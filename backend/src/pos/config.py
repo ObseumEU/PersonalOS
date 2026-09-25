@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # Recurring system jobs (morning brief, follow-ups, retrospective, budget
     # check, A2A sync) run in the app until Nexus schedules them over A2A.
     scheduler: bool = True
+    # Largest file upload, in megabytes (POS_MAX_UPLOAD_MB).
+    max_upload_mb: int = 200
 
     @property
     def db_path(self) -> Path:

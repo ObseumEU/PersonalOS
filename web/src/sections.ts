@@ -45,17 +45,17 @@ export const SECTIONS: Section[] = [
     features: ["Synced events", "Day and week view", "Tasks alongside events"],
   },
   {
-    path: "files", mock: "planned screen, no file storage yet", label: "Files", icon: FolderOpen, phase: 2,
+    path: "files", label: "Files", icon: FolderOpen, phase: 2,
     blurb: "Every document in one place, searchable in full text.",
     features: ["Drag-and-drop upload", "Preview", "Tags and topics", "Full-text search"],
   },
   {
-    path: "topics", mock: "planned screen, not built yet", label: "Topics", icon: Hash, phase: 2,
+    path: "topics", label: "Topics", icon: Hash, phase: 2,
     blurb: "One home for each area of your life and work.",
     features: ["Files, notes and tasks together", "Events and conversations"],
   },
   {
-    path: "notes", mock: "planned screen, not built yet", label: "Notes", icon: FileText, phase: 2,
+    path: "notes", label: "Notes", icon: FileText, phase: 2,
     blurb: "Markdown notes that belong to your topics.",
     features: ["Markdown editor", "Linked to topics", "Searchable"],
   },

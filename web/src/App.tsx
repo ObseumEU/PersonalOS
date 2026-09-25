@@ -12,17 +12,20 @@ import Board from "./pages/Board";
 import Chat from "./pages/Chat";
 import ComingSoon from "./pages/ComingSoon";
 import Connectors from "./pages/Connectors";
+import Files from "./pages/Files";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import NetworkPage from "./pages/Network";
+import Notes from "./pages/Notes";
 import Org from "./pages/Org";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import Tools from "./pages/Tools";
+import Topics from "./pages/Topics";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar", "tools", "chat"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar", "tools", "chat", "files", "topics", "notes"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -63,6 +66,10 @@ export default function App() {
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/chat" element={<Chat />} />
+        <Route path="/files" element={<Files />} />
+        <Route path="/topics" element={<Topics />} />
+        <Route path="/topics/:slug" element={<Topics />} />
+        <Route path="/notes" element={<Notes />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />
         {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (

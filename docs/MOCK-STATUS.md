@@ -20,8 +20,6 @@ or a control whose handler does nothing.
 
 | Screen | Widget | Why it is mock |
 | --- | --- | --- |
-| Navigation | Files, Topics, Notes | Planned screens (`ComingSoon`), no backend yet |
-| Files, Topics, Notes | Whole page and each planned feature row | `ComingSoon` placeholder |
 | Every page header | STATUS "API online" | Static text; not a live health check |
 | Tasks (Today view) | "Today's plan" capacity bar | Fixed 6 h focus day (`DAY_CAPACITY_MIN`) until calendar sync; the task minutes are real |
 | Connectors | `calendar` in the source lists | No calendar connector emits events yet (no dot: it is an option in a select) |
@@ -46,3 +44,7 @@ or a control whose handler does nothing.
 | Today | Handed in by agents (was the NOTE) | `tasksApi.list("review")` |
 | System | Subsystem cards | `/api/system/subsystems` |
 | Calendar, Today | Week view, FIG. 2 Agenda | `/api/calendar` (iCal feeds from `POS_CALENDAR_ICS` plus dated tasks); the dot shows only while no calendar is connected |
+| Files | Upload, list and grid, search, tags, preview, detail, archive | `/api/files` (docs/FILES.md) |
+| Topics | Topic grid with counts, topic page (tasks, files, notes, events) | `/api/topics` |
+| Notes | List, search, markdown editor with autosave, history and restore | `/api/notes` |
+| Today | Recent files | `/api/files` |
