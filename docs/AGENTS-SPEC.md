@@ -190,6 +190,100 @@ s tím, že majitel každé zlepšení klikne. Nově:
 - noční přehled ze smyčky sebezlepšování dál vzniká, ale jako informace
   „co se změnilo“, ne jako fronta ke schválení.
 
+## 6a. Platforma a úkoly (z mockupů)
+
+Doplněno 2026-09-25 z mockupů „Tasks“ a „Platform“ (stejný odkaz jako
+nahoře). Popisuje, co mají obsahovat kroky 1 až 5 postupu stavby. Kapitoly
+3 až 6 tím nemění.
+
+### Úkoly podle best practices
+
+- **Tok GTD:** zachytit → vyjasnit → uspořádat → revize. Inbox se zpracovává
+  do nuly. Co zabere pod 2 minuty, se udělá hned.
+- **Pole úkolu:**
+  - `do_date` (kdy na úkolu pracovat) a `deadline` (pevný termín).
+  - Priorita P1/P2/P3 (Must / Should / Could).
+  - Odhad času a energie (high/low).
+  - Téma, odkazy na soubory a události.
+  - Vrstva viditelnosti (princip 3).
+- **Projekty** se dělí na kroky a mají „Definition of done“.
+- **Pohledy:** Inbox, Today (s lištou kapacity dne a limitem soustředění
+  80 %), Upcoming, Next actions, AI a agenti, Waiting for, Someday
+  a týdenní revize.
+- **Rychlé zachycení** se syntaxí, např. `Zavolat do banky zítra 15m #finance !high`
+  nebo `@ai shrň …`.
+
+### Kdo úkol dělá
+
+Každý úkol **i každý jeho krok** má jednoho řešitele jednoho ze čtyř typů:
+
+| Typ | Kdy | Výsledek |
+|---|---|---|
+| Já (majitel nebo jiný člověk v PersonalOS) | rozhodnutí, peníze, podpisy, co jde ven jeho jménem | – |
+| AI (asistent přes Codex) | čtení, shrnutí, extrakce, koncepty | čeká na kontrolu vlastníka úkolu |
+| Agent (Knowledge, Nexus, Mail, Dev, …) | výzkum, opakované a systémové úlohy | co jde ven, čeká na schválení (ústava 1) |
+| Člověk mimo systém | delegováno ven | úkol jde do „Waiting for“ s datem připomenutí; AI připraví připomínku |
+
+Při vyjasnění Inboxu AI navrhne název, téma, termín a kroky s řešiteli
+i s důvodem volby. Vlastník zvolí Přijmout / Upravit / Udělat hned /
+Delegovat / Someday / Smazat (smazání = archivace, kap. 5.4).
+
+### MCP server `pos`
+
+Nástroje, přes které s úkoly pracují agenti, Codex a Claude na laptopu:
+
+| Nástroj | Druh |
+|---|---|
+| `list_tasks`, `get_task` | čtení |
+| `capture`, `create_task`, `update_task`, `complete_task`, `assign_task` | zápis |
+| `claim_task`, `heartbeat`, `report_progress` | zápis (běh agenta) |
+| `request_approval` | vytvoří položku ve frontě schválení |
+| `create_agent` | zápis s limity z kap. 3.2 |
+| `freeze` | jen majitel (kill switch, kap. 5.3) |
+
+Resources: `tasks://today`, `tasks://inbox`, `tasks://waiting`. Prompts:
+`plan_my_day`, `weekly_review`. Každé volání se zapíše do audit logu
+(kap. 5.2).
+
+### Fronta schválení
+
+Jedno místo pro všechno, co podle ústavy čeká na majitele: platba, odeslání
+e-mailu, příspěvek na Discord, komentář na GitHubu, změna oprávnění, limitů
+nebo rozpočtu. Tlačítka Schválit / Upravit / Zamítnout, na webu i na
+telefonu.
+
+### Obrazovky pro agenty
+
+- **Agents:** adresář lidí a agentů. U každého je vidět běhové prostředí,
+  protokol, stav, aktuální úkol, fronta a oprávnění. Agent se přidá přes URL
+  A2A karty, nebo se založí Codex worker ze šablony.
+- **Detail agenta:** fronta a aktuální běh krok po kroku, tlačítka
+  Pauza / Napsat / Převzít / Stop, jeho paměť a týdenní statistiky.
+- **Work board:** řádek pro každého člena a sloupce Ve frontě / Pracuje /
+  Potřebuje tebe / Hotovo dnes.
+
+### Startovní agenti a konektory
+
+| Agent | Konektor | Příklad směrování |
+|---|---|---|
+| Assistant | PersonalOS | dotazy majitele |
+| Mail agent | Gmail (MCP) | nový e-mail → třídění, koncept odpovědi |
+| Dev agent | GitHub (MCP) | issue s labelem `agent` → oprava a merge (kap. 6) |
+| Community agent | Discord (MCP) | zmínka nebo dotaz → koncept odpovědi |
+| Knowledge agent | knowlage-agent (A2A) | výzkum napříč dokumenty |
+| Nexus | Nexus (A2A) | faktura → příprava platby → schválení majitelem |
+
+Směrovací pravidla (událost → agent) jsou data v PersonalOS, takže je HR agent
+i smyčka sebezlepšování mohou upravovat (kap. 6). Obsah z konektorů je vždy
+označený jako nedůvěryhodný (kap. 5.2).
+
+### Automatizace přes Nexus
+
+Opakované a událostmi spouštěné úlohy: ranní brief, příprava týdenní revize,
+platby faktur, třídění inboxu, noční retrospektiva (vstup pro kap. 6), zálohy
+a aktualizace závislostí. Každý běh se v PersonalOS objeví jako úkol s
+řešitelem Nexus.
+
 ## 7. Úkoly
 
 Pořadí odpovídá závislostem. „Thread A“ = „Map PersonalOS assistant state“,
@@ -208,6 +302,11 @@ Pořadí odpovídá závislostem. „Thread A“ = „Map PersonalOS assistant s
 | 9 | Knowledge base: verze dokumentů, koš a obnova; obsah konektorů značit jako nedůvěryhodný | Thread K | – |
 | 10 | Sebezměna platformy: agenti mergují do main, automatické testy, health check a auto-revert | Thread A, krok 6 | 4, 5, 6 |
 | 11 | Plánovač pro systémové agenty přes Nexus (A2A fasáda), do té doby cron v PersonalOS | Thread A, krok 5 | 7, 8 |
+| 12 | Jádro úkolů podle kap. 6a: pole, projekty a kroky, řešitelé, pohledy, rychlé zachycení, Inbox s návrhy AI | Thread A, krok 1 | 1, 2 |
+| 13 | MCP server `pos` s nástroji, resources a prompty z kap. 6a | Thread A, krok 1 | 12 |
+| 14 | Fronta schválení (web a telefon), napojená na `request_approval` | Thread A, krok 2 | 13 |
+| 15 | Obrazovky Agents, detail agenta a Work board | Thread A, krok 2 | 3, 13 |
+| 16 | Konektory Gmail, GitHub a Discord jako MCP servery, směrovací pravidla a startovní agenti | Thread A, krok 4 | 5, 14 |
 
 Nové thready 6 až 8 pracují v repu PersonalOS vedle Threadu A. Aby se
 nepřepisovaly, datový model a runner vlastní Thread A. Nové thready přidávají
