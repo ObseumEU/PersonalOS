@@ -167,6 +167,15 @@ class Reporter:
         self.http = http or httpx.Client(base_url=url, timeout=30)
         self.auth = {"Authorization": f"Bearer {key}"}
 
+    def frozen(self) -> bool:
+        """The kill switch is on: the deployer ships nothing (it is an agent too)."""
+        try:
+            r = self.http.get("/api/worker/me", headers=self.auth)
+            r.raise_for_status()
+            return bool(r.json().get("frozen"))
+        except httpx.HTTPError:
+            return True  # cannot tell: better not to deploy
+
     def last_good(self) -> str | None:
         r = self.http.get("/api/deploys/last", headers=self.auth)
         r.raise_for_status()
@@ -245,14 +254,30 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
         ok, log = sh(test_cmd, wt)
         if not ok:
             return fail("tests", log)
+
+    def rolled_back(stage: str, log: str) -> Result:
+        """The new build is (partly) live but broken: put main's last good
+        version back up before reporting, so production never stays on it."""
+        git(wt, "checkout", "--detach", "--force", base)
+        ok, up_log = sh(up_cmd, wt)
+        healthy_again = healthy(health_url)[0] if (ok and health_url) else ok
+        if ok:
+            note = f"\n\n--- rolled back to {base[:10]}{' (healthy)' if healthy_again else ' (still unhealthy)'} ---"
+        else:
+            note = f"\n\n--- rollback to {base[:10]} failed ---\n{up_log}"
+        out = fail(stage, log + note)
+        if not ok or not healthy_again:
+            out.status = "error"
+        return out
+
     if up_cmd:
         ok, log = sh(up_cmd, wt)
         if not ok:
-            return fail("deploy", log)
+            return rolled_back("deploy", log)
     if health_url:
         ok, log = healthy(health_url)
         if not ok:
-            return fail("health", log)
+            return rolled_back("health", log) if up_cmd else fail("health", log)
     merged = git(wt, "rev-parse", "HEAD")
     push = subprocess.run(["git", "push", remote, f"HEAD:{target}"], cwd=wt, capture_output=True, text=True)
     if push.returncode != 0:  # main moved meanwhile: try again next tick, not the author's fault
@@ -278,6 +303,12 @@ def main() -> None:
               test_cmd=os.environ.get("DEPLOY_TEST_CMD", DEFAULT_TEST), up_cmd=os.environ.get("DEPLOY_UP_CMD", DEFAULT_UP),
               health_url=os.environ.get("DEPLOY_HEALTH_URL", "http://localhost:8090/api/health"))
     while True:
+        if reporter.frozen():
+            print("kill switch is on (or PersonalOS is unreachable): not deploying", flush=True)
+            if a.once or not a.watch:
+                break
+            time.sleep(a.watch)
+            continue
         if a.promote_from:
             res = promote_tick(Path(a.repo), reporter, source=a.promote_from, remote=kw["remote"], target=kw["branch"],
                                test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"], health_url=kw["health_url"],

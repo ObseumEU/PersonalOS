@@ -139,3 +139,36 @@ def test_promote_mode_merges_only_checked_work(tmp_path, reporter):
     deploys = client.get("/api/deploys").json()
     assert [d["status"] for d in deploys][:2] == ["rejected", "ok"]
     assert tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])["assignee_name"] == "Dev agent"
+
+
+def test_promote_rolls_production_back_when_health_fails_and_respects_the_kill_switch(tmp_path, reporter,
+                                                                                         monkeypatch):
+    from pos import killswitch
+
+    rep, client, conn = reporter
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "work"
+    git(tmp_path, "clone", str(origin), str(work))
+    (work / "check.py").write_text(CHECK)
+    commit(work, {"app.txt": "good v1"}, "initial")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-q", "-b", "agent/dev")
+    deploy = tmp_path / "deploy"
+    git(work, "worktree", "add", "--detach", str(deploy), "main")
+    live = tmp_path / "live.txt"
+    up = f'"{sys.executable}" -c "import shutil; shutil.copy(\'app.txt\', r\'{live}\')"'
+    # "good but slow" passes the tests, but the running service is not healthy on it
+    monkeypatch.setattr(selfdeploy, "healthy", lambda url, wait_s=90: ("slow" not in live.read_text(), "timeout"))
+    kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
+              up_cmd=up, health_url="http://web/api/health")
+    commit(work, {"app.txt": "good but slow"}, "Speed up\n\nAgent: Dev agent")
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "rejected" and res.stage == "health" and "rolled back" in res.log
+    assert live.read_text() == "good v1"  # production is on main's last good version again
+    assert git(tmp_path, "--git-dir", str(origin), "show", "main:app.txt") == "good v1"
+
+    assert rep.frozen() is False
+    killswitch.freeze(conn, Ctx(actors.owner_id(conn)), "test")
+    conn.commit()
+    assert rep.frozen() is True
