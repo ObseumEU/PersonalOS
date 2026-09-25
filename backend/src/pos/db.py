@@ -235,6 +235,29 @@ MIGRATIONS: list[str] = [
     ALTER TABLE approvals ADD COLUMN result TEXT;
     ALTER TABLE approvals ADD COLUMN executed_at TEXT;
     """,
+    # 6: scheduler jobs and A2A links to remote agents (step 5).
+    """
+    CREATE TABLE jobs (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,
+        schedule    TEXT NOT NULL,
+        action      TEXT NOT NULL UNIQUE,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        next_run_at TEXT NOT NULL,
+        last_run_at TEXT,
+        last_result TEXT,
+        created_at  TEXT NOT NULL
+    );
+    CREATE TABLE a2a_links (
+        task_id        INTEGER PRIMARY KEY REFERENCES tasks(id),
+        member_id      INTEGER NOT NULL REFERENCES actors(id),
+        remote_url     TEXT NOT NULL,
+        remote_task_id TEXT,
+        context_id     TEXT,
+        state          TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+    );
+    """,
 ]
 
 

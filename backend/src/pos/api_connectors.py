@@ -7,7 +7,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import actors, outbound, routing
+from . import a2a, actors, outbound, routing, scheduler
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .core import Ctx
@@ -108,3 +108,32 @@ async def github_webhook(request: Request, conn=Depends(get_db)):
     results = [routing.ingest(conn, ctx, ev) for ev in routing.github_events(kind, payload)]
     conn.commit()
     return {"events": results}
+
+
+@router.get("/jobs")
+def list_jobs(conn=Depends(get_db)):
+    return scheduler.list_jobs(conn)
+
+
+@router.patch("/jobs/{job_id}")
+def update_job(job_id: int, body: dict, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    try:
+        return scheduler.update_job(conn, ctx, job_id, body)
+    except ValueError as e:
+        from .tasks import Invalid
+
+        raise Invalid(str(e)) from e
+
+
+@router.post("/jobs/{job_id}/run")
+def run_job(job_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if job is None:
+        raise HTTPException(404, "no such job")
+    return scheduler.run_job(conn, job, by=ctx)
+
+
+@router.get("/a2a/links")
+def a2a_links(conn=Depends(get_db)):
+    members = [{"id": m["id"], "name": m["name"], "a2a_url": m["a2a_url"]} for m in a2a.remote_members(conn).values()]
+    return {"members": members, "links": a2a.links(conn)}

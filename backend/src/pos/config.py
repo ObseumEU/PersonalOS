@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # Bearer key that lets MCP clients act as the owner over HTTP (/mcp).
     # Agents get their own keys (actors.create_key). Empty: no owner key.
     mcp_token: str = ""
+    # Recurring system jobs (morning brief, follow-ups, retrospective, budget
+    # check, A2A sync) run in the app until Nexus schedules them over A2A.
+    scheduler: bool = True
 
     @property
     def db_path(self) -> Path:

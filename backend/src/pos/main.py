@@ -7,7 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
 
 from . import __doc__ as description
-from . import actors, api_agents, api_connectors, api_tasks, api_worker, integrations, mcp_server
+from . import a2a, actors, api_agents, api_connectors, api_tasks, api_worker, integrations, mcp_server, scheduler
 from .auth import require_user
 from .auth import router as auth_router
 from .budget import service as budget_service
@@ -66,6 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if settings.mcp_token:
                 actors.ensure_key(conn, actors.owner_id(conn), settings.mcp_token, "POS_MCP_TOKEN")
             integrations.register_builtin_agents(conn)
+            a2a.configure_builtin(conn)
+            scheduler.seed(conn)
         finally:
             conn.close()
         integrations.install()
@@ -74,11 +76,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                        if check_minutes > 0 else None)
         hr_task = (asyncio.create_task(integrations.hr_loop(settings.db_path))
                    if hr_schedule.HRSettings().scheduler else None)
+        sched_task = asyncio.create_task(scheduler.loop(settings.db_path)) if settings.scheduler else None
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
-            for task in (budget_task, hr_task):
+            for task in (budget_task, hr_task, sched_task):
                 if task:
                     task.cancel()
 
@@ -103,6 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_worker.router)
     app.include_router(api_connectors.router)
     app.include_router(api_connectors.hooks)
+    app.include_router(a2a.router)
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
 

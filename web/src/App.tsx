@@ -6,6 +6,7 @@ import AgentDetail from "./pages/AgentDetail";
 import Agents from "./pages/Agents";
 import Approvals from "./pages/Approvals";
 import Assistant from "./pages/Assistant";
+import Automations from "./pages/Automations";
 import Board from "./pages/Board";
 import ComingSoon from "./pages/ComingSoon";
 import Connectors from "./pages/Connectors";
@@ -17,7 +18,7 @@ import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "network", "approvals", "connectors"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "network", "approvals", "connectors", "automations"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/board" element={<Board />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/connectors" element={<Connectors />} />
+        <Route path="/automations" element={<Automations />} />
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />
