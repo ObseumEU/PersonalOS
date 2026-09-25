@@ -25,7 +25,7 @@ export type Section = {
 export const SECTIONS: Section[] = [
   { path: "today", label: "Today", icon: Sun, phase: 4, mobile: true, blurb: "Your day at a glance.", features: [] },
   {
-    path: "tasks", label: "Tasks", icon: CheckSquare, phase: 2, mobile: true,
+    path: "tasks", label: "Tasks", icon: CheckSquare, phase: 1, mobile: true,
     blurb: "Everything you need to get done, by topic and due date.",
     features: ["Quick-add", "Due dates and priority", "Grouped by topic", "Created by the assistant"],
   },

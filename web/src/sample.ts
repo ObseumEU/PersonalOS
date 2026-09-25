@@ -1,15 +1,8 @@
-// SAMPLE DATA. Placeholder content until Phase 2 adds real tasks, files and
-// calendar sync. Every screen that shows it labels it as sample data.
+// SAMPLE DATA. Placeholder content until real files, calendar sync and the
+// assistant exist (tasks are real since step 1). Every screen that shows it labels it as sample data.
 
-export type SampleTask = { id: string; title: string; topic: string; due: string; urgent: boolean };
 export type SampleEvent = { start: number; end: number; title: string; meta: string };
 
-export const TASKS: SampleTask[] = [
-  { id: "T-014", title: "Send the signed contract to Acme", topic: "Acme", due: "today", urgent: true },
-  { id: "T-015", title: "Pay the September invoice", topic: "Finance", due: "today", urgent: true },
-  { id: "T-021", title: "Draft PersonalOS phase 2 scope", topic: "PersonalOS", due: "tomorrow", urgent: false },
-  { id: "T-009", title: "Book the car service", topic: "House", due: "29 Sep", urgent: false },
-];
 
 // Hours as decimals (9.5 = 09:30).
 export const EVENTS: SampleEvent[] = [
