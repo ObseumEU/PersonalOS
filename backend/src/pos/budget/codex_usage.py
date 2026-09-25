@@ -85,6 +85,7 @@ class ExecRun:
     usage: TokenUsage = field(default_factory=TokenUsage)
     turns: int = 0
     failed: bool = False
+    limit_reached: bool = False  # Codex refused the run: subscription usage limit hit
 
 
 def _json_lines(lines: Iterable[str]) -> Iterator[dict]:
@@ -112,6 +113,9 @@ def parse_exec_jsonl(lines: Iterable[str]) -> ExecRun:
             run.turns += 1
         elif kind in ("turn.failed", "error"):
             run.failed = True
+            error = event.get("error") if isinstance(event.get("error"), dict) else event
+            if "usage limit" in str(error.get("message", "")).lower():
+                run.limit_reached = True
     return run
 
 
