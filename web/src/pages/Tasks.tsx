@@ -58,7 +58,19 @@ export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
   );
 }
 
-function Row({ task, selected, onSelect, onToggle }: { task: Task; selected: boolean; onSelect: () => void; onToggle: () => void }) {
+function Row({
+  task,
+  selected,
+  hideTopic,
+  onSelect,
+  onToggle,
+}: {
+  task: Task;
+  selected: boolean;
+  hideTopic: boolean;
+  onSelect: () => void;
+  onToggle: () => void;
+}) {
   const due = dueLabel(task);
   const done = task.status === "done";
   return (
@@ -83,7 +95,7 @@ function Row({ task, selected, onSelect, onToggle }: { task: Task; selected: boo
           </span>
         ) : null}
         <StatePill task={task} />
-        {task.topic && <span className="cap hidden shrink-0 xl:inline">#{task.topic}</span>}
+        {task.topic && !hideTopic && <span className="cap hidden shrink-0 xl:inline">#{task.topic}</span>}
       </button>
       <AssigneeChip type={task.assignee_type} name={task.assignee_name} />
       <span className="cap text-ink-2!">{task.assignee_type === "human" || !task.assignee_type ? fmtMinutes(task.estimate_min) : "—"}</span>
@@ -240,7 +252,14 @@ export default function Tasks() {
                 </div>
               )}
               {g.items.map((t) => (
-                <Row key={t.id} task={t} selected={t.ref === selected} onSelect={() => set({ task: t.ref })} onToggle={() => toggle(t)} />
+                <Row
+                  key={t.id}
+                  task={t}
+                  selected={t.ref === selected}
+                  hideTopic={!!selected}
+                  onSelect={() => set({ task: t.ref })}
+                  onToggle={() => toggle(t)}
+                />
               ))}
             </div>
           ))}
