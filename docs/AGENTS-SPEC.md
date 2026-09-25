@@ -370,6 +370,7 @@ připraví.
 | 10 | ano | `pos.selfdeploy` (kontrola ústavy, testy, health check, automatický revert), `docs/SELF-DEPLOY.md`, instrukce agentů v `agents/` |
 | Claude CLI | ano | druhý runtime: `pos.engines`, `worker/pos_worker/claude.py`; `auto`: nejdřív Codex, Claude (claude-opus-5-5) jako záloha při vyčerpaném limitu, po resetu zpět; Nexus: poskytovatel `claude-cli` |
 | Rutiny agentů | ano | `pos.schedules`: agent si přes MCP naplánuje opakovanou práci (`schedule_create` …), každé spuštění = úkol; limity HR (max 5 aktivních, min. 15 min), kill switch, rozpočet; osobní a týmové na stránce agenta a v Automations |
+| Struktura firmy | ano | `pos.org`: role (profese), `reports_to` a tým u každého člena (migrace 12), všichni pod agentem **Project manager**, ten pod majitelem; PM (systémový agent, práva `tasks:read/write/claim`, `messages:send`, `approvals:request`, instrukce `agents/project-manager/`) dělí týmovou práci na kroky a přiděluje podle role; MCP `handoff_task` (verzovaná změna úkolu + zpráva příjemci + záznam v `handoffs`) a `org_chart`; týmová rutina „Daily standup“ (všední dny 08:30) sbírá stav od agentů a zakládá souhrn pro majitele; `GET /api/org`, `PUT /api/agents/{id}/org` (jen majitel); stránka Org; v Network hrany agent–agent (zprávy, předávky) odlišené od hran k platformě a přepínač „Org chart“ |
 | 6, 7, 8, 9 | jiné thready | ústava a guardrails, Rozpočtář, HR agent, knowledge base |
 
 Co musí dodat jen majitel: přihlášení Codexu (limit předplatného do 29. 9.),

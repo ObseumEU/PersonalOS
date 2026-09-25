@@ -7,13 +7,21 @@ import { ago, fmtTokens } from "./Agents";
 
 const AgentNetwork = lazy(() => import("../components/agents/AgentNetwork"));
 
-const LEGEND: [EdgeType, string, string][] = [
-  ["assign", "#e6e8eb", "hand-off of a task"],
-  ["message", "#6cc4dc", "message"],
-  ["approval", "#d9a55b", "approval request"],
-  ["mcp", "#3e7c8d", "calls to PersonalOS (MCP)"],
-  ["run", "#6cc4dc", "codex run"],
+// [type, color, label, line style]: agent-to-agent edges bright or dashed, platform edges dim.
+const LEGEND: [EdgeType, string, string, "thick" | "dashed" | "solid" | "dim"][] = [
+  ["handoff", "#9be3f5", "handoff between members", "thick"],
+  ["message", "#6cc4dc", "message between members", "dashed"],
+  ["assign", "#e6e8eb", "task assigned", "solid"],
+  ["approval", "#d9a55b", "approval request", "solid"],
+  ["mcp", "#4a515b", "calls to PersonalOS (MCP)", "dim"],
+  ["run", "#3e7c8d", "agent run", "dim"],
 ];
+const ORG_LEGEND: (typeof LEGEND)[number] = ["org", "#e6e8eb", "reports to", "solid"];
+
+function Swatch({ color, style }: { color: string; style: (typeof LEGEND)[number][3] }) {
+  if (style === "dashed") return <span className="w-4 border-t border-dashed" style={{ borderColor: color }} />;
+  return <span className={`w-4 ${style === "thick" ? "h-[3px]" : "h-px"} ${style === "dim" ? "opacity-60" : ""}`} style={{ background: color }} />;
+}
 const WINDOWS = [
   ["live", "Live · 1 h"],
   ["24h", "24 h"],
@@ -25,6 +33,13 @@ const fetchNetwork = agentsApi.network;
 export default function NetworkPage() {
   const [params, setParams] = useSearchParams();
   const window_ = params.get("window") ?? "live";
+  const orgMode = params.get("view") === "org";
+  const setParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(params);
+    if (value == null) next.delete(key);
+    else next.set(key, value);
+    setParams(next);
+  };
   const [data, setData] = useState<Net | null>(null);
   const navigate = useNavigate();
 
@@ -45,22 +60,35 @@ export default function NetworkPage() {
     .filter((n) => n.kind !== "hub" && n.status !== "archived")
     .sort((a, b) => b.open + 2 * b.working + b.review - (a.open + 2 * a.working + a.review));
   const totals = LEGEND.map(([t]) => [t, data?.edges.filter((e) => e.type === t).reduce((s, e) => s + e.count, 0) ?? 0] as const);
+  const legend = orgMode ? [ORG_LEGEND, ...LEGEND.filter(([t]) => t !== "mcp" && t !== "run")] : LEGEND;
 
   return (
     <div className="flex flex-col gap-5 lg:h-[calc(100vh-3rem)]">
       <PageHeader
         kicker="PLATFORM · AGENT NETWORK"
         title="How the team works together"
-        sub="Every member — you, other people and agents — sized by workload. Lines show hand-offs, messages, approvals and calls to PersonalOS; dots travel along them for the latest events."
+        sub="Every member — you, other people and agents — sized by workload. Bright and dashed arcs are agents working with each other (handoffs, messages); dim low lines are calls to PersonalOS. Dots travel along them for the latest events. Org chart lays the team out by whom they report to."
       />
       <div className="flex flex-wrap items-center gap-2">
         {WINDOWS.map(([id, label]) => (
-          <button key={id} type="button" onClick={() => setParams({ window: id })} className={id === window_ ? "btn-accent" : "btn"}>
+          <button key={id} type="button" onClick={() => setParam("window", id)} className={id === window_ ? "btn-accent" : "btn"}>
             {label}
           </button>
         ))}
+        <button
+          type="button"
+          aria-pressed={orgMode}
+          title="Lay members out by whom they report to"
+          onClick={() => setParam("view", orgMode ? null : "org")}
+          className={orgMode ? "btn-accent ml-2" : "btn ml-2"}
+        >
+          Org chart
+        </button>
         {data?.frozen && <span className="cap ml-2 rounded-sm border border-amber-400/60 px-2 py-1 text-amber-300!">KILL SWITCH ON · agents frozen</span>}
-        <Link to="/agents" className="btn ml-auto">
+        <Link to="/org" className="btn ml-auto">
+          Org →
+        </Link>
+        <Link to="/agents" className="btn">
           Agents →
         </Link>
         <Link to="/board" className="btn">
@@ -68,14 +96,14 @@ export default function NetworkPage() {
         </Link>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="FIG. 6" title="Agent network" right={`window ${window_} · drag to orbit · click a member`} className="h-[520px] lg:col-span-9 lg:h-auto" bodyClassName="measure-grid relative">
+        <Panel fig="FIG. 6" title={orgMode ? "Org chart" : "Agent network"} right={`window ${window_} · drag to orbit · click a member`} className="h-[520px] lg:col-span-9 lg:h-auto" bodyClassName="measure-grid relative">
           <Suspense fallback={<p className="cap breathe absolute inset-0 grid place-items-center">loading network…</p>}>
-            {data && <AgentNetwork data={data} onSelect={onSelect} />}
+            {data && <AgentNetwork data={data} onSelect={onSelect} orgMode={orgMode} />}
           </Suspense>
           <div className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap gap-4">
-            {LEGEND.map(([t, color, label]) => (
+            {legend.map(([t, color, label, style]) => (
               <span key={t} className="cap flex items-center gap-1.5">
-                <span className="h-px w-4" style={{ background: color }} />
+                <Swatch color={color} style={style} />
                 {label}
               </span>
             ))}

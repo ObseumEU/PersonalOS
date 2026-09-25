@@ -2,7 +2,7 @@ import { Pause, Play, RotateCcw, Send, Square, UserCheck } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { type AgentDetail as Detail, agentsApi } from "../agentsApi";
+import { type AgentDetail as Detail, agentsApi, type Org } from "../agentsApi";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { SchedulesPanel } from "../components/Schedules";
@@ -68,6 +68,67 @@ function Inject({ agentId, current, onSent }: { agentId: number; current?: strin
   );
 }
 
+/** Role, team and manager; only the owner may change them (the API enforces it). */
+function OrgPanel({ a, onSaved }: { a: Detail; onSaved: (p: Promise<unknown>, done: string) => void }) {
+  const [org, setOrg] = useState<Org | null>(null);
+  useEffect(() => {
+    agentsApi.org().then(setOrg);
+  }, [a.id]);
+  const managers = (org?.members ?? []).filter((m) => m.id !== a.id);
+  const field = "h-7 rounded border border-line bg-bg px-2 font-mono text-xs outline-none focus:border-accent";
+  return (
+    <Panel fig="ORG" title="Place in the team" right="owner only · everyone reports to the Project manager">
+      <div className="flex flex-wrap items-end gap-4 p-4">
+        <label className="flex flex-col gap-1">
+          <span className="cap">ROLE</span>
+          <input
+            key={`role-${a.role}`}
+            list="org-roles"
+            aria-label="Role"
+            defaultValue={a.role ?? ""}
+            onBlur={(e) => (e.target.value || null) !== a.role && onSaved(agentsApi.setOrg(a.id, { role: e.target.value || null }), "Role saved")}
+            className={`${field} w-44`}
+          />
+          <datalist id="org-roles">
+            {org?.roles.map((r) => <option key={r} value={r} />)}
+          </datalist>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="cap">TEAM</span>
+          <input
+            key={`team-${a.team}`}
+            aria-label="Team"
+            defaultValue={a.team ?? ""}
+            onBlur={(e) => (e.target.value || null) !== a.team && onSaved(agentsApi.setOrg(a.id, { team: e.target.value || null }), "Team saved")}
+            className={`${field} w-40`}
+          />
+        </label>
+        {!a.is_owner && (
+          <label className="flex flex-col gap-1">
+            <span className="cap">REPORTS TO</span>
+            <select
+              aria-label="Reports to"
+              value={a.reports_to ?? ""}
+              onChange={(e) => onSaved(agentsApi.setOrg(a.id, { reports_to: e.target.value ? Number(e.target.value) : null }), "Manager saved")}
+              className={`${field} w-48`}
+            >
+              <option value="">default (Project manager)</option>
+              {managers.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.is_owner ? "You (owner)" : m.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <Link to="/org" className="btn ml-auto">
+          Org →
+        </Link>
+      </div>
+    </Panel>
+  );
+}
+
 export default function AgentDetail() {
   const id = Number(useParams().id);
   const [a, setA] = useState<(Detail & { hr?: Hr }) | null>(null);
@@ -114,6 +175,13 @@ export default function AgentDetail() {
         <StatusDot status={a.status} />
         {a.system && <Pill>system</Pill>}
         {a.lifetime && <Pill>{a.lifetime.replace("_", "-")}</Pill>}
+        {a.role && <Pill>{a.role.replace(/_/g, " ")}</Pill>}
+        {a.team && <span className="cap">team {a.team}</span>}
+        {a.reports_to_name && (
+          <Link to={`/agents/${a.reports_to}`} className="cap hover:text-accent!">
+            reports to {a.reports_to_name}
+          </Link>
+        )}
         <EngineBadge view={a.engine_view} engine={a.engine_effective} model={a.engine_effective !== "codex" ? a.model ?? "claude-opus-5-5" : null} />
         {!a.is_owner && (
           <select
@@ -337,6 +405,7 @@ export default function AgentDetail() {
           ))}
         </Panel>
       </div>
+      <OrgPanel a={a} onSaved={act} />
       <SchedulesPanel actor={{ id: a.id, name: a.name }} />
       <p className="cap">
         Assignees: <AssigneeChip type="human" name="Owner" /> people · <AssigneeChip type="ai" name="AI" /> the assistant ·{" "}

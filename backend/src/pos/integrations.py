@@ -97,6 +97,10 @@ def register_builtin_agents(conn: sqlite3.Connection) -> None:
 
     agents.seed_builtin_permissions(conn)
     routing.seed_defaults(conn)
+    from . import org
+
+    # The Project manager, everyone's place in the org chart, the daily standup.
+    org.ensure(conn)
 
 
 def register_mcp_tools(mcp, session) -> None:

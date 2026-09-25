@@ -13,7 +13,7 @@ from . import store
 from .models import AgentRecord, AgentStats, Lifetime, Status
 
 # Agents that run the platform itself; HR rates them but never retires them.
-BUILTIN_SYSTEM = {actors.ASSISTANT_NAME, "Knowledge agent", "Nexus", "Deployer"}
+BUILTIN_SYSTEM = {actors.ASSISTANT_NAME, "Knowledge agent", "Nexus", "Deployer", "Project manager"}
 
 
 def iso(at: datetime) -> str:

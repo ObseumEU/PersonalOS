@@ -330,6 +330,23 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN model TEXT;
     """,
+    # 12: org structure (role, reports_to, team) and handoffs
+    """
+    ALTER TABLE actors ADD COLUMN role TEXT;
+    ALTER TABLE actors ADD COLUMN reports_to INTEGER REFERENCES actors(id);
+    ALTER TABLE actors ADD COLUMN team TEXT;
+    CREATE TABLE handoffs (
+        id         INTEGER PRIMARY KEY,
+        task_id    INTEGER NOT NULL REFERENCES tasks(id),
+        from_actor INTEGER NOT NULL REFERENCES actors(id),
+        to_actor   INTEGER NOT NULL REFERENCES actors(id),
+        note       TEXT NOT NULL DEFAULT '',
+        message_id INTEGER REFERENCES messages(id),
+        run_id     INTEGER REFERENCES runs(id),
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX handoffs_at ON handoffs (created_at);
+    """,
 ]
 
 

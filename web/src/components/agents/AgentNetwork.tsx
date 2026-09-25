@@ -15,19 +15,29 @@ export type NetNode = {
   tokens: number;
   status: string;
   engine_view?: EngineView | null;
+  role?: string | null;
+  team?: string | null;
+  reports_to?: number | null;
 };
-export type NetEdge = { from: number; to: number; type: EdgeType; count: number };
-export type NetEvent = { from: number; to: number; type: EdgeType; at: string };
-export type EdgeType = "assign" | "message" | "approval" | "mcp" | "run";
+/** peer = between members, platform = to the PersonalOS hub, org = who reports to whom. */
+export type EdgeScope = "peer" | "platform" | "org";
+export type NetEdge = { from: number; to: number; type: EdgeType; kind?: EdgeType; scope?: EdgeScope; count: number };
+export type NetEvent = { from: number; to: number; type: EdgeType; scope?: EdgeScope; at: string };
+export type EdgeType = "assign" | "handoff" | "message" | "approval" | "mcp" | "run" | "org";
 export type Network = { window: string; frozen: boolean; nodes: NetNode[]; edges: NetEdge[]; events: NetEvent[] };
 
+// Agent-to-agent traffic is bright (handoffs) or dashed (messages); calls to the
+// platform stay dim so the team's own work reads first.
 export const EDGE_COLOR: Record<EdgeType, number> = {
   assign: 0xe6e8eb,
+  handoff: 0x9be3f5,
   message: 0x6cc4dc,
   approval: 0xd9a55b,
-  mcp: 0x3e7c8d,
-  run: 0x6cc4dc,
+  mcp: 0x4a515b,
+  run: 0x3e7c8d,
+  org: 0xe6e8eb,
 };
+const scopeOf = (e: NetEdge | NetEvent): EdgeScope => e.scope ?? (e.type === "org" ? "org" : e.to === 0 ? "platform" : "peer");
 const INK = 0xe6e8eb;
 const DIM = 0x3a4048;
 const ACCENT = 0x6cc4dc;
@@ -53,10 +63,13 @@ export default function AgentNetwork({
   data,
   onSelect,
   compact = false,
+  orgMode = false,
 }: {
   data: Network;
   onSelect?: (id: number) => void;
   compact?: boolean;
+  /** Lay members out by reporting level and draw the reports_to lines. */
+  orgMode?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
@@ -90,25 +103,57 @@ export default function AgentNetwork({
     // Layout: the hub in the middle, people on an inner ring, agents on an outer
     // ring, gently staggered in height so the structure reads in 3D.
     const pos = new Map<number, THREE.Vector3>();
-    const people = data.nodes.filter((n) => n.kind === "human");
-    const agents = data.nodes.filter((n) => n.kind === "ai" || n.kind === "agent");
-    pos.set(0, new THREE.Vector3(0, 0, 0));
-    people.forEach((n, i) => {
-      const a = (i / Math.max(people.length, 1)) * Math.PI * 2 + Math.PI / 2;
-      pos.set(n.id, new THREE.Vector3(Math.cos(a) * 0.95, 0.62, Math.sin(a) * 0.95));
-    });
-    agents.forEach((n, i) => {
-      const a = (i / Math.max(agents.length, 1)) * Math.PI * 2;
-      pos.set(n.id, new THREE.Vector3(Math.cos(a) * 1.8, (i % 2 ? 0.3 : -0.3) - 0.1, Math.sin(a) * 1.8));
-    });
+    const rings: [number, number][] = [];
+    if (orgMode) {
+      // Org chart: one horizontal ring per reporting level, the owner on top.
+      const byId = new Map(data.nodes.map((n) => [n.id, n]));
+      const level = (n: NetNode) => {
+        let d = 0;
+        const seen = new Set([n.id]);
+        for (let up = n.reports_to; up != null && byId.has(up) && !seen.has(up); up = byId.get(up)!.reports_to) {
+          seen.add(up);
+          d++;
+        }
+        return d;
+      };
+      const levels = new Map<number, NetNode[]>();
+      for (const n of data.nodes) {
+        if (n.kind === "hub" || n.status === "archived") continue;
+        const l = level(n);
+        levels.set(l, [...(levels.get(l) ?? []), n]);
+      }
+      const top = Math.max(1, ...levels.keys());
+      levels.forEach((ns, l) => {
+        const y = 0.75 - (l * 1.2) / top;
+        const r = ns.length === 1 ? 0 : Math.min(0.4 + 0.15 * ns.length, 1.6);
+        if (r) rings.push([r, y]);
+        ns.forEach((n, i) => {
+          const a = (i / ns.length) * Math.PI * 2 + l * 0.4;
+          pos.set(n.id, new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+        });
+      });
+    } else {
+      const people = data.nodes.filter((n) => n.kind === "human");
+      const agents = data.nodes.filter((n) => n.kind === "ai" || n.kind === "agent");
+      pos.set(0, new THREE.Vector3(0, 0, 0));
+      people.forEach((n, i) => {
+        const a = (i / Math.max(people.length, 1)) * Math.PI * 2 + Math.PI / 2;
+        pos.set(n.id, new THREE.Vector3(Math.cos(a) * 0.95, 0.62, Math.sin(a) * 0.95));
+      });
+      agents.forEach((n, i) => {
+        const a = (i / Math.max(agents.length, 1)) * Math.PI * 2;
+        pos.set(n.id, new THREE.Vector3(Math.cos(a) * 1.8, (i % 2 ? 0.3 : -0.3) - 0.1, Math.sin(a) * 1.8));
+      });
+      rings.push([0.95, 0], [1.8, 0]);
+    }
 
     const maxLoad = Math.max(1, ...data.nodes.map(workload));
     const clickable: { mesh: THREE.Mesh; id: number }[] = [];
     const pulses: { mesh: THREE.Mesh; base: number; phase: number }[] = [];
 
     // Quiet reference rings.
-    for (const r of [0.95, 1.8]) {
-      const pts = Array.from({ length: 129 }, (_, i) => new THREE.Vector3(Math.cos((i / 128) * Math.PI * 2) * r, 0, Math.sin((i / 128) * Math.PI * 2) * r));
+    for (const [r, y] of rings) {
+      const pts = Array.from({ length: 129 }, (_, i) => new THREE.Vector3(Math.cos((i / 128) * Math.PI * 2) * r, y, Math.sin((i / 128) * Math.PI * 2) * r));
       group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: INK, transparent: true, opacity: 0.06 })));
     }
 
@@ -140,29 +185,48 @@ export default function AgentNetwork({
         group.add(halo);
       }
       const name = n.is_owner ? "You" : n.name;
-      const sub = n.kind === "hub" ? (data.frozen ? "FROZEN" : "platform") : `${n.working} working · ${n.open} next${n.review ? ` · ${n.review} review` : ""}`;
+      const loadText = `${n.working} working · ${n.open} next${n.review ? ` · ${n.review} review` : ""}`;
+      const roleText = n.role ? `${n.role.replace(/_/g, " ")}${n.team ? ` · ${n.team}` : ""}` : loadText;
+      const sub = n.kind === "hub" ? (data.frozen ? "FROZEN" : "platform") : orgMode ? roleText : loadText;
       const ev = n.engine_view;
       const shown = ev ? (ev.last_run?.running ? ev.last_run : ev.now) : null;
       const engine = shown ? { label: shown.label, fallback: "fallback" in shown && !!shown.fallback } : undefined;
       mesh.add(tag(name, sub, n.kind === "human" || n.kind === "hub" ? "#e6e8eb" : dimmed ? "#7d848f" : "#6cc4dc", engine));
     }
 
-    // Edges: straight thin lines, opacity by volume; curved slightly upward so
-    // two-way traffic stays readable.
-    const maxCount = Math.max(1, ...data.edges.map((e) => e.count));
+    // Edges by scope: agent-to-agent arcs high above the plane (handoffs as a
+    // bright tube, messages dashed), calls to the platform low and dim, and in
+    // org mode the reports_to hierarchy as straight lines.
+    const shown = data.edges.filter((e) => (orgMode ? scopeOf(e) !== "platform" : scopeOf(e) !== "org"));
+    const maxCount = Math.max(1, ...shown.filter((e) => scopeOf(e) !== "org").map((e) => e.count));
     const curves = new Map<string, THREE.QuadraticBezierCurve3>();
-    for (const e of data.edges) {
+    for (const e of shown) {
       const a = pos.get(e.from);
       const b = pos.get(e.to);
       if (!a || !b) continue;
+      const scope = scopeOf(e);
       const mid = a.clone().add(b).multiplyScalar(0.5);
-      mid.y += 0.18 + (e.type === "mcp" || e.type === "run" ? 0 : 0.12);
+      if (scope === "peer") mid.y += orgMode ? 0.14 : 0.34;
+      else if (scope === "platform") mid.y += 0.1;
       const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
       curves.set(`${e.from}-${e.to}-${e.type}`, curve);
-      const line = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(curve.getPoints(32)),
-        new THREE.LineBasicMaterial({ color: EDGE_COLOR[e.type], transparent: true, opacity: 0.12 + 0.5 * (e.count / maxCount) }),
-      );
+      const weight = e.count / maxCount;
+      if (e.type === "handoff") {
+        group.add(
+          new THREE.Mesh(
+            new THREE.TubeGeometry(curve, 32, 0.0045 + 0.004 * weight, 6, false),
+            new THREE.MeshBasicMaterial({ color: EDGE_COLOR.handoff, transparent: true, opacity: 0.6 + 0.4 * weight }),
+          ),
+        );
+        continue;
+      }
+      const opacity = scope === "org" ? 0.5 : scope === "platform" ? 0.06 + 0.2 * weight : 0.25 + 0.55 * weight;
+      const material =
+        e.type === "message"
+          ? new THREE.LineDashedMaterial({ color: EDGE_COLOR.message, transparent: true, opacity, dashSize: 0.05, gapSize: 0.035 })
+          : new THREE.LineBasicMaterial({ color: EDGE_COLOR[e.type], transparent: true, opacity });
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curve.getPoints(32)), material);
+      if (e.type === "message") line.computeLineDistances();
       group.add(line);
     }
 
@@ -172,8 +236,9 @@ export default function AgentNetwork({
       .map((ev, i) => {
         const curve = curves.get(`${ev.from}-${ev.to}-${ev.type}`);
         if (!curve) return null;
-        const m = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({ color: EDGE_COLOR[ev.type] }));
-        m.scale.setScalar(0.012);
+        const peer = scopeOf(ev) === "peer";
+        const m = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({ color: EDGE_COLOR[ev.type], transparent: !peer, opacity: peer ? 1 : 0.5 }));
+        m.scale.setScalar(peer ? 0.016 : 0.01);
         group.add(m);
         return { m, curve, offset: (i * 0.137) % 1, speed: 0.12 + (i % 5) * 0.03 };
       })
@@ -237,14 +302,18 @@ export default function AgentNetwork({
       renderer.dispose();
       el.innerHTML = "";
     };
-  }, [data, onSelect, compact]);
+  }, [data, onSelect, compact, orgMode]);
 
   return (
     <div
       ref={host}
       className="relative h-full w-full cursor-grab overflow-hidden active:cursor-grabbing"
       role="img"
-      aria-label="Agent network: members sized by workload, lines for hand-offs, messages, approvals and platform calls. Drag to orbit, click a member to open it."
+      aria-label={
+        orgMode
+          ? "Org chart: members layered by whom they report to, with handoffs and messages between them. Drag to orbit, click a member to open it."
+          : "Agent network: members sized by workload, bright lines for handoffs and dashed lines for messages between agents, dim lines for calls to the platform. Drag to orbit, click a member to open it."
+      }
     >
       {failed && <p className="cap absolute inset-0 grid place-items-center">WebGL is not available in this browser.</p>}
     </div>

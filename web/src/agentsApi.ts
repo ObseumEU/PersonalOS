@@ -24,6 +24,10 @@ export type Agent = {
   created_by_name: string | null;
   created_at: string;
   expires_at: string | null;
+  role: string | null;
+  team: string | null;
+  reports_to: number | null;
+  reports_to_name: string | null;
   engine: "claude" | "codex" | "auto" | null;
   engine_effective: "claude" | "codex" | "auto";
   model: string | null;
@@ -117,6 +121,21 @@ export type Engines = {
   };
 };
 
+/** A member's place in the company structure (GET /api/org). */
+export type OrgMember = {
+  id: number;
+  name: string;
+  kind: Agent["kind"];
+  is_owner: boolean;
+  role: string | null;
+  team: string | null;
+  reports_to: number | null;
+  reports_to_name: string | null;
+  status: AgentStatus;
+  level: number;
+};
+export type Org = { members: OrgMember[]; roles: string[]; project_manager: number | null };
+
 export type FreezeState = { frozen: boolean; reason?: string; updated_at?: string };
 
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
@@ -140,6 +159,9 @@ export const agentsApi = {
   setEngine: (id: number, engine: string | null, model: string | null) =>
     api<AgentDetail>(`/api/agents/${id}/engine`, { method: "PUT", body: JSON.stringify({ engine, model }) }),
   engines: () => api<Engines>("/api/engines"),
+  org: () => api<Org>("/api/org"),
+  setOrg: (id: number, body: { role?: string | null; team?: string | null; reports_to?: number | null }) =>
+    api<OrgMember>(`/api/agents/${id}/org`, { method: "PUT", body: JSON.stringify(body) }),
   network: (window: string) => api<Network>(`/api/network?window=${window}`),
   freezeState: () => api<FreezeState>("/api/system/freeze"),
   freeze: (reason: string) => post<FreezeState>("/api/system/freeze", { reason }),
