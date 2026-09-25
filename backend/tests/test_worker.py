@@ -148,7 +148,8 @@ def test_worker_runs_a_task_and_injects_a_message(setup, fake_codex, tmp_path, m
     run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
     # The first turn was stopped mid-way to inject the message; the resumed turn reports usage.
     assert run["status"] == "ok" and run["input_tokens"] >= 50
-    msg = conn.execute("SELECT delivered_in_run FROM messages").fetchone()
+    # Messages are chat now: delivery per recipient lives in chat_inbox.
+    msg = conn.execute("SELECT delivered_in_run FROM chat_inbox").fetchone()
     assert msg["delivered_in_run"] == run["id"]
     done = tasks.get(conn, owner, t["id"])
     assert done["status"] == "review"

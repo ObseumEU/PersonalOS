@@ -8,7 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
 
 from . import __doc__ as description
-from . import a2a, actors, api_agents, api_connectors, api_deploys, api_tasks, api_worker, integrations, mcp_server, scheduler
+from . import a2a, actors, api_agents, api_chat, api_connectors, api_deploys, api_tasks, api_worker, chat, integrations, mcp_server, scheduler
 from .auth import require_user
 from .auth import router as auth_router
 from .budget import service as budget_service
@@ -79,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             integrations.register_builtin_agents(conn)
             a2a.configure_builtin(conn)
             scheduler.seed(conn)
+            chat.ensure_team_channel(conn)
         finally:
             conn.close()
         integrations.install()
@@ -117,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_tasks.router)
     app.include_router(api_agents.router)
     app.include_router(api_worker.router)
+    app.include_router(api_chat.router)
     app.include_router(api_connectors.router)
     app.include_router(api_connectors.hooks)
     app.include_router(a2a.router)

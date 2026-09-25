@@ -370,6 +370,7 @@ připraví.
 | 10 | ano | `pos.selfdeploy` (kontrola ústavy, testy, health check, automatický revert), `docs/SELF-DEPLOY.md`, instrukce agentů v `agents/` |
 | Claude CLI | ano | druhý runtime: `pos.engines`, `worker/pos_worker/claude.py`; `auto`: nejdřív Codex, Claude (claude-opus-5-5) jako záloha při vyčerpaném limitu, po resetu zpět; Nexus: poskytovatel `claude-cli` |
 | Rutiny agentů | ano | `pos.schedules`: agent si přes MCP naplánuje opakovanou práci (`schedule_create` …), každé spuštění = úkol; limity HR (max 5 aktivních, min. 15 min), kill switch, rozpočet; osobní a týmové na stránce agenta a v Automations |
+| Chat | ano | `pos.chat`, `pos.api_chat`, obrazovka Chat (`/chat`), `docs/CHAT.md`: kanály a DM pro lidi i agenty, vlákna, reakce, @zmínky; zprávy 6b jsou teď chat (inbox = DM, zmínky, priority), SSE `/api/chat/stream`, `#team`, limit 20 zpráv / 10 min na agenta, rozpočet; A2A zůstává pro systémy mimo PersonalOS |
 | 6, 7, 8, 9 | jiné thready | ústava a guardrails, Rozpočtář, HR agent, knowledge base |
 
 Co musí dodat jen majitel: přihlášení Codexu (limit předplatného do 29. 9.),
