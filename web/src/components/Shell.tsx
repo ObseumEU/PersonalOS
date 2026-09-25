@@ -89,7 +89,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
                 <>
                   <Icon size={18} strokeWidth={1.5} className={isActive ? "text-accent" : "text-ink-3"} />
                   {label}
-                  {mock && <MockDot className="ml-auto" />}
+                  {mock && <MockDot why={mock} className="ml-auto" />}
                   {path === "approvals" && approvals > 0 && (
                     <span className="cap ml-auto rounded-sm bg-amber-300/15 px-1.5 text-amber-300!">{approvals}</span>
                   )}
@@ -170,7 +170,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
             <span className="relative">
               <Icon size={20} strokeWidth={1.5} />
               {path === "approvals" && approvals > 0 && <span className="absolute -top-1 -right-1.5 h-2 w-2 rounded-full bg-amber-300" />}
-              {mock && <MockDot className="absolute -top-1 -left-1.5" />}
+              {mock && <MockDot why={mock} className="absolute -top-1 -left-1.5" />}
             </span>
             {label}
           </NavLink>

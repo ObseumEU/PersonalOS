@@ -14,8 +14,8 @@ export function Panel({
   fig?: string;
   title?: string;
   right?: ReactNode;
-  /** Shows the red mock dot next to the title (see docs/MOCK-STATUS.md). */
-  mock?: boolean;
+  /** Red mock dot next to the title; a string says why (tooltip). See docs/MOCK-STATUS.md. */
+  mock?: boolean | string;
   className?: string;
   bodyClassName?: string;
   children: ReactNode;
@@ -26,7 +26,7 @@ export function Panel({
         <div className="flex items-baseline gap-2.5 border-b border-line px-4 py-3">
           {fig && <span className="cap text-accent!">{fig}</span>}
           <h2 className="text-sm font-medium">{title}</h2>
-          {mock && <MockDot />}
+          {mock && <MockDot why={typeof mock === "string" ? mock : undefined} />}
           {right && <span className="cap ml-auto truncate pl-3">{right}</span>}
         </div>
       )}
@@ -42,20 +42,21 @@ export const MOCK_TITLE = "Mock: sample data or not implemented yet";
  * screen). Real, working parts carry no dot. The list lives in docs/MOCK-STATUS.md;
  * remove the dot there and here when the part is wired to real data.
  */
-export function MockDot({ className = "" }: { className?: string }) {
+export function MockDot({ why, className = "" }: { why?: string; className?: string }) {
+  const label = why ? `Mock: ${why}` : MOCK_TITLE;
   return (
     <span
       role="img"
-      aria-label={MOCK_TITLE}
-      title={MOCK_TITLE}
+      aria-label={label}
+      title={label}
       className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full bg-red-500 ${className}`}
     />
   );
 }
 
 /** Marks placeholder content until real data arrives. */
-export function SampleBadge() {
-  return <MockDot />;
+export function SampleBadge({ why }: { why?: string }) {
+  return <MockDot why={why} />;
 }
 
 function useNow() {
@@ -91,6 +92,7 @@ export function PageHeader({ kicker, title, sub }: { kicker: string; title: stri
           <span className="flex items-center gap-2 text-sm">
             <span className="sonar h-[7px] w-[7px] rounded-full bg-accent" />
             API online
+            <MockDot why="always says online; not a live health check" />
           </span>
         </div>
       </div>

@@ -4,8 +4,12 @@ A small red dot (`MockDot` in `web/src/components/ui.tsx`) marks every part of t
 web UI that is mock: sample data, a control that does nothing yet, or a planned
 screen. Parts that read real data from the backend API carry no dot.
 
+Dots sit on the navigation item, on each mock panel, and on single mock items
+inside otherwise real pages. Hovering a dot shows why it is mock (the `why`
+text, or the `mock="..."` string on a `Panel` or in `web/src/sections.ts`).
+
 When you wire a part to real data, remove its dot (drop `mock` on the `Panel`,
-the `<MockDot />` / `<SampleBadge />`, or `mock: true` in `web/src/sections.ts`)
+the `<MockDot />` / `<SampleBadge />`, or `mock` in `web/src/sections.ts`)
 and move its row below to "Real".
 
 Rule used for the audit: a widget is real when it renders data from a backend
@@ -18,7 +22,10 @@ or a control whose handler does nothing.
 | --- | --- | --- |
 | Navigation | Calendar, Files, Topics, Notes | Planned screens (`ComingSoon`), no backend yet |
 | Today | FIG. 2 Agenda | No calendar sync yet (honest empty state) |
-| Calendar, Files, Topics, Notes | Whole page | `ComingSoon` placeholder |
+| Calendar, Files, Topics, Notes | Whole page and each planned feature row | `ComingSoon` placeholder |
+| Every page header | STATUS "API online" | Static text; not a live health check |
+| Tasks (Today view) | "Today's plan" capacity bar | Fixed 6 h focus day (`DAY_CAPACITY_MIN`) until calendar sync; the task minutes are real |
+| Connectors | `calendar` in the source lists | No calendar connector emits events yet (no dot: it is an option in a select) |
 
 ## Real (no dot)
 

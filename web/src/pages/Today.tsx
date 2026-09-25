@@ -107,7 +107,7 @@ export default function Today() {
           </Panel>
         </div>
 
-        <Panel fig="FIG. 2" title="Agenda" right="no calendar connected yet" mock className="lg:col-span-12" bodyClassName="relative px-5 pt-3.5 pb-1.5">
+        <Panel fig="FIG. 2" title="Agenda" right="no calendar connected yet" mock="calendar sync not built; no events yet" className="lg:col-span-12" bodyClassName="relative px-5 pt-3.5 pb-1.5">
           <Timeline events={[]} />
           <p className="cap pointer-events-none absolute inset-0 grid place-items-center">
             Your calendar appears here once the Google Calendar connector is set up (Connectors).
