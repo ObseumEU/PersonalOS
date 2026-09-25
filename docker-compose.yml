@@ -18,5 +18,48 @@ services:
       - "${POS_PORT:-8080}:80"
     restart: unless-stopped
 
+  # --- Agents: each one is its own Codex worker app (AGENTS-SPEC step 3).
+  # Start with:  docker compose --profile agents up -d --build
+  # Keys come from the agent's page (New key); Codex login from CODEX_HOME_HOST.
+  dev-agent:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on: [api]
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${DEV_AGENT_KEY:-}
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - dev-agent-work:/work
+    restart: unless-stopped
+
+  mail-agent:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on: [api]
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${MAIL_AGENT_KEY:-}
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - mail-agent-work:/work
+    restart: unless-stopped
+
+  community-agent:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on: [api]
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${COMMUNITY_AGENT_KEY:-}
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - community-agent-work:/work
+    restart: unless-stopped
+
 volumes:
   pos-data:
+  dev-agent-work:
+  mail-agent-work:
+  community-agent-work:
+

@@ -134,6 +134,15 @@ export default function AgentDetail() {
           <button className="btn border-amber-400/60! text-amber-300!" onClick={() => act(agentsApi.action(id, "stop"), "Stopped and paused")}>
             <Square size={13} /> Stop
           </button>
+          {!a.archived && a.kind === "agent" && (
+            <button
+              className="btn"
+              title="Issue a new API key for this agent's worker (the old one stops working)"
+              onClick={() => window.confirm("Issue a new key? The current one stops working.") && act(api(`/api/agents/${id}/key`, { method: "POST" }))}
+            >
+              New key
+            </button>
+          )}
           {a.archived ? (
             <button className="btn" onClick={() => act(agentsApi.action(id, "restore"))}>
               Restore
