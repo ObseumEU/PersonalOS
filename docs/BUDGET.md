@@ -54,23 +54,21 @@ vlastní Codex na stejném stroji), protože berou ze stejného předplatného.
 | `POS_BUDGET_MONTHLY_TOKENS` | – | volitelný měsíční strop účtovaných tokenů |
 | `POS_BUDGET_OWNER_RESERVE` | 0.3 | podíl nechaný pro majitelův vlastní Codex |
 | `POS_BUDGET_CODEX_HOME` | `$CODEX_HOME` nebo `~/.codex` | kde Codex zapisuje sezení |
+| `POS_BUDGET_CHECK_MINUTES` | 60 | interval automatické kontroly, 0 = vypnuto |
 
 ## Rozhraní
 
 - API: `GET /api/budget`, `POST /api/budget/check`, `GET /api/budget/gate/{agent}`,
   `PUT /api/budget/agents/{agent}` (`budget_class`: system / normal / low).
 - CLI: `python -m pos.budget check | status | gate AGENT | record --agent A [--task T] < exec.jsonl`.
-- Do spuštění plánovače: cron `0 * * * * python -m pos.budget check`.
 
-## Co potřebuje od jádra (Thread A)
+## Zapojení do jádra (`backend/src/pos/integrations.py`)
 
-1. Runner před každým `codex exec` zavolá `service.can_run(conn, agent_id)`
-   a po něm `service.record_exec(conn, stdout, agent_id=…, task_id=…)`;
-   `codex exec` musí běžet s `--json`.
-2. Při založení agenta `service.set_agent_class(conn, agent_id, třída)`
-   (systémoví agenti `system`).
-3. Akce `notify_owner` z `run_check` převést na úkol pro majitele,
-   `level_changed` zapsat do audit logu.
-4. Plánovač volá `service.run_check(conn)` každou hodinu.
-5. Tabulky `budget_*` si modul zakládá sám (`CREATE TABLE IF NOT EXISTS`);
-   až jádro nabídne migrace po modulech, přesunou se tam.
+- Runner před každým `codex exec` volá bránu `can_run` a po běhu zapisuje
+  spotřebu přes `record_exec`.
+- Asistent je veden jako systémový agent.
+- Web aplikace spouští kontrolu každých `POS_BUDGET_CHECK_MINUTES` minut
+  (výchozí 60, 0 = vypnuto). Změnu stavu zapíše do audit logu, a když se stav
+  zhorší na throttle nebo pause, vytvoří úkol pro majitele (téma `rozpocet`, P1).
+- Až bude plánovač v Nexusu, stačí, když bude volat `integrations.budget_check`.
+- Tabulky `budget_*` si modul zakládá sám (`CREATE TABLE IF NOT EXISTS`).

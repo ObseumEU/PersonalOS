@@ -183,3 +183,18 @@ def test_mcp_tools(tmp_path):
             assert refused.is_error
 
     anyio.run(scenario)
+
+
+def test_schedule_runs_daily_then_weekly_once(conn):
+    from datetime import datetime
+
+    from pos.core import TZ
+    from pos.hr import schedule
+
+    monday_early = datetime(2026, 9, 28, 5, 0, tzinfo=TZ)
+    monday = datetime(2026, 9, 28, 7, 0, tzinfo=TZ)
+    tuesday = datetime(2026, 9, 29, 7, 0, tzinfo=TZ)
+    assert schedule.due(conn, monday_early) == []
+    assert schedule.run_due(conn, monday) == ["daily", "weekly"]
+    assert schedule.run_due(conn, monday) == []
+    assert schedule.run_due(conn, tuesday) == ["daily"]

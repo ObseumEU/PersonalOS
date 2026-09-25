@@ -57,6 +57,9 @@ implementuje a HR agenta spouští plánovač (spec úkol 11).
 - **MCP** (server `pos`): `hr_overview`, `hr_review`, `hr_admit_agent`,
   `hr_weekly_report`. Provést revizi nebo poslat přehled smí jen majitel nebo
   HR agent.
-- **Plánovač:** dokud není Nexus (spec úkol 11), cron:
+- **Plánovač:** dokud není Nexus (spec úkol 11), běží ve webové aplikaci:
+  každých 30 minut zkontroluje, jestli je po 6:00 a dnešní revize ještě
+  neproběhla, v pondělí navíc pošle týdenní přehled. Vypíná se
+  `POS_HR_SCHEDULER=false`, pak jde použít cron
   `30 6 * * * python -m pos.hr review` a `0 7 * * 1 python -m pos.hr weekly`.
   `python -m pos.hr status` jen vypíše přehled.

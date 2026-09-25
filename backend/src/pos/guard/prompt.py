@@ -59,3 +59,13 @@ def constitution_digest() -> str:
 
 def agent_guardrails() -> str:
     return f"{constitution_text().rstrip()}\n\n{GUARDRAILS}"
+
+
+_MARKER = "<!-- pos-guardrails -->"
+
+
+def with_guardrails(prompt: str) -> str:
+    """Prepend the constitution and guardrails to a run's prompt, once."""
+    if prompt.startswith(_MARKER):
+        return prompt
+    return f"{_MARKER}\n{agent_guardrails()}\n---\n\n{prompt}"

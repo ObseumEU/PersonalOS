@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -9,10 +10,12 @@ from . import __doc__ as description
 from . import actors, api_tasks, integrations, mcp_server
 from .auth import require_user
 from .auth import router as auth_router
+from .budget import service as budget_service
 from .budget.api import router as budget_router
 from .config import Settings, get_settings
 from .db import connect, init_db
 from .guard import api as guard_api
+from .hr import schedule as hr_schedule
 from .hr.api import router as hr_router
 
 
@@ -66,8 +69,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             conn.close()
         integrations.install()
-        async with mcp.session_manager.run():
-            yield
+        check_minutes = budget_service.BudgetSettings().check_minutes
+        budget_task = (asyncio.create_task(integrations.budget_loop(settings.db_path, check_minutes))
+                       if check_minutes > 0 else None)
+        hr_task = (asyncio.create_task(integrations.hr_loop(settings.db_path))
+                   if hr_schedule.HRSettings().scheduler else None)
+        try:
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            for task in (budget_task, hr_task):
+                if task:
+                    task.cancel()
 
     app = FastAPI(title="PersonalOS", description=description, lifespan=lifespan)
     app.dependency_overrides[get_settings] = lambda: settings
