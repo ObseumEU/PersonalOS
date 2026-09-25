@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { type Engines, agentsApi } from "../agentsApi";
+import BudgetPanel from "../components/BudgetPanel";
 import KnowledgePanel from "../components/KnowledgePanel";
 import { PageHeader, Panel } from "../components/ui";
 import { useSubsystems } from "../knowledgeApi";
@@ -103,6 +104,7 @@ export default function System() {
           </div>
         </Panel>
       )}
+      <BudgetPanel />
       <Panel fig="TAB. 17" title="Deploys" right="agents merge to main · the deployer checks, ships or reverts">
         {deploys.length === 0 && (
           <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">

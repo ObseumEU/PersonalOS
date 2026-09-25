@@ -68,6 +68,37 @@ function useNow() {
   return now;
 }
 
+let healthState: { ok: boolean | null; at: number } = { ok: null, at: 0 };
+
+/** "API online" from a live /api/health check (shared by every header, every 30 s). */
+function ApiStatus() {
+  const [ok, setOk] = useState<boolean | null>(healthState.ok);
+  useEffect(() => {
+    let alive = true;
+    const check = () => {
+      if (Date.now() - healthState.at < 25000 && healthState.ok !== null) return setOk(healthState.ok);
+      fetch("/api/health", { credentials: "same-origin" })
+        .then((r) => r.ok, () => false)
+        .then((v) => {
+          healthState = { ok: v, at: Date.now() };
+          if (alive) setOk(v);
+        });
+    };
+    check();
+    const t = setInterval(check, 30000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+  return (
+    <span className="flex items-center gap-2 text-sm">
+      <span className={`h-[7px] w-[7px] rounded-full ${ok === false ? "bg-red-400" : ok ? "sonar bg-accent" : "bg-dim"}`} />
+      {ok === false ? "API unreachable" : ok ? "API online" : "checking…"}
+    </span>
+  );
+}
+
 export function PageHeader({ kicker, title, sub }: { kicker: string; title: string; sub?: ReactNode }) {
   const now = useNow();
   const hm = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
@@ -89,11 +120,7 @@ export function PageHeader({ kicker, title, sub }: { kicker: string; title: stri
         </div>
         <div className="flex flex-col gap-1">
           <span className="cap">STATUS</span>
-          <span className="flex items-center gap-2 text-sm">
-            <span className="sonar h-[7px] w-[7px] rounded-full bg-accent" />
-            API online
-            <MockDot why="always says online; not a live health check" />
-          </span>
+          <ApiStatus />
         </div>
       </div>
     </header>

@@ -101,7 +101,7 @@ function Rows({ items, onChange, onError }: { items: Schedule[]; onChange: () =>
   );
 }
 
-function NewSchedule({ assignee, onCreated, onError }: { assignee?: { id: number; name: string }; onCreated: () => void; onError: (m: string | null) => void }) {
+export function NewSchedule({ assignee, onCreated, onError }: { assignee?: { id: number; name: string }; onCreated: () => void; onError: (m: string | null) => void }) {
   const [open, setOpen] = useState(false);
   const [f, setF] = useState({ name: "", schedule: "daily 07:00", notes: "" });
   if (!open)

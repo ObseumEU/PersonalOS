@@ -139,7 +139,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/system", tags=["system"], dependencies=[Depends(require_user)])
     def system() -> dict[str, str]:
-        return {"version": "0.3.0", "phase": "steps 1-6: tasks, agents, workers, connectors, A2A, self-deploy"}
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            v = version("personalos")
+        except PackageNotFoundError:
+            v = "dev"
+        return {"version": v, "phase": "team: people and agents, projects, review, feedback, hiring"}
 
     return app
 

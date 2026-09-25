@@ -327,6 +327,8 @@ Stav: hotovo (commit „Wave 2 / 4.4“). Pracovní doba z `POS_WORK_HOURS` (vý
   sloupcem Vlastník), stejné ovládání.
 - `/api/system` verze z balíčku, „API online“ z živého health checku.
 
+Stav: hotovo (commit „Wave 2 / 4.5“).
+
 ### 4.6 Konektory a pošta
 
 - **Háček od knowlage (vlastní thread „Knowlage: server a konektory“):** po
