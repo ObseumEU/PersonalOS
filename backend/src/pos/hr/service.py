@@ -36,7 +36,8 @@ def ensure_hr_agent(conn: sqlite3.Connection) -> int:
     else:
         hr_id = row["id"]
     if store.get_profile(conn, hr_id) is None:
-        store.set_profile(conn, hr_id, purpose=HR_PURPOSE, lifetime="long_lived", system=1)
+        store.set_profile(conn, Ctx(hr_id, via="system"), hr_id, purpose=HR_PURPOSE,
+                          lifetime="long_lived", system=1)
     conn.commit()
     budget.set_agent_class(conn, str(hr_id), "system")
     conn.commit()
@@ -112,12 +113,14 @@ def weekly_report(conn: sqlite3.Connection, ctx: Ctx | None = None, *, now: date
 
 
 def register_agent(conn: sqlite3.Connection, actor_id: int, *, purpose: str, lifetime: str = "long_lived",
-                   created_by: int | None = None, expires_at: str | None = None, system: bool = False) -> None:
+                   created_by: int | None = None, expires_at: str | None = None, system: bool = False,
+                   ctx: Ctx | None = None) -> None:
     """Record the spec 3.1 fields HR needs for an agent the core just created."""
     store.ensure_schema(conn)
     actors.get(conn, actor_id)
     Lifetime(lifetime)
-    store.set_profile(conn, actor_id, purpose=purpose, lifetime=lifetime, created_by=created_by,
+    ctx = ctx or Ctx(created_by or actors.owner_id(conn), via="system")
+    store.set_profile(conn, ctx, actor_id, purpose=purpose, lifetime=lifetime, created_by=created_by,
                       expires_at=expires_at, system=int(system))
 
 
@@ -128,7 +131,7 @@ def _active_agents(platform: CorePlatform) -> list:
 def _created_today(conn: sqlite3.Connection, creator_id: int) -> int:
     start = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
     return conn.execute(
-        """SELECT COUNT(*) FROM hr_agent_profiles p JOIN actors a ON a.id = p.actor_id
+        """SELECT COUNT(*) FROM hr_profiles p JOIN actors a ON a.id = p.id
            WHERE p.created_by = ? AND a.created_at >= ?""",
         (creator_id, iso(start)),
     ).fetchone()[0]

@@ -93,8 +93,13 @@ def test_daily_review_archives_idle_agents_only(conn):
     assert actors.get(conn, busy)["archived_at"] is None
     assert actors.find_by_name(conn, "Nexus") is not None
 
+    from pos import versioning
+
+    assert [h["action"] for h in versioning.history(conn, "actor", idle)] == ["archive"]
     service.restore(conn, owner, idle)
     assert actors.get(conn, idle)["archived_at"] is None
+    assert [h["action"] for h in versioning.history(conn, "actor", idle)][-1] == "unarchive"
+    assert versioning.history(conn, "hr_profile", idle)[0]["action"] == "create"
 
 
 def test_review_is_owner_or_hr_only(conn):
