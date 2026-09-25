@@ -23,10 +23,46 @@ All three follow the rules of tasks: every write goes through `versioning`
 - **Preview.** `GET /api/files/{id}/content` is inline for images (PNG, JPEG,
   GIF, WebP), PDF and text; everything else downloads. `?download=1` forces a
   download.
-- **Search.** Text, markdown, CSV and JSON are indexed directly. PDFs are
-  indexed when `pypdf` is installed (`pip install personalos[pdf]`); without
-  it they are stored but not searchable. Search uses SQLite FTS5
-  (`files_fts`, `notes_fts`, kept in sync by triggers); a SQLite build without
+- **Search goes through knowlage.** Files do not keep a second full-text
+  index (the old `files_fts` is dropped by migration 18). Code:
+  `backend/src/pos/kb_files.py`.
+  - *Push.* After an upload is saved, the file is pushed in the background to
+    knowlage `POST /api/ingest` (`Authorization: Bearer $POS_KNOWLAGE_API_KEY`)
+    as `{source: "personalos", channel: "files", key: "file-<id>", title:
+    <name>, text: <name, type, topic, tags + the text extract>}`. The row stores
+    the knowlage document id (`kb_doc_id`, `pe_<sha1("personalos:files:file-<id>")[:16]>`,
+    the id knowlage derives from the item) and `kb_status` (`pending`, `ok`,
+    `error`), `kb_error`, `kb_attempts`, `kb_synced_at`. A failed push never
+    fails the upload. The scheduler job `knowlage_files` (every 15 minutes)
+    pushes what is `pending` or `error` again; renaming or retagging a file
+    marks it `pending`, so knowlage gets the new labels under the same key.
+  - *Text.* Text, markdown, CSV and JSON are sent directly. PDFs are sent when
+    `pypdf` is installed (`pip install personalos[pdf]`); other files are sent
+    with their name and labels only.
+  - *Search.* `files.search` asks knowlage's `search` tool (`POST /mcp?workspace=$POS_KNOWLAGE_WORKSPACE`,
+    default `firma`, the whole pile; `sources: ["personalos"]`) and maps the hits'
+    document ids back to local files, keeping knowlage's order. Visibility,
+    topic, tag and archive filters still apply locally. `GET /api/files/search`,
+    `GET /api/files?q=`, `GET /api/search` and the MCP `search` tool all use it.
+  - *Fallback.* When knowlage is not configured (no `POS_KNOWLAGE_API_KEY`) or
+    does not answer, search matches file names only (every word, LIKE) and says
+    so: `mode: "filename"` (`files_mode` in `/api/search` and MCP), and the
+    Files page shows a note.
+  - *Backfill.* Files from before this change have no knowlage document. Push
+    them once (idempotent; files that already have a `kb_doc_id` are skipped,
+    `--dry-run` only counts):
+
+    ```bash
+    python -m pos.kb_files backfill            # inside Docker: docker compose exec api python -m pos.kb_files backfill
+    ```
+
+    `python -m pos.kb_files retry` pushes everything `pending` or `error` now,
+    instead of waiting for the job.
+  - Settings: `POS_KNOWLAGE_URL`, `POS_KNOWLAGE_API_KEY`,
+    `POS_KNOWLAGE_WORKSPACE` (where to search, default `firma`),
+    `POS_KNOWLAGE_FILES_WORKSPACE` (optional placement of the `files` channel),
+    `POS_PUBLIC_URL` (link back to the file, shown with knowlage citations).
+- Notes keep their own SQLite FTS5 index (`notes_fts`); a SQLite build without
   FTS5 falls back to LIKE.
 
 ## Topics
@@ -42,6 +78,7 @@ mentions it. Archiving a topic hides it; its items stay.
 | Path | What |
 | --- | --- |
 | `GET/POST /api/files` | list (`topic`, `tag`, `q`, `archived`), multipart upload (`file`, `topic`, `tags`, `visibility`) |
+| `GET /api/files/search?q=` | search through knowlage: `{mode: "knowlage" \| "filename", files, error?}` (also `topic`, `tag`, `archived`) |
 | `GET/PATCH /api/files/{id}`, `/content`, `/history`, `POST /archive`, `/restore` | one file |
 | `GET/POST /api/notes`, `GET/PATCH /api/notes/{id}`, `/history`, `POST /archive`, `/restore` | notes; `/restore` with `{version}` goes back to a version |
 | `GET/POST /api/topics`, `GET/PATCH /api/topics/{slug}`, `POST /archive`, `/restore` | topics |

@@ -210,9 +210,11 @@ def search(conn: sqlite3.Connection, ctx: Ctx, q: str, limit: int = 20) -> dict:
         f"""SELECT * FROM tasks WHERE archived_at IS NULL AND {' AND '.join(conds)} AND {vis}
             ORDER BY status = 'done', updated_at DESC LIMIT ?""", [*params, *vp, limit]
     ).fetchall()
+    found = files.search(conn, ctx, q, limit=limit)  # through knowlage; file names when it is down
     return {
         "q": q,
         "tasks": [tasks.to_dict(r) for r in rows],
-        "files": files.list_files(conn, ctx, q=q, limit=limit),
+        "files": found["files"],
+        "files_mode": found["mode"],
         "notes": notes.list_notes(conn, ctx, q=q, limit=limit),
     }

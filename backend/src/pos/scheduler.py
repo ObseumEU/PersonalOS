@@ -202,7 +202,14 @@ def a2a_sync(conn: sqlite3.Connection) -> dict:
     return a2a.sync(conn)
 
 
+def knowlage_files(conn: sqlite3.Connection) -> dict:
+    from . import kb_files
+
+    return kb_files.sync_pending(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "knowlage_files": knowlage_files,
     "morning_brief": morning_brief,
     "follow_ups": follow_ups,
     "weekly_review": weekly_review,
@@ -224,6 +231,7 @@ DEFAULT_JOBS = [
     ("Release runs of workers that went silent", "every 5m", "reap_runs"),
     ("Schedules of people and agents", "every 1m", "member_schedules"),
     ("Check that the Claude CLI answers with its model", "every 6h", "claude_selfcheck"),
+    ("Push files into knowlage (retry what failed)", "every 15m", "knowlage_files"),
 ]
 
 
@@ -284,8 +292,9 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
         (now.isoformat(timespec="seconds"), json.dumps(result, ensure_ascii=False, default=str),
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
-    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules") or result.get("sent") \
-            or result.get("finished") or result.get("released") or result.get("fired"):
+    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "knowlage_files") or result.get("sent") \
+            or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
+            or result.get("failed"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result

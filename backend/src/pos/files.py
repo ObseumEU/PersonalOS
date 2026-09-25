@@ -1,8 +1,10 @@
 """Files and documents (PLAN 3, item 2): upload, browse, preview, tag, search.
 
 The bytes live on disk under Settings.files_dir as
-`<yyyy>/<mm>/<sha256 prefix>-<safe name>`; the metadata and a text extract for
-full-text search live in the `files` table. Identical content is stored once.
+`<yyyy>/<mm>/<sha256 prefix>-<safe name>`; the metadata and a text extract
+live in the `files` table. Identical content is stored once. Search goes
+through knowlage (pos.kb_files): every file is pushed there after upload, and
+only when knowlage cannot answer does search fall back to file names.
 Like tasks, every write is versioned and audited, reads follow the visibility
 layers, and files are archived, never deleted (the bytes stay on disk).
 
@@ -21,7 +23,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from . import actors, versioning
-from .content import check_visibility, match_sql, norm_tags, norm_topic, tags_json, words
+from .content import check_visibility, norm_tags, norm_topic, tags_json, words
 from .core import Ctx, NotFound, now_iso
 from .tasks import Invalid
 from .visibility import DEFAULT, check_read, visible_sql
@@ -98,7 +100,7 @@ def is_text(mime: str | None) -> bool:
 
 
 def extract_text(path: Path, mime: str) -> str:
-    """Text for full-text search: text files directly, PDFs through pypdf
+    """Text for search (pushed into knowlage): text files directly, PDFs through pypdf
     when it is installed (optional), nothing for other types."""
     try:
         if is_text(mime):
@@ -158,8 +160,7 @@ def get(conn: sqlite3.Connection, ctx: Ctx, file_id: int, *, with_text: bool = F
     return to_dict(_row(conn, ctx, file_id), with_text=with_text)
 
 
-def list_files(conn: sqlite3.Connection, ctx: Ctx, *, topic: str | None = None, tag: str | None = None,
-               q: str | None = None, archived: bool = False, limit: int = 200) -> list[dict]:
+def _filtered(ctx: Ctx, topic: str | None, tag: str | None, archived: bool) -> tuple[str, list]:
     vis, params = visible_sql(ENTITY, ctx.actor_id, "files")
     sql = f"SELECT files.* FROM files WHERE {vis} AND files.archived_at IS {'NOT ' if archived else ''}NULL"
     if topic:
@@ -168,12 +169,49 @@ def list_files(conn: sqlite3.Connection, ctx: Ctx, *, topic: str | None = None, 
     if tag:
         sql += " AND EXISTS (SELECT 1 FROM json_each(files.tags) WHERE value = ?)"
         params.append((norm_tags([tag]) or [""])[0])
+    return sql, params
+
+
+def list_files(conn: sqlite3.Connection, ctx: Ctx, *, topic: str | None = None, tag: str | None = None,
+               q: str | None = None, archived: bool = False, limit: int = 200) -> list[dict]:
     if q and words(q):
-        cond, qp = match_sql(conn, "files", "files_fts", ("name", "text_extract", "tags"), q)
-        sql += f" AND {cond}"
-        params += qp
+        return search(conn, ctx, q, topic=topic, tag=tag, archived=archived, limit=limit)["files"]
+    sql, params = _filtered(ctx, topic, tag, archived)
     rows = conn.execute(f"{sql} ORDER BY files.created_at DESC, files.id DESC LIMIT ?", [*params, limit]).fetchall()
     return [to_dict(r) for r in rows]
+
+
+def _like(word: str) -> str:
+    return "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def search(conn: sqlite3.Connection, ctx: Ctx, q: str, *, topic: str | None = None, tag: str | None = None,
+           archived: bool = False, limit: int = 200) -> dict:
+    """Files matching `q`, as the caller may see them: {mode, files, error?}.
+
+    mode "knowlage": knowlage searched the files' content (pos.kb_files) and its
+    hits are mapped back to local files by document id, best first.
+    mode "filename": knowlage is not configured or did not answer, so only file
+    names were matched (every word, LIKE)."""
+    from . import kb_files
+
+    ws = words(q)
+    if not ws:
+        return {"mode": "none", "files": list_files(conn, ctx, topic=topic, tag=tag, archived=archived, limit=limit)}
+    sql, params = _filtered(ctx, topic, tag, archived)
+    try:
+        ids = kb_files.search(q, limit)
+    except kb_files.Unavailable as e:
+        cond = " AND ".join("files.name LIKE ? ESCAPE '\\'" for _ in ws)
+        rows = conn.execute(f"{sql} AND {cond} ORDER BY files.created_at DESC, files.id DESC LIMIT ?",
+                            [*params, *map(_like, ws), limit]).fetchall()
+        return {"mode": "filename", "files": [to_dict(r) for r in rows], "error": str(e)[:300]}
+    if not ids:
+        return {"mode": "knowlage", "files": []}
+    rank = {kid: i for i, kid in enumerate(ids)}
+    rows = conn.execute(f"{sql} AND files.kb_doc_id IN ({','.join('?' * len(ids))})", [*params, *ids]).fetchall()
+    rows = sorted(rows, key=lambda r: rank[r["kb_doc_id"]])[:limit]
+    return {"mode": "knowlage", "files": [to_dict(r) for r in rows]}
 
 
 def tags(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:
@@ -267,6 +305,7 @@ def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO
         "name": name, "path": rel, "mime": mime, "size": size, "sha256": sha, "topic": topic_v,
         "tags": tags_json(tag_list), "visibility": vis, "owner_id": owner, "created_by": ctx.actor_id,
         "text_extract": extract_text(resolve(files_dir, rel), mime), "created_at": now, "updated_at": now,
+        "kb_status": "pending",  # pushed into knowlage once the upload is saved (pos.kb_files)
     })
     return {**get(conn, ctx, row["id"]), "duplicate": False}
 
@@ -291,6 +330,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, file_id: int, changes: dict) -> d
             check_visibility_change(conn, ctx, row, changes["visibility"])
         clean["visibility"] = changes["visibility"]
     versioning.update(conn, ctx, ENTITY, file_id, clean)
+    if {"name", "topic", "tags"} & set(clean):
+        from . import kb_files
+
+        kb_files.mark_changed(conn, file_id)  # the retry job pushes the new name and labels
     return get(conn, ctx, file_id)
 
 

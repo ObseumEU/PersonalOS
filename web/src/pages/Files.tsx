@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNod
 import { Link, useSearchParams } from "react-router-dom";
 import TopicInput, { refreshTopics } from "../components/TopicInput";
 import { PageHeader, Panel } from "../components/ui";
-import { type FileItem, filesApi, fmtDate, fmtSize, parseTags } from "../filesApi";
+import { type FileItem, type FileSearch, filesApi, fmtDate, fmtSize, parseTags } from "../filesApi";
 import type { Version } from "../tasksApi";
 
 const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
@@ -129,7 +129,13 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
             }}
           />
         </Field>
-        {file.text_chars > 0 && <span className="cap">{file.text_chars.toLocaleString("en-GB")} characters of text indexed for search</span>}
+        <span className="cap">
+          {file.kb_status === "ok"
+            ? `in knowlage${file.text_chars > 0 ? ` · ${file.text_chars.toLocaleString("en-GB")} characters of text searchable` : ""}`
+            : file.kb_status === "error"
+              ? `not in knowlage yet (will retry): ${file.kb_error ?? "error"}`
+              : "waiting to be indexed in knowlage"}
+        </span>
         <div className="flex flex-wrap gap-2 border-t border-line pt-3">
           <a className="btn" href={filesApi.contentUrl(file.id, true)}>
             <Download size={14} /> Download
@@ -235,10 +241,22 @@ export default function Files() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [grid, setGrid] = useState(false);
+  const [mode, setMode] = useState<FileSearch["mode"]>("none");
 
   const query = params.get("q") ?? undefined;
   const refresh = useCallback(() => {
-    filesApi.list({ topic, tag, q: query, archived }).then(setFiles, (e) => setError(e.message));
+    if (query) {
+      filesApi.search({ q: query, topic, tag, archived }).then(
+        (r) => {
+          setFiles(r.files);
+          setMode(r.mode);
+        },
+        (e) => setError(e.message),
+      );
+    } else {
+      setMode("none");
+      filesApi.list({ topic, tag, archived }).then(setFiles, (e) => setError(e.message));
+    }
     filesApi.tags().then(setTags, () => undefined);
   }, [topic, tag, query, archived]);
   useEffect(refresh, [refresh]);
@@ -262,7 +280,7 @@ export default function Files() {
       <PageHeader
         kicker="FILES · UPLOAD → TAG → FIND"
         title="Files"
-        sub="Every document in one place. Text, markdown, CSV, JSON and PDFs are searchable in full text."
+        sub="Working files and attachments, linked to tasks, topics and notes. Search goes through knowlage: every upload is indexed there, text, markdown, CSV, JSON and PDFs in full text."
       />
       <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
         <nav aria-label="File filters" className="flex shrink-0 gap-1 overflow-x-auto lg:w-44 lg:flex-col lg:overflow-visible">
@@ -346,10 +364,15 @@ export default function Files() {
                 id="file-search"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search names and the text inside…"
+                placeholder="Search the text inside, through knowlage…"
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-3"
               />
             </div>
+            {query && mode === "filename" && (
+              <span className="cap text-amber-300!" role="status">
+                knowlage did not answer, so only file names were searched
+              </span>
+            )}
             {notice && <span className="cap text-accent!">{notice}</span>}
           </div>
           {files?.length === 0 && <p className="cap p-6 text-center">{query || tag || topic ? "No file matches." : archived ? "Nothing archived." : "No files yet. Drop one above."}</p>}
