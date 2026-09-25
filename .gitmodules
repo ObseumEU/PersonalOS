@@ -1,0 +1,6 @@
+[submodule "apps/nexus-process-pilot"]
+	path = apps/nexus-process-pilot
+	url = https://github.com/ObseumEU/nexus-process-pilot.git
+[submodule "apps/knowlage-agent"]
+	path = apps/knowlage-agent
+	url = https://github.com/ObseumEU/knowlage-agent.git
