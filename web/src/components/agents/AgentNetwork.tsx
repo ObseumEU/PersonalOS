@@ -68,6 +68,7 @@ export default function AgentNetwork({
       return;
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.domElement.style.cssText = "display:block;width:100%;height:100%";
     el.appendChild(renderer.domElement);
     const labels = new CSS2DRenderer();
     labels.domElement.style.cssText = "position:absolute;inset:0;pointer-events:none";
@@ -190,7 +191,7 @@ export default function AgentNetwork({
     const resize = () => {
       const { clientWidth: w, clientHeight: h } = el;
       if (!w || !h) return;
-      renderer.setSize(w, h);
+      renderer.setSize(w, h, false); // size the buffer; CSS keeps it fluid
       labels.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -233,7 +234,7 @@ export default function AgentNetwork({
   return (
     <div
       ref={host}
-      className="relative h-full w-full cursor-grab active:cursor-grabbing"
+      className="relative h-full w-full cursor-grab overflow-hidden active:cursor-grabbing"
       role="img"
       aria-label="Agent network: members sized by workload, lines for hand-offs, messages, approvals and platform calls. Drag to orbit, click a member to open it."
     >
