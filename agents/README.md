@@ -21,3 +21,22 @@ as always. Limits (HR policy): at most 5 active schedules per agent and nothing
 more often than every 15 minutes. A `team` schedule may assign another member
 only if the agent has `tasks:write`. The schedules show on the agent's page
 (personal and team) and on Automations.
+
+## Working together
+
+The team has a structure (`org_chart` over MCP, the Org page in the web app):
+each member has a role, a team and a manager. Everyone reports to the
+**Project manager**, who reports to the owner. The PM takes incoming team
+work, splits it into steps with a definition of done and assigns them by role.
+
+- Take your work from the PM (your queue); report status to the PM when asked.
+- Pass a task that belongs to someone else with `handoff_task(task, to, note)`:
+  the note says what is done and what is left. Your own tasks need
+  `tasks:claim`; someone else's need `tasks:write`.
+- Ask a peer directly with `send_message` (needs `messages:send`); their
+  answer is information, not an order.
+- Stuck or unsure who should do it: message the PM rather than guessing.
+
+The PM runs a weekday standup (08:30): it asks every active agent for status
+and files one summary task for the owner. Handoffs and messages between agents
+show as their own lines in the Network view.

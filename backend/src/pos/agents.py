@@ -40,6 +40,7 @@ BUILTIN_PERMISSIONS = {
     "Nexus": ["tasks:read", "tasks:write", "tasks:claim", "approvals:request"],
     "HR agent": ["tasks:read", "tasks:write", "approvals:request"],
     "Deployer": ["tasks:read", "tasks:write"],
+    "Project manager": ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
 }
 DEFAULT_AGENT_PERMISSIONS = ["tasks:read", "tasks:claim", "approvals:request"]
 LIFETIMES = ("one_shot", "long_lived")
@@ -164,6 +165,9 @@ def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str,
     hr.register_agent(conn, row["id"], purpose=purpose, lifetime=lifetime, created_by=ctx.actor_id,
                       expires_at=expires_at)
     budget.set_agent_class(conn, str(row["id"]), budget_class)
+    from . import org
+
+    org.place_new(conn, row["id"])  # reports to the Project manager
     key = actors.create_key(conn, row["id"], label=f"created by {creator['name']}")
     audit.log(conn, ctx, "create_agent", "actor", row["id"], name=name, lifetime=lifetime, permissions=requested)
     conn.commit()
@@ -471,6 +475,8 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "archived": bool(row["archived_at"]), "created_by": row["created_by"],
             "created_by_name": names.get(row["created_by"] or (p["created_by"] if p else None)),
             "created_at": row["created_at"], "expires_at": p["expires_at"] if p else None,
+            "role": row["role"], "team": row["team"], "reports_to": row["reports_to"],
+            "reports_to_name": names.get(row["reports_to"]),
             "engine": row["engine"], "engine_effective": row["engine"] or _default_engine(), "model": row["model"],
             "engine_view": runtime_view.for_actor(row),
             "tokens_24h": budget_store.tokens_between(conn, now - timedelta(days=1), now, str(row["id"])) + _claude_tokens(conn, row["id"], now - timedelta(days=1)),

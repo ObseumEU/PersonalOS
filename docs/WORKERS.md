@@ -79,3 +79,9 @@ docker compose logs -f dev-agent
 ```
 
 A new agent: add a service like `dev-agent` with its own key.
+
+The **Project manager** (`project-manager` service, key `PM_AGENT_KEY`) is
+created by PersonalOS at startup; issue its key on its agent page. It takes
+team work, splits it into steps and assigns them by role, and runs the weekday
+standup. Workers hand work to each other with the `handoff_task` tool and ask
+peers with `send_message` (see `agents/README.md`, "Working together").

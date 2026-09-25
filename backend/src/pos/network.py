@@ -4,11 +4,15 @@ Nodes are members (people and agents) plus a hub for PersonalOS itself.
 Edges aggregate interactions in a time window:
 
 - assign:   someone hands a task to someone else (task creation or re-assignment)
+- handoff:  a member passed its task to another with a note (handoff_task)
 - message:  a message between members
 - approval: an approval request to the owner
 - mcp:      calls a member made to PersonalOS over MCP
 - run:      codex runs a member did
+- org:      who reports to whom (not windowed, no events)
 
+Each edge has a `kind` (same as `type`) and a `scope`: `peer` between members,
+`platform` to the PersonalOS hub, `org` for the hierarchy.
 `events` lists the most recent interactions, for animating particles.
 """
 
@@ -50,6 +54,7 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
             "open": load["open"] or 0, "working": load["working"] or 0, "review": load["review"] or 0,
             "tokens": budget_store.tokens_between(conn, now - WINDOWS[window], now, str(a["id"])),
             "last_seen_at": a["last_seen_at"], "status": status,
+            "role": a["role"], "team": a["team"], "reports_to": a["reports_to"],
             "engine_view": runtime_view.for_actor(a),
         })
 
@@ -69,8 +74,12 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
         (since,),
     ):
         add(r["actor_id"], r["to_id"], "assign", r["at"])
-    for r in conn.execute("SELECT from_actor, to_actor, created_at FROM messages WHERE created_at >= ?", (since,)):
+    # Handoff messages are drawn once, as the handoff.
+    for r in conn.execute("SELECT from_actor, to_actor, created_at FROM messages WHERE created_at >= ? "
+                          "AND id NOT IN (SELECT message_id FROM handoffs WHERE message_id IS NOT NULL)", (since,)):
         add(r["from_actor"], r["to_actor"], "message", r["created_at"])
+    for r in conn.execute("SELECT from_actor, to_actor, created_at FROM handoffs WHERE created_at >= ?", (since,)):
+        add(r["from_actor"], r["to_actor"], "handoff", r["created_at"])
     for r in conn.execute("SELECT requested_by, created_at FROM approvals WHERE created_at >= ?", (since,)):
         add(r["requested_by"], owner, "approval", r["created_at"])
     for r in conn.execute(
@@ -80,10 +89,20 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
     for r in conn.execute("SELECT actor_id, started_at FROM runs WHERE started_at >= ?", (since,)):
         add(r["actor_id"], HUB, "run", r["started_at"])
 
+    for a in conn.execute("SELECT id, reports_to FROM actors WHERE archived_at IS NULL AND reports_to IS NOT NULL"):
+        if a["reports_to"] != a["id"]:
+            edges[(a["id"], a["reports_to"], "org")] = 1
+
+    def scope(dst: int, kind: str) -> str:
+        return "org" if kind == "org" else "platform" if dst == HUB else "peer"
+
     events.sort(key=lambda e: e["at"], reverse=True)
+    for e in events:
+        e["kind"], e["scope"] = e["type"], scope(e["to"], e["type"])
     return {
         "window": window, "frozen": frozen, "nodes": nodes,
-        "edges": [{"from": s, "to": d, "type": k, "count": n} for (s, d, k), n in edges.items()],
+        "edges": [{"from": s, "to": d, "type": k, "kind": k, "scope": scope(d, k), "count": n}
+                  for (s, d, k), n in edges.items()],
         "events": events[:60],
     }
 

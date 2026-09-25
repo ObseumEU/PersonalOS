@@ -14,12 +14,13 @@ import Connectors from "./pages/Connectors";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import NetworkPage from "./pages/Network";
+import Org from "./pages/Org";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "network", "approvals", "connectors", "automations", "calendar"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/:id" element={<AgentDetail />} />
         <Route path="/network" element={<NetworkPage />} />
+        <Route path="/org" element={<Org />} />
         <Route path="/board" element={<Board />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/connectors" element={<Connectors />} />
