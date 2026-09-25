@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import KnowledgeGraph from "../components/LazyGraph";
 import { PageHeader, Panel, SampleBadge } from "../components/ui";
@@ -23,14 +24,37 @@ function Spark({ seed }: { seed: number }) {
   );
 }
 
+type Deploy = {
+  id: number;
+  old_sha: string;
+  new_sha: string;
+  status: "ok" | "reverted" | "rejected" | "error";
+  stage: string;
+  author: string;
+  reverted_sha: string | null;
+  commits: number;
+  task_ref: string | null;
+  created_at: string;
+  log: string;
+};
+
+const DEPLOY_COLOR: Record<Deploy["status"], string> = {
+  ok: "text-accent",
+  reverted: "text-amber-300",
+  rejected: "text-amber-300",
+  error: "text-red-400",
+};
+
 export default function System() {
   const [api_, setApi] = useState<{ version: string; phase: string } | null>(null);
+  const [deploys, setDeploys] = useState<Deploy[]>([]);
   useEffect(() => {
     api<{ version: string; phase: string }>("/api/system").then(setApi, () => setApi(null));
+    api<Deploy[]>("/api/deploys").then(setDeploys, () => setDeploys([]));
   }, []);
 
   return (
-    <div className="flex flex-col gap-5 lg:h-[calc(100vh-3rem)]">
+    <div className="flex flex-col gap-5">
       <PageHeader
         kicker="SYSTEM · PERSONALOS CORE"
         title="Everything PersonalOS knows."
@@ -41,7 +65,7 @@ export default function System() {
           </span>
         }
       />
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:h-[620px] lg:grid-cols-12">
         <Panel
           fig="FIG. 4"
           title="Knowledge graph, full"
@@ -69,6 +93,37 @@ export default function System() {
           ))}
         </div>
       </div>
+      <Panel fig="TAB. 17" title="Deploys" right="agents merge to main · the deployer checks, ships or reverts">
+        {deploys.length === 0 && (
+          <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">
+            No deploys recorded yet. On the server the deployer follows main: constitution check, tests, build, health check — and an automatic revert
+            commit if anything fails. Start it with <span className="font-mono">docker compose --profile deploy up -d</span> (needs the Deployer key).
+          </p>
+        )}
+        {deploys.map((d) => (
+          <div key={d.id} className="grid grid-cols-[150px_90px_minmax(0,1fr)_150px_90px] items-center gap-3 border-b border-line px-4 py-2 text-[13px]">
+            <span className="font-mono text-xs">
+              {d.old_sha.slice(0, 7)}..{d.new_sha.slice(0, 7)}
+            </span>
+            <span className={`cap ${DEPLOY_COLOR[d.status]}!`}>
+              {d.status}
+              {d.stage ? ` · ${d.stage}` : ""}
+            </span>
+            <span className="truncate text-ink-2" title={d.log}>
+              {d.commits} commit{d.commits === 1 ? "" : "s"} by {d.author || "unknown"}
+              {d.reverted_sha ? ` · reverted in ${d.reverted_sha.slice(0, 7)}` : ""}
+            </span>
+            <span>
+              {d.task_ref && (
+                <Link to={`/tasks?view=agents&task=${d.task_ref}`} className="font-mono text-xs text-accent">
+                  {d.task_ref}
+                </Link>
+              )}
+            </span>
+            <span className="cap text-right">{new Date(d.created_at).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}</span>
+          </div>
+        ))}
+      </Panel>
     </div>
   );
 }

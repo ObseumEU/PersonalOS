@@ -64,14 +64,10 @@ def _state(conn: sqlite3.Connection, actor_id: int, run_id: int | None = None) -
 
 @router.get("/me")
 def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
-    from pathlib import Path
-
     from .guard import prompt as guard_prompt
 
     row = actors.get(conn, ctx.actor_id)
-    instructions = ""
-    if row["instructions_path"] and Path(row["instructions_path"]).exists():
-        instructions = Path(row["instructions_path"]).read_text(encoding="utf-8")
+    instructions = agents.instructions_of(row) or ""
     return {
         "id": row["id"], "name": row["name"], "kind": row["kind"],
         "permissions": sorted(agents.permissions_of(conn, ctx.actor_id)),

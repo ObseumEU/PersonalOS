@@ -358,6 +358,22 @@ nepřepisovaly, datový model a runner vlastní Thread A. Nové thready přidáv
 vlastní moduly a do sdílených částí sahají jen přes rozhraní, které Thread A
 připraví.
 
+## 7a. Stav implementace (2026-09-25)
+
+| # | Hotovo | Kde |
+|---|---|---|
+| 1, 2, 12, 13 | ano | `pos.tasks`, `pos.versioning`, `pos.audit`, `pos.visibility`, MCP `pos` (`/mcp`) |
+| 3, 4, 14, 15 | ano | `pos.agents`, `pos.killswitch` (`python -m pos freeze`), fronta schválení, obrazovky Agents, Network, Board, Approvals |
+| 5 | ano | `worker/` (Codex worker, vkládání zpráv za běhu přes `codex exec resume`), `docs/WORKERS.md` |
+| 16 | ano | `pos.routing`, `pos.outbound`, obrazovka Connectors, `docs/CONNECTORS.md`; znalosti přes knowlage `/ingest/mcp` |
+| 11 | ano | `pos.scheduler` (obrazovka Automations), A2A server i klient `pos.a2a`; A2A fasáda Nexusu v `apps/nexus-process-pilot` |
+| 10 | ano | `pos.selfdeploy` (kontrola ústavy, testy, health check, automatický revert), `docs/SELF-DEPLOY.md`, instrukce agentů v `agents/` |
+| 6, 7, 8, 9 | jiné thready | ústava a guardrails, Rozpočtář, HR agent, knowledge base |
+
+Co musí dodat jen majitel: přihlášení Codexu (limit předplatného do 29. 9.),
+klíče a tokeny konektorů (SMTP, GitHub, Discord, KB klíče agentů), podpisový
+klíč pro ústavu (`ops/owner_allowed_signers`), nasazení na server.
+
 ## 8. Výchozí volby (majitel je může změnit)
 
 | Otázka | Výchozí |

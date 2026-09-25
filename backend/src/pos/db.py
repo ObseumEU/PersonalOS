@@ -258,6 +258,22 @@ MIGRATIONS: list[str] = [
         updated_at     TEXT NOT NULL
     );
     """,
+    # 7: deploys by the self-deploying pipeline (step 6).
+    """
+    CREATE TABLE deploys (
+        id           INTEGER PRIMARY KEY,
+        old_sha      TEXT NOT NULL,
+        new_sha      TEXT NOT NULL,
+        status       TEXT NOT NULL CHECK (status IN ('ok', 'reverted', 'rejected', 'error')),
+        stage        TEXT NOT NULL DEFAULT '',
+        log          TEXT NOT NULL DEFAULT '',
+        author       TEXT NOT NULL DEFAULT '',
+        reverted_sha TEXT,
+        commits      INTEGER NOT NULL DEFAULT 0,
+        task_id      INTEGER REFERENCES tasks(id),
+        created_at   TEXT NOT NULL
+    );
+    """,
 ]
 
 
