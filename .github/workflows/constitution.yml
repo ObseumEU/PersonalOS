@@ -1,0 +1,23 @@
+# Flags pushes to main that change protected files without the owner's SSH
+# signature. GitHub cannot block a push from here; a red check tells the
+# runner (and the owner) to revert it.
+name: constitution
+on:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check protected paths
+        env:
+          PYTHONPATH: backend/src
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: python -m pos.guard check-range "$BEFORE" "$AFTER"
