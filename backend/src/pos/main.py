@@ -6,6 +6,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import __doc__ as description
 from .auth import require_user
 from .auth import router as auth_router
+from .budget.api import router as budget_router
 from .config import Settings, get_settings
 from .db import init_db
 
@@ -32,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         https_only=settings.secure_cookies,
     )
     app.include_router(auth_router)
+    app.include_router(budget_router)
 
     @app.get("/api/health", tags=["system"])
     def health() -> dict[str, str]:
