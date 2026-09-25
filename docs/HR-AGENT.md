@@ -34,16 +34,29 @@ implementuje a HR agenta spouští plánovač (spec úkol 11).
 - Systémové agenty (`system=True`) HR hodnotí, ale nikdy nearchivuje ani
   neslučuje.
 
-## Co potřebuje od jádra
+## Napojení na jádro
 
-`HRDataSource`:
-- `list_agents()` s poli z kap. 3.1 plus `status`, `last_active_at`, `system`.
-- `agent_stats(agent_id, since, until)`: dokončené úkoly, z toho bez zásahu
-  majitele, vrácené, selhané, otevřené, zásahy majitele a tokeny (tokeny
-  dodá Rozpočtář z logu `codex exec`).
-
-`HRActions`: `archive_agent`, `set_lifetime`, `create_task(kind="read")`.
-
-Aby šlo „vráceno“ a „zásah majitele“ počítat, potřebuje úkol v jádře událost
-nebo pole pro vrácení majitelem a pro zásah. `create_agent` nad limitem má
-místo zamítnutí zavolat `decide_over_limit` (nebo založit úkol HR agentovi).
+- **Data:** `pos/hr/platform.py` čte agenty z `actors` (druh `ai` a `agent`),
+  statistiky z úkolů (`returned_count`, `interventions`, historie akcí
+  `return` a `intervene`), selhané běhy z `runs` a tokeny od Rozpočtáře
+  (`budget_runs`). Pole z kap. 3.1, která `actors` zatím nemá (účel,
+  životnost, zakladatel, `expires_at`, systémový agent), drží HR ve vlastní
+  tabulce `hr_agent_profiles`. Až je jádro přidá do `actors`, adaptér je bude
+  číst odtud.
+- **HR agent** je systémový člen „HR agent“ (vzniká při startu, u Rozpočtáře
+  třída `system`). Úkoly na sloučení a úpravu instrukcí dostává on.
+- **Limity:** `create_agent` v jádře má před založením zavolat
+  `hr.service.admit_agent(conn, ctx, name=, purpose=, lifetime=)` a po založení
+  `hr.service.register_agent(conn, actor_id, purpose=, lifetime=, created_by=)`.
+  Do 10 aktivních agentů se počítají jen nesystémoví. Denní limit 2 se na
+  majitele nevztahuje. `ask_owner` založí položku ve frontě schválení
+  (`raise_agent_limit`).
+- **API** `/api/hr`: `GET` přehled se skóre, `POST /review?apply=`,
+  `POST /weekly`, `PUT /agents/{id}/profile`, `POST /agents/{id}/restore`,
+  `POST /admit`.
+- **MCP** (server `pos`): `hr_overview`, `hr_review`, `hr_admit_agent`,
+  `hr_weekly_report`. Provést revizi nebo poslat přehled smí jen majitel nebo
+  HR agent.
+- **Plánovač:** dokud není Nexus (spec úkol 11), cron:
+  `30 6 * * * python -m pos.hr review` a `0 7 * * 1 python -m pos.hr weekly`.
+  `python -m pos.hr status` jen vypíše přehled.

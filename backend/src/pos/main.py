@@ -13,6 +13,7 @@ from .budget.api import router as budget_router
 from .config import Settings, get_settings
 from .db import connect, init_db
 from .guard import api as guard_api
+from .hr.api import router as hr_router
 
 
 class MCPAuth:
@@ -81,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(auth_router)
     app.include_router(budget_router)
+    app.include_router(hr_router)
     app.include_router(guard_api.router)
     guard_api.install_error_handler(app)
     app.include_router(api_tasks.router)

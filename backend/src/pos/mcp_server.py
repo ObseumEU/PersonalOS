@@ -194,6 +194,10 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                 "and find topics without a next action. 3) Get creative: list someday items and ask which "
                 "to promote. Ask me before changing anything.")
 
+    # Tools from the independent modules (pos.hr, ...), sharing the same auth and audit.
+    from .integrations import register_mcp_tools
+
+    register_mcp_tools(mcp, session)
     return mcp
 
 
