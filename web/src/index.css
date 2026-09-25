@@ -1,1 +1,79 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+/* Design tokens. Light is the base; dark follows the OS setting. */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: #f6f7fb;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f3f9;
+  --color-line: #e4e7f0;
+  --color-ink: #0f1222;
+  --color-ink-2: #4a5068;
+  --color-ink-3: #8a90a8;
+  --color-brand: #6d5dfc;
+  --color-brand-2: #22c3ee;
+  --color-brand-ink: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0a0b14;
+    --color-surface: #121424;
+    --color-surface-2: #1a1d31;
+    --color-line: #262a42;
+    --color-ink: #eef0fa;
+    --color-ink-2: #b3b8d0;
+    --color-ink-3: #767c98;
+    --color-brand: #8b7dff;
+    --color-brand-2: #38d6f5;
+  }
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Soft colour glow behind the whole app. */
+.app-glow {
+  background:
+    radial-gradient(60rem 30rem at 85% -10%, color-mix(in oklab, var(--color-brand) 16%, transparent), transparent 70%),
+    radial-gradient(40rem 24rem at 0% 110%, color-mix(in oklab, var(--color-brand-2) 12%, transparent), transparent 70%),
+    var(--color-bg);
+}
+
+.brand-gradient {
+  background-image: linear-gradient(135deg, var(--color-brand), var(--color-brand-2));
+}
+
+.text-gradient {
+  background-image: linear-gradient(135deg, var(--color-brand), var(--color-brand-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.card {
+  background: color-mix(in oklab, var(--color-surface) 86%, transparent);
+  border: 1px solid var(--color-line);
+  border-radius: 1.25rem;
+  backdrop-filter: blur(12px);
+  box-shadow:
+    0 1px 0 color-mix(in oklab, white 6%, transparent) inset,
+    0 10px 30px -12px rgb(15 18 34 / 0.12);
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise { animation: none; }
+}
