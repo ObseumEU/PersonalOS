@@ -90,6 +90,7 @@ export type Approval = {
   created_at: string;
   decided_at: string | null;
   comment: string | null;
+  result?: { status: string; owner_task?: string; error?: string } | null;
 };
 
 export type FreezeState = { frozen: boolean; reason?: string; updated_at?: string };

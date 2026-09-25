@@ -10,6 +10,8 @@ Environment:
     WORKER_SANDBOX   codex sandbox mode (default workspace-write)
     WORKER_POLL      long-poll seconds (default 60)
     CODEX_BIN        codex binary (default codex); CODEX_HOME holds its login
+    WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
+                     GitHub, Gmail, Discord) with their own tokens in env vars
 """
 
 import logging
@@ -18,6 +20,18 @@ import os
 from .client import PosClient
 from .codex import CodexSession
 from .loop import Worker
+
+
+def extra_config() -> list[str]:
+    """More MCP servers or Codex settings for this agent, one `key=value` per line
+    in WORKER_CODEX_CONFIG. Example for the Mail agent (knowlage ingest):
+
+        mcp_servers.knowlage.url="https://knowlage.example/ingest/mcp"
+        mcp_servers.knowlage.bearer_token_env_var="KB_AGENT_KEY"
+    """
+    raw = os.environ.get("WORKER_CODEX_CONFIG", "").replace("||", "
+")
+    return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
 def main() -> None:
@@ -34,7 +48,8 @@ def main() -> None:
             workdir=workdir,
             sandbox=os.environ.get("WORKER_SANDBOX", "workspace-write"),
             # The agent reaches PersonalOS through the pos MCP server, as itself.
-            config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"'],
+            config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
+                    *extra_config()],
         )
 
     Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60"))).run_forever()

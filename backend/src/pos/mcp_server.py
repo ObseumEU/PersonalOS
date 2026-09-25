@@ -49,6 +49,7 @@ TOOL_PERMISSIONS = {
     "report_progress": "tasks:claim", "request_approval": "approvals:request",
     "create_agent": "agents:create", "send_message": "messages:send",
     "get_agent_status": "tasks:read", "list_active_runs": "tasks:read",
+    "emit_event": "events:emit", "request_outbound": "approvals:request", "list_routes": "tasks:read",
 }
 # Tools an agent may still use while the kill switch is on.
 FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze", "check_inbox", "get_agent_status",
@@ -294,6 +295,39 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
         with session(ctx, "list_active_runs") as (conn, c):
             return agents.active_runs(conn)
+
+    @mcp.tool(description="Report an incoming event from a connector (a new e-mail, Discord message, GitHub "
+                          "issue). PersonalOS routes it to the right member as a task. source: gmail, github, "
+                          "discord, calendar, nexus, web. ref: the item's id in its source (duplicates are ignored). "
+                          "The body is stored as untrusted outside content.")
+    def emit_event(ctx: Context, source: str, title: str, body: str = "", kind: str | None = None,
+                   ref: str | None = None, url: str | None = None, author: str | None = None,
+                   labels: list[str] | None = None) -> dict:
+        from . import routing
+
+        with session(ctx, "emit_event", source=source, kind=kind, ref=ref) as (conn, c):
+            return routing.ingest(conn, c, {"source": source, "kind": kind, "title": title, "body": body,
+                                            "ref": ref, "url": url, "author": author,
+                                            "meta": {"labels": labels or []}})
+
+    @mcp.tool(description="Ask the owner to approve an outbound action; it runs automatically once approved. "
+                          "action: email.send {to, subject, body, in_reply_to?}, github.comment {repo, number, "
+                          "body}, discord.post {content}.")
+    def request_outbound(ctx: Context, action: str, payload: dict[str, Any], task_id: str | None = None) -> dict:
+        from . import outbound
+
+        with session(ctx, "request_outbound", action=action, task_id=task_id) as (conn, c):
+            tid = tasks.parse_id(task_id) if task_id else None
+            if tid:
+                tasks.get(conn, c, tid)
+            return outbound.request(conn, c, action, payload, tid)
+
+    @mcp.tool(description="The event routing rules (which events go to which member).")
+    def list_routes(ctx: Context) -> list[dict]:
+        from . import routing
+
+        with session(ctx, "list_routes") as (conn, c):
+            return routing.list_rules(conn)
 
     @mcp.tool(description="Kill switch: freeze every agent now (owner and people only). Unfreezing is "
                           "only possible for the owner, in the web app or with `python -m pos unfreeze`.")
