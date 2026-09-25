@@ -222,21 +222,55 @@ def stop(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
     return pause(conn, ctx, agent_id, True)
 
 
-def archive(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str = "") -> dict:
-    _agent_row(conn, agent_id)
+def archive_no_commit(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str = "",
+                      action: str = "archive_agent") -> dict:
+    """Archive an agent (the one implementation, also for HR): its running runs
+    stop, its keys are revoked and its open tasks go to whom it reports to (else
+    the owner) with a note, so no work hangs on an archived member. The caller
+    commits."""
+    row = _agent_row(conn, agent_id)
+    who = actors.get(conn, ctx.actor_id)["name"]
+    stopped = runner.cancel_all(conn, f"{row['name']} archived by {who}", actor_id=agent_id)
+    to = row["reports_to"] if "reports_to" in row.keys() and row["reports_to"] else None
+    if to is None or actors.get(conn, to)["archived_at"]:
+        to = actors.owner_id(conn)
+    open_ids = [r["id"] for r in conn.execute(
+        """SELECT id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
+           AND status NOT IN ('done', 'someday')""", (agent_id,))]
+    from . import reassign
+
+    for task_id in open_ids:
+        note = f"{row['name']} was archived" + (f" ({reason})" if reason else "")
+        try:
+            reassign.reassign(conn, ctx, task_id, to, note, force=True)
+        except tasks.Invalid:  # refused (e.g. a private task the lead may not see): to the owner
+            tasks.assign(conn, ctx, task_id, {"type": "human", "id": actors.owner_id(conn)})
     versioning.archive(conn, ctx, "actor", agent_id)
     conn.execute("UPDATE api_keys SET revoked_at = ? WHERE actor_id = ? AND revoked_at IS NULL", (now_iso(), agent_id))
-    audit.log(conn, ctx, "archive_agent", "actor", agent_id, reason=reason)
+    audit.log(conn, ctx, action, "actor", agent_id, reason=reason, runs=stopped or None,
+              handed_over=[tasks.display_id(i) for i in open_ids] or None)
+    return {"runs_stopped": stopped, "tasks_handed_over": open_ids, "to": to}
+
+
+def archive(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str = "") -> dict:
+    archive_no_commit(conn, ctx, agent_id, reason)
     conn.commit()
     return detail(conn, agent_id)
 
 
-def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
-    """Bring an archived agent back. It needs a new key (old ones stay revoked)."""
+def restore_no_commit(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, action: str = "restore_agent") -> str:
+    """Bring an archived agent back with a new key (old ones stay revoked);
+    returns the key. The caller commits."""
     _agent_row(conn, agent_id)
     versioning.unarchive(conn, ctx, "actor", agent_id)
     key = actors.create_key(conn, agent_id, label="restored")
-    audit.log(conn, ctx, "restore_agent", "actor", agent_id)
+    audit.log(conn, ctx, action, "actor", agent_id)
+    return key
+
+
+def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
+    """Bring an archived agent back. It needs a new key (old ones stay revoked)."""
+    key = restore_no_commit(conn, ctx, agent_id)
     conn.commit()
     return {**detail(conn, agent_id), "api_key": key}
 

@@ -228,3 +228,31 @@ def test_message_priorities_and_trust(conn, me, assistant, tmp_path):
     assert actors.get(conn, worker)["archived_at"] is None
     with pytest.raises(agents.AgentError):
         agents.send_message(conn, me, worker, "x", priority="urgent")
+
+
+def test_archive_stops_runs_and_hands_open_work_on_and_restore_gives_a_new_key(tmp_path, monkeypatch):
+    from pos import actors, agents, tasks
+    from pos.core import Ctx
+    from pos.db import connect, migrate
+    from pos.hr import service
+
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    conn = connect(tmp_path / "a.db")
+    migrate(conn)
+    actors.ensure_builtin(conn)
+    me = Ctx(actors.owner_id(conn))
+    made = agents.create_agent(conn, me, name="Scout", purpose="research", lifetime="long_lived",
+                               permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)
+    scout = made["agent"]["id"]
+    old_key = made["api_key"]
+    t = tasks.create(conn, me, {"title": "Find suppliers", "assignee": "Scout", "status": "next"})
+    run = conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', "
+                       "'running', '2026-09-25T10:00:00+00:00')", (scout, t["id"])).lastrowid
+    agents.archive(conn, me, scout, "not needed")
+    assert conn.execute("SELECT status FROM runs WHERE id = ?", (run,)).fetchone()["status"] == "cancelled"
+    moved = tasks.get(conn, me, t["id"])
+    assert moved["assignee_id"] == me.actor_id and "Scout was archived" in moved["progress_note"]
+    assert actors.actor_for_key(conn, old_key) is None
+    # HR restore is the same restore: a new key, the old one stays revoked
+    new_key = service.restore(conn, me, scout)
+    assert new_key and actors.actor_for_key(conn, new_key) == scout and actors.actor_for_key(conn, old_key) is None

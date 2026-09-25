@@ -191,13 +191,14 @@ def agents_overview(conn: sqlite3.Connection, now: datetime | None = None) -> di
     return report
 
 
-def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> None:
+def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> str:
     from .platform import restore_agent
 
     _may_run_hr(conn, ctx)
     row = actors.get(conn, agent_id)
     if row["kind"] not in ("ai", "agent"):
         raise NotFound(f"agent {agent_id}")
-    restore_agent(conn, ctx, agent_id)
+    key = restore_agent(conn, ctx, agent_id)
     conn.commit()
+    return key
 

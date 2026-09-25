@@ -71,10 +71,10 @@ def put_profile(agent_id: int, body: Profile, conn: sqlite3.Connection = Depends
 @router.post("/agents/{agent_id}/restore")
 def restore(agent_id: int, conn: sqlite3.Connection = Depends(_conn)) -> dict:
     try:
-        service.restore(conn, _owner(conn), agent_id)
+        key = service.restore(conn, _owner(conn), agent_id)
     except (NotFound, Forbidden) as e:
         raise HTTPException(404, str(e)) from e
-    return {"ok": True}
+    return {"ok": True, "api_key": key}
 
 
 @router.post("/admit")
