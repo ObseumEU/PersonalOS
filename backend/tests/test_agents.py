@@ -288,3 +288,41 @@ def test_hr_replacement_is_archived_only_with_a_created_agent(tmp_path, monkeypa
     assert agents.create_agent(conn, me, name="New", purpose="new work", permissions=["tasks:read"],
                                data_dir=tmp_path)["created"]
     assert actors.get(conn, old)["archived_at"] is not None
+
+
+def test_agents_get_is_read_only_and_numbers_agree(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi.testclient import TestClient
+
+    from pos import actors, agents, network, tasks
+    from pos.config import Settings
+    from pos.core import Ctx
+    from pos.db import connect
+    from pos.main import create_app
+
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        conn = connect(tmp_path / "personalos.db")
+        me = Ctx(actors.owner_id(conn))
+        scout = agents.create_agent(conn, me, name="Scout", purpose="research", lifetime="long_lived",
+                                    permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
+        # an old return and intervention (last month) and one this week
+        t = tasks.create(conn, me, {"title": "Research", "assignee": "Scout", "status": "review"})
+        tasks.review(conn, me, t["id"], False, "redo")
+        conn.execute("UPDATE history SET at = '2026-01-01T00:00:00+00:00' WHERE entity = 'task' AND action = 'return'")
+        tasks.update(conn, me, t["id"], {"status": "review"})
+        tasks.review(conn, me, t["id"], False, "again")
+        now = datetime.now(timezone.utc)
+        conn.execute("INSERT INTO engine_usage (at, engine, actor_id, input_tokens, output_tokens) "
+                     "VALUES (?, 'claude', ?, 100, 50)", (now.isoformat(timespec="seconds"), scout))
+        conn.commit()
+        audit_before = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
+        listed = client.get("/api/agents").json()
+        assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == audit_before  # GET wrote nothing
+        row = next(a for a in listed["agents"] if a["id"] == scout)
+        assert row["tokens_24h"] == 150 == agents.tokens_used(conn, scout, now - timedelta(days=1), now + timedelta(seconds=5))
+        net = next(n for n in network.build(conn, "24h")["nodes"] if n["id"] == scout)
+        assert net["tokens"] == 150
+        assert agents.detail(conn, scout)["week"]["returned"] == 1
+        conn.close()

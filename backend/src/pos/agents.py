@@ -460,10 +460,18 @@ def _default_engine() -> str:
     return default_engine()
 
 
-def _claude_tokens(conn: sqlite3.Connection, actor_id: int, since: datetime) -> int:
-    return conn.execute(
+def tokens_used(conn: sqlite3.Connection, actor_id: int | str, start: datetime, end: datetime) -> int:
+    """Tokens a member used in [start, end): Codex (budget runs) + Claude (engine
+    usage). The one number the Agents screen, Network and HR all show."""
+    from .budget import store as budget_store
+
+    budget_store.ensure_schema(conn)
+    codex = budget_store.tokens_between(conn, start, end, str(actor_id))
+    claude = conn.execute(
         "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM engine_usage WHERE engine = 'claude' "
-        "AND actor_id = ? AND at >= ?", (actor_id, since.isoformat(timespec="seconds"))).fetchone()[0]
+        "AND actor_id = ? AND at >= ? AND at < ?",
+        (int(actor_id), start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds"))).fetchone()[0]
+    return codex + claude
 
 
 def overview(conn: sqlite3.Connection) -> list[dict]:
@@ -514,8 +522,8 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "reports_to_name": names.get(row["reports_to"]),
             "engine": row["engine"], "engine_effective": row["engine"] or _default_engine(), "model": row["model"],
             "engine_view": runtime_view.for_actor(row),
-            "tokens_24h": budget_store.tokens_between(conn, now - timedelta(days=1), now, str(row["id"])) + _claude_tokens(conn, row["id"], now - timedelta(days=1)),
-            "tokens_7d": budget_store.tokens_between(conn, now - timedelta(days=7), now, str(row["id"])),
+            "tokens_24h": tokens_used(conn, row["id"], now - timedelta(days=1), now),
+            "tokens_7d": tokens_used(conn, row["id"], now - timedelta(days=7), now),
             "daily_cap": c["daily_cap"] if c else None,
             "queued": q["queued"] or 0, "working": q["working"] or 0, "review": q["review"] or 0,
             "done_today": q["done_today"] or 0, "approvals_waiting": waiting,
@@ -544,12 +552,15 @@ def detail(conn: sqlite3.Connection, agent_id: int) -> dict:
         "SELECT id, body, visibility, created_at FROM memories WHERE actor_id = ? AND archived_at IS NULL ORDER BY id DESC LIMIT 20",
         (agent_id,),
     ).fetchall()
-    week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    stats = conn.execute(
-        """SELECT SUM(status = 'done' AND completed_at >= ?) AS done, SUM(returned_count) AS returned,
-                  SUM(interventions) AS interventions FROM tasks WHERE assignee_id = ?""",
-        (week, agent_id),
-    ).fetchone()
+    week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+    done = conn.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id = ? AND status = 'done' AND completed_at >= ?",
+                        (agent_id, week)).fetchone()[0]
+    # Returns and interventions this week, from the task history (the counters on tasks are all-time).
+    events = conn.execute(
+        """SELECT SUM(action = 'return') AS returned, SUM(action = 'intervene') AS interventions FROM history
+           WHERE entity = 'task' AND action IN ('return', 'intervene') AND at >= ?
+           AND json_extract(data, '$.assignee_id') = ?""", (week, agent_id)).fetchone()
+    stats = {"done": done, "returned": events["returned"], "interventions": events["interventions"]}
     return {
         **base, "instructions": instructions,
         "queue": [tasks.to_dict(t) for t in queue],

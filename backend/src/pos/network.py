@@ -34,6 +34,7 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
     owner = actors.owner_id(conn)
     frozen = killswitch.is_frozen(conn)
 
+    from .agents import tokens_used
     from .budget import store as budget_store
 
     budget_store.ensure_schema(conn)
@@ -52,7 +53,7 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
         nodes.append({
             "id": a["id"], "name": a["name"], "kind": a["kind"], "is_owner": bool(a["is_owner"]),
             "open": load["open"] or 0, "working": load["working"] or 0, "review": load["review"] or 0,
-            "tokens": budget_store.tokens_between(conn, now - WINDOWS[window], now, str(a["id"])),
+            "tokens": tokens_used(conn, a["id"], now - WINDOWS[window], now),
             "last_seen_at": a["last_seen_at"], "status": status,
             "role": a["role"], "team": a["team"], "reports_to": a["reports_to"],
             "engine_view": runtime_view.for_actor(a),

@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .. import actors, audit, tasks
-from ..agents import is_seeded
+from ..agents import is_seeded, tokens_used
 from ..budget import store as budget_store
 from ..core import Ctx
 from . import store
@@ -98,7 +98,7 @@ class CorePlatform:
                AND status NOT IN ('done', 'review', 'someday')""",
             (aid,),
         ).fetchone()[0]
-        tokens = budget_store.tokens_between(self.conn, since, until, agent_id)
+        tokens = tokens_used(self.conn, agent_id, since, until)
         return AgentStats(
             agent_id=agent_id,
             # A returned hand-in was still finished work, just badly done.

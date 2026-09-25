@@ -190,8 +190,9 @@ def admit_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, 
 
 
 def agents_overview(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
-    """Current roster with scores, for the Agents screen. Read-only."""
-    report = daily_review(conn, apply=False, now=now)
+    """Scores and proposals for the Agents screen, from the last saved daily
+    review: a GET never runs a review (not even a dry run) and writes nothing."""
+    report = dict(store.latest_review(conn, "daily") or {"ratings": [], "proposals": []})
     report["last_daily"] = (store.latest_review(conn, "daily") or {}).get("at")
     report["last_weekly"] = (store.latest_review(conn, "weekly") or {}).get("at")
     return report
