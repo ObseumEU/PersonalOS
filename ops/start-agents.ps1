@@ -32,7 +32,7 @@ $devTools = (@(
     "Read", "Glob", "Grep", "Write", "Edit",
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)",
     "Bash(git commit:*)", "Bash(git fetch origin:*)", "Bash(git merge origin/main:*)",
-    "Bash(backend/.venv/Scripts/python -m pytest:*)", "Bash(npm run build:*)"
+    "Bash(backend/.venv/Scripts/python -m pytest:*)", "Bash(python -m pytest:*)", "Bash(npm run build:*)"
 )) -join "|"
 
 $agents = @(

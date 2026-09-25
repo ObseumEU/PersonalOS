@@ -42,10 +42,15 @@ The worker stops a run that goes far past this anyway.
 3. Make the smallest change that does the job. Match the surrounding style.
    Prefer one `Edit` per place over rewriting a file with `Write`.
 4. Check, narrowest first:
-   - one test file: `backend/.venv/Scripts/python -m pytest -q -x --tb=short backend/tests/test_<area>.py`
+   - one test file: `python -m pytest -q -x --tb=short backend/tests/test_<area>.py`
    - before committing a backend change, the whole suite once:
-     `backend/.venv/Scripts/python -m pytest -q -x --tb=short backend/tests`
+     `python -m pytest -q -x --tb=short backend/tests`
    - only if you touched `web/`: `npm run build` in `web/`
+   `python` is the backend's interpreter: on the server (Linux) `python` or
+   `backend/.venv/bin/python`; on the owner's Windows PC `backend/.venv/Scripts/python`.
+   If pytest is missing, `python -m pip install -q -e "backend[dev]"` once.
+   Every shell command passes PersonalOS's command guard first; a refused one
+   is refused for a reason (the answer says which), do not try variants of it.
    On a failure, read the first error only, fix it, rerun the same narrow check.
 5. Commit with a clear message in English, ending with the trailer line
    `Agent: Dev agent`. One logical change per commit.

@@ -421,3 +421,33 @@ def test_worker_tools_follow_the_agents_permissions(setup, monkeypatch):
                           "heartbeat"}
     assert "create_agent" in hidden and "chat_send" not in hidden
     assert set(pos_tools(me, "")[0]) == set(me["pos_tools"])  # nothing narrowed: all it may use
+
+
+def test_claude_bash_goes_through_the_command_guard(setup, tmp_path):
+    import json as _json
+
+    from pos_worker import command_hook
+
+    client, conn, owner, dev_id, key = setup
+    auth = {"Authorization": f"Bearer {key}"}
+
+    def post(command):
+        return client.post("/api/worker/check-command", json={"command": command}, headers=auth).json()
+
+    bash = lambda c: {"tool_name": "Bash", "tool_input": {"command": c}}  # noqa: E731
+    assert command_hook.decide(bash("git status"), post) is None
+    denied = command_hook.decide(bash("git push --force origin main"), post)
+    assert denied and denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert command_hook.decide({"tool_name": "Read", "tool_input": {}}, post) is None
+
+    def down(command):
+        raise ConnectionError("no route")
+
+    assert command_hook.decide(bash("ls"), down)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # the session installs the hook only when Bash exists
+    s = ClaudeSession(builtin_tools=["Bash", "Read"])
+    path = s._settings_file()
+    hooks = _json.load(open(path, encoding="utf-8"))["hooks"]["PreToolUse"][0]
+    assert hooks["matcher"] == "Bash" and "pos_worker.command_hook" in hooks["hooks"][0]["command"]
+    assert "--settings" in s._args(None, None, path)
+    assert ClaudeSession(builtin_tools=["Read"])._settings_file() is None

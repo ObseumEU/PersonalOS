@@ -74,7 +74,10 @@ services:
       # permissions allow; inbox and team chat always stay), medium effort, a cost cap per Claude run
       # and a step cap per run.
       WORKER_POS_TOOLS: 'get_task report_progress complete_task request_approval create_task handoff_task'
-      WORKER_CLAUDE_TOOLS: 'Read|Glob|Grep|Write|Edit'
+      # Bash exists for it under Claude too, limited to git, tests and the web build; every
+      # command goes through the command guard first (pos_worker.command_hook).
+      WORKER_CLAUDE_BUILTIN: Bash,Read,Edit,Write,Glob,Grep
+      WORKER_CLAUDE_TOOLS: 'Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(python -m pytest:*)|Bash(python -m pip install:*)|Bash(backend/.venv/bin/python -m pytest:*)|Bash(npm run build:*)|Bash(npm ci:*)'
       WORKER_CLAUDE_EFFORT: medium
       WORKER_CLAUDE_MAX_USD: "6"
       WORKER_MAX_STEPS: "90"

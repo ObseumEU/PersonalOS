@@ -81,11 +81,25 @@ class ClaudeSession:
             json.dump({"mcpServers": self.mcp_servers}, f)
         return path
 
-    def _args(self, mcp_file: str | None, prompt_file: str | None = None) -> list[str]:
+    def _settings_file(self) -> str | None:
+        """Bash exists for this agent: every command goes through PersonalOS's
+        command guard first (pos_worker.command_hook, a PreToolUse hook)."""
+        if "Bash" not in self.builtin_tools:
+            return None
+        from .command_hook import settings
+
+        fd, path = tempfile.mkstemp(prefix="pos-settings-", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(settings(), f)
+        return path
+
+    def _args(self, mcp_file: str | None, prompt_file: str | None = None, settings_file: str | None = None) -> list[str]:
         binary = resolve_binary(self.binary)
         args = [binary, "-p", "--output-format", "stream-json", "--verbose"]
         if self.restricted:
             args.append("--restricted")
+        if settings_file:
+            args += ["--settings", settings_file]
         if self.model:
             args += ["--model", self.model]
         if self.effort:
@@ -117,10 +131,11 @@ class ClaudeSession:
     def run(self, prompt: str) -> Iterator[dict]:
         mcp_file = self._mcp_file()
         prompt_file = self._prompt_file()
+        settings_file = self._settings_file()
         kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
         env = {**os.environ, **(self.env or {}), "PYTHONUTF8": "1"}
         try:
-            self.proc = subprocess.Popen(self._args(mcp_file, prompt_file), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            self.proc = subprocess.Popen(self._args(mcp_file, prompt_file, settings_file), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=self.workdir,
                                          env=env, **kw)
             assert self.proc.stdin and self.proc.stdout
@@ -163,7 +178,7 @@ class ClaudeSession:
             if self.proc.returncode not in (0, None) and not self.failed:
                 self.failed = (self.proc.stderr.read() if self.proc.stderr else "")[-1000:] or f"exit {self.proc.returncode}"
         finally:
-            for f in (mcp_file, prompt_file):
+            for f in (mcp_file, prompt_file, settings_file):
                 if f:
                     try:
                         os.unlink(f)
