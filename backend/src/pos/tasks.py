@@ -23,7 +23,7 @@ EDITABLE = {
     "definition_of_done", "visibility", "follow_up", "position", "progress", "progress_note",
 }
 
-VIEWS = ("inbox", "today", "upcoming", "next", "agents", "waiting", "review", "someday", "done")
+VIEWS = ("inbox", "today", "upcoming", "next", "agents", "waiting", "review", "to_review", "someday", "done")
 
 
 class Invalid(ValueError):
@@ -116,6 +116,11 @@ def to_dict(row: sqlite3.Row | dict) -> dict:
 def get(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
     row = _row(conn, ctx, task_id)
     task = to_dict(row)
+    # Who reviews the result (set, or by default) and whether the caller may.
+    rid = reviewer_of(conn, row)
+    task["reviewer_effective_id"] = rid
+    task["reviewer_name"] = actors.get(conn, rid)["name"]
+    task["can_review"] = row["status"] == "review" and may_review(conn, ctx, row)[0]
     cond, params = visible_sql(ENTITY, ctx.actor_id)
     steps = conn.execute(
         f"SELECT * FROM tasks WHERE parent_id = ? AND archived_at IS NULL AND {cond} ORDER BY position, id",
@@ -129,7 +134,7 @@ def get(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
     return task
 
 
-def _view_sql(view: str) -> tuple[str, list, str]:
+def _view_sql(view: str, actor_id: int | None = None) -> tuple[str, list, str]:
     """(condition, params, order) for a named view."""
     t = today().isoformat()
     top = "parent_id IS NULL"
@@ -152,6 +157,8 @@ def _view_sql(view: str) -> tuple[str, list, str]:
                 "COALESCE(follow_up, '9999'), id")
     if view == "review":
         return "status = 'review'", [], "updated_at"
+    if view == "to_review":  # results waiting for me as their reviewer
+        return "status = 'review' AND reviewer_id = ?", [actor_id], "updated_at"
     if view == "someday":
         return f"{top} AND status = 'someday'", [], "created_at DESC"
     if view == "done":
@@ -161,7 +168,7 @@ def _view_sql(view: str) -> tuple[str, list, str]:
 
 def list_tasks(conn: sqlite3.Connection, ctx: Ctx, view: str = "today", *, topic: str | None = None,
                assignee_id: int | None = None, limit: int = 200) -> list[dict]:
-    cond, params, order = _view_sql(view)
+    cond, params, order = _view_sql(view, ctx.actor_id)
     vis, vparams = visible_sql(ENTITY, ctx.actor_id)
     sql = f"SELECT * FROM tasks WHERE archived_at IS NULL AND {cond} AND {vis}"
     params = [*params, *vparams]
@@ -193,7 +200,7 @@ def counts(conn: sqlite3.Connection, ctx: Ctx) -> dict[str, int]:
     for view in VIEWS:
         if view == "done":
             continue
-        cond, params, _ = _view_sql(view)
+        cond, params, _ = _view_sql(view, ctx.actor_id)
         out[view] = conn.execute(
             f"SELECT COUNT(*) FROM tasks WHERE archived_at IS NULL AND {cond} AND {vis}", [*params, *vparams]
         ).fetchone()[0]
@@ -215,6 +222,7 @@ def topics(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:
 def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     fields = dict(fields)
     assignee = fields.pop("assignee", None)
+    reviewer = fields.pop("reviewer", None)
     parent_id = fields.pop("parent_id", None)
     owner = fields.pop("owner_id", None)
     source = fields.pop("source", ctx.via)
@@ -241,6 +249,7 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         "owner_id": owner, "source": source, "created_by": ctx.actor_id,
         "created_at": now, "updated_at": now,
         **resolve_assignee(conn, ctx, assignee),
+        **({"reviewer_id": resolve_reviewer(conn, ctx, reviewer)} if reviewer not in (None, "") else {}),
     }
     if values.get("topic"):
         values["topic"] = values["topic"].lower().lstrip("#")
@@ -270,6 +279,9 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     changes = dict(changes)
     row = _row(conn, ctx, task_id)
     extra = {}
+    if "reviewer" in changes:
+        value = changes.pop("reviewer")
+        extra["reviewer_id"] = resolve_reviewer(conn, ctx, value) if value not in (None, "") else None
     if "assignee" in changes:
         extra.update(resolve_assignee(conn, ctx, changes.pop("assignee")))
     unknown = set(changes) - EDITABLE
@@ -291,12 +303,18 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
             extra["description_generated"] = 0
     accepted = False
     if changes.get("status") == "done" and row["status"] != "done":
-        # Nobody gets around review: AI and agents hand work in, and a person
-        # marking a task under review done accepts it.
-        if actors.get(conn, ctx.actor_id)["kind"] != "human":
+        # Nobody gets around review: marking a result under review done is an
+        # accept (by someone who may review it); anyone else hands work in.
+        if row["status"] == "review":
+            ok, why = may_review(conn, ctx, row)
+            if not ok:
+                raise Forbidden(why)
+            accepted = True
+        elif not may_finish(conn, ctx, row):
             changes["status"] = "review"
-        else:
-            accepted = row["status"] == "review"
+    handed_in = changes.get("status") == "review" and row["status"] != "review"
+    if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
+        extra["reviewer_id"] = reviewer_of(conn, row)
     if "status" in changes:
         if changes["status"] == "done" and row["status"] != "done":
             extra["completed_at"] = now_iso()
@@ -304,6 +322,8 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
             extra["completed_at"] = None
     versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra}, action="accept" if accepted else "update")
     out = get(conn, ctx, task_id)
+    if handed_in:
+        _ask_reviewer(conn, ctx, out)
     if accepted:
         from . import comments
         from .agents import retire_if_done
@@ -314,17 +334,116 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     return out
 
 
+# ------------------------------------------------------------------ review between colleagues (3.2)
+
+def resolve_reviewer(conn: sqlite3.Connection, ctx: Ctx, value) -> int:
+    """A member (id, name, 'me' or 'ai') who reviews the result; never someone outside."""
+    if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
+        value = {"type": "human", "id": int(value)}  # the actor's real kind comes from its row
+    cols = resolve_assignee(conn, ctx, value)
+    if cols["assignee_type"] in (None, "external"):
+        raise Invalid(f"reviewer must be a member of PersonalOS, not {value!r}")
+    return cols["assignee_id"]
+
+
+def _can_review_as_agent(conn: sqlite3.Connection, actor_id: int) -> bool:
+    row = actors.get(conn, actor_id)
+    if row["kind"] == "human":
+        return not row["archived_at"]
+    from .agents import has_permission
+
+    return not row["archived_at"] and has_permission(conn, actor_id, "tasks:review")
+
+
+def reviewer_of(conn: sqlite3.Connection, row) -> int:
+    """Who reviews this task's result: the one set on it, else whoever asked
+    for it, else the assignee's lead, else the owner. Agents only with tasks:review."""
+    if row["reviewer_id"]:
+        return row["reviewer_id"]
+    assignee = row["assignee_id"]
+    creator = row["created_by"]
+    if creator and creator != assignee and _can_review_as_agent(conn, creator):
+        return creator
+    if assignee:
+        lead = actors.get(conn, assignee)["reports_to"]
+        if lead and lead != assignee and _can_review_as_agent(conn, lead):
+            return lead
+    return actors.owner_id(conn)
+
+
+def may_review(conn: sqlite3.Connection, ctx: Ctx, row) -> tuple[bool, str]:
+    """(allowed, why not): the reviewer, the assignee's lead or the owner; nobody
+    approves their own work; an agent needs tasks:review and may not review what
+    it has just handed to the assignee (no circles)."""
+    me = actors.get(conn, ctx.actor_id)
+    if me["is_owner"]:
+        return True, ""
+    ref = display_id(row["id"])
+    if row["assignee_id"] == ctx.actor_id:
+        return False, f"nobody approves their own work ({ref})"
+    if me["kind"] != "human":
+        if not _can_review_as_agent(conn, ctx.actor_id):
+            return False, "reviewing needs the permission tasks:review"
+        last = conn.execute("SELECT from_actor FROM handoffs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+                            (row["id"],)).fetchone()
+        if last and last["from_actor"] == ctx.actor_id:
+            return False, f"you handed {ref} over yourself; someone else reviews it"
+    from .org import manages
+
+    if ctx.actor_id == reviewer_of(conn, row) or manages(conn, ctx.actor_id, row["assignee_id"]):
+        return True, ""
+    return False, f"only the reviewer of {ref}, the assignee's lead or the owner review it"
+
+
+def may_finish(conn: sqlite3.Connection, ctx: Ctx, row) -> bool:
+    """May mark the task done without a review: your own task you review
+    yourself (no one else reviews it), or someone who may review it anyway."""
+    if row["assignee_id"] in (None, ctx.actor_id) and reviewer_of(conn, row) == ctx.actor_id:
+        return True
+    return row["assignee_id"] != ctx.actor_id and may_review(conn, ctx, row)[0]
+
+
+def request_review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, reviewer, note: str = "") -> dict:
+    """Hand the result in to a chosen colleague for review."""
+    row = _row(conn, ctx, task_id)
+    rid = resolve_reviewer(conn, ctx, reviewer)
+    if rid == row["assignee_id"]:
+        raise Invalid("nobody reviews their own work: pick someone else")
+    if row["status"] == "done":
+        raise Invalid(f"{display_id(task_id)} is done")
+    changes = {"reviewer": rid, "status": "review", "progress": 100}
+    if note:
+        changes["progress_note"] = note
+    return update(conn, ctx, task_id, changes)
+
+
+def _ask_reviewer(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> None:
+    """A result was handed in: the reviewer hears of it (the owner sees Needs review)."""
+    rid = task.get("reviewer_id")
+    if not rid or rid == ctx.actor_id:
+        return
+    r = actors.get(conn, rid)
+    if r["is_owner"] or r["archived_at"]:
+        return
+    from . import chat, wake
+
+    by = actors.get(conn, ctx.actor_id)["name"]
+    chat.send_dm(conn, ctx, rid, f"{by} handed in {task['ref']} '{task['title']}' for your review. "
+                                 "Accept it or return it with what should change (review_task).",
+                 priority="fyi", attachments=[{"type": "task", "id": task["id"]}], system=True)
+    if r["kind"] != "human":
+        wake.wake(rid)
+
+
 def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None = None) -> dict:
     """People finish tasks; AI and agents hand results in for review. A person
     completing a task that waits for review accepts it."""
     row = _row(conn, ctx, task_id)
-    kind = actors.get(conn, ctx.actor_id)["kind"]
-    if row["status"] == "review" and kind == "human":
+    if row["status"] == "review" and may_review(conn, ctx, row)[0]:
         return review(conn, ctx, task_id, True, note)
-    changes: dict = {"progress": 100}
+    changes: dict = {"progress": 100, "status": "done"}  # update() turns it into a hand-in when needed
     if note:
         changes["progress_note"] = note
-    changes["status"] = "done" if kind == "human" else "review"
     out = update(conn, ctx, task_id, changes)
     if out["status"] == "done":
         from .agents import retire_if_done
@@ -337,8 +456,9 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
     row = _row(conn, ctx, task_id)
     if row["status"] != "review":
         raise Invalid(f"{display_id(task_id)} is not waiting for review")
-    if actors.get(conn, ctx.actor_id)["kind"] != "human":
-        raise Forbidden("only people review AI and agent results")
+    ok, why = may_review(conn, ctx, row)
+    if not ok:
+        raise Forbidden(why)
     if accept:  # update() records the accept and retires a one-shot agent
         return update(conn, ctx, task_id, {"status": "done", **({"progress_note": comment} if comment else {})})
     versioning.update(conn, ctx, ENTITY, task_id, {

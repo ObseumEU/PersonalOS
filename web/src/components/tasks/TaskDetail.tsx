@@ -198,7 +198,7 @@ function ReviewBox({ onAccept, onReturn }: { onAccept: () => void; onReturn: (co
   const [comment, setComment] = useState("");
   return (
     <div className="flex flex-col gap-2 rounded border border-amber-400/60 p-3">
-      <span className="cap text-amber-300!">RESULT WAITS FOR YOUR REVIEW</span>
+      <span className="cap text-amber-300!">RESULT WAITS FOR REVIEW</span>
       {returning ? (
         <>
           <textarea
@@ -306,7 +306,7 @@ export default function TaskDetail({
 
         <Description task={task} onSave={(notes) => notes !== task.notes && save({ notes })} />
 
-        {task.status === "review" && (
+        {task.status === "review" && task.can_review !== false && (
           <ReviewBox
             key={task.updated_at}
             onAccept={() => run(tasksApi.review(task.ref, true))}
@@ -324,6 +324,23 @@ export default function TaskDetail({
           </Field>
           <Field label="ASSIGNEE">
             <AssigneeSelect task={task} actors={actors} onChange={(v) => save({ assignee: v })} />
+          </Field>
+          <Field label="REVIEWER">
+            <select
+              className={input}
+              value={task.reviewer_id ?? ""}
+              onChange={(e) => save({ reviewer: e.target.value ? Number(e.target.value) : null })}
+              title="Who accepts or returns the result"
+            >
+              <option value="">default · {task.reviewer_name ?? "owner"}</option>
+              {actors
+                .filter((a) => a.id !== task.assignee_id)
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.is_owner ? "Me" : a.name}
+                  </option>
+                ))}
+            </select>
           </Field>
           <Field label="DO DATE">
             <input type="date" className={input} value={task.do_date ?? ""} onChange={(e) => save({ do_date: e.target.value || null })} />

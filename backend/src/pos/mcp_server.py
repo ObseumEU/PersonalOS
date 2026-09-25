@@ -73,6 +73,8 @@ TOOL_PERMISSIONS = {
     "task_reassign": "tasks:write",
     # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
     "task_comment": "tasks:read",
+    # Review between colleagues (tasks.may_review decides whose result).
+    "review_task": "tasks:review", "request_review": "tasks:claim",
     # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.
     "tools_list": "tasks:read", "tools_get": "tasks:read",
     "tools_publish": "tasks:claim", "tools_record_use": "tasks:claim",
@@ -166,12 +168,14 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     def brief(t: dict) -> dict:
         keep = ("ref", "id", "title", "status", "priority", "do_date", "deadline", "topic", "assignee_type",
-                "assignee_name", "estimate_min", "energy", "progress", "parent_id", "steps_total", "steps_done")
+                "assignee_name", "estimate_min", "energy", "progress", "parent_id", "steps_total", "steps_done",
+                "reviewer_name")
         return {k: t.get(k) for k in keep if t.get(k) is not None}
 
     # ------------------------------------------------------------- read
 
-    @mcp.tool(description="List tasks in a view: inbox, today, upcoming, next, agents, waiting, review, someday, done. "
+    @mcp.tool(description="List tasks in a view: inbox, today, upcoming, next, agents, waiting, review, to_review "
+                          "(results waiting for you as their reviewer), someday, done. "
                           "Optionally filter by topic or assignee name ('me' for yourself).")
     def list_tasks(ctx: Context, view: str = "today", topic: str | None = None,
                    assignee: str | None = None) -> list[dict]:
@@ -192,6 +196,21 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             activity = [{k: a[k] for k in ("id", "kind", "author_name", "body", "created_at")}
                         for a in comments.list_for(conn, c, tid, limit=20)]
             return {**tasks.get(conn, c, tid), "activity": activity}
+
+    @mcp.tool(description="Review a colleague's result you are the reviewer (or lead) of: verdict 'accept' "
+                          "finishes it, 'changes' returns it with your comment (say what should change).")
+    def review_task(ctx: Context, task_id: str, verdict: str, comment: str = "") -> dict:
+        if verdict not in ("accept", "changes"):
+            raise ToolError("verdict must be 'accept' or 'changes'")
+        with session(ctx, "review_task", task_id=task_id, verdict=verdict) as (conn, c):
+            if verdict == "changes" and not comment.strip():
+                raise tasks.Invalid("say what should change")
+            return brief(tasks.review(conn, c, tasks.parse_id(task_id), verdict == "accept", comment or None))
+
+    @mcp.tool(description="Hand your result in to a chosen colleague for review (not yourself).")
+    def request_review(ctx: Context, task_id: str, reviewer: str, note: str = "") -> dict:
+        with session(ctx, "request_review", task_id=task_id, reviewer=reviewer) as (conn, c):
+            return brief(tasks.request_review(conn, c, tasks.parse_id(task_id), reviewer, note))
 
     @mcp.tool(description="Comment on a task (its activity). @Name reaches that member's inbox. "
                           "Use it for questions, findings and feedback on the work, not for status "

@@ -27,6 +27,7 @@ PERMISSIONS = {
     "tasks:read": "see tasks in the team and public layers",
     "tasks:write": "create and change tasks",
     "tasks:claim": "take tasks from the queue, report progress, hand in results",
+    "tasks:review": "review colleagues' results (accept or return) where you are the reviewer or their lead",
     "approvals:request": "ask the owner to approve outbound actions",
     "agents:create": "create new agents (within limits, never with more permissions)",
     "messages:send": "message other members",
@@ -82,7 +83,8 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
     # Permissions added to an agent later (platform code, not an agent's own
     # change): hr:read for the HR agent, which hr_overview requires; messages:send
     # for the role agents, so they can answer the standup and colleagues in chat.
-    for name, perm in (("HR agent", "hr:read"), ("Dev agent", "messages:send"), ("Agent coach", "messages:send")):
+    for name, perm in (("HR agent", "hr:read"), ("Dev agent", "messages:send"), ("Agent coach", "messages:send"),
+                       ("Project manager", "tasks:review")):
         row = conn.execute("SELECT id, permissions FROM actors WHERE name = ?", (name,)).fetchone()
         if row and perm not in json.loads(row["permissions"] or "[]"):
             conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",

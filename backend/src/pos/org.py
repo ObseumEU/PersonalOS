@@ -20,7 +20,7 @@ PM_NAME = "Project manager"
 PM_PURPOSE = ("Takes incoming team work, splits it into steps with a definition of done, assigns them by "
               "role, follows up and escalates to the owner.")
 # Never more than its creator (the owner) has; tasks:claim lets it hand in its own tasks.
-PM_PERMISSIONS = ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"]
+PM_PERMISSIONS = ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:review", "tasks:write"]
 
 ROLES = ("owner", "project_manager", "assistant", "developer", "mail", "community", "knowledge",
          "automation", "hr", "deployer", "specialist")
@@ -155,6 +155,19 @@ def _status(row: sqlite3.Row, working: int) -> str:
     if row["kind"] == "human":
         return "online"
     return "working" if working else "idle"
+
+
+def manages(conn: sqlite3.Connection, manager_id: int, member_id: int | None) -> bool:
+    """Is `manager_id` above `member_id` in the org chart (reports_to, transitively)?"""
+    seen: set[int] = set()
+    up = member_id
+    while up is not None and up not in seen:
+        seen.add(up)
+        row = conn.execute("SELECT reports_to FROM actors WHERE id = ?", (up,)).fetchone()
+        up = row["reports_to"] if row else None
+        if up == manager_id:
+            return True
+    return False
 
 
 def chart(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict]:

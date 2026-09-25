@@ -150,6 +150,8 @@ Každá položka je samostatná změna s testem.
 - UI: TaskDetail má pod poli časovou osu aktivity a pole komentáře; vrácení
   přes dialog místo `window.prompt`.
 
+Stav: hotovo, b775fca.
+
 ### 3.2 Review mezi kolegy
 
 - Pole úkolu `reviewer_id` (volitelné). Výchozí reviewer podle pořadí:
@@ -166,6 +168,10 @@ Každá položka je samostatná změna s testem.
 - UI: Today a Tým mají „Čeká na tvé review“; TaskDetail tlačítka Schválit /
   Vrátit s komentářem.
 - HR metriky: kvalita = podíl přijatých review od kohokoli, ne jen majitele.
+
+Stav: hotovo (commit „Wave 1 / 3.2“). Reviewer = zadaný → kdo úkol zadal → vedoucí
+řešitele → majitel; agent jen s `tasks:review` (PM ho má). UI: pole REVIEWER a
+Accept/Return jen pro toho, kdo smí.
 
 ### 3.3 Autorita vedoucího (org chart dává práva)
 

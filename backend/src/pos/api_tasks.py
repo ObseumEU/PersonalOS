@@ -44,6 +44,7 @@ class TaskIn(BaseModel):
     visibility: str | None = None
     follow_up: str | None = None
     assignee: Any = None
+    reviewer: Any = None  # who reviews the result (default: who asked, the lead, the owner)
 
 
 class CaptureIn(BaseModel):
@@ -139,6 +140,18 @@ def complete(task_id: str, body: NoteIn, conn=Depends(get_db), ctx=Depends(get_c
 @router.post("/tasks/{task_id}/review")
 def review(task_id: str, body: ReviewIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     t = tasks.review(conn, ctx, tasks.parse_id(task_id), body.accept, body.comment)
+    conn.commit()
+    return t
+
+
+class RequestReviewIn(BaseModel):
+    reviewer: Any
+    note: str | None = None
+
+
+@router.post("/tasks/{task_id}/request-review")
+def request_review(task_id: str, body: RequestReviewIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    t = tasks.request_review(conn, ctx, tasks.parse_id(task_id), body.reviewer, body.note or "")
     conn.commit()
     return t
 

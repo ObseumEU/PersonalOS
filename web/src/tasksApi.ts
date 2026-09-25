@@ -55,6 +55,10 @@ export type Task = {
   returned_count: number;
   interventions: number;
   suggestion: Suggestion | null;
+  reviewer_id?: number | null;
+  reviewer_effective_id?: number;
+  reviewer_name?: string;
+  can_review?: boolean;
   source: string;
   created_at: string;
   updated_at: string;

@@ -585,6 +585,11 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX task_comments_task ON task_comments (task_id, id);
     """,
+    # 21: review between colleagues (REVIZE-FUNKCI 3.2): who reviews a task's result.
+    """
+    ALTER TABLE tasks ADD COLUMN reviewer_id INTEGER REFERENCES actors(id);
+    CREATE INDEX tasks_reviewer ON tasks (reviewer_id, status);
+    """,
 ]
 
 
