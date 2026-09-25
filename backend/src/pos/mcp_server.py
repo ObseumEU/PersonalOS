@@ -542,8 +542,9 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     # ------------------------------------------------------------- files, notes and topics
 
-    @mcp.tool(description="Search tasks, files and notes by words (full text in files and notes). "
-                          "Returns short entries; use get_task, file_get or the note id for details.")
+    @mcp.tool(description="Search tasks, files and notes by words. Files are searched in full text through the "
+                          "knowledge base (knowlage); `files_mode` is 'filename' when it was unreachable and only file "
+                          "names were matched. Returns short entries; use get_task, file_get or the note id for details.")
     def search(ctx: Context, q: str, limit: int = 20) -> dict:
         from . import topics
 
@@ -552,6 +553,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             return {"q": q, "tasks": [brief(t) for t in found["tasks"]],
                     "files": [{k: f.get(k) for k in ("id", "name", "mime", "size", "topic", "tags", "created_at")}
                               for f in found["files"]],
+                    "files_mode": found.get("files_mode", "none"),
                     "notes": [{k: n.get(k) for k in ("id", "title", "topic", "tags", "excerpt", "updated_at")}
                               for n in found["notes"]]}
 

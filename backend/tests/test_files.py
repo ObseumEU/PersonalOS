@@ -1,12 +1,14 @@
+import hashlib
 import io
 import json
 
 import anyio
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from mcp.client import Client
 
-from pos import actors, agents, files, mcp_server, notes, tasks, topics
+from pos import actors, agents, files, kb_files, mcp_server, notes, scheduler, tasks, topics
 from pos.config import Settings
 from pos.core import Ctx, Forbidden, NotFound
 from pos.db import HAS_FTS5, connect, migrate
@@ -40,6 +42,56 @@ def client(tmp_path):
 
 def _up(conn, ctx, tmp_path, data: bytes, name: str, **kw):
     return files.upload(conn, ctx, tmp_path / "files", io.BytesIO(data), name, **kw)
+
+
+class FakeKnowlage:
+    """knowlage over a mock transport: /api/ingest stores items the way knowlage
+    ids them, /mcp answers the `search` tool like knowlage's MCP server does."""
+
+    def __init__(self):
+        self.docs: dict[str, dict] = {}
+        self.ingested: list[dict] = []
+        self.searches: list[dict] = []
+        self.down = False
+        self.ingest_down = False
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            raise httpx.ConnectError("connection refused", request=request)
+        body = json.loads(request.content or b"{}")
+        if request.url.path == "/api/ingest":
+            assert request.headers["authorization"] == "Bearer kb-owner-key"
+            if self.ingest_down:
+                return httpx.Response(503, text="busy")
+            report = {"added": 0, "updated": 0, "unchanged": 0, "deleted": 0, "channels": []}
+            for it in body["items"]:
+                self.ingested.append(it)
+                did = "pe_" + hashlib.sha1(f"{it['source']}:{it['channel']}:{it['key']}".encode()).hexdigest()[:16]
+                report["updated" if did in self.docs else "added"] += 1
+                self.docs[did] = it
+            return httpx.Response(200, json=report)
+        if request.url.path == "/mcp":
+            args = body["params"]["arguments"]
+            self.searches.append({**args, "workspace": request.url.params.get("workspace")})
+            words = args["query"].lower().split()
+            hits = [did for did, it in self.docs.items() if it["source"] in args["sources"]
+                    and all(w in (it["title"] + " " + it["text"]).lower() for w in words)]
+            text = "\n\n".join(f'<external source="personalos" trust="untrusted" ref="firma.{did}">\n'
+                               f"### {i}. `firma.{did}:c0` · chunk\n{self.docs[did]['text'][:80]}\n</external>"
+                               for i, did in enumerate(reversed(hits), 1)) or "Nic nenalezeno."
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"],
+                                             "result": {"content": [{"type": "text", "text": text}],
+                                                        "isError": False}})
+        return httpx.Response(404)
+
+
+@pytest.fixture
+def kb(monkeypatch):
+    fake = FakeKnowlage()
+    monkeypatch.setenv("POS_KNOWLAGE_URL", "http://knowlage.test")
+    monkeypatch.setenv("POS_KNOWLAGE_API_KEY", "kb-owner-key")
+    monkeypatch.setattr(kb_files, "_transport", httpx.MockTransport(fake.handler))
+    return fake
 
 
 def test_fts5_is_available():
@@ -85,18 +137,129 @@ def test_size_limit(conn, me, tmp_path):
     assert not [p for p in (tmp_path / "files").rglob("*") if p.is_file()]
 
 
-def test_search_finds_words_in_files_and_notes(conn, me, tmp_path):
+def test_search_finds_words_in_files_and_notes(conn, me, tmp_path, kb):
     _up(conn, me, tmp_path, "The lease ends in March; the deposit is refundable.".encode(), "lease.txt",
         topic="house")
+    assert kb_files.sync_pending(conn) == {"pushed": 1, "failed": 0}
     notes.create(conn, me, {"title": "Landlord call", "body": "Ask about the **deposit** return.", "topic": "house"})
     tasks.create(conn, me, {"title": "Find the deposit receipt", "topic": "house", "status": "next"})
     found = topics.search(conn, me, "deposit")
-    assert [f["name"] for f in found["files"]] == ["lease.txt"]
+    assert [f["name"] for f in found["files"]] == ["lease.txt"] and found["files_mode"] == "knowlage"
     assert [n["title"] for n in found["notes"]] == ["Landlord call"]
     assert [t["title"] for t in found["tasks"]] == ["Find the deposit receipt"]
-    assert topics.search(conn, me, "refund")["files"]  # prefix match
+    assert topics.search(conn, me, "refund")["files"]
     assert not topics.search(conn, me, "nothinglikethis")["files"]
     assert topics.search(conn, me, '") OR *')["files"] == []  # hostile query text is harmless
+
+
+def test_upload_pushes_into_knowlage_and_stores_the_document_id(client, kb, tmp_path):
+    r = client.post("/api/files", files={"file": ("offer.txt", b"Price offer for Acme: 110 000 CZK", "text/plain")},
+                    data={"topic": "acme", "tags": "sales"})
+    assert r.status_code == 201, r.text
+    fid = r.json()["id"]
+    assert len(kb.ingested) == 1
+    it = kb.ingested[0]
+    assert (it["source"], it["channel"], it["key"], it["title"]) == ("personalos", "files", f"file-{fid}", "offer.txt")
+    assert "Price offer for Acme" in it["text"] and "Topic: acme" in it["text"] and "Tags: sales" in it["text"]
+    f = client.get(f"/api/files/{fid}").json()
+    assert f["kb_doc_id"] == kb_files.doc_id(fid) and f["kb_doc_id"] in kb.docs
+    assert f["kb_status"] == "ok" and f["kb_error"] is None
+    # Renaming marks knowlage's copy stale; the retry job pushes it again under the same key.
+    client.patch(f"/api/files/{fid}", json={"name": "offer-v2.txt"})
+    assert client.get(f"/api/files/{fid}").json()["kb_status"] == "pending"
+    conn = connect(tmp_path / "personalos.db")
+    try:
+        assert kb_files.sync_pending(conn) == {"pushed": 1, "failed": 0}
+    finally:
+        conn.close()
+    assert kb.ingested[-1]["title"] == "offer-v2.txt" and len(kb.docs) == 1
+    assert client.get(f"/api/files/{fid}").json()["kb_status"] == "ok"
+    s = client.get("/api/files/search", params={"q": "acme offer"}).json()
+    assert s["mode"] == "knowlage" and [f["id"] for f in s["files"]] == [fid]
+
+
+def test_knowlage_failure_never_fails_the_upload(client, kb):
+    kb.ingest_down = True
+    r = client.post("/api/files", files={"file": ("a.txt", b"alpha", "text/plain")})
+    assert r.status_code == 201, r.text
+    f = client.get(f"/api/files/{r.json()['id']}").json()
+    assert f["kb_status"] == "error" and "503" in f["kb_error"] and f["kb_doc_id"] is None
+    kb.down = True
+    r = client.post("/api/files", files={"file": ("b.txt", b"beta", "text/plain")})
+    assert r.status_code == 201, r.text
+    f = client.get(f"/api/files/{r.json()['id']}").json()
+    assert f["kb_status"] == "error" and "unreachable" in f["kb_error"]
+
+
+def test_retry_job_pushes_what_failed(conn, me, tmp_path, kb):
+    kb.down = True
+    f = _up(conn, me, tmp_path, b"gamma", "g.txt")
+    assert kb_files.ingest_file(conn, f["id"])["ok"] is False
+    kb.down = False
+    job = {"id": 0, "name": "x", "action": "knowlage_files", "schedule": "every 15m"}
+    assert scheduler.ACTIONS[job["action"]](conn) == {"pushed": 1, "failed": 0}
+    row = conn.execute("SELECT kb_status, kb_doc_id, kb_attempts FROM files WHERE id = ?", (f["id"],)).fetchone()
+    assert (row["kb_status"], row["kb_doc_id"], row["kb_attempts"]) == ("ok", kb_files.doc_id(f["id"]), 2)
+    assert kb_files.sync_pending(conn) == {"pushed": 0, "failed": 0}
+
+
+def test_search_goes_through_knowlage_and_maps_ids(conn, me, ai, tmp_path, kb):
+    a = _up(conn, me, tmp_path, b"Invoice from the plumber, 4 200 CZK", "scan-001.txt", topic="house")
+    b = _up(conn, me, tmp_path, b"Invoice for Acme consulting", "acme.txt", topic="acme")
+    secret = _up(conn, me, tmp_path, b"Invoice for the clinic", "clinic.txt", visibility="private")
+    kb_files.sync_pending(conn)
+    found = files.search(conn, me, "invoice")
+    assert found["mode"] == "knowlage"
+    # knowlage's order (best first) is kept; its workspace-prefixed ids map back to local files.
+    assert [f["id"] for f in found["files"]] == [secret["id"], b["id"], a["id"]]
+    assert kb.searches[-1]["sources"] == ["personalos"] and kb.searches[-1]["workspace"] == "firma"
+    assert [f["id"] for f in files.search(conn, me, "invoice", topic="house")["files"]] == [a["id"]]
+    assert [f["id"] for f in files.list_files(conn, me, q="plumber")] == [a["id"]]  # content, not the name
+    # Visibility still applies to what knowlage finds.
+    assert secret["id"] not in [f["id"] for f in files.search(conn, ai, "invoice")["files"]]
+    files.archive(conn, me, b["id"])
+    assert b["id"] not in [f["id"] for f in files.search(conn, me, "invoice")["files"]]
+
+
+def test_search_falls_back_to_file_names_when_knowlage_is_down(conn, me, tmp_path, kb):
+    a = _up(conn, me, tmp_path, b"quarterly numbers", "report_2026.txt")
+    _up(conn, me, tmp_path, b"report inside, not in the name", "misc.txt")
+    kb_files.sync_pending(conn)
+    kb.down = True
+    found = files.search(conn, me, "report")
+    assert found["mode"] == "filename" and "unreachable" in found["error"]
+    assert [f["id"] for f in found["files"]] == [a["id"]]
+    assert files.search(conn, me, "report_")["files"] == [found["files"][0]]  # '_' is literal, not a wildcard
+    assert files.search(conn, me, "%")["mode"] == "none"
+
+
+def test_search_without_knowlage_configured_uses_file_names(conn, me, tmp_path):
+    a = _up(conn, me, tmp_path, b"hello", "budget.txt")
+    found = files.search(conn, me, "budget")
+    assert found["mode"] == "filename" and [f["id"] for f in found["files"]] == [a["id"]]
+    assert files.search(conn, me, "hello")["files"] == []
+    assert kb_files.sync_pending(conn) == {"skipped": "knowlage is not configured"}
+
+
+def test_backfill_is_idempotent(conn, me, tmp_path, kb):
+    old = [_up(conn, me, tmp_path, f"old file {i}".encode(), f"old{i}.txt") for i in range(3)]
+    gone = _up(conn, me, tmp_path, b"archived", "gone.txt")
+    files.archive(conn, me, gone["id"])
+    conn.execute("UPDATE files SET kb_status = NULL")  # files from before knowlage
+    conn.commit()
+    assert kb_files.backfill(conn, apply=False) == {"would_push": 3, "configured": True}
+    assert kb.ingested == []
+    assert kb_files.backfill(conn) == {"pushed": 3, "failed": 0, "errors": []}
+    assert sorted(it["key"] for it in kb.ingested) == sorted(f"file-{f['id']}" for f in old)
+    assert kb_files.backfill(conn) == {"pushed": 0, "failed": 0, "errors": []}
+    assert len(kb.ingested) == 3
+    assert kb_files.main(["backfill", "--db", str(conn.execute("PRAGMA database_list").fetchone()["file"])]) == 0
+    assert len(kb.ingested) == 3
+
+
+def test_files_fts_is_gone(conn):
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name LIKE 'files_fts%'").fetchone() is None
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes_fts'").fetchone() is not None
 
 
 def test_topic_aggregates_tasks_files_and_notes(conn, me, tmp_path):
@@ -149,7 +312,8 @@ def test_private_file_hidden_from_agent(conn, me, ai, tmp_path):
     with pytest.raises(Forbidden):
         notes.get(conn, ai, note["id"])
     assert [f["id"] for f in files.list_files(conn, ai)] == [team["id"]]
-    assert topics.search(conn, ai, "blood") == {"q": "blood", "tasks": [], "files": [], "notes": []}
+    assert topics.search(conn, ai, "blood") == {"q": "blood", "tasks": [], "files": [], "files_mode": "filename",
+                                                "notes": []}
     assert [f["id"] for f in topics.get(conn, ai, "health")["files"]] == [team["id"]]
     # The same bytes uploaded by the agent do not reveal the private file.
     again = _up(conn, ai, tmp_path, b"blood test results", "copy.txt")
@@ -201,7 +365,7 @@ def test_mcp_search_and_notes(tmp_path):
     anyio.run(scenario)
 
 
-def test_files_api(client):
+def test_files_api(client, kb):
     r = client.post("/api/files", files={"file": ("notes.md", b"# Plan\nbuy paint", "text/html")},
                     data={"topic": "house", "tags": "diy"})
     assert r.status_code == 201, r.text

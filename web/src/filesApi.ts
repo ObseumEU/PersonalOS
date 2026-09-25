@@ -21,7 +21,14 @@ export type FileItem = {
   text_chars: number;
   preview: "image" | "pdf" | "text" | "download";
   duplicate?: boolean;
+  /** The file's document in knowlage, where its text is indexed and searched. */
+  kb_doc_id?: string | null;
+  kb_status?: "pending" | "ok" | "error" | null;
+  kb_error?: string | null;
 };
+
+/** "knowlage": full text through knowlage; "filename": knowlage was unreachable, only names matched. */
+export type FileSearch = { mode: "knowlage" | "filename" | "none"; files: FileItem[]; error?: string };
 
 export type Note = {
   id: number;
@@ -51,7 +58,7 @@ export type Topic = TopicCounts & {
 
 export type TopicDetail = Topic & { files: FileItem[]; notes: Note[]; open: Task[]; done: Task[]; events: CalEvent[] };
 
-export type SearchResult = { q: string; tasks: Task[]; files: FileItem[]; notes: Note[] };
+export type SearchResult = { q: string; tasks: Task[]; files: FileItem[]; files_mode?: FileSearch["mode"]; notes: Note[] };
 
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 const patch = <T,>(path: string, body: unknown) => api<T>(path, { method: "PATCH", body: JSON.stringify(body) });
@@ -78,6 +85,7 @@ async function upload(file: File, fields: { topic?: string; tags?: string; visib
 
 export const filesApi = {
   list: (f: { topic?: string; tag?: string; q?: string; archived?: boolean } = {}) => api<FileItem[]>(`/api/files${query(f)}`),
+  search: (f: { q: string; topic?: string; tag?: string; archived?: boolean }) => api<FileSearch>(`/api/files/search${query(f)}`),
   tags: () => api<{ tag: string; n: number }[]>("/api/files/tags"),
   get: (id: number) => api<FileItem>(`/api/files/${id}`),
   upload,

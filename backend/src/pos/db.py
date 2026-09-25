@@ -21,7 +21,8 @@ def has_table(conn: sqlite3.Connection, name: str) -> bool:
 
 
 # Full-text search for files and notes. SQLite builds without FTS5 skip these
-# tables; pos.files and pos.notes then fall back to LIKE search.
+# tables; pos.notes then falls back to LIKE search. files_fts is dropped again
+# by migration 18: files are searched through knowlage (pos.kb_files).
 HAS_FTS5 = _has_fts5()
 _FTS_SQL = """
     CREATE VIRTUAL TABLE files_fts USING fts5(name, text_extract, content='files', content_rowid='id');
@@ -539,6 +540,20 @@ MIGRATIONS: list[str] = [
     # 17: task descriptions PersonalOS wrote itself (pos.task_descriptions), told apart from real ones.
     """
     ALTER TABLE tasks ADD COLUMN description_generated INTEGER NOT NULL DEFAULT 0;
+    """,
+    # 18: files are searched through knowlage (pos.kb_files), not a second index here:
+    #     each file remembers its knowlage document and how pushing it went; files_fts goes.
+    """
+    ALTER TABLE files ADD COLUMN kb_doc_id TEXT;
+    ALTER TABLE files ADD COLUMN kb_status TEXT;
+    ALTER TABLE files ADD COLUMN kb_error TEXT;
+    ALTER TABLE files ADD COLUMN kb_attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE files ADD COLUMN kb_synced_at TEXT;
+    CREATE INDEX files_kb_doc ON files (kb_doc_id);
+    DROP TRIGGER IF EXISTS files_fts_ai;
+    DROP TRIGGER IF EXISTS files_fts_ad;
+    DROP TRIGGER IF EXISTS files_fts_au;
+    DROP TABLE IF EXISTS files_fts;
     """,
 ]
 

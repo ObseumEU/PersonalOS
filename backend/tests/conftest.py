@@ -8,3 +8,5 @@ def isolated_codex_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.setenv("POS_CODEX_DISABLED", "1")
     monkeypatch.setenv("POS_CLAUDE_DISABLED", "1")
+    # Nor the real knowlage: without a key, files are not pushed and search uses file names.
+    monkeypatch.delenv("POS_KNOWLAGE_API_KEY", raising=False)

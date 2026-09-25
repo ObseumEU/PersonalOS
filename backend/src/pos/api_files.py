@@ -2,13 +2,13 @@
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.datastructures import UploadFile
 
-from . import files, notes, topics, versioning
+from . import files, kb_files, notes, topics, versioning
 from .api_tasks import RestoreIn, get_ctx, get_db
 from .auth import require_user
 from .config import Settings, get_settings
@@ -50,10 +50,19 @@ def file_tags(conn=Depends(get_db), ctx=Depends(get_ctx)):
     return files.tags(conn, ctx)
 
 
+@router.get("/files/search")
+def search_files(q: str, topic: str | None = None, tag: str | None = None, archived: bool = False,
+                 conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Search files through knowlage: {mode: "knowlage" | "filename", files, error?}.
+    "filename" means knowlage could not answer and only names were matched."""
+    return files.search(conn, ctx, q, topic=topic, tag=tag, archived=archived)
+
+
 @router.post("/files", status_code=201)
-async def upload(request: Request, settings: Settings = Depends(get_settings)):
+async def upload(request: Request, background: BackgroundTasks, settings: Settings = Depends(get_settings)):
     """Multipart upload: `file`, plus optional `topic`, `tags` (comma separated)
-    and `visibility`. Larger than POS_MAX_UPLOAD_MB gives 413."""
+    and `visibility`. Larger than POS_MAX_UPLOAD_MB gives 413. Once saved, the
+    file is pushed into knowlage in the background (never failing the upload)."""
     max_bytes = settings.max_upload_mb * 1024 * 1024
     length = request.headers.get("content-length")
     if length and length.isdigit() and int(length) > max_bytes + 64 * 1024:
@@ -78,7 +87,10 @@ async def upload(request: Request, settings: Settings = Depends(get_settings)):
             conn.close()
 
     try:
-        return await run_in_threadpool(store)
+        out = await run_in_threadpool(store)
+        if not out.get("duplicate") or out.get("kb_status") != "ok":
+            background.add_task(kb_files.ingest_in_background, settings.db_path, out["id"])
+        return out
     except files.TooLarge as e:
         raise HTTPException(413, str(e)) from e
     finally:

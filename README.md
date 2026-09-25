@@ -103,6 +103,12 @@ from the task's fields and links (no model call) and flags it
 `description_generated`. To fill old tasks with empty descriptions
 (idempotent; `--dry-run` only counts): `python -m pos.task_descriptions backfill`.
 
+Files are indexed and searched in knowlage, not in PersonalOS: every upload is
+pushed to knowlage's `/api/ingest` (source `personalos`), and search maps
+knowlage's hits back to local files (file names only when knowlage is down).
+To push files uploaded before this (idempotent; `--dry-run` only counts):
+`python -m pos.kb_files backfill`. See [docs/FILES.md](docs/FILES.md).
+
 ## Agents and runtimes
 
 Agents are separate workers, not part of the API. Each one waits for tasks and
