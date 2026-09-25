@@ -3,7 +3,7 @@
 # data\agent-logs\<name>.log. Stop them with ops\stop-agents.ps1.
 #
 # Needs: the stack running (docker compose up -d), keys in .env
-# (DEV_AGENT_KEY, MAIL_AGENT_KEY, COMMUNITY_AGENT_KEY), backend\.venv with the
+# (ASSISTANT_AGENT_KEY, DEV_AGENT_KEY, MAIL_AGENT_KEY, COMMUNITY_AGENT_KEY), backend\.venv with the
 # worker installed (pip install -e worker).
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -19,6 +19,7 @@ Get-Content $envFile | Where-Object { $_ -match '^\s*([A-Z0-9_]+)=(.*)$' } | For
 $port = if ($vars["POS_PORT"]) { $vars["POS_PORT"] } else { "8080" }
 
 $agents = @(
+    @{ Name = "assistant"; Key = "ASSISTANT_AGENT_KEY" },
     @{ Name = "dev-agent"; Key = "DEV_AGENT_KEY" },
     @{ Name = "mail-agent"; Key = "MAIL_AGENT_KEY" },
     @{ Name = "community-agent"; Key = "COMMUNITY_AGENT_KEY" }

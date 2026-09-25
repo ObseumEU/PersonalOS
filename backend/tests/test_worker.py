@@ -212,3 +212,13 @@ def test_claude_usage_limit_pauses_claude_and_auto_falls_back(setup, monkeypatch
     agents_mod.set_engine(conn, owner, agent_id, "auto")
     engine, why, _ = engines.choose(conn, agent_id)
     assert engine == "codex"  # Claude is paused, so auto falls back to Codex
+
+
+def test_worker_entry_point_imports_and_reads_config(monkeypatch):
+    import importlib
+
+    main = importlib.import_module("pos_worker.__main__")
+    monkeypatch.setenv("WORKER_CODEX_CONFIG", 'a="1"||b="2"')
+    assert main.extra_config() == ['a="1"', 'b="2"']
+    monkeypatch.setenv("WORKER_CLAUDE_MCP", '{"kb": {"type": "http", "url": "http://kb/ingest/mcp"}}')
+    assert main.claude_extra_mcp()["kb"]["type"] == "http"

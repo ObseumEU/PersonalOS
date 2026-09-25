@@ -33,8 +33,7 @@ def extra_config() -> list[str]:
         mcp_servers.knowlage.url="https://knowlage.example/ingest/mcp"
         mcp_servers.knowlage.bearer_token_env_var="KB_AGENT_KEY"
     """
-    raw = os.environ.get("WORKER_CODEX_CONFIG", "").replace("||", "
-")
+    raw = os.environ.get("WORKER_CODEX_CONFIG", "").replace("||", chr(10))
     return [line.strip() for line in raw.splitlines() if line.strip()]
 
 
