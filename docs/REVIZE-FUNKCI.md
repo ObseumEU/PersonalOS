@@ -116,6 +116,14 @@ Každá položka je samostatná změna s testem.
 | F20 | Prod compose: logging i pro agent-coach a project-manager | `deploy/prod/docker-compose.prod.yml` | |
 | F21 | Mrtvý kód pryč: `ComingSoon` a `BUILT`, nevyužitý `run` v `org.handoff`, `register_outbound_action` (nebo ho použít v F35) | `App.tsx:28,75`, `org.py:265`, `outbound.py` | |
 
+### Stav vlny 0
+
+- F1: hotovo, 3aa337b
+- F2, F3: hotovo, 028c1f6
+- F4: hotovo, db81463
+- F5, F6: hotovo, 7cd6491
+- F7, F8, F9: hotovo, 04db74e (+ testy a42b09b)
+
 ## 3. Vlna 1: kolegiální jádro
 
 ### 3.1 Aktivita a komentáře u úkolu (základ zpětné vazby)
