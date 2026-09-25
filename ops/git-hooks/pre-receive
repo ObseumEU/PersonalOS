@@ -1,0 +1,7 @@
+#!/bin/sh
+# Server-side hook: refuse pushes that change protected files (docs/CONSTITUTION.md,
+# backend/src/pos/guard/, permissions, limits, budget) without the owner's
+# signature. Install into the bare repo agents push to:
+#   ln -s /opt/personalos/ops/git-hooks/pre-receive <bare-repo>/hooks/pre-receive
+# POS_PYTHON and PYTHONPATH must point at the PersonalOS backend.
+exec "${POS_PYTHON:-python3}" -m pos.guard pre-receive --repo "${GIT_DIR:-.}"
