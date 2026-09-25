@@ -15,6 +15,7 @@ docs/INGEST.md).
 """
 
 import json
+import os
 import re
 import sqlite3
 
@@ -36,6 +37,8 @@ DEFAULT_RULES = [
 # Off until the Dev agent can act on it (GitHub write access, repositories other
 # than PersonalOS); until then every review request is a wasted run.
 OFF_BY_DEFAULT = {"GitHub review request → Dev agent"}
+# On only while Nexus is reachable (POS_NEXUS_A2A_URL); else its tasks would wait for ever.
+NEXUS_RULE = "Invoice e-mail → payment task for Nexus"
 
 
 # ------------------------------------------------------------------ rules
@@ -47,8 +50,26 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     for i, (name, source, match, assignee, priority, topic) in enumerate(DEFAULT_RULES):
         create_rule(conn, ctx, {"name": name, "source": source, "match": match, "assignee": assignee,
                                 "priority": priority, "topic": topic, "position": i,
-                                "enabled": name not in OFF_BY_DEFAULT})
+                                "enabled": name not in OFF_BY_DEFAULT
+                                and (name != NEXUS_RULE or bool(os.environ.get("POS_NEXUS_A2A_URL")))})
     conn.commit()
+
+
+def sync_nexus_rule(conn: sqlite3.Connection) -> None:
+    """Switch the invoice → Nexus rule on when Nexus has an A2A URL and off when
+    not, unless a person changed the rule by hand (then it is theirs)."""
+    row = conn.execute("SELECT id, enabled FROM routing_rules WHERE name = ? AND archived_at IS NULL",
+                       (NEXUS_RULE,)).fetchone()
+    if row is None:
+        return
+    actions = {h["action"] for h in versioning.history(conn, "route", row["id"])}
+    if actions - {"create", "auto_nexus"}:
+        return
+    want = bool(os.environ.get("POS_NEXUS_A2A_URL"))
+    if bool(row["enabled"]) != want:
+        versioning.update(conn, Ctx(actors.owner_id(conn), via="system"), "route", row["id"],
+                          {"enabled": 1 if want else 0}, action="auto_nexus")
+        conn.commit()
 
 
 def _rule_out(row) -> dict:

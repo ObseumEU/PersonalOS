@@ -15,6 +15,7 @@ from pos.main import create_app
 @pytest.fixture
 def conn(tmp_path, monkeypatch):
     monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    monkeypatch.setenv("POS_NEXUS_A2A_URL", "http://nexus/a2a")  # the invoice rule is on only with Nexus
     for v in ("POS_SMTP_HOST", "POS_SMTP_USER", "POS_GITHUB_TOKEN", "POS_DISCORD_WEBHOOK_URL"):
         monkeypatch.delenv(v, raising=False)
     c = connect(tmp_path / "c.db")
@@ -188,3 +189,22 @@ def test_connectors_status_shows_prefilter_counts_and_event_senders(tmp_path, mo
         status = client.get("/api/connectors").json()
         assert status["event_senders"] == ["knowlage"] and "t" * 32 not in str(status)
         assert status["mail_prefilter"]["total"] == 1
+
+
+def test_invoice_rule_follows_the_nexus_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    monkeypatch.delenv("POS_NEXUS_A2A_URL", raising=False)
+    c = connect(tmp_path / "n.db")
+    migrate(c)
+    actors.ensure_builtin(c)
+    routing.seed_defaults(c)
+    rule = lambda: next(r for r in routing.list_rules(c) if r["name"] == routing.NEXUS_RULE)  # noqa: E731
+    assert rule()["enabled"] is False
+    monkeypatch.setenv("POS_NEXUS_A2A_URL", "http://nexus/a2a")
+    routing.sync_nexus_rule(c)
+    assert rule()["enabled"] is True
+    # a person's own change wins over the automatic switch
+    routing.update_rule(c, Ctx(actors.owner_id(c)), rule()["id"], {"enabled": False})
+    routing.sync_nexus_rule(c)
+    assert rule()["enabled"] is False
+    c.close()

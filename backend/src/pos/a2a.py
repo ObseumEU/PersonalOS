@@ -298,6 +298,9 @@ def configure_builtin(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE actors SET a2a_url = ?, runtime = ? WHERE name = ?",
                      (url or None, "a2a" if url else "builtin", name))
     conn.commit()
+    from . import routing
+
+    routing.sync_nexus_rule(conn)
 
 
 def ask(conn: sqlite3.Connection, ctx: Ctx, member_name: str, question: str, wait_s: int = 60,
