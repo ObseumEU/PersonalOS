@@ -138,11 +138,15 @@ def reassign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = "
     from . import chat, wake
 
     me = actors.get(conn, ctx.actor_id)
-    if me["kind"] != "human":
-        killswitch.check_agent_may_act(conn, ctx)
-        if not agents.has_permission(conn, ctx.actor_id, "tasks:write"):
-            raise Forbidden("reassigning a task needs tasks:write")
     row = tasks._row(conn, ctx, task_id)
+    if me["kind"] != "human":
+        from .org import manages
+
+        killswitch.check_agent_may_act(conn, ctx)
+        lead = manages(conn, ctx.actor_id, row["assignee_id"])  # a lead moves its reports' work
+        if not (agents.has_permission(conn, ctx.actor_id, "tasks:write")
+                or (lead and agents.has_permission(conn, ctx.actor_id, "tasks:claim"))):
+            raise Forbidden("reassigning a task needs tasks:write (or leading its assignee)")
     ref = tasks.display_id(task_id)
     if row["archived_at"]:
         raise tasks.Invalid(f"{ref} is archived")

@@ -321,6 +321,14 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     others = [m for m in members if m != ctx.actor_id]
     if priority == "stop" and ch["kind"] == "group" and not mentioned:
         raise ChatError("stop needs a recipient: send it as a DM or @mention who should stop")
+    if priority == "stop" and author["kind"] != "human" and not system:
+        from .org import manages
+
+        targets = others if ch["kind"] == "dm" else mentioned
+        refused = [m for m in targets if not manages(conn, ctx.actor_id, m)]
+        if refused:
+            names = ", ".join(actors.get(conn, m)["name"] for m in refused)
+            raise Forbidden(f"only people and their leads send stop; you do not lead {names}")
 
     refs = [{"type": "task", "id": int(n)} for n in dict.fromkeys(_TASK_REF.findall(body))]
     atts = list(attachments or [])

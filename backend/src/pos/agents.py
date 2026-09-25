@@ -240,8 +240,10 @@ def _agent_row(conn: sqlite3.Connection, agent_id: int) -> sqlite3.Row:
 
 
 def pause(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, paused: bool) -> dict:
-    if actors.get(conn, ctx.actor_id)["kind"] != "human":
-        raise _Forbidden("only people pause agents")
+    from .org import manages
+
+    if actors.get(conn, ctx.actor_id)["kind"] != "human" and not manages(conn, ctx.actor_id, agent_id):
+        raise _Forbidden("only people and the agent's leads pause it")
     _agent_row(conn, agent_id)
     versioning.update(conn, ctx, "actor", agent_id, {"paused_at": now_iso() if paused else None},
                       action="pause" if paused else "resume")
@@ -250,8 +252,12 @@ def pause(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, paused: bool) -> di
 
 
 def stop(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
-    """Stop the agent's running work now and pause it."""
+    """Stop the agent's running work now and pause it (people and its leads)."""
+    from .org import manages
+
     _agent_row(conn, agent_id)
+    if actors.get(conn, ctx.actor_id)["kind"] != "human" and not manages(conn, ctx.actor_id, agent_id):
+        raise _Forbidden("only people and the agent's leads stop it")
     stopped = runner.cancel_all(conn, f"stopped by {actors.get(conn, ctx.actor_id)['name']}", actor_id=agent_id)
     audit.log(conn, ctx, "stop_agent", "actor", agent_id, runs=stopped)
     return pause(conn, ctx, agent_id, True)

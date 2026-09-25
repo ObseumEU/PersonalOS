@@ -197,9 +197,19 @@ def chart(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict
 
 
 def set_org(conn: sqlite3.Connection, ctx: Ctx, actor_id: int, changes: dict) -> dict:
-    """Change a member's role, team or manager (owner only). Versioned."""
-    if not actors.get(conn, ctx.actor_id)["is_owner"]:
-        raise Forbidden("only the owner changes the org structure")
+    """Change a member's role, team or manager. Versioned. The owner changes
+    anything; a lead changes members below it and moves them only within its
+    own part of the chart."""
+    me = actors.get(conn, ctx.actor_id)
+    if not me["is_owner"]:
+        if not manages(conn, ctx.actor_id, actor_id):
+            raise Forbidden("only the owner or the member's lead changes where they sit")
+        new = changes.get("reports_to")
+        if "reports_to" in changes and new not in (None, "", 0) and int(new) != ctx.actor_id \
+                and not manages(conn, ctx.actor_id, int(new)):
+            raise Forbidden("a lead moves members only within its own part of the chart")
+        if "reports_to" in changes and new in (None, "", 0):
+            raise Forbidden("only the owner takes a member out of the chart")
     row = actors.get(conn, actor_id)
     sets: dict = {}
     for key in ("role", "team"):
@@ -260,7 +270,7 @@ def handoff(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = ""
     row = tasks._row(conn, ctx, task_id)
     me = actors.get(conn, ctx.actor_id)
     if me["kind"] != "human":
-        own = row["assignee_id"] == ctx.actor_id
+        own = row["assignee_id"] == ctx.actor_id or manages(conn, ctx.actor_id, row["assignee_id"])
         if not (agents.has_permission(conn, ctx.actor_id, "tasks:write")
                 or (own and agents.has_permission(conn, ctx.actor_id, "tasks:claim"))):
             raise Forbidden("handing off someone else's task needs tasks:write" if not own

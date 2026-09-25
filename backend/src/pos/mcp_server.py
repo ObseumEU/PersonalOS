@@ -73,6 +73,8 @@ TOOL_PERMISSIONS = {
     "task_reassign": "tasks:write",
     # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
     "task_comment": "tasks:read",
+    # Pausing or stopping an agent: people and its leads (checked in pos.agents).
+    "manage_agent": "tasks:claim",
     # Review between colleagues (tasks.may_review decides whose result).
     "review_task": "tasks:review", "request_review": "tasks:claim",
     # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.
@@ -454,6 +456,22 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             if target is None:
                 raise NotFound(f"no member called {name}")
             return agents.status(conn, target["id"])
+
+    @mcp.tool(description="As an agent's lead (or a person): pause or resume it, or stop its running work now "
+                          "(action: pause | resume | stop). Say why in `reason`; it goes to the audit log.")
+    def manage_agent(ctx: Context, name: str, action: str, reason: str = "") -> dict:
+        from . import agents
+
+        if action not in ("pause", "resume", "stop"):
+            raise ToolError("action must be pause, resume or stop")
+        with session(ctx, "manage_agent", name=name, action=action) as (conn, c):
+            target = actors.find_by_name(conn, name)
+            if target is None:
+                raise NotFound(f"no member called {name}")
+            out = (agents.stop(conn, c, target["id"]) if action == "stop"
+                   else agents.pause(conn, c, target["id"], action == "pause"))
+            audit.log(conn, c, f"lead_{action}", "actor", target["id"], reason=reason[:300] or None)
+            return {"name": out["name"], "paused": out["paused"], "status": out["status"]}
 
     @mcp.tool(description="Pass a task to another member with a note (who you are handing to and why, "
                           "what is done, what is left). They get a message; the task moves to their queue. "

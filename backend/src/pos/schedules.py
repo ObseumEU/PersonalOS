@@ -75,10 +75,14 @@ def list_schedules(conn: sqlite3.Connection, *, actor_id: int | None = None, arc
 
 
 def _may_manage(conn: sqlite3.Connection, ctx: Ctx, s: dict) -> None:
+    from .org import manages
+
     me = actors.get(conn, ctx.actor_id)
     if me["kind"] == "human" or ctx.actor_id in (s["created_by"], s["assignee_id"]):
         return
-    raise tasks.Forbidden("only the creator, the assignee or a person can change this schedule")
+    if s["assignee_id"] and manages(conn, ctx.actor_id, s["assignee_id"]):
+        return
+    raise tasks.Forbidden("only the creator, the assignee, their lead or a person can change this schedule")
 
 
 def _check_assign(conn: sqlite3.Connection, creator_id: int, assignee_id: int) -> None:
