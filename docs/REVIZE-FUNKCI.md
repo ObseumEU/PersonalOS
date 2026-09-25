@@ -204,6 +204,9 @@ Accept/Return jen pro toho, kdo smí.
   (merge do main + deployer kontrola). Kdo smí: majitel, vedoucí agenta, coach.
 - Profil člena ukazuje „Zpětná vazba“ (přijatá a daná) a co se z ní změnilo.
 
+Stav: hotovo (commit „Wave 1 / 3.4“). Úprava instrukcí z UI jde jako úkol pro Dev agenta
+(commit na agent/dev → deployer), ne přímým zápisem z API.
+
 ### 3.5 Nábor (hiring) a zkušební doba
 
 - Jeden tok pro založení kolegy: `hire_request` (kdo žádá, role, účel,

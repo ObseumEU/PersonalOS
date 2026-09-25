@@ -73,6 +73,9 @@ TOOL_PERMISSIONS = {
     "task_reassign": "tasks:write",
     # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
     "task_comment": "tasks:read",
+    # Feedback: any member gives it; resolving is checked in pos.feedback.
+    "propose_instructions": "tasks:claim",
+    "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
     # Pausing or stopping an agent: people and its leads (checked in pos.agents).
     "manage_agent": "tasks:claim",
     # Review between colleagues (tasks.may_review decides whose result).
@@ -213,6 +216,50 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     def request_review(ctx: Context, task_id: str, reviewer: str, note: str = "") -> dict:
         with session(ctx, "request_review", task_id=task_id, reviewer=reviewer) as (conn, c):
             return brief(tasks.request_review(conn, c, tasks.parse_id(task_id), reviewer, note))
+
+    @mcp.tool(description="Give a colleague feedback: kind praise, critique or suggestion, optionally about a "
+                          "task (T-012). Be specific: what happened, why it matters, what to do instead. It reaches "
+                          "their inbox; an agent sees it in its next runs; the Agent coach turns repeated critique "
+                          "into better instructions.")
+    def give_feedback(ctx: Context, to: str, body: str, kind: str = "critique", task_id: str | None = None,
+                      rating: int | None = None) -> dict:
+        from . import feedback
+
+        with session(ctx, "give_feedback", to=to, kind=kind) as (conn, c):
+            tid = tasks.parse_id(task_id) if task_id else None
+            return feedback.give(conn, c, to, body, kind, tid, rating)
+
+    @mcp.tool(description="Propose a new version of an agent's instructions (the whole text). It becomes a task "
+                          "for the Dev agent to commit agents/<slug>/INSTRUCTIONS.md; the deployer checks it. For the "
+                          "owner, the agent's lead and the Agent coach.")
+    def propose_instructions(ctx: Context, agent: str, text: str, reason: str = "") -> dict:
+        from . import agents
+
+        with session(ctx, "propose_instructions", agent=agent) as (conn, c):
+            target = actors.find_by_name(conn, agent)
+            if target is None:
+                raise NotFound(f"no member called {agent}")
+            return agents.propose_instructions(conn, c, target["id"], text, reason)
+
+    @mcp.tool(description="Feedback given to a member (default: you), by status open | applied | dismissed.")
+    def feedback_list(ctx: Context, to: str | None = None, status: str | None = "open") -> list[dict]:
+        from . import feedback
+
+        with session(ctx, "feedback_list", to=to) as (conn, c):
+            target = actors.find_by_name(conn, to) if to else actors.get(conn, c.actor_id)
+            if target is None:
+                raise NotFound(f"no member called {to}")
+            return feedback.list_for(conn, to_id=target["id"], status=status, limit=50)
+
+    @mcp.tool(description="Resolve feedback: status applied (with applied_ref: the task or commit that "
+                          "changed the work) or dismissed (with the reason in note). The owner, the Agent "
+                          "coach, the receiver's lead or the receiver.")
+    def feedback_resolve(ctx: Context, feedback_id: int, status: str, note: str = "",
+                         applied_ref: str | None = None) -> dict:
+        from . import feedback
+
+        with session(ctx, "feedback_resolve", feedback_id=feedback_id, status=status) as (conn, c):
+            return feedback.resolve(conn, c, feedback_id, status, note, applied_ref)
 
     @mcp.tool(description="Comment on a task (its activity). @Name reaches that member's inbox. "
                           "Use it for questions, findings and feedback on the work, not for status "

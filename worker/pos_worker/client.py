@@ -24,6 +24,13 @@ class PosClient:
         r.raise_for_status()
         return r.json()
 
+    def feedback(self) -> list[dict]:
+        """Open feedback for this agent (empty on an older PersonalOS)."""
+        try:
+            return self._get("/api/worker/feedback")
+        except Exception:  # noqa: BLE001 - feedback is context, never a reason not to work
+            return []
+
     def me(self) -> dict:
         return self._get("/api/worker/me")
 

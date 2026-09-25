@@ -316,6 +316,38 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
     return {**detail(conn, agent_id), "api_key": key}
 
 
+def propose_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, text: str, reason: str = "") -> dict:
+    """A new version of an agent's instructions goes the way every change does:
+    a task for the Dev agent to commit agents/<slug>/INSTRUCTIONS.md on agent/dev,
+    which the deployer checks and promotes. The owner, the agent's lead and the
+    Agent coach may propose."""
+    from .org import manages
+
+    row = _agent_row(conn, agent_id)
+    me = actors.get(conn, ctx.actor_id)
+    if not (me["is_owner"] or me["name"] == "Agent coach" or manages(conn, ctx.actor_id, agent_id)):
+        raise _Forbidden("the owner, the agent's lead or the Agent coach proposes its instructions")
+    text = (text or "").strip()
+    if len(text) < 40:
+        raise AgentError("the instructions are too short")
+    path = f"agents/{_slug(row['name'])}/INSTRUCTIONS.md"
+    dev = actors.find_by_name(conn, "Dev agent")
+    t = tasks.create(conn, ctx, {
+        "title": f"Instrukce {row['name']}: {(reason or 'nová verze').strip()[:80]}",
+        "assignee": {"type": "agent", "id": dev["id"]} if dev and not dev["archived_at"] else "me",
+        "priority": 2, "topic": "agents",
+        "notes": f"Účel: nová verze instrukcí agenta {row['name']} od {me['name']}"
+                 + (f" ({reason.strip()})" if reason.strip() else "") + ".\n"
+                 "Odkud: návrh z PersonalOS (zpětná vazba / úprava instrukcí).\n\n"
+                 f"Nahraď celý obsah `{path}` tímto textem, commitni na agent/dev (deployer ho zkontroluje "
+                 f"a nasadí):\n\n````markdown\n{text}\n````",
+        "definition_of_done": f"`{path}` má tento obsah v main (commit prošel deployerem).",
+    })
+    audit.log(conn, ctx, "propose_instructions", "actor", agent_id, task=t["ref"], reason=reason[:300] or None)
+    conn.commit()
+    return {"task": t["ref"], "path": path, "assignee": t["assignee_name"]}
+
+
 def set_engine(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, engine: str | None,
                model: str | None = None) -> dict:
     """codex, claude, auto, or None for the platform default; the Claude model (owner only)."""

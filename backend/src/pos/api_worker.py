@@ -135,6 +135,14 @@ async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Se
             await wake.wait(woken, min(POLL_FALLBACK_S, remaining))
 
 
+@router.get("/feedback")
+def my_feedback(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """Open feedback for this agent, for the prompt of its next run."""
+    from . import feedback
+
+    return feedback.open_for_prompt(conn, ctx.actor_id)
+
+
 @router.get("/tasks/{task_id}")
 def get_task(task_id: str, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     return tasks.get(conn, ctx, tasks.parse_id(task_id))

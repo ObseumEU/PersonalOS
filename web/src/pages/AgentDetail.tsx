@@ -5,6 +5,7 @@ import { api } from "../api";
 import { type AgentDetail as Detail, agentsApi, type Org } from "../agentsApi";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
+import { FeedbackPanel, InstructionsEditor } from "../components/Feedback";
 import { SchedulesPanel } from "../components/Schedules";
 import { PageHeader, Panel } from "../components/ui";
 import { tasksApi } from "../tasksApi";
@@ -408,6 +409,7 @@ export default function AgentDetail() {
         </Panel>
         <Panel fig="MEMORY" title="Instructions and memory" className="lg:col-span-3" bodyClassName="max-h-[300px] overflow-y-auto">
           <pre className="px-4 py-3 font-mono text-[11px] whitespace-pre-wrap text-ink-2">{a.instructions ?? "Built-in instructions."}</pre>
+          {a.kind !== "human" && <InstructionsEditor agentId={a.id} current={a.instructions} />}
           {a.memory.map((m) => (
             <p key={m.id} className="border-t border-line px-4 py-2 text-xs text-ink-2">
               {m.body}
@@ -416,6 +418,7 @@ export default function AgentDetail() {
         </Panel>
       </div>
       <OrgPanel a={a} onSaved={act} />
+      <FeedbackPanel member={{ id: a.id, name: a.name }} />
       <SchedulesPanel actor={{ id: a.id, name: a.name }} />
       <p className="cap">
         Assignees: <AssigneeChip type="human" name="Owner" /> people · <AssigneeChip type="ai" name="AI" /> the assistant ·{" "}

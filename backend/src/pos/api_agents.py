@@ -112,6 +112,17 @@ def archive(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return agents.archive(conn, ctx, agent_id, "archived by the owner")
 
 
+class InstructionsIn(BaseModel):
+    text: str
+    reason: str = ""
+
+
+@router.post("/agents/{agent_id}/instructions")
+def propose_instructions(agent_id: int, body: InstructionsIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """A new version of the agent's instructions, committed through the Dev agent and the deployer."""
+    return _wrap(lambda: agents.propose_instructions(conn, ctx, agent_id, body.text, body.reason))
+
+
 @router.post("/agents/{agent_id}/restore")
 def restore(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return agents.restore(conn, ctx, agent_id)

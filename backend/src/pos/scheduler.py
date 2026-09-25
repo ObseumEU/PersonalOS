@@ -201,6 +201,12 @@ def a2a_sync(conn: sqlite3.Connection) -> dict:
     return a2a.sync(conn)
 
 
+def feedback_digest(conn: sqlite3.Connection) -> dict:
+    from . import feedback
+
+    return feedback.coach_digest(conn)
+
+
 def knowlage_files(conn: sqlite3.Connection) -> dict:
     from . import kb_files
 
@@ -209,6 +215,7 @@ def knowlage_files(conn: sqlite3.Connection) -> dict:
 
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "knowlage_files": knowlage_files,
+    "feedback_digest": feedback_digest,
     "morning_brief": morning_brief,
     "follow_ups": follow_ups,
     "weekly_review": weekly_review,
@@ -231,6 +238,7 @@ DEFAULT_JOBS = [
     ("Schedules of people and agents", "every 1m", "member_schedules"),
     ("Check that the Claude CLI answers with its model", "every 6h", "claude_selfcheck"),
     ("Push files into knowlage (retry what failed)", "every 15m", "knowlage_files"),
+    ("Repeated critique of an agent → the Agent coach", "daily 06:30", "feedback_digest"),
 ]
 
 

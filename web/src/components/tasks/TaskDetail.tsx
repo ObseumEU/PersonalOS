@@ -1,6 +1,7 @@
 import { Archive, Check, History, Pencil, RotateCcw, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { type Actor, type Comment, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
+import { FeedbackForm } from "../Feedback";
 import Markdown from "../Markdown";
 import { Panel } from "../ui";
 import AgentPicker from "./AgentPicker";
@@ -449,6 +450,15 @@ export default function TaskDetail({
         )}
 
         <Activity taskRef={task.ref} version={task.updated_at} />
+
+        {task.assignee_id && task.assignee_type !== "external" && (
+          <details className="border-t border-line pt-2">
+            <summary className="cap cursor-pointer">feedback for {task.assignee_name} on this task</summary>
+            <div className="pt-2">
+              <FeedbackForm to={task.assignee_id} taskRef={task.ref} />
+            </div>
+          </details>
+        )}
 
         <div className="flex flex-wrap gap-2 border-t border-line pt-3">
           {task.status !== "done" && (

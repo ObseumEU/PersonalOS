@@ -259,6 +259,47 @@ def knowledge_ask(body: AskIn):
     return knowledge.ask(body.question.strip(), body.workspace)
 
 
+class FeedbackIn(BaseModel):
+    to: str | int
+    body: str
+    kind: str = "critique"
+    task_id: str | None = None
+    rating: int | None = None
+
+
+class ResolveIn(BaseModel):
+    status: str
+    note: str = ""
+    applied_ref: str | None = None
+
+
+@router.get("/feedback")
+def list_feedback(to_id: int | None = None, from_id: int | None = None, status: str | None = None,
+                  conn=Depends(get_db)):
+    from . import feedback
+
+    return feedback.list_for(conn, to_id=to_id, from_id=from_id, status=status)
+
+
+@router.post("/feedback", status_code=201)
+def give_feedback(body: FeedbackIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import feedback, tasks
+
+    tid = tasks.parse_id(body.task_id) if body.task_id else None
+    out = feedback.give(conn, ctx, body.to, body.body, body.kind, tid, body.rating)
+    conn.commit()
+    return out
+
+
+@router.post("/feedback/{feedback_id}/resolve")
+def resolve_feedback(feedback_id: int, body: ResolveIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import feedback
+
+    out = feedback.resolve(conn, ctx, feedback_id, body.status, body.note, body.applied_ref)
+    conn.commit()
+    return out
+
+
 @router.get("/a2a/links")
 def a2a_links(conn=Depends(get_db)):
     members = [{"id": m["id"], "name": m["name"], "a2a_url": m["a2a_url"]} for m in a2a.remote_members(conn).values()]

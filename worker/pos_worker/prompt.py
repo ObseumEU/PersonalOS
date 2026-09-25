@@ -45,6 +45,11 @@ def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardra
         "manager with send_message.",
         "- When you are done, finish with a short summary of what you did and what the owner should check.",
     ]
+    if me.get("feedback"):
+        lines = "\n".join(f"- {f['kind']} from {f.get('from_name') or 'a colleague'}"
+                          + (f" ({f['task_ref']})" if f.get("task_ref") else "") + f": {f['body']}"
+                          for f in me["feedback"][:5])
+        parts += ["# Recent feedback for you (colleagues' view of your work; take it into account)", lines]
     parts.append(prompt_section(me.get("tools") or [], include_skills=include_guardrails))
     if context:
         parts += ["# Messages you received before this task", _messages(context)]

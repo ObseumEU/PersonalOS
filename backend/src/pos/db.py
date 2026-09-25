@@ -590,6 +590,28 @@ MIGRATIONS: list[str] = [
     ALTER TABLE tasks ADD COLUMN reviewer_id INTEGER REFERENCES actors(id);
     CREATE INDEX tasks_reviewer ON tasks (reviewer_id, status);
     """,
+    # 22: feedback between colleagues (pos.feedback): praise, critique, suggestions.
+    """
+    CREATE TABLE feedback (
+        id INTEGER PRIMARY KEY,
+        from_id INTEGER NOT NULL REFERENCES actors(id),
+        to_id INTEGER NOT NULL REFERENCES actors(id),
+        task_id INTEGER REFERENCES tasks(id),
+        kind TEXT NOT NULL CHECK (kind IN ('praise', 'critique', 'suggestion')),
+        body TEXT NOT NULL,
+        rating INTEGER,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'applied', 'dismissed')),
+        resolution TEXT,
+        applied_ref TEXT,
+        resolved_by INTEGER REFERENCES actors(id),
+        resolved_at TEXT,
+        created_by INTEGER REFERENCES actors(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE INDEX feedback_to ON feedback (to_id, status);
+    """,
 ]
 
 
