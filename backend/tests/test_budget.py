@@ -237,3 +237,18 @@ def test_api(tmp_path):
         gate = client.get("/api/budget/gate/hr").json()
         assert gate["allowed"] and gate["budget_class"] == "system"
         assert client.post("/api/budget/check").json()["level"] == "ok"
+
+
+def test_usage_limit_error_pauses_at_once(tmp_path):
+    conn = connect(tmp_path / "pos.db")
+    service.set_agent_class(conn, "hr", "system")
+    out = [
+        json.dumps({"type": "thread.started", "thread_id": THREAD}),
+        json.dumps({"type": "error", "message": "You've hit your usage limit. Try again at Sep 29th, 2026 6:47 AM."}),
+        json.dumps({"type": "turn.failed", "error": {"message": "You've hit your usage limit."}}),
+    ]
+    run = service.record_exec(conn, out, agent_id="mail", now=NOW,
+                              settings=service.BudgetSettings(codex_home=tmp_path))
+    assert run.limit_reached and run.failed
+    assert not service.can_run(conn, "mail", now=NOW).allowed
+    assert service.can_run(conn, "hr", now=NOW).allowed

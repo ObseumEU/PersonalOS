@@ -79,6 +79,11 @@ def record_exec(
         conn, at=now, usage=run.usage, source="exec",
         thread_id=run.thread_id, agent_id=agent_id, task_id=task_id,
     )
+    if run.limit_reached:
+        # Don't wait for the hourly check: stop non-system agents right away.
+        report = {"at": store.iso(now), "level": "pause", "actions": [],
+                  "reasons": ["Codex odmítl běh: vyčerpaný limit předplatného."]}
+        store.save_check(conn, now, "pause", json.dumps(report, ensure_ascii=False))
     if run.thread_id:
         root = (settings or BudgetSettings()).codex_home or codex_home()
         path = find_session_log(run.thread_id, root)
