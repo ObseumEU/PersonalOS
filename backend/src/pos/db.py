@@ -568,6 +568,23 @@ MIGRATIONS: list[str] = [
         archived_at TEXT
     );
     """,
+    # 20: a task's activity (pos.comments): comments, returns, reviews, handoffs and
+    #     progress, so nothing is lost when progress_note is overwritten.
+    """
+    CREATE TABLE task_comments (
+        id INTEGER PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES tasks(id),
+        author_id INTEGER REFERENCES actors(id),
+        body TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'comment'
+             CHECK (kind IN ('comment', 'return', 'review', 'handoff', 'progress', 'system')),
+        created_by INTEGER REFERENCES actors(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE INDEX task_comments_task ON task_comments (task_id, id);
+    """,
 ]
 
 

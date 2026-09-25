@@ -71,6 +71,8 @@ TOOL_PERMISSIONS = {
     "handoff_task": "tasks:read", "org_chart": "tasks:read",
     # Reassign a task and wake the new agent (pos.reassign); the PM routes work with it.
     "task_reassign": "tasks:write",
+    # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
+    "task_comment": "tasks:read",
     # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.
     "tools_list": "tasks:read", "tools_get": "tasks:read",
     "tools_publish": "tasks:claim", "tools_record_use": "tasks:claim",
@@ -182,8 +184,23 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     @mcp.tool(description="One task with its steps, notes and fields. Accepts T-012 or 12.")
     def get_task(ctx: Context, task_id: str) -> dict:
+        from . import comments
+
         with session(ctx, "get_task", task_id=task_id) as (conn, c):
-            return tasks.get(conn, c, tasks.parse_id(task_id))
+            tid = tasks.parse_id(task_id)
+            # the last 20 activity entries: comments, returns, reviews, handoffs, progress
+            activity = [{k: a[k] for k in ("id", "kind", "author_name", "body", "created_at")}
+                        for a in comments.list_for(conn, c, tid, limit=20)]
+            return {**tasks.get(conn, c, tid), "activity": activity}
+
+    @mcp.tool(description="Comment on a task (its activity). @Name reaches that member's inbox. "
+                          "Use it for questions, findings and feedback on the work, not for status "
+                          "(report_progress) or handing over (handoff_task).")
+    def task_comment(ctx: Context, task_id: str, body: str) -> dict:
+        from . import comments
+
+        with session(ctx, "task_comment", task_id=task_id) as (conn, c):
+            return comments.add(conn, c, tasks.parse_id(task_id), body)
 
     # ------------------------------------------------------------- write
 

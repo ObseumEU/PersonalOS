@@ -192,6 +192,10 @@ def reassign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = "
         body += f"\n\nDone when: {dod}" if dod else ""
         message_id = chat.send_dm(conn, ctx, target["id"], body[:chat.MAX_BODY], priority="fyi",
                                   attachments=[{"type": "task", "id": task_id}], system=True)["id"]
+    from . import comments
+
+    comments.log(conn, ctx, task_id, f"Reassigned from {prev_name or 'nobody'} to {target['name']}"
+                 + (f": {note}" if note else ""), "handoff")
     audit.log(conn, ctx, "reassign", tasks.ENTITY, task_id, **{
         "from": prev_name, "from_id": prev_id, "to": target["name"], "to_id": target["id"],
         "cancelled_runs": cancelled, "message_id": message_id, "forced": bool(reasons),

@@ -305,8 +305,11 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra}, action="accept" if accepted else "update")
     out = get(conn, ctx, task_id)
     if accepted:
+        from . import comments
         from .agents import retire_if_done
 
+        comments.log(conn, ctx, task_id, "Accepted" + (f": {changes['progress_note']}"
+                                                       if changes.get("progress_note") else ""), "review")
         retire_if_done(conn, ctx, out["assignee_id"])
     return out
 
@@ -343,6 +346,9 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
         "returned_count": row["returned_count"] + 1,
         "progress_note": f"Returned: {comment}" if comment else "Returned",
     }, action="return")
+    from . import comments
+
+    comments.log(conn, ctx, task_id, f"Returned: {comment}" if comment else "Returned", "return")
     return get(conn, ctx, task_id)
 
 
@@ -392,7 +398,12 @@ def claim(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
 def report_progress(conn: sqlite3.Connection, ctx: Ctx, task_id: int, percent: int, message: str = "") -> dict:
     if not 0 <= percent <= 100:
         raise Invalid("percent must be 0 to 100")
-    return update(conn, ctx, task_id, {"progress": percent, "progress_note": message or None})
+    out = update(conn, ctx, task_id, {"progress": percent, "progress_note": message or None})
+    if message:
+        from . import comments
+
+        comments.log(conn, ctx, task_id, f"{percent} %: {message}", "progress")
+    return out
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:

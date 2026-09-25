@@ -286,6 +286,9 @@ def handoff(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = ""
     ).lastrowid
     audit.log(conn, ctx, "handoff", tasks.ENTITY, task_id, to=target["name"], handoff_id=handoff_id,
               message_id=message_id)
+    from . import comments
+
+    comments.log(conn, ctx, task_id, f"Handed off to {target['name']}" + (f": {note}" if note else ""), "handoff")
     return {"handoff_id": handoff_id, "task": ref, "from": me["name"], "to": target["name"],
             "status": changes.get("status", row["status"]), "message_id": message_id}
 

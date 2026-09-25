@@ -65,6 +65,17 @@ export type Task = {
   parent?: { id: number; ref: string; title: string };
 };
 
+export type Comment = {
+  id: number;
+  task_id: number;
+  kind: "comment" | "return" | "review" | "handoff" | "progress" | "system";
+  body: string;
+  author_id: number | null;
+  author_name: string | null;
+  author_kind: string | null;
+  created_at: string;
+};
+
 export type Actor = { id: number; kind: "human" | "ai" | "agent"; name: string; is_owner: number };
 export type Version = { version: number; action: string; at: string; actor_name: string | null; run_id: number | null };
 export type Counts = Record<Exclude<View, "done">, number>;
@@ -159,6 +170,8 @@ export const tasksApi = {
   suggest: (ref: string) => post<Suggestion>(`/api/tasks/${ref}/suggest`),
   clarify: (ref: string, action: string, fields?: Record<string, unknown>) =>
     post<Task>(`/api/tasks/${ref}/clarify`, { action, fields }),
+  comments: (ref: string) => api<Comment[]>(`/api/tasks/${ref}/comments`),
+  comment: (ref: string, body: string) => post<Comment>(`/api/tasks/${ref}/comments`, { body }),
   history: (ref: string) => api<Version[]>(`/api/tasks/${ref}/history`),
   restore: (ref: string, version: number) => post<Task>(`/api/tasks/${ref}/restore`, { version }),
   reassignOptions: (ref: string) => api<Candidate[]>(`/api/tasks/${ref}/reassign/options`),

@@ -54,6 +54,10 @@ class NoteIn(BaseModel):
     note: str | None = None
 
 
+class CommentIn(BaseModel):
+    body: str
+
+
 class ReviewIn(BaseModel):
     accept: bool
     comment: str | None = None
@@ -218,6 +222,22 @@ def history(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
     tid = tasks.parse_id(task_id)
     tasks.get(conn, ctx, tid)  # visibility check
     return versioning.history(conn, "task", tid)
+
+
+@router.get("/tasks/{task_id}/comments")
+def task_comments(task_id: str, limit: int = 100, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import comments
+
+    return comments.list_for(conn, ctx, tasks.parse_id(task_id), limit=max(1, min(limit, 500)))
+
+
+@router.post("/tasks/{task_id}/comments", status_code=201)
+def add_task_comment(task_id: str, body: CommentIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import comments
+
+    c = comments.add(conn, ctx, tasks.parse_id(task_id), body.body)
+    conn.commit()
+    return c
 
 
 @router.post("/tasks/{task_id}/restore")

@@ -1,6 +1,6 @@
 import { Archive, Check, History, Pencil, RotateCcw, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { type Actor, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
+import { type Actor, type Comment, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
 import Markdown from "../Markdown";
 import { Panel } from "../ui";
 import AgentPicker from "./AgentPicker";
@@ -124,6 +124,115 @@ export function Description({ task, onSave }: { task: Task; onSave: (notes: stri
   );
 }
 
+const KIND_LABEL: Record<Comment["kind"], string> = {
+  comment: "",
+  return: "returned",
+  review: "review",
+  handoff: "handoff",
+  progress: "progress",
+  system: "system",
+};
+
+/** The task's activity: comments, returns, reviews, handoffs and progress, oldest first. */
+function Activity({ taskRef, version }: { taskRef: string; version: string }) {
+  const [items, setItems] = useState<Comment[] | null>(null);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const load = () => tasksApi.comments(taskRef).then(setItems, (e) => setError(e.message));
+  useEffect(() => {
+    load();
+  }, [taskRef, version]);
+  const send = () => {
+    if (!draft.trim()) return;
+    tasksApi.comment(taskRef, draft.trim()).then(
+      () => {
+        setDraft("");
+        load();
+      },
+      (e) => setError(e.message),
+    );
+  };
+  return (
+    <div className="flex flex-col">
+      <span className="flex items-baseline gap-2 pb-1.5">
+        <span className="text-[13px] font-medium">Activity</span>
+        <span className="cap">comments, returns, reviews, handoffs · @name notifies</span>
+      </span>
+      {items?.length === 0 && <span className="cap border-t border-line py-2">nothing yet</span>}
+      {items?.map((c) => (
+        <div key={c.id} className="flex flex-col gap-0.5 border-t border-line py-2">
+          <span className="cap">
+            {c.author_name ?? "system"}
+            {KIND_LABEL[c.kind] ? ` · ${KIND_LABEL[c.kind]}` : ""} ·{" "}
+            {new Date(c.created_at).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}
+          </span>
+          <span className={`text-[13px] whitespace-pre-wrap ${c.kind === "comment" ? "" : "text-ink-2"}`}>{c.body}</span>
+        </div>
+      ))}
+      <div className="flex flex-col gap-1.5 border-t border-line pt-2">
+        <textarea
+          rows={2}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
+          }}
+          placeholder="Comment… (Ctrl+Enter)"
+          aria-label="Comment"
+          className="rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent"
+        />
+        <div className="flex items-center gap-2">
+          <button type="button" className="btn" disabled={!draft.trim()} onClick={send}>
+            Comment
+          </button>
+          {error && <span className="cap text-red-400!">{error}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Accept, or return with what should change (the note goes to the activity). */
+function ReviewBox({ onAccept, onReturn }: { onAccept: () => void; onReturn: (comment: string) => void }) {
+  const [returning, setReturning] = useState(false);
+  const [comment, setComment] = useState("");
+  return (
+    <div className="flex flex-col gap-2 rounded border border-amber-400/60 p-3">
+      <span className="cap text-amber-300!">RESULT WAITS FOR YOUR REVIEW</span>
+      {returning ? (
+        <>
+          <textarea
+            autoFocus
+            rows={3}
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="What should change?"
+            aria-label="What should change"
+            className="rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent"
+          />
+          <div className="flex gap-2">
+            <button type="button" className="btn-accent" disabled={!comment.trim()} onClick={() => onReturn(comment.trim())}>
+              Return with this note
+            </button>
+            <button type="button" className="btn" onClick={() => setReturning(false)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="flex gap-2">
+          <button type="button" className="btn-accent" onClick={onAccept}>
+            <Check size={14} /> Accept
+          </button>
+          <button type="button" className="btn" onClick={() => setReturning(true)}>
+            Return…
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TaskDetail({
   taskRef,
   actors,
@@ -198,24 +307,11 @@ export default function TaskDetail({
         <Description task={task} onSave={(notes) => notes !== task.notes && save({ notes })} />
 
         {task.status === "review" && (
-          <div className="flex flex-col gap-2 rounded border border-amber-400/60 p-3">
-            <span className="cap text-amber-300!">RESULT WAITS FOR YOUR REVIEW</span>
-            <div className="flex gap-2">
-              <button type="button" className="btn-accent" onClick={() => run(tasksApi.review(task.ref, true))}>
-                <Check size={14} /> Accept
-              </button>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  const c = window.prompt("What should change?");
-                  if (c !== null) run(tasksApi.review(task.ref, false, c));
-                }}
-              >
-                Return
-              </button>
-            </div>
-          </div>
+          <ReviewBox
+            key={task.updated_at}
+            onAccept={() => run(tasksApi.review(task.ref, true))}
+            onReturn={(c) => run(tasksApi.review(task.ref, false, c))}
+          />
         )}
 
         <div className="grid grid-cols-2 gap-3">
@@ -334,6 +430,8 @@ export default function TaskDetail({
             </form>
           </div>
         )}
+
+        <Activity taskRef={task.ref} version={task.updated_at} />
 
         <div className="flex flex-wrap gap-2 border-t border-line pt-3">
           {task.status !== "done" && (
