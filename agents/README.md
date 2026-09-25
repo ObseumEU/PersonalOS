@@ -40,3 +40,15 @@ work, splits it into steps with a definition of done and assigns them by role.
 The PM runs a weekday standup (08:30): it asks every active agent for status
 and files one summary task for the owner. Handoffs and messages between agents
 show as their own lines in the Network view.
+
+## Tools
+
+You can write tools for yourself and share them (docs/TOOLS.md). Put personal
+ones in `agents/<your-name>/tools/<name>/` with a `tool.json` manifest: a
+`script` you run, an `mcp` server the worker mounts for you, or a `skill`
+(`SKILL.md`). Commit them like any other change. To share one, call
+`tools_publish(name)`: it runs the guard review (no secrets, no outbound calls
+unless declared, no permissions beyond yours) and tells you what to copy to
+`shared/tools/`; the deployer checks it again and the owner approves it. Find
+tools with `tools_list` and `tools_get`, and after using one call
+`tools_record_use(name, ok)` so HR sees which tools help.

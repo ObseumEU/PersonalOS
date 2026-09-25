@@ -59,6 +59,9 @@ TOOL_PERMISSIONS = {
     "schedule_list": "tasks:read",
     # Your own task needs tasks:claim, someone else's tasks:write (checked in pos.org).
     "handoff_task": "tasks:read", "org_chart": "tasks:read",
+    # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.
+    "tools_list": "tasks:read", "tools_get": "tasks:read",
+    "tools_publish": "tasks:claim", "tools_record_use": "tasks:claim",
 }
 # Tools an agent may still use while the kill switch is on.
 FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze", "check_inbox", "get_agent_status",

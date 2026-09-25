@@ -9,7 +9,9 @@ For every new range of commits on main it
 1. checks the constitution: commits that touch protected paths
    (`docs/CONSTITUTION.md`, `pos/guard`, permissions, limits, budget) must be
    signed by the owner (`pos.guard.gitcheck`, `ops/owner_allowed_signers`);
-   until the owner sets up signing it only warns;
+   until the owner sets up signing it only warns; commits that touch
+   `shared/tools/` must also pass the tools guard review (`pos.tools`,
+   docs/TOOLS.md), which refuses the range on any finding;
 2. runs the tests (`DEPLOY_TEST_CMD`);
 3. builds and starts (`DEPLOY_UP_CMD`);
 4. checks health (`DEPLOY_HEALTH_URL` must answer `{"status": "ok"}`).

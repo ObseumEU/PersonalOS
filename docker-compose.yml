@@ -9,6 +9,8 @@ services:
     environment:
       # Agent instructions from git override the first version (AGENTS-SPEC 6).
       POS_AGENTS_REPO_DIR: /repo-agents
+      # The tool library (docs/TOOLS.md): agents/*/tools and shared/tools, read-only.
+      POS_TOOLS_REPO_DIR: /repo-tools
       # Runtimes: auto = codex first, claude (Opus 5.5) as fallback.
       POS_AGENT_RUNTIME: ${POS_AGENT_RUNTIME:-auto}
       POS_ENGINE_ORDER: ${POS_ENGINE_ORDER:-codex,claude}
@@ -19,6 +21,8 @@ services:
     volumes:
       - pos-data:/data
       - ./agents:/repo-agents:ro
+      - ./agents:/repo-tools/agents:ro
+      - ./shared:/repo-tools/shared:ro
     restart: unless-stopped
 
   web:

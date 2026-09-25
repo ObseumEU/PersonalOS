@@ -58,6 +58,10 @@ class PosClient:
     def inbox(self, run_id: int | None = None) -> list[dict]:
         return self._get("/api/worker/inbox", **({"run_id": run_id} if run_id else {}))
 
+    def tools(self) -> list[dict]:
+        """The agent's tools from the tool library (personal and shared)."""
+        return self._get("/api/worker/tools")
+
     def check_command(self, command: str, external: bool = False) -> dict:
         return self._post("/api/worker/check-command", {"command": command, "external": external})
 

@@ -18,9 +18,10 @@ import Org from "./pages/Org";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
+import Tools from "./pages/Tools";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar", "tools"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/automations" element={<Automations />} />
+        <Route path="/tools" element={<Tools />} />
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/system" element={<System />} />

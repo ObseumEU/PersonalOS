@@ -1,6 +1,8 @@
 """Prompts for agent runs. The constitution and guardrails come from PersonalOS
 (pos.guard), so every agent works under the same rules."""
 
+from .tools import prompt_section
+
 
 def _messages(msgs: list[dict]) -> str:
     out = []
@@ -38,6 +40,7 @@ def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardra
         "manager with send_message.",
         "- When you are done, finish with a short summary of what you did and what the owner should check.",
     ]
+    parts.append(prompt_section(me.get("tools") or [], include_skills=include_guardrails))
     if context:
         parts += ["# Messages you received before this task", _messages(context)]
     return "\n\n".join(p for p in parts if p)
