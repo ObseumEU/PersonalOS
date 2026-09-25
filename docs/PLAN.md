@@ -1,159 +1,174 @@
 # PersonalOS: plan
 
-Status: draft for discussion. Written 2026-09-25.
+Status: draft for discussion. Updated 2026-09-25 with the owner's decisions.
 
 ## 1. What PersonalOS is
 
-PersonalOS is a personal AI assistant that works like an operating system for
-one person's life and work. It has two parts:
+PersonalOS is **the one place I open every day**, to manage my stuff and ask
+questions. It is the main system. The subsystems (apps) do the deep, detailed
+work behind it.
 
-- **A small kernel.** This is the assistant you talk to. It understands the
-  request, remembers context about you, and delegates the work to the right app.
-- **Apps.** Each app is an independent agent in its own repository, added here
-  as a git submodule under `apps/`. An app can be installed, updated or removed
-  without touching the kernel.
+- **PersonalOS (daily use).** A web app for files, topics, documents, tasks
+  and a synced calendar. It also has an assistant I can ask about any of it.
+  It has an admin section, but daily use comes first.
+- **Subsystems (detailed admin work).** These are independent systems with
+  their own UIs for power-user and admin tasks. PersonalOS uses them in the
+  background over A2A and MCP, and links to them from the admin section.
 
-The kernel should stay thin. Real capabilities live in the apps, and the kernel
-only routes, remembers and schedules.
+| | PersonalOS | Subsystems |
+|---|---|---|
+| Who and when | Me, every day | Me, when I need detail or admin |
+| Examples | See today's tasks and calendar, find a document, upload a file, ask a question | Build an automation in Nexus; manage knowledge workspaces and indexing |
+| Talks to the other | Calls subsystems over A2A and MCP | Stays autonomous, unaware of PersonalOS |
 
-## 2. Design principles
+## 2. Decisions
 
-1. **Codex CLI first, to save credits.** Every LLM call goes through
-   `codex exec`, which runs on the ChatGPT subscription. That means there is no
-   per-token billing. Paid APIs are an explicit opt-in fallback only, never the
-   default. Both first apps already work this way (section 4).
-2. **Standard protocols, not custom glue.**
-   - **MCP** is for tools and data. It lets an agent call a function or read a
-     resource.
-   - **A2A** is for agent-to-agent delegation. One agent hands a whole task to
-     another, then streams progress and gets an artifact back.
-3. **Apps are autonomous.** An app can run without PersonalOS, and PersonalOS
-   knows it only through its A2A agent card and its MCP endpoint.
-4. **Self-hosted and private.** Everything runs in Docker Compose on your own
-   machine or home server, reachable over LAN or VPN.
+| Topic | Decision |
+|---|---|
+| Brain | **Codex CLI** (`codex exec`, ChatGPT subscription). No paid API by default. |
+| Protocols | **MCP** for tools and data, **A2A** for delegating to subsystems |
+| Backend | **Python** (FastAPI) |
+| Primary interface | **Web** (React; Lovable-compatible like the other apps) |
+| Where it runs | Developed on the laptop; the target is the server (Docker Compose) |
+| Subsystems | Git submodules under `apps/`, **pinned to commits** |
 
-## 3. Architecture
+## 3. Daily-use features (native in PersonalOS)
+
+These live in PersonalOS itself, because they are what I use every day:
+
+1. **Home / Today.** Today's calendar, open tasks due soon, recent files, and a
+   question box.
+2. **Files and documents.** Upload (drag and drop), browse, preview, tag, and
+   full-text search. Files are stored on disk and the metadata in the database.
+3. **Topics.** One place per life or work area (a client, a project, "health",
+   "house"). It holds the related files, notes, tasks, events and
+   conversations.
+4. **Tasks.** Open and closed, with due dates, priority and topic. There is a
+   quick-add, and the assistant can create them.
+5. **Calendar (synced).** Pulled from Google or Microsoft 365 and shown next to
+   tasks. It starts read-only; creating events can come later.
+6. **Notes.** Markdown documents that belong to topics.
+7. **Assistant.** A chat about everything above. For example: "What's open for
+   client X this week?", "Summarize the contract I uploaded yesterday", or
+   "Plan my Friday". Answers link back to the files, tasks or events they used.
+8. **Admin.** Subsystem status and health, links into their UIs, and settings
+   such as the Codex login and connected accounts.
+
+## 4. Architecture
 
 ```text
- You (CLI now; Telegram or web later)
+ Browser (laptop / phone)
         │
         ▼
- ┌──────────────────────────── PersonalOS kernel ────────────────────────────┐
- │  codex exec  ◄── the brain (ChatGPT subscription)                          │
- │     │  MCP tools configured for Codex:                                     │
- │     ├─ pos-memory    personal memory: facts, preferences, people, goals    │
- │     ├─ pos-a2a       list_agents / ask_agent / get_task (A2A client bridge)│
- │     └─ app MCP servers (direct tool access where an app exposes one)       │
- │  registry: apps.yaml (name, agent-card URL, MCP URL, how to start)         │
- │  scheduler: routines such as a morning brief or weekly review              │
- │  exposes its own A2A agent card and MCP server, so other agents can use it │
- └───────────────┬──────────────────────────────────┬─────────────────────────┘
-                 │ A2A (JSON-RPC, streaming)        │ A2A / MCP
-                 ▼                                  ▼
-        apps/knowlage-agent                  apps/nexus-process-pilot
-        research answers with                durable process automation,
-        verified citations                   connectors, approvals
+ ┌──────────────────────── PersonalOS (docker compose) ─────────────────────┐
+ │  web (React)  ──►  api (FastAPI, Python)                                 │
+ │                      │                                                    │
+ │                      ├─ db: SQLite (files meta, topics, tasks, notes,    │
+ │                      │       calendar cache, chat history) + FTS5 search │
+ │                      ├─ storage: uploaded files on disk (volume)         │
+ │                      ├─ sync: calendar sync job (Google / M365)          │
+ │                      └─ assistant: runs `codex exec` with MCP servers:   │
+ │                           • pos      PersonalOS's own data as MCP tools  │
+ │                           │          (search_files, read_file,          │
+ │                           │           list_tasks, create_task,          │
+ │                           │           list_events, topics, notes)       │
+ │                           └─ pos-a2a  list_agents / ask_agent / get_task │
+ │  also exposes: /mcp (its MCP server) and an A2A agent card               │
+ └───────────────┬───────────────────────────────┬──────────────────────────┘
+                 │ A2A                            │ A2A (after a facade)
+                 ▼                                ▼
+        knowlage-agent                     nexus-process-pilot
+        deep research over documents       automations, connectors,
+        with verified citations            approvals (nexus.obseum.cloud)
 ```
 
-**The key idea is that Codex CLI already is the agent loop.** Codex CLI can
-load MCP servers from its config. So the kernel does not need its own
-LLM-orchestration code. It runs `codex exec` with a curated set of MCP servers,
-and one of those, `pos-a2a`, turns "delegate this to app X" into an A2A call.
-That keeps the kernel small and puts every token on the subscription.
+The main points:
 
-### Request flow (example)
+- **Codex CLI is the agent loop.** PersonalOS does not implement LLM
+  orchestration. It starts `codex exec` with MCP servers, so every token stays
+  on the subscription. It uses the same pattern knowlage-agent uses today: the
+  Codex login is kept in a Docker volume and set up once from the admin page.
+- **PersonalOS's own data is an MCP server (`pos`).** The assistant uses it.
+  The same endpoint lets Codex or Claude on the laptop work with my tasks and
+  files too.
+- **Subsystems are only reached over A2A.** The `pos-a2a` bridge MCP server
+  gives Codex the ability to delegate a task and stream the result.
+- **SQLite fits here**, because this is a single-user system. It needs no extra
+  service, backup is one file, and FTS5 handles search. Postgres can come later
+  if needed.
 
-1. You ask: "What should I do about churn in the gym? Then make it a task."
-2. The kernel runs `codex exec` with the `pos-memory` and `pos-a2a` MCP servers.
-3. Codex calls `ask_agent("knowledge", …)`. The bridge sends an A2A
-   `SendStreamingMessage` to knowlage-agent and returns the answer artifact
-   with its citations.
-4. Codex calls `ask_agent("nexus", …)` to create or run a process. Nexus keeps
-   the run durable and asks for approval where its policies require it.
-5. The kernel stores what it learned in `pos-memory` and replies to you.
+### Which subsystem does what
 
-## 4. The first two apps (as found on 2026-09-25)
+| Need | Handled by |
+|---|---|
+| Quick search in my own files | PersonalOS (FTS5) |
+| Deep question over many documents or transcripts, with citations | knowlage-agent (A2A). Files uploaded to PersonalOS can also be pushed into a "personal" knowledge workspace. |
+| Automations, scheduled processes, approvals, external connectors | Nexus (A2A, after a facade) |
+| Calendar sync | PersonalOS first, directly with read-only Google/M365 access. If Nexus connections already hold those accounts, reuse them later. |
+
+## 5. The two subsystems (as found on 2026-09-25)
 
 ### knowlage-agent (`apps/knowlage-agent`)
-
-- **What it does:** a business advisor over video and interview transcripts. It
-  answers in Czech with verified citations (video, timestamp and the exact
-  passage). It has workspaces as separate knowledge bases and a web UI on
-  `:8080`.
-- **Stack:** Python 3.12, FastAPI, Qdrant, Voyage embeddings and rerank, and a
-  React frontend from Lovable.
-- **Brain:** Codex CLI through the ChatGPT subscription (`src/kb/codex.py`),
-  with a Codex critic pass that checks the citations.
-- **Protocols:** it already has both.
-  - **A2A 1.0 server** (`src/kb/a2a_server.py`): an agent card at
-    `/.well-known/agent-card.json`, where each workspace is a tenant, plus
-    JSON-RPC `/a2a` with streaming, and REST.
-  - **MCP server** (`src/kb/mcp_server.py`): the `search`, `read_section`,
-    `read_document`, `list_documents` and `fetch_page` tools.
-- **Costs:** Codex is on the subscription. Voyage has 200M free tokens.
-- **Integration effort:** low. Register its agent card and it works.
+- It gives Czech business advice over transcripts and documents, with verified
+  citations. It has workspaces as separate knowledge bases and a web UI.
+- Stack: Python, FastAPI, Qdrant and Voyage.
+- Brain: Codex CLI (`src/kb/codex.py`).
+- It already has an **A2A 1.0 server** (`src/kb/a2a_server.py`) and an **MCP
+  server** (`src/kb/mcp_server.py`).
+- Status: **not deployed on the server yet.** It needs a deployment next to
+  PersonalOS.
 
 ### nexus-process-pilot (`apps/nexus-process-pilot`)
+- A self-hosted platform for agents and process automation: durable runs,
+  approvals, connectors, knowledge and browser automation.
+- Stack: TypeScript, Fastify, Postgres and Redis.
+- Brain: `@nexus/llm` with a Codex CLI provider. Set
+  `LLM_PRIMARY_PROVIDER=codex-cli`.
+- It has **MCP** (client connections, plus a knowledge MCP server) but **no
+  A2A**. It needs an A2A facade (agent card; `SendMessage` starts a run; task
+  status maps to run status).
+- Status: **running on the server** at `https://nexus.obseum.cloud/`.
 
-- **What it does:** a self-hosted platform for process automation and agents.
-  It covers durable runs, typed tools, approval checkpoints, knowledge
-  retrieval, browser automation, connectors (Google, M365, GitHub, Discord,
-  Notion, SSH, MCP), schedules and an audit trail.
-- **Stack:** a TypeScript pnpm/Turborepo monorepo, with a Fastify API, a
-  TanStack web app, Postgres and Redis.
-- **Brain:** `@nexus/llm` with a Codex CLI provider (`packages/llm/src/codex-cli.ts`,
-  subscription-based `codex exec`). To make it Codex-first, set
-  `LLM_PRIMARY_PROVIDER=codex-cli` (see `.env.example`). The default order
-  otherwise starts with Claude Code CLI.
-- **Protocols:**
-  - **MCP:** it acts as an MCP client for connections (the `mcp` auth type in
-    `packages/connectors`). It also has an optional read-only knowledge MCP
-    server at `/mcp/knowledge` (`KNOWLEDGE_MCP_ENABLED=true`).
-  - **A2A:** none found. This is the main gap.
-- **Integration effort:** medium. It needs an A2A facade (an agent card, plus
-  a `SendMessage` that starts a run and a task mapped to run status) or an MCP
-  server exposing "start run / get run / approve".
+## 6. Roadmap
 
-## 5. Roadmap
-
-| Phase | Deliverable | Notes |
+| Phase | Deliverable | Result |
 |---|---|---|
-| 0 | Repo skeleton, submodules and this plan | This PR |
-| 1 | Kernel MVP: the `pos` CLI wraps `codex exec`, with `apps.yaml`, the `pos-a2a` bridge MCP server, and knowlage-agent wired up | First end-to-end answer |
-| 2 | `pos-memory` MCP server (SQLite plus Markdown), so the assistant remembers you | Reviewable, editable memory |
-| 3 | Nexus A2A facade (a PR in nexus-process-pilot), registered in PersonalOS | Nexus becomes a delegate |
-| 4 | PersonalOS exposes its own A2A card and MCP server | Usable from Claude, Codex or other agents |
-| 5 | Routines (morning brief, weekly review) and a chat interface (Telegram or web) | Proactive assistant |
-| 6 | More apps: calendar, email, tasks, finance | Each one a submodule with A2A and MCP |
+| 0 | Submodules and this plan | This PR |
+| 1 | Skeleton: FastAPI, React shell, SQLite, Docker Compose (dev and server), single-user login | The app runs on the laptop and on the server |
+| 2 | Tasks, Topics, Files (upload, browse, search), Notes | Daily use starts |
+| 3 | Assistant: `codex exec`, the `pos` MCP server, chat with links to sources | Ask questions about my stuff |
+| 4 | Calendar sync and the Home / Today page | Complete daily overview |
+| 5 | Subsystems: deploy knowlage-agent, add the `pos-a2a` bridge, and an admin section with health checks | Deep research from PersonalOS |
+| 6 | Nexus A2A facade (a PR in nexus-process-pilot), then delegate automations | Automations from PersonalOS |
+| 7 | Routines (morning brief, weekly review) and notifications | Proactive assistant |
 
-## 6. App contract (what every app must provide)
+## 7. Subsystem contract
 
-- An **A2A agent card** at `/.well-known/agent-card.json` that lists its skills.
-- **A2A JSON-RPC** with `SendMessage`, `SendStreamingMessage`, `GetTask` and
-  `CancelTask`.
-- Optionally, an **MCP server** for fine-grained tools.
-- **Codex CLI** as the default model runtime, using the shared `~/.codex` login.
-- A `docker compose` service definition and a health endpoint.
-- Auth with a bearer API key, for the kernel only.
+Every subsystem must provide:
 
-## 7. Open questions
+- an **A2A agent card** at `/.well-known/agent-card.json`, plus JSON-RPC with
+  `SendMessage`, `SendStreamingMessage`, `GetTask` and `CancelTask`;
+- optionally, an **MCP server** for fine-grained tools;
+- **Codex CLI** as the default model runtime;
+- a health endpoint and bearer-key auth for PersonalOS;
+- its own UI for detailed admin work, which PersonalOS links to.
 
-1. **Kernel language:** Python or TypeScript? Recommended: Python. The official
-   `a2a-sdk` and `mcp` packages are mature there, and knowlage-agent already
-   uses both.
-2. **First interface:** CLI, Telegram or web? Recommended: CLI first, then
-   Telegram.
-3. **Where it runs:** a laptop, or an always-on home server? Routines need an
-   always-on host.
-4. **Submodule tracking:** should the submodules be pinned to commits (the
-   current setup, which is reproducible), or follow `main` automatically?
+## 8. Open questions
 
-## 8. Working with submodules
+1. **Calendar provider:** Google, Microsoft 365, or both?
+2. **Login:** a single password or passkey, or "Sign in with Google"?
+3. **Network:** will PersonalOS run on the same server as Nexus, and is Nexus
+   reachable from it (same host, or over the VPN)?
+4. **Phone:** is a responsive web app enough, or is an installable PWA wanted
+   later?
+
+## 9. Working with submodules
 
 ```bash
 git clone --recurse-submodules https://github.com/ObseumEU/PersonalOS.git
 # or, in an existing clone:
 git submodule update --init --recursive
-# pull the latest app versions:
-git submodule update --remote --merge
+# move an app to a newer commit (pinned, so this is a deliberate change):
+git -C apps/<app> fetch && git -C apps/<app> checkout <commit>
+git add apps/<app> && git commit -m "Bump <app>"
 ```

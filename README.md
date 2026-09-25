@@ -1,11 +1,14 @@
 # PersonalOS
 
 A personal AI assistant that works like an operating system for your life and
-work. A thin kernel runs on **Codex CLI** (your ChatGPT subscription, not paid
-API credits). It delegates to independent **apps** over the **A2A** protocol
-and uses tools over **MCP**.
+work. It is the one web app you use every day: files, topics, documents, tasks,
+a synced calendar, and an assistant you can ask about all of it.
 
-## Apps
+The assistant runs on **Codex CLI** (your ChatGPT subscription, not paid API
+credits). It uses its own data over **MCP**. For detailed work, it delegates to
+independent **subsystems** over **A2A**.
+
+## Subsystems
 
 | App | Path | What it does |
 |---|---|---|
