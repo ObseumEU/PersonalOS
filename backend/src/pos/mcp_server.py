@@ -87,6 +87,27 @@ FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze", "check_inbox", "ge
              "list_active_runs", "org_chart", "chat_read", "chat_list_channels"}
 
 
+_TOOL_NAMES: list[str] | None = None
+
+
+def tool_names() -> list[str]:
+    """Every tool of the pos MCP server (built once, without a database)."""
+    global _TOOL_NAMES
+    if _TOOL_NAMES is None:
+        server = build(Path("unused.db"))
+        _TOOL_NAMES = sorted(t.name for t in server._tool_manager.list_tools())
+    return _TOOL_NAMES
+
+
+def allowed_tools(conn: sqlite3.Connection, actor_id: int) -> list[str]:
+    """The pos tools this member may call, by its permissions (the worker shows
+    its model only these; its compose settings may narrow them further)."""
+    from . import agents
+
+    return [t for t in tool_names()
+            if TOOL_PERMISSIONS.get(t) is None or agents.has_permission(conn, actor_id, TOOL_PERMISSIONS[t])]
+
+
 def _gate(conn: sqlite3.Connection, c: Ctx, tool: str) -> None:
     from . import agents, killswitch
 

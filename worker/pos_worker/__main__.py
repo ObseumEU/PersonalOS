@@ -11,7 +11,11 @@ Environment:
     WORKER_POLL      long-poll seconds (default 60)
     CODEX_BIN        codex binary (default codex); CODEX_HOME holds its login
     CLAUDE_BIN       claude binary (default claude); logged in, or CLAUDE_CODE_OAUTH_TOKEN
-    WORKER_CLAUDE_TOOLS  tools a Claude agent may use (default: pos MCP, read, edit, web);
+    WORKER_POS_TOOLS     narrows the pos MCP tools the agent sees (short names, e.g. "get_task
+                     complete_task"); the base is what its permissions allow (/api/worker/me
+                     pos_tools), and the inbox and team chat tools always stay
+    WORKER_CLAUDE_TOOLS  other tools a Claude agent may use (default: read, edit, web); its
+                     mcp__pos__ entries are ignored (WORKER_POS_TOOLS narrows those);
                      entries separated by '|' when they contain spaces
     WORKER_CLAUDE_BUILTIN  built-in tools that exist at all, comma-separated (e.g. Bash,Read,Edit)
     WORKER_CLAUDE_DISALLOWED  tools hidden from a Claude agent (saves their definitions on every turn)
@@ -24,6 +28,7 @@ Environment:
                      GitHub, Gmail, Discord) with their own tokens in env vars
 """
 
+import json
 import logging
 import os
 import sys
@@ -53,10 +58,24 @@ def tool_list(raw: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+# Talking to colleagues is never narrowed away (standup answers, questions, handoffs).
+COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "heartbeat")
+
+
+def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:
+    """(shown, hidden) pos MCP tools: what the agent's permissions allow, narrowed
+    by WORKER_POS_TOOLS; the COMMS tools stay when permitted."""
+    permitted = list(me.get("pos_tools") or [])
+    raw = os.environ.get("WORKER_POS_TOOLS", "") if narrow is None else narrow
+    wanted = {t.removeprefix("mcp__pos__") for t in tool_list(raw)}
+    shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]
+    everything = set(me.get("all_pos_tools") or []) | set(permitted)
+    return shown, sorted(everything - set(shown))
+
+
 def claude_extra_mcp() -> dict:
     """More MCP servers for a Claude agent as JSON in WORKER_CLAUDE_MCP, e.g.
     {"knowlage": {"type": "http", "url": "https://…/ingest/mcp", "headers": {"Authorization": "Bearer …"}}}."""
-    import json
 
     raw = os.environ.get("WORKER_CLAUDE_MCP", "").strip()
     return json.loads(raw) if raw else {}
@@ -84,7 +103,13 @@ def main() -> None:
         tools = me.get("tools") or []  # the tool library: skills, MCP tools, scripts
         if engine == "claude":
             skills = tool_library.skills_text(tools)
-            allowed = tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
+            configured = tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
+            if me.get("pos_tools"):
+                shown, hidden = pos_tools(me)
+                allowed = [f"mcp__pos__{t}" for t in shown] + [
+                    t for t in configured if t != "mcp__pos" and not t.startswith("mcp__pos__")]
+            else:  # an older PersonalOS without pos_tools: the configured list as it is
+                hidden, allowed = [], configured
             return ClaudeSession(
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
                 workdir=workdir,
@@ -96,7 +121,8 @@ def main() -> None:
                 allowed_tools=allowed + tool_library.claude_allowed(tools)
                 + (["mcp__browser"] if browser(me) and allowed else []),
                 builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
-                disallowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")),
+                disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
+                + [t for t in tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")) if not t.startswith("mcp__pos__")],
                 effort=os.environ.get("WORKER_CLAUDE_EFFORT") or None,
                 max_budget_usd=float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None,
             )
@@ -105,6 +131,7 @@ def main() -> None:
             workdir=workdir,
             sandbox=os.environ.get("WORKER_SANDBOX", "workspace-write"),
             config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
+                    *([f"mcp_servers.pos.enabled_tools={json.dumps(pos_tools(me)[0])}"] if me.get("pos_tools") else []),
                     *([f'model="{model}"'] if model else []), *extra_config(), *tool_library.codex_config(tools),
                     *([f'mcp_servers.browser.command="{sys.executable.replace(chr(92), "/")}"',
                        'mcp_servers.browser.args=["-m","pos_worker.browser_guard"]',

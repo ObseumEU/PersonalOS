@@ -67,13 +67,14 @@ services:
       POS_AGENT_KEY: ${DEV_AGENT_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
-      WORKER_CODEX_CONFIG: '${DEV_AGENT_CODEX_CONFIG:-mcp_servers.pos.enabled_tools=["get_task","report_progress","complete_task","ack_message","request_approval","create_task","handoff_task"]||model_reasoning_effort="medium"}'
+      WORKER_CODEX_CONFIG: '${DEV_AGENT_CODEX_CONFIG:-model_reasoning_effort="medium"}'
       KB_AGENT_KEY: ${DEV_KB_AGENT_KEY:-}
       GITHUB_TOKEN: ${DEV_GITHUB_TOKEN:-}
-      # Token budget (agents/dev-agent/INSTRUCTIONS.md): only the pos tools it uses, medium effort,
-      # a cost cap per Claude run and a step cap per run.
-      WORKER_CLAUDE_TOOLS: 'mcp__pos__get_task|mcp__pos__report_progress|mcp__pos__complete_task|mcp__pos__ack_message|mcp__pos__request_approval|mcp__pos__create_task|mcp__pos__handoff_task|Read|Glob|Grep|Write|Edit'
-      WORKER_CLAUDE_DISALLOWED: 'mcp__pos__ask_agent mcp__pos__assign_task mcp__pos__capture mcp__pos__chat_create_channel mcp__pos__chat_invite mcp__pos__chat_list_channels mcp__pos__chat_mark_read mcp__pos__chat_react mcp__pos__chat_read mcp__pos__chat_send mcp__pos__check_inbox mcp__pos__claim_task mcp__pos__create_agent mcp__pos__emit_event mcp__pos__file_get mcp__pos__freeze mcp__pos__get_agent_status mcp__pos__heartbeat mcp__pos__hr_admit_agent mcp__pos__hr_overview mcp__pos__hr_review mcp__pos__hr_weekly_report mcp__pos__list_active_runs mcp__pos__list_routes mcp__pos__list_tasks mcp__pos__note_create mcp__pos__note_update mcp__pos__org_chart mcp__pos__request_outbound mcp__pos__schedule_create mcp__pos__schedule_delete mcp__pos__schedule_list mcp__pos__schedule_pause mcp__pos__schedule_resume mcp__pos__schedule_run_now mcp__pos__schedule_update mcp__pos__search mcp__pos__send_message mcp__pos__task_reassign mcp__pos__tools_get mcp__pos__tools_list mcp__pos__tools_publish mcp__pos__tools_record_use mcp__pos__topic_get mcp__pos__update_task'
+      # Token budget (agents/dev-agent/INSTRUCTIONS.md): only the pos tools it uses (of those its
+      # permissions allow; inbox and team chat always stay), medium effort, a cost cap per Claude run
+      # and a step cap per run.
+      WORKER_POS_TOOLS: 'get_task report_progress complete_task request_approval create_task handoff_task'
+      WORKER_CLAUDE_TOOLS: 'Read|Glob|Grep|Write|Edit'
       WORKER_CLAUDE_EFFORT: medium
       WORKER_CLAUDE_MAX_USD: "6"
       WORKER_MAX_STEPS: "90"
@@ -105,9 +106,10 @@ services:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${COACH_AGENT_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CODEX_CONFIG: 'mcp_servers.pos.enabled_tools=["hr_overview","list_tasks","get_task","get_agent_status","create_task","send_message","report_progress","complete_task","ack_message","schedule_create","schedule_list"]||model_reasoning_effort="medium"'
-      WORKER_CLAUDE_TOOLS: 'mcp__pos__hr_overview|mcp__pos__list_tasks|mcp__pos__get_task|mcp__pos__get_agent_status|mcp__pos__create_task|mcp__pos__send_message|mcp__pos__report_progress|mcp__pos__complete_task|mcp__pos__ack_message|mcp__pos__schedule_create|mcp__pos__schedule_list'
-      WORKER_CLAUDE_DISALLOWED: 'mcp__pos__ask_agent mcp__pos__assign_task mcp__pos__capture mcp__pos__chat_create_channel mcp__pos__chat_invite mcp__pos__chat_list_channels mcp__pos__chat_mark_read mcp__pos__chat_react mcp__pos__chat_read mcp__pos__chat_send mcp__pos__check_inbox mcp__pos__claim_task mcp__pos__create_agent mcp__pos__emit_event mcp__pos__file_get mcp__pos__freeze mcp__pos__handoff_task mcp__pos__heartbeat mcp__pos__hr_admit_agent mcp__pos__hr_review mcp__pos__hr_weekly_report mcp__pos__list_active_runs mcp__pos__list_routes mcp__pos__note_create mcp__pos__note_update mcp__pos__org_chart mcp__pos__request_approval mcp__pos__request_outbound mcp__pos__schedule_delete mcp__pos__schedule_pause mcp__pos__schedule_resume mcp__pos__schedule_run_now mcp__pos__schedule_update mcp__pos__search mcp__pos__task_reassign mcp__pos__tools_get mcp__pos__tools_list mcp__pos__tools_publish mcp__pos__tools_record_use mcp__pos__topic_get mcp__pos__update_task Read Glob Grep Write Edit WebSearch WebFetch'
+      WORKER_CODEX_CONFIG: 'model_reasoning_effort="medium"'
+      WORKER_POS_TOOLS: 'hr_overview list_tasks get_task get_agent_status create_task send_message report_progress complete_task schedule_create schedule_list'
+      WORKER_CLAUDE_TOOLS: ' '
+      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit WebSearch WebFetch'
       WORKER_CLAUDE_EFFORT: medium
       WORKER_CLAUDE_MAX_USD: "2"
       WORKER_MAX_STEPS: "40"

@@ -12,7 +12,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import actors, agents, approvals, chat, killswitch, runner, tasks
+from . import actors, agents, approvals, chat, killswitch, mcp_server, runner, tasks
 from .api_tasks import get_db
 from .config import Settings, get_settings
 from .core import Ctx, now_iso
@@ -70,6 +70,8 @@ def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     return {
         "id": row["id"], "name": row["name"], "kind": row["kind"],
         "permissions": sorted(agents.permissions_of(conn, ctx.actor_id)),
+        # pos MCP tools it may call; the worker's allowlist is derived from this.
+        "pos_tools": mcp_server.allowed_tools(conn, ctx.actor_id), "all_pos_tools": mcp_server.tool_names(),
         "instructions": instructions,
         "guardrails": guard_prompt.agent_guardrails(), "constitution_sha256": guard_prompt.constitution_digest(),
         **_state(conn, ctx.actor_id),

@@ -79,12 +79,14 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
     for name, perms in BUILTIN_PERMISSIONS.items():
         conn.execute("UPDATE actors SET permissions = ? WHERE name = ? AND permissions = '[]'",
                      (json.dumps(perms), name))
-    # Permissions added to a builtin agent later (platform code, not an agent's
-    # own change): hr:read for the HR agent, which hr_overview now requires.
-    row = conn.execute("SELECT id, permissions FROM actors WHERE name = 'HR agent'").fetchone()
-    if row and "hr:read" not in json.loads(row["permissions"] or "[]"):
-        conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",
-                     (json.dumps(sorted({*json.loads(row["permissions"] or "[]"), "hr:read"})), row["id"]))
+    # Permissions added to an agent later (platform code, not an agent's own
+    # change): hr:read for the HR agent, which hr_overview requires; messages:send
+    # for the role agents, so they can answer the standup and colleagues in chat.
+    for name, perm in (("HR agent", "hr:read"), ("Dev agent", "messages:send"), ("Agent coach", "messages:send")):
+        row = conn.execute("SELECT id, permissions FROM actors WHERE name = ?", (name,)).fetchone()
+        if row and perm not in json.loads(row["permissions"] or "[]"):
+            conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",
+                         (json.dumps(sorted({*json.loads(row["permissions"] or "[]"), perm})), row["id"]))
     conn.commit()
 
 

@@ -405,3 +405,19 @@ def test_reassign_mid_run_stops_the_old_worker_and_the_task_stays_with_the_new_a
     assert after["assignee_id"] == other and after["status"] == "next"
     run = conn.execute("SELECT status FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
     assert run["status"] == "cancelled"
+
+
+def test_worker_tools_follow_the_agents_permissions(setup, monkeypatch):
+    from pos_worker.__main__ import pos_tools
+
+    client, conn, owner, dev_id, key = setup
+    # tasks:read/claim, approvals:request; messages:send is seeded for the Dev agent (standup, chat)
+    agents.seed_builtin_permissions(conn)
+    me = client.get("/api/worker/me", headers={"Authorization": f"Bearer {key}"}).json()
+    assert {"get_task", "complete_task", "check_inbox", "chat_send"} <= set(me["pos_tools"])
+    assert "create_agent" not in me["pos_tools"] and "create_agent" in me["all_pos_tools"]
+    shown, hidden = pos_tools(me, "get_task complete_task")
+    assert set(shown) == {"get_task", "complete_task", "check_inbox", "ack_message", "chat_send", "chat_read",
+                          "heartbeat"}
+    assert "create_agent" in hidden and "chat_send" not in hidden
+    assert set(pos_tools(me, "")[0]) == set(me["pos_tools"])  # nothing narrowed: all it may use
