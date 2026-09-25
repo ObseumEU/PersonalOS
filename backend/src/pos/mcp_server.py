@@ -54,6 +54,9 @@ TOOL_PERMISSIONS = {
     "ask_agent": "messages:send", "emit_event": "events:emit", "request_outbound": "approvals:request", "list_routes": "tasks:read",
     # Schedules check the creator's own rights inside (tasks:claim for yourself, tasks:write for others).
     "schedule_list": "tasks:read",
+    # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.
+    "tools_list": "tasks:read", "tools_get": "tasks:read",
+    "tools_publish": "tasks:claim", "tools_record_use": "tasks:claim",
 }
 # Tools an agent may still use while the kill switch is on.
 FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze", "check_inbox", "get_agent_status",

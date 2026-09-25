@@ -6,7 +6,9 @@ deployer runs where the server's checkout lives and, for every new range of
 commits on main:
 
 1. constitution check: commits touching protected paths must be signed by the
-   owner (pos.guard.gitcheck); otherwise the range is refused;
+   owner (pos.guard.gitcheck); otherwise the range is refused; commits that
+   touch shared/tools/ must also pass the tools guard review (pos.tools:
+   no secrets, no undeclared outbound calls, no permission escalation);
 2. tests (DEPLOY_TEST_CMD);
 3. build and start (DEPLOY_UP_CMD);
 4. health check (DEPLOY_HEALTH_URL must answer {"status": "ok"}).
@@ -41,6 +43,7 @@ from pathlib import Path
 
 import httpx
 
+from . import tools
 from .guard import gitcheck
 
 DEFAULT_TEST = "cd backend && python -m pytest -q"
@@ -136,6 +139,11 @@ def deploy_range(repo: Path, old: str, new: str, *, test_cmd: str, up_cmd: str, 
         out = fail("constitution", detail)
         out.status = "rejected" if out.status != "error" else out.status
         return out
+    tool_problems = tools.check_range(repo, old, new)
+    if tool_problems:
+        out = fail("tools", "shared tools failed the guard review: " + "; ".join(tool_problems))
+        out.status = "rejected" if out.status != "error" else out.status
+        return out
     if check.unsigned_protected:
         res.log = "warning (signing not set up yet): " + "; ".join(
             f"{p.sha[:10]} changes {', '.join(p.paths)}" for p in check.unsigned_protected)
@@ -222,6 +230,9 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     if check.problems:
         return fail("constitution", "; ".join(
             f"{p.sha[:10]} touches {', '.join(p.paths)} without the owner's signature" for p in check.problems))
+    tool_problems = tools.check_range(wt, base, tip)
+    if tool_problems:
+        return fail("tools", "shared tools failed the guard review: " + "; ".join(tool_problems))
     subject = git(wt, "log", "-1", "--format=%s", tip)
     merge = subprocess.run(
         ["git", "merge", "--no-ff", "--no-edit", "-m",

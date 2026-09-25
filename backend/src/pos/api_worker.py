@@ -226,6 +226,16 @@ def inbox(run_id: int | None = None, conn=Depends(get_db), ctx: Ctx = Depends(wo
     return out
 
 
+@router.get("/tools")
+def my_tools(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """The tools this agent's worker mounts: its personal ones and the shared ones it may use."""
+    from . import tools
+
+    out = tools.for_agent(conn, ctx.actor_id)
+    conn.commit()
+    return out
+
+
 @router.post("/check-command")
 def check_command(body: CommandIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """Before an agent shell command. NEEDS_OWNER becomes a task for the owner."""

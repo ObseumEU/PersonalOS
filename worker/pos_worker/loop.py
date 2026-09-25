@@ -14,22 +14,26 @@ inbox after every completed step (a safe point):
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from .client import Blocked, PosClient
 from .prompt import build_task_prompt, injection
+from .tools import fetch as fetch_tools
 
 log = logging.getLogger("pos_worker")
 
 
 class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
-                 max_resumes: int = 6, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep):
+                 max_resumes: int = 6, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
+                 tools_dir: str | None = None):
         self.client = client
         self.new_session = new_session
         self.poll_wait = poll_wait
         self.max_resumes = max_resumes
         self.max_steps = max_steps  # 0 = no cap; else a runaway run stops and the task goes back
         self.sleep = sleep
+        self.tools_dir = Path(tools_dir) if tools_dir else Path.cwd()  # where tool files are found
         self.context: list[dict] = []  # messages received while idle, used in the next task
         self.me: dict = {}
 
@@ -98,9 +102,11 @@ class Worker:
             return "error"
 
     def _run_task(self, ref: str, task: dict, run_id: int, engine: str, model: str | None) -> str:
-        session = self.new_session(engine, model, self.me)
+        # The agent's tools (personal and shared); none if PersonalOS cannot say.
+        me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir)}
+        session = self.new_session(engine, model, me)
         # Claude takes the constitution as a system prompt; Codex gets it at the top of the prompt.
-        prompt = build_task_prompt(self.me, task, self.context, include_guardrails=engine != "claude")
+        prompt = build_task_prompt(me, task, self.context, include_guardrails=engine != "claude")
         self.context = []
         pending_fyi: list[dict] = []
         resumes = 0

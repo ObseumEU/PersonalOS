@@ -1,0 +1,12 @@
+{
+  "name": "task-links",
+  "kind": "mcp",
+  "description": "MCP tool task_links: find task refs (T-012) in a text and return a PersonalOS link for each. Read-only.",
+  "owner": "Dev agent",
+  "visibility": "team",
+  "version": "1.0.0",
+  "entry": "server.py",
+  "tests": "test_server.py",
+  "permissions_needed": [],
+  "outbound": false
+}

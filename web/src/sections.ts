@@ -1,6 +1,7 @@
 import {
   Bot,
   Workflow,
+  Wrench,
   Plug,
   Box,
   Share2,
@@ -61,6 +62,7 @@ export const SECTIONS: Section[] = [
   { path: "network", label: "Network", icon: Share2, phase: 2, blurb: "", features: [] },
   { path: "approvals", label: "Approvals", icon: ShieldCheck, phase: 2, mobile: true, blurb: "", features: [] },
   { path: "automations", label: "Automations", icon: Workflow, phase: 5, blurb: "", features: [] },
+  { path: "tools", label: "Tools", icon: Wrench, phase: 5, blurb: "", features: [] },
   { path: "connectors", label: "Connectors", icon: Plug, phase: 4, blurb: "", features: [] },
   { path: "system", label: "System", icon: Box, phase: 5, blurb: "", features: [] },
 ];

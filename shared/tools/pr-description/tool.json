@@ -1,0 +1,12 @@
+{
+  "name": "pr-description",
+  "kind": "skill",
+  "description": "Write a short, reviewable description of a change: what, why, how it was checked, what to look at.",
+  "owner": "Dev agent",
+  "visibility": "team",
+  "version": "1.0.0",
+  "entry": "SKILL.md",
+  "tests": "test_skill.py",
+  "permissions_needed": [],
+  "outbound": false
+}

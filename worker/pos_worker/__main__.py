@@ -19,6 +19,7 @@ Environment:
     WORKER_CLAUDE_MAX_USD    Claude cost cap per run (--max-budget-usd)
     WORKER_MAX_STEPS     stop a run after this many completed steps and hand the task back (0 = no cap)
     WORKER_CLAUDE_MCP    more MCP servers for Claude, as JSON
+    WORKER_TOOLS_DIR PersonalOS checkout with agents/*/tools and shared/tools (default: WORKER_WORKDIR)
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
                      GitHub, Gmail, Discord) with their own tokens in env vars
 """
@@ -30,6 +31,7 @@ from .claude import DEFAULT_TOOLS, ClaudeSession
 from .client import PosClient
 from .codex import CodexSession
 from .loop import Worker
+from . import tools as tool_library
 
 
 def extra_config() -> list[str]:
@@ -70,16 +72,19 @@ def main() -> None:
     os.makedirs(workdir, exist_ok=True)
 
     def new_session(engine: str, model: str | None, me: dict):
+        tools = me.get("tools") or []  # the tool library: skills, MCP tools, scripts
         if engine == "claude":
+            skills = tool_library.skills_text(tools)
             return ClaudeSession(
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
                 workdir=workdir,
                 model=model,
-                system_prompt=me.get("guardrails", ""),
+                system_prompt=me.get("guardrails", "") + (f"\n\n{skills}" if skills else ""),
                 # The agent reaches PersonalOS through the pos MCP server, as itself.
                 mcp_servers={"pos": {"type": "http", "url": mcp_url, "headers": {"Authorization": f"Bearer {key}"}},
-                             **claude_extra_mcp()},
-                allowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS)),
+                             **claude_extra_mcp(), **tool_library.claude_servers(tools)},
+                allowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
+                + tool_library.claude_allowed(tools),
                 builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
                 disallowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")),
                 effort=os.environ.get("WORKER_CLAUDE_EFFORT") or None,
@@ -90,11 +95,12 @@ def main() -> None:
             workdir=workdir,
             sandbox=os.environ.get("WORKER_SANDBOX", "workspace-write"),
             config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
-                    *([f'model="{model}"'] if model else []), *extra_config()],
+                    *([f'model="{model}"'] if model else []), *extra_config(), *tool_library.codex_config(tools)],
         )
 
     Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
-           max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0)).run_forever()
+           max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0),
+           tools_dir=str(tool_library.tools_root(workdir))).run_forever()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,12 @@
+{
+  "name": "summarize-diff",
+  "kind": "script",
+  "description": "Print `git diff --stat` and the changed file names (with A/M/D status) against a base, default HEAD.",
+  "owner": "Dev agent",
+  "visibility": "team",
+  "version": "1.0.0",
+  "entry": "summarize_diff.py",
+  "tests": "test_summarize_diff.py",
+  "permissions_needed": [],
+  "outbound": false
+}

@@ -370,6 +370,7 @@ připraví.
 | 10 | ano | `pos.selfdeploy` (kontrola ústavy, testy, health check, automatický revert), `docs/SELF-DEPLOY.md`, instrukce agentů v `agents/` |
 | Claude CLI | ano | druhý runtime: `pos.engines`, `worker/pos_worker/claude.py`; `auto`: nejdřív Codex, Claude (claude-opus-5-5) jako záloha při vyčerpaném limitu, po resetu zpět; Nexus: poskytovatel `claude-cli` |
 | Rutiny agentů | ano | `pos.schedules`: agent si přes MCP naplánuje opakovanou práci (`schedule_create` …), každé spuštění = úkol; limity HR (max 5 aktivních, min. 15 min), kill switch, rozpočet; osobní a týmové na stránce agenta a v Automations |
+| Knihovna nástrojů | ano | `pos.tools`: osobní nástroje v `agents/<agent>/tools/`, týmové v `shared/tools/` (script, mcp, skill; manifest `tool.json`); publikace přes `tools_publish` + guard review (tajemství, odchozí volání, eskalace oprávnění) i v deployeru; worker je připojí (`GET /api/worker/tools`); počty použití pro HR; stránka Tools; `docs/TOOLS.md` |
 | 6, 7, 8, 9 | jiné thready | ústava a guardrails, Rozpočtář, HR agent, knowledge base |
 
 Co musí dodat jen majitel: přihlášení Codexu (limit předplatného do 29. 9.),

@@ -102,6 +102,9 @@ def register_builtin_agents(conn: sqlite3.Connection) -> None:
 def register_mcp_tools(mcp, session) -> None:
     """Extra tools on the `pos` MCP server; `session` is its auth + audit helper."""
     hr_mcp.register(mcp, session)
+    from . import tools
+
+    tools.register_mcp(mcp, session)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:

@@ -330,6 +330,29 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN model TEXT;
     """,
+    # 13: tool library (publications, usage)
+    """
+    CREATE TABLE tool_publications (
+        id          INTEGER PRIMARY KEY,
+        tool        TEXT NOT NULL,
+        from_agent  INTEGER REFERENCES actors(id),
+        version     TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'rejected', 'published')),
+        findings    TEXT NOT NULL DEFAULT '[]',
+        created_at  TEXT NOT NULL,
+        decided_at  TEXT
+    );
+    CREATE TABLE tool_usage (
+        id       INTEGER PRIMARY KEY,
+        tool     TEXT NOT NULL,
+        actor_id INTEGER REFERENCES actors(id),
+        run_id   INTEGER,
+        at       TEXT NOT NULL,
+        ok       INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX tool_usage_tool ON tool_usage(tool, at);
+    """,
 ]
 
 
