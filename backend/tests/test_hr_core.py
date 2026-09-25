@@ -152,6 +152,8 @@ def test_admit_agent_limits(conn):
 
 def test_http_api(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        assert client.get("/api/hr").json()["ratings"] == []  # a GET never runs a review
+        client.post("/api/hr/review")
         overview = client.get("/api/hr").json()
         assert {r["name"] for r in overview["ratings"]} >= {"HR agent", "Nexus"}
         assert client.post("/api/hr/review", params={"apply": "false"}).json()["proposals"] == []

@@ -315,7 +315,7 @@ def test_agents_get_is_read_only_and_numbers_agree(tmp_path, monkeypatch):
         tasks.review(conn, me, t["id"], False, "again")
         now = datetime.now(timezone.utc)
         conn.execute("INSERT INTO engine_usage (at, engine, actor_id, input_tokens, output_tokens) "
-                     "VALUES (?, 'claude', ?, 100, 50)", (now.isoformat(timespec="seconds"), scout))
+                     "VALUES (?, 'claude', ?, 100, 50)", ((now - timedelta(minutes=1)).isoformat(timespec="seconds"), scout))
         conn.commit()
         audit_before = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
         listed = client.get("/api/agents").json()
