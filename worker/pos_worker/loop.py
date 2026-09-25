@@ -103,7 +103,7 @@ class Worker:
 
     def _run_task(self, ref: str, task: dict, run_id: int, engine: str, model: str | None) -> str:
         # The agent's tools (personal and shared); none if PersonalOS cannot say.
-        me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir)}
+        me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir), "task_ref": ref}
         session = self.new_session(engine, model, me)
         # Claude takes the constitution as a system prompt; Codex gets it at the top of the prompt.
         prompt = build_task_prompt(me, task, self.context, include_guardrails=engine != "claude")

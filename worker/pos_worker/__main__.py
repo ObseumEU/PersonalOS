@@ -97,10 +97,14 @@ def main() -> None:
             return {}
         return {"browser": {"type": "stdio", "command": sys.executable, "args": ["-m", "pos_worker.browser_guard"],
                             "env": {"POS_URL": url, "POS_AGENT_KEY": key,
+                                    # the task the browser acts for: approvals and logs name it
+                                    **({"POS_TASK_ID": me["task_ref"]} if me.get("task_ref") else {}),
                                     **{k: v for k, v in os.environ.items() if k.startswith(("BROWSER_", "PLAYWRIGHT"))}}}}
 
     def new_session(engine: str, model: str | None, me: dict):
         tools = me.get("tools") or []  # the tool library: skills, MCP tools, scripts
+        if me.get("task_ref") and browser(me):  # Codex passes env_vars through from this process
+            os.environ["POS_TASK_ID"] = me["task_ref"]
         if engine == "claude":
             skills = tool_library.skills_text(tools)
             configured = tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
@@ -135,8 +139,8 @@ def main() -> None:
                     *([f'model="{model}"'] if model else []), *extra_config(), *tool_library.codex_config(tools),
                     *([f'mcp_servers.browser.command="{sys.executable.replace(chr(92), "/")}"',
                        'mcp_servers.browser.args=["-m","pos_worker.browser_guard"]',
-                       'mcp_servers.browser.env_vars=["POS_URL","POS_AGENT_KEY","BROWSER_CDP","BROWSER_ALLOW",'
-                       '"BROWSER_HEADED","BROWSER_MAX_MINUTES","PLAYWRIGHT_MCP"]'] if browser(me) else [])],
+                       'mcp_servers.browser.env_vars=["POS_URL","POS_AGENT_KEY","POS_TASK_ID","BROWSER_CDP","BROWSER_ALLOW",'
+                       '"BROWSER_HEADED","BROWSER_MAX_MINUTES","BROWSER_APPROVAL_WAIT","PLAYWRIGHT_MCP"]'] if browser(me) else [])],
         )
 
     Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
