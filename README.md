@@ -22,3 +22,50 @@ git clone --recurse-submodules https://github.com/ObseumEU/PersonalOS.git
 ```
 
 See [docs/PLAN.md](docs/PLAN.md) for the architecture and roadmap.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `backend/` | API: FastAPI, SQLite (`data/personalos.db`), uploaded files in `data/files/` |
+| `web/` | UI: React, Vite, Tailwind |
+| `apps/` | Subsystems (git submodules) |
+
+## Run on the laptop (dev)
+
+API on port 8000:
+
+```bash
+cd backend
+python -m venv .venv
+.venv/Scripts/pip install -e ".[dev]"   # macOS/Linux: .venv/bin/pip
+.venv/Scripts/uvicorn pos.main:app --reload
+```
+
+UI on http://localhost:5173 (it proxies `/api` to port 8000):
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+With no `POS_PASSWORD` set, dev runs without a login. Run the API tests with
+`.venv/Scripts/pytest` in `backend/`.
+
+## Run with Docker
+
+```bash
+cp .env.example .env    # set POS_PASSWORD and POS_SESSION_SECRET
+docker compose up -d --build
+```
+
+The UI is on http://localhost:8080. On the server, add the production
+overrides. They bind to 127.0.0.1 only, so put a TLS reverse proxy in front,
+and they send the session cookie over HTTPS only:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+Data lives in the `pos-data` Docker volume.

@@ -1,0 +1,10 @@
+# Server overrides: bind to localhost only (put a TLS reverse proxy in front)
+# and send the session cookie over HTTPS only.
+services:
+  api:
+    environment:
+      POS_SECURE_COOKIES: "true"
+
+  web:
+    ports: !override
+      - "127.0.0.1:${POS_PORT:-8080}:80"
