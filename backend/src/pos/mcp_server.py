@@ -49,7 +49,7 @@ TOOL_PERMISSIONS = {
     "report_progress": "tasks:claim", "request_approval": "approvals:request",
     "create_agent": "agents:create", "send_message": "messages:send",
     "get_agent_status": "tasks:read", "list_active_runs": "tasks:read",
-    "emit_event": "events:emit", "request_outbound": "approvals:request", "list_routes": "tasks:read",
+    "ask_agent": "messages:send", "emit_event": "events:emit", "request_outbound": "approvals:request", "list_routes": "tasks:read",
 }
 # Tools an agent may still use while the kill switch is on.
 FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze", "check_inbox", "get_agent_status",
@@ -328,6 +328,14 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
         with session(ctx, "list_routes") as (conn, c):
             return routing.list_rules(conn)
+
+    @mcp.tool(description="Ask another agent over A2A (e.g. the Knowledge agent for research with citations) "
+                          "and wait up to wait_s seconds for the answer.")
+    def ask_agent(ctx: Context, name: str, question: str, wait_s: int = 60) -> dict:
+        from . import a2a
+
+        with session(ctx, "ask_agent", name=name) as (conn, c):
+            return a2a.ask(conn, c, name, question, min(max(wait_s, 5), 300))
 
     @mcp.tool(description="Kill switch: freeze every agent now (owner and people only). Unfreezing is "
                           "only possible for the owner, in the web app or with `python -m pos unfreeze`.")
