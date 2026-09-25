@@ -6,9 +6,9 @@ Agent ids in pos.hr are the actor id as a string, the same key pos.budget uses.
 import sqlite3
 from datetime import datetime, timezone
 
-from .. import actors, audit, tasks
+from .. import actors, audit, tasks, versioning
 from ..budget import store as budget_store
-from ..core import Ctx, now_iso
+from ..core import Ctx
 from . import store
 from .models import AgentRecord, AgentStats, Lifetime, Status
 
@@ -112,12 +112,11 @@ class CorePlatform:
 
     def archive_agent(self, agent_id: str, reason: str) -> None:
         # Archiving keeps the actor, its history and results (spec 3.3); restore_agent undoes it.
-        self.conn.execute("UPDATE actors SET archived_at = ? WHERE id = ? AND archived_at IS NULL",
-                          (now_iso(), int(agent_id)))
+        versioning.archive(self.conn, self.ctx, store.ACTOR, int(agent_id))
         audit.log(self.conn, self.ctx, "hr_archive_agent", "actor", int(agent_id), reason=reason)
 
     def set_lifetime(self, agent_id: str, lifetime: Lifetime, reason: str) -> None:
-        store.set_profile(self.conn, int(agent_id), lifetime=lifetime.value)
+        store.set_profile(self.conn, self.ctx, int(agent_id), action="set_lifetime", lifetime=lifetime.value)
         audit.log(self.conn, self.ctx, "hr_set_lifetime", "actor", int(agent_id),
                   lifetime=lifetime.value, reason=reason)
 
@@ -133,5 +132,4 @@ class CorePlatform:
 
 
 def restore_agent(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> None:
-    conn.execute("UPDATE actors SET archived_at = NULL WHERE id = ?", (agent_id,))
-    audit.log(conn, ctx, "hr_restore_agent", "actor", agent_id)
+    versioning.unarchive(conn, ctx, store.ACTOR, agent_id)

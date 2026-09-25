@@ -61,7 +61,7 @@ def weekly(conn: sqlite3.Connection = Depends(_conn)) -> dict:
 def put_profile(agent_id: int, body: Profile, conn: sqlite3.Connection = Depends(_conn)) -> dict:
     try:
         service.register_agent(conn, agent_id, purpose=body.purpose, lifetime=body.lifetime,
-                               expires_at=body.expires_at, created_by=actors.owner_id(conn))
+                               expires_at=body.expires_at, created_by=actors.owner_id(conn), ctx=_owner(conn))
     except NotFound as e:
         raise HTTPException(404, str(e)) from e
     conn.commit()

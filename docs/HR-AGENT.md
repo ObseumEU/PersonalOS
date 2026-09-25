@@ -41,7 +41,7 @@ implementuje a HR agenta spouští plánovač (spec úkol 11).
   `return` a `intervene`), selhané běhy z `runs` a tokeny od Rozpočtáře
   (`budget_runs`). Pole z kap. 3.1, která `actors` zatím nemá (účel,
   životnost, zakladatel, `expires_at`, systémový agent), drží HR ve vlastní
-  tabulce `hr_agent_profiles`. Až je jádro přidá do `actors`, adaptér je bude
+  tabulce `hr_profiles` (verzované přes `pos.versioning`, stejně jako archivace agentů). Až je jádro přidá do `actors`, adaptér je bude
   číst odtud.
 - **HR agent** je systémový člen „HR agent“ (vzniká při startu, u Rozpočtáře
   třída `system`). Úkoly na sloučení a úpravu instrukcí dostává on.
