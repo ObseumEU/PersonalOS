@@ -18,7 +18,8 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
-  const details = Object.entries(a.details ?? {});
+  const shot = typeof a.details?.screenshot === "string" ? (a.details.screenshot as string) : null;
+  const details = Object.entries(a.details ?? {}).filter(([k]) => k !== "screenshot");
   return (
     <div className="panel fade-in flex flex-col gap-3 p-4">
       <span className="flex flex-wrap items-center gap-2">
@@ -38,6 +39,11 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
             </div>
           ))}
         </div>
+      )}
+      {shot && (
+        <a href={`/api/browser/screenshots/${shot}`} target="_blank" rel="noreferrer" title="What the agent's browser showed">
+          <img src={`/api/browser/screenshots/${shot}`} alt="Screenshot of the agent's browser" className="max-h-64 rounded border border-line" />
+        </a>
       )}
       {a.task_ref && (
         <Link to={`/tasks?view=agents&task=${a.task_ref}`} className="cap text-accent!">

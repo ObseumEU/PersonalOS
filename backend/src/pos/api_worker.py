@@ -13,7 +13,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import actors, agents, chat, killswitch, runner, tasks
+from . import actors, agents, approvals, chat, killswitch, runner, tasks
 from .api_tasks import get_db
 from .config import Settings, get_settings
 from .core import Ctx, now_iso
@@ -268,3 +268,35 @@ def wrap(payload: dict, ctx: Ctx = Depends(worker_ctx)):
 
 def _json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+# ------------------------------------------------------------------ browser (pos.browser)
+
+@router.post("/browser/check")
+def browser_check(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                  settings: Settings = Depends(get_settings)):
+    """Before a browser action: allow, or an approval the guard waits for."""
+    from . import agents, browser
+
+    st = _state(conn, ctx.actor_id)
+    if st["frozen"] or st["paused"] or st["archived"]:
+        return {"decision": "refuse", "reason": "the kill switch is on or this agent is paused"}
+    if not agents.has_permission(conn, ctx.actor_id, "browser:use"):
+        return {"decision": "refuse", "reason": "this agent lacks browser:use"}
+    return browser.check(conn, ctx, settings.data_dir, body)
+
+
+@router.post("/browser/log")
+def browser_log(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                settings: Settings = Depends(get_settings)):
+    from . import browser
+
+    return browser.record(conn, ctx, settings.data_dir, body)
+
+
+@router.get("/approvals/{approval_id}")
+def approval_state(approval_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    a = approvals.get(conn, approval_id)
+    if a["requested_by"] != ctx.actor_id:
+        raise HTTPException(404, "not your approval")
+    return {"id": a["id"], "status": a["status"], "comment": a.get("comment")}

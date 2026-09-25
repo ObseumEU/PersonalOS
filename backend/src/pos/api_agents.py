@@ -1,6 +1,6 @@
 """REST API for agents, the work board, the approval queue and the kill switch."""
 
-from fastapi import APIRouter, Depends
+from fastapi import HTTPException, APIRouter, Depends
 from pydantic import BaseModel
 
 from . import agents, approvals, killswitch, network, org, tasks
@@ -182,6 +182,19 @@ def get_network(window: str = "24h", conn=Depends(get_db)):
 @router.get("/board")
 def board(conn=Depends(get_db)):
     return agents.board(conn)
+
+
+@router.get("/browser/screenshots/{rel:path}")
+def browser_screenshot(rel: str, settings: Settings = Depends(get_settings)):
+    """A screenshot from an agent's browser session (audit log, approvals)."""
+    from fastapi.responses import FileResponse
+
+    from . import browser
+
+    path = browser.screenshot_path(settings.data_dir, rel)
+    if path is None:
+        raise HTTPException(404, "no such screenshot")
+    return FileResponse(path, media_type="image/png", headers={"X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/approvals")

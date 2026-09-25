@@ -32,6 +32,7 @@ PERMISSIONS = {
     "messages:send": "message other members",
     "events:emit": "report incoming events from a connector (e-mail, Discord, GitHub)",
     "routes:write": "change event routing rules",
+    "browser:use": "drive a web browser (paying, sending, deleting and account settings still need approval)",
 }
 BUILTIN_PERMISSIONS = {
     actors.ASSISTANT_NAME: ["tasks:read", "tasks:write", "tasks:claim", "approvals:request", "agents:create",

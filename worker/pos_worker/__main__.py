@@ -26,6 +26,7 @@ Environment:
 
 import logging
 import os
+import sys
 
 from .claude import DEFAULT_TOOLS, ClaudeSession
 from .client import PosClient
@@ -71,10 +72,19 @@ def main() -> None:
     workdir = os.environ.get("WORKER_WORKDIR", "/work")
     os.makedirs(workdir, exist_ok=True)
 
+    def browser(me: dict) -> dict:
+        """The guarded browser (pos_worker.browser_guard) for agents with browser:use."""
+        if "browser:use" not in (me.get("permissions") or []):
+            return {}
+        return {"browser": {"type": "stdio", "command": sys.executable, "args": ["-m", "pos_worker.browser_guard"],
+                            "env": {"POS_URL": url, "POS_AGENT_KEY": key,
+                                    **{k: v for k, v in os.environ.items() if k.startswith(("BROWSER_", "PLAYWRIGHT"))}}}}
+
     def new_session(engine: str, model: str | None, me: dict):
         tools = me.get("tools") or []  # the tool library: skills, MCP tools, scripts
         if engine == "claude":
             skills = tool_library.skills_text(tools)
+            allowed = tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
             return ClaudeSession(
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
                 workdir=workdir,
@@ -82,9 +92,9 @@ def main() -> None:
                 system_prompt=me.get("guardrails", "") + (f"\n\n{skills}" if skills else ""),
                 # The agent reaches PersonalOS through the pos MCP server, as itself.
                 mcp_servers={"pos": {"type": "http", "url": mcp_url, "headers": {"Authorization": f"Bearer {key}"}},
-                             **claude_extra_mcp(), **tool_library.claude_servers(tools)},
-                allowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
-                + tool_library.claude_allowed(tools),
+                             **browser(me), **claude_extra_mcp(), **tool_library.claude_servers(tools)},
+                allowed_tools=allowed + tool_library.claude_allowed(tools)
+                + (["mcp__browser"] if browser(me) and allowed else []),
                 builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
                 disallowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")),
                 effort=os.environ.get("WORKER_CLAUDE_EFFORT") or None,
@@ -95,7 +105,11 @@ def main() -> None:
             workdir=workdir,
             sandbox=os.environ.get("WORKER_SANDBOX", "workspace-write"),
             config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
-                    *([f'model="{model}"'] if model else []), *extra_config(), *tool_library.codex_config(tools)],
+                    *([f'model="{model}"'] if model else []), *extra_config(), *tool_library.codex_config(tools),
+                    *([f'mcp_servers.browser.command="{sys.executable.replace(chr(92), "/")}"',
+                       'mcp_servers.browser.args=["-m","pos_worker.browser_guard"]',
+                       'mcp_servers.browser.env_vars=["POS_URL","POS_AGENT_KEY","BROWSER_CDP","BROWSER_ALLOW",'
+                       '"BROWSER_HEADED","BROWSER_MAX_MINUTES","PLAYWRIGHT_MCP"]'] if browser(me) else [])],
         )
 
     Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
