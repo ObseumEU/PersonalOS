@@ -27,6 +27,7 @@ export type Agent = {
   engine: "claude" | "codex" | "auto" | null;
   engine_effective: "claude" | "codex" | "auto";
   model: string | null;
+  engine_view: EngineView | null;
   tokens_24h: number;
   tokens_7d: number;
   daily_cap: number | null;
@@ -36,6 +37,15 @@ export type Agent = {
   done_today: number;
   approvals_waiting: number;
   current: { id: number; ref: string; title: string } | null;
+};
+
+/** Which engine and model an agent runs on (read-only, from /api/agents). */
+export type EngineRun = { engine: "claude" | "codex"; model: string | null; fallback: boolean; label: string };
+export type EngineView = {
+  setting: "claude" | "codex" | "auto";
+  primary: "claude" | "codex";
+  now: (Partial<EngineRun> & { label: string; paused_until?: string | null }) | { engine: null; label: string };
+  last_run: (EngineRun & { at: string; running: boolean }) | null;
 };
 
 export type TraceEntry = {

@@ -146,7 +146,7 @@ function Card({ a, rating, maxTokens }: { a: Agent; rating?: Rating; maxTokens: 
       <span className="flex items-center gap-2">
         <ActorChip a={a} />
         {a.system && <Pill>system</Pill>}
-        {a.kind !== "human" && <EngineBadge engine={a.engine_effective} model={a.engine_effective === "auto" || a.engine_effective === "claude" ? a.model ?? "claude-opus-5-5" : null} />}
+        {a.kind !== "human" && <EngineBadge view={a.engine_view} engine={a.engine_effective} model={a.engine_effective === "auto" || a.engine_effective === "claude" ? a.model ?? "claude-opus-5-5" : null} />}
         <span className="ml-auto">
           <StatusDot status={a.status} />
         </span>

@@ -1,4 +1,4 @@
-import type { Agent, AgentStatus } from "../../agentsApi";
+import type { Agent, AgentStatus, EngineView } from "../../agentsApi";
 import { AssigneeChip } from "../tasks/bits";
 
 const COLOR: Record<AgentStatus, string> = {
@@ -25,7 +25,26 @@ export function ActorChip({ a }: { a: Pick<Agent, "kind" | "name" | "is_owner"> 
   return <AssigneeChip type={type} name={a.is_owner ? "Owner" : a.name} />;
 }
 
-export function EngineBadge({ engine, model }: { engine: string | null | undefined; model?: string | null }) {
+/** Engine and model: the running run's, else what the next run uses; amber on the fallback. */
+export function EngineBadge({ view, engine, model }: { view?: EngineView | null; engine?: string | null; model?: string | null }) {
+  if (view) {
+    const shown = view.last_run?.running ? view.last_run : view.now;
+    const fallback = "fallback" in shown && shown.fallback;
+    const setting = view.setting === "auto" ? `auto (${view.primary === "codex" ? "Codex first, Claude as fallback" : "Claude first, Codex as fallback"})` : view.setting;
+    const title = [
+      `Runtime setting: ${setting}`,
+      `${view.last_run?.running ? "Running on" : "Next run"}: ${shown.label}`,
+      view.last_run && !view.last_run.running ? `Last run: ${view.last_run.label} · ${view.last_run.at.slice(0, 16).replace("T", " ")}` : null,
+    ].filter(Boolean).join("\n");
+    return (
+      <span
+        className={`cap rounded-[3px] border px-1.5 py-px text-[10px]! ${fallback ? "border-amber-400/60 text-amber-300!" : "border-accent/50 text-accent!"}`}
+        title={title}
+      >
+        {shown.label}
+      </span>
+    );
+  }
   if (!engine) return null;
   const label = engine === "claude" ? `Claude${model ? ` · ${model.replace("claude-", "")}` : ""}` : engine === "codex" ? "Codex" : "auto";
   return (
