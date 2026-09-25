@@ -14,5 +14,6 @@
   "lifetime": "long_lived",
   "runtime": "codex_worker",
   "worker": "assistant",
-  "note": "A built-in member; the file gives its worker a key."
+  "note": "A built-in member; the file gives its worker a key. People talk to it in chat (DM).",
+  "answers_chat": true
 }

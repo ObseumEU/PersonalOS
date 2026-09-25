@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import KnowledgePanel from "../components/KnowledgePanel";
+import QuickAnswer from "../components/QuickAnswer";
 import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
-import { AskBox, PageHeader, Panel } from "../components/ui";
+import { PageHeader, Panel } from "../components/ui";
 import { type FileItem, filesApi, fmtDate } from "../filesApi";
 import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
 import { type Agenda, agendaApi } from "./Calendar";
@@ -51,7 +52,7 @@ export default function Today() {
         <KnowledgePanel fig="FIG. 1" className="h-[340px] lg:col-span-7 lg:h-auto" />
 
         <div className="flex min-h-0 flex-col gap-4 lg:col-span-5">
-          <AskBox id="ask-today" placeholder="Ask our knowledge base (answers cite their sources)" />
+          <QuickAnswer />
           <Panel
             fig="TAB. 1"
             title="Today"

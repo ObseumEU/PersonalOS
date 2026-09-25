@@ -53,6 +53,11 @@ def specs(base: Path | None = None) -> list[dict]:
     return out
 
 
+def answers_chat(name: str) -> bool:
+    """Does this agent answer people in chat (agent.json "answers_chat": true)?"""
+    return any(s.get("answers_chat") and s["name"] == name for s in specs())
+
+
 def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None = None) -> dict:
     """Create the missing role agents from their agent.json and fill a missing
     place in the chart. Returns what changed."""

@@ -4,7 +4,7 @@ import { getMe, logout, type Me } from "./api";
 import Shell, { Mark } from "./components/Shell";
 import AgentDetail from "./pages/AgentDetail";
 import Approvals from "./pages/Approvals";
-import Assistant from "./pages/Assistant";
+import AssistantChat from "./pages/AssistantChat";
 import Automations from "./pages/Automations";
 import Calendar from "./pages/Calendar";
 import Chat from "./pages/Chat";
@@ -63,7 +63,7 @@ export default function App() {
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/automations" element={<Automations />} />
         <Route path="/tools" element={<Tools />} />
-        <Route path="/assistant" element={<Assistant />} />
+        <Route path="/assistant" element={<AssistantChat />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/files" element={<Files />} />

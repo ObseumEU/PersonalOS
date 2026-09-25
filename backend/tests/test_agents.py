@@ -202,7 +202,7 @@ def test_network(conn, me, assistant):
     assert (me.actor_id, assistant.actor_id, "message") in kinds
     assert (assistant.actor_id, me.actor_id, "approval") in kinds
     node = next(n for n in net["nodes"] if n["id"] == assistant.actor_id)
-    assert node["open"] == 1 and net["events"][0]["at"]
+    assert node["open"] == 2 and net["events"][0]["at"]  # the task and "Chat: answer Owner" (4.3)
     with pytest.raises(ValueError):
         network.build(conn, "1y")
 

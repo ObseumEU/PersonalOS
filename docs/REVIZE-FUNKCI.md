@@ -305,6 +305,9 @@ zůstává s odkazem „open DM in chat“.
   odpovídat i o úkolech, projektech a souborech a zakládat úkoly. Konverzace
   se neztrácí (je to chat).
 
+Stav: hotovo (commit „Wave 2 / 4.3“). Zpráva člověka agentovi s `answers_chat`
+(agent.json) se stane úkolem „Chat: answer …“ pro jeho worker.
+
 ### 4.4 Můj den (Today) a osobní pohledy
 
 - Today je pro přihlášeného člena: moje úkoly (včetně kroků s dnešním

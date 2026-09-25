@@ -59,3 +59,18 @@ def test_comment_api_and_mcp(tmp_path, monkeypatch):
             assert "Confirmed with the supplier" in text and "activity" in text
 
     anyio.run(scenario)
+
+
+def test_people_talk_to_the_assistant_in_chat(conn):
+    me = Ctx(actors.owner_id(conn))
+    ai = actors.assistant_id(conn)
+    chat.send_dm(conn, me, ai, "Kolik máme otevřených úkolů pro Acme?")
+    chat.send_dm(conn, me, ai, "A kdo je má?")
+    open_ = conn.execute("SELECT * FROM tasks WHERE assignee_id = ? AND title LIKE 'Chat: answer%'", (ai,)).fetchall()
+    assert len(open_) == 1  # the second message joined the open task
+    t = tasks.get(conn, me, open_[0]["id"])
+    assert "Kolik máme" in t["notes"] and t["status"] == "next"
+    assert any("A kdo je má?" in a["body"] for a in comments.list_for(conn, me, t["id"]))
+    # its answer needs no review: the assistant finishes it itself
+    tasks.claim(conn, Ctx(ai), t["id"])
+    assert tasks.complete(conn, Ctx(ai), t["id"])["status"] == "done"

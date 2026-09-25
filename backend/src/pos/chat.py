@@ -363,6 +363,10 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     audit.log(conn, ctx, "chat_send", "chat_message", mid, channel=channel_id, priority=priority,
               mentions=mentioned, inbox=sorted(inbox))
 
+    if not system and author["kind"] == "human" and priority != "stop":
+        for aid in targets:
+            _ask_to_answer(conn, ctx, ch, aid, mid, body)
+
     if priority == "stop":
         for aid in targets:
             target = actors.get(conn, aid)
@@ -382,6 +386,39 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     out["delivered_to_run"] = runs.get(dm_target) if dm_target else None
     out["inbox"] = sorted(inbox)
     return out
+
+
+def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int, message_id: int, body: str) -> None:
+    """A person wrote to an agent that answers chat (agent.json answers_chat, e.g.
+    the Assistant): its worker gets a task to reply in this channel. Messages
+    that arrive while that task is still open join it instead of a new one."""
+    from . import agents_code, comments, tasks
+
+    target = actors.get(conn, aid)
+    if target["kind"] == "human" or target["archived_at"] or not agents_code.answers_chat(target["name"]):
+        return
+    author = actors.get(conn, ctx.actor_id)["name"]
+    where = f"DM with {author}" if ch["kind"] == "dm" else f"#{ch['name']}"
+    title = f"Chat: answer {author} ({where})"
+    open_ = conn.execute("""SELECT id FROM tasks WHERE title = ? AND assignee_id = ? AND archived_at IS NULL
+                            AND status IN ('inbox', 'next', 'working')""", (title, aid)).fetchone()
+    from .guard.external import wrap_external
+
+    said = wrap_external(f"chat:{author}", body, ref=f"message {message_id}")
+    if open_:
+        comments.log(conn, ctx, open_["id"], f"{author} added (message {message_id}): {body[:1500]}", "comment")
+        return
+    tasks.create(conn, ctx, {
+        "title": title, "assignee": {"type": target["kind"], "id": aid}, "status": "next", "priority": 2,
+        "topic": "chat",
+        "notes": f"Purpose: {author} wrote to you in chat and waits for an answer.\n"
+                 f"Source: chat channel {ch['id']} ({where}), message {message_id}.\n\n{said}\n\n"
+                 f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}); read the thread with "
+                 f"chat_read if you need context. Use your tools (tasks, files, the knowledge base via "
+                 f"ask_agent 'Knowledge agent') to answer well; create tasks when asked to.",
+        "definition_of_done": "The answer is in the chat channel.",
+        "reviewer": aid,  # a chat answer needs no review: it is already in front of the person
+    })
 
 
 def send_dm(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, **kw) -> dict:
