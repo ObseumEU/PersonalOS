@@ -7,7 +7,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import a2a, actors, outbound, routing, scheduler
+from . import a2a, actors, outbound, routing, scheduler, schedules, versioning
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .core import Ctx
@@ -131,6 +131,62 @@ def run_job(job_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     if job is None:
         raise HTTPException(404, "no such job")
     return scheduler.run_job(conn, job, by=ctx)
+
+
+class ScheduleIn(BaseModel):
+    name: str
+    schedule: str
+    title: str | None = None
+    notes: str | None = None
+    definition_of_done: str | None = None
+    priority: int | None = None
+    topic: str | None = None
+    estimate_min: int | None = None
+    assignee: str | dict | None = None
+    visibility: str = "personal"
+
+
+@router.get("/schedules")
+def list_schedules(actor_id: int | None = None, archived: bool = False, conn=Depends(get_db)):
+    return schedules.list_schedules(conn, actor_id=actor_id, archived=archived)
+
+
+@router.post("/schedules", status_code=201)
+def create_schedule(body: ScheduleIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    s = schedules.create(conn, ctx, body.model_dump())
+    conn.commit()
+    return s
+
+
+@router.patch("/schedules/{schedule_id}")
+def update_schedule(schedule_id: int, body: dict, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    s = schedules.update(conn, ctx, schedule_id, body)
+    conn.commit()
+    return s
+
+
+@router.post("/schedules/{schedule_id}/run")
+def run_schedule(schedule_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return schedules.fire(conn, schedule_id, manual_by=ctx)
+
+
+@router.post("/schedules/{schedule_id}/archive")
+def archive_schedule(schedule_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    s = schedules.archive(conn, ctx, schedule_id)
+    conn.commit()
+    return s
+
+
+@router.post("/schedules/{schedule_id}/restore")
+def restore_schedule(schedule_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    versioning.unarchive(conn, ctx, schedules.ENTITY, schedule_id)
+    conn.commit()
+    return schedules.get(conn, schedule_id)
+
+
+@router.get("/schedules/{schedule_id}/history")
+def schedule_history(schedule_id: int, conn=Depends(get_db)):
+    return versioning.history(conn, schedules.ENTITY, schedule_id)
 
 
 @router.get("/a2a/links")

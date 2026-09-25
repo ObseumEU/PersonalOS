@@ -5,6 +5,7 @@ import { api } from "../api";
 import { type AgentDetail as Detail, agentsApi } from "../agentsApi";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
+import { SchedulesPanel } from "../components/Schedules";
 import { PageHeader, Panel } from "../components/ui";
 import { tasksApi } from "../tasksApi";
 import { ago, fmtTokens } from "./Agents";
@@ -336,6 +337,7 @@ export default function AgentDetail() {
           ))}
         </Panel>
       </div>
+      <SchedulesPanel actor={{ id: a.id, name: a.name }} />
       <p className="cap">
         Assignees: <AssigneeChip type="human" name="Owner" /> people · <AssigneeChip type="ai" name="AI" /> the assistant ·{" "}
         <AssigneeChip type="agent" name="Agent" /> agents

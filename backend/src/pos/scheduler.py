@@ -5,7 +5,7 @@ A job has a simple schedule and a built-in action. Actions are deterministic
 code (no tokens); where thinking is needed they create a task for an agent,
 which then spends tokens through the normal budget gates.
 
-Schedules:  "every 60m" · "daily 07:00" · "weekdays 07:00" · "weekly fri 15:00"
+Schedules:  "every 60m" · "every 2h" · "daily 07:00" · "weekdays 07:00" · "weekly fri 15:00"
 Times are Europe/Prague.
 """
 
@@ -26,8 +26,11 @@ DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 def next_run(schedule: str, after: datetime) -> datetime:
     """Next time (UTC) the schedule fires strictly after `after` (UTC)."""
     s = schedule.strip().lower()
-    if m := re.fullmatch(r"every (\d+)m", s):
-        return after + timedelta(minutes=int(m[1]))
+    if m := re.fullmatch(r"every (\d+) ?(m|min|h)", s):
+        n = int(m[1]) * (60 if m[2] == "h" else 1)
+        if n < 1:
+            raise ValueError(f"unknown schedule: {schedule}")
+        return after + timedelta(minutes=n)
     local = after.astimezone(TZ)
     if m := re.fullmatch(r"(daily|weekdays) (\d{1,2}):(\d{2})", s):
         kind, hh, mm = m[1], int(m[2]), int(m[3])
@@ -162,6 +165,12 @@ def reap_runs(conn: sqlite3.Connection, silent_minutes: int = 20) -> dict:
     return {"released": released}
 
 
+def member_schedules(conn: sqlite3.Connection) -> dict:
+    from . import schedules
+
+    return schedules.run_due(conn)
+
+
 def a2a_sync(conn: sqlite3.Connection) -> dict:
     from . import a2a
 
@@ -176,6 +185,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "budget_check": budget_check,
     "a2a_sync": a2a_sync,
     "reap_runs": reap_runs,
+    "member_schedules": member_schedules,
 }
 
 DEFAULT_JOBS = [
@@ -186,6 +196,7 @@ DEFAULT_JOBS = [
     ("Budget check", "every 60m", "budget_check"),
     ("A2A: hand tasks to remote agents and collect results", "every 1m", "a2a_sync"),
     ("Release runs of workers that went silent", "every 5m", "reap_runs"),
+    ("Schedules of people and agents", "every 1m", "member_schedules"),
 ]
 
 
@@ -246,8 +257,8 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
         (now.isoformat(timespec="seconds"), json.dumps(result, ensure_ascii=False, default=str),
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
-    if job["action"] not in ("a2a_sync", "reap_runs") or result.get("sent") or result.get("finished") \
-            or result.get("released"):
+    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules") or result.get("sent") \
+            or result.get("finished") or result.get("released") or result.get("fired"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result

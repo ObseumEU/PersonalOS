@@ -2,6 +2,7 @@ import { Play } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { SchedulesPanel, resultText, until } from "../components/Schedules";
 import { PageHeader, Panel } from "../components/ui";
 import { ago } from "./Agents";
 
@@ -17,25 +18,6 @@ type Job = {
 };
 type Link_ = { task_ref: string; member: string; remote_task_id: string | null; state: string; updated_at: string };
 type A2A = { members: { id: number; name: string; a2a_url: string }[]; links: Link_[] };
-
-function until(iso: string) {
-  const s = (new Date(iso).getTime() - Date.now()) / 1000;
-  if (s < 60) return "in < 1 min";
-  if (s < 3600) return `in ${Math.round(s / 60)} min`;
-  if (s < 86400) return `in ${Math.round(s / 3600)} h`;
-  return `in ${Math.round(s / 86400)} d`;
-}
-
-function resultText(r: Record<string, unknown> | null) {
-  if (!r) return "—";
-  if (r.error) return `error: ${r.error}`;
-  if (r.skipped) return String(r.skipped);
-  if (r.task) return `created ${r.task}`;
-  return Object.entries(r)
-    .filter(([, v]) => v !== null && !(Array.isArray(v) && v.length === 0))
-    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
-    .join(" · ") || "ok";
-}
 
 export default function Automations() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -94,6 +76,8 @@ export default function Automations() {
           </div>
         ))}
       </Panel>
+
+      <SchedulesPanel fig="TAB. 17" />
 
       <div className="grid gap-4 lg:grid-cols-12">
         <Panel fig="A2A" title="Remote agents" right="tasks assigned to them travel over A2A" className="lg:col-span-5">

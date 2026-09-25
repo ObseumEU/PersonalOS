@@ -304,6 +304,28 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN heartbeat_at TEXT;
     """,
+    # 10: schedules that people and agents create for themselves or their team.
+    """
+    CREATE TABLE schedules (
+        id           INTEGER PRIMARY KEY,
+        name         TEXT NOT NULL,
+        schedule     TEXT NOT NULL,
+        template     TEXT NOT NULL DEFAULT '{}',
+        assignee_id  INTEGER NOT NULL REFERENCES actors(id),
+        visibility   TEXT NOT NULL DEFAULT 'personal',
+        status       TEXT NOT NULL DEFAULT 'active',
+        next_run_at  TEXT,
+        last_run_at  TEXT,
+        last_result  TEXT,
+        last_task_id INTEGER REFERENCES tasks(id),
+        runs         INTEGER NOT NULL DEFAULT 0,
+        created_by   INTEGER NOT NULL REFERENCES actors(id),
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        archived_at  TEXT
+    );
+    CREATE INDEX schedules_due ON schedules(status, next_run_at);
+    """,
 ]
 
 
