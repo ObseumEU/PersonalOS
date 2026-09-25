@@ -53,6 +53,8 @@ class BudgetSettings(BaseSettings):
     owner_reserve: float = 0.3
     # Where Codex writes its session logs; default $CODEX_HOME or ~/.codex.
     codex_home: Path | None = None
+    # Minutes between automatic checks in the web app; 0 turns them off.
+    check_minutes: int = 60
 
 
 def utcnow() -> datetime:
