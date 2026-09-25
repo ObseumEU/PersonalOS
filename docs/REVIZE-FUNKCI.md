@@ -222,6 +222,9 @@ Stav: hotovo (commit „Wave 1 / 3.4“). Úprava instrukcí z UI jde jako úkol
 - Lidé: stejný tok s `kind=human` = pozvánka (vlna 2, 4.1).
 - MCP: `hire_request`, `hire_decide`; UI: tlačítko „Nabrat kolegu“ v Tým.
 
+Stav: hotovo (commit „Wave 1 / 3.5“) pro agenty; lidé přes pozvánky ve vlně 2.
+Spuštění workeru nového agenta přijde s 3.7.
+
 ### 3.6 Projekty jako sdílená práce
 
 - Tabulka `projects` (id, slug, name, goal, definition_of_done, lead_id,

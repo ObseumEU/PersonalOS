@@ -75,6 +75,8 @@ TOOL_PERMISSIONS = {
     "task_comment": "tasks:read",
     # Feedback: any member gives it; resolving is checked in pos.feedback.
     "propose_instructions": "tasks:claim",
+    # Hiring: asking needs agents:create or tasks:write, deciding is the decider's (pos.hiring).
+    "hire_request": "tasks:read", "hire_decide": "tasks:read", "hire_list": "tasks:read",
     "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
     # Pausing or stopping an agent: people and its leads (checked in pos.agents).
     "manage_agent": "tasks:claim",
@@ -240,6 +242,37 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             if target is None:
                 raise NotFound(f"no member called {agent}")
             return agents.propose_instructions(conn, c, target["id"], text, reason)
+
+    @mcp.tool(description="Ask for a new colleague (an agent): name, purpose, role, lead (who it reports to; "
+                          "default the Project manager), permissions (never more than yours), budget_class, "
+                          "lifetime and draft instructions. HR's limits run first; the lead decides, or the owner "
+                          "when it is over the limit or asks for more than you have.")
+    def hire_request(ctx: Context, name: str, purpose: str, role: str | None = None, lead: str | None = None,
+                     permissions: list[str] | None = None, budget_class: str = "normal",
+                     lifetime: str = "long_lived", instructions: str = "", reason: str = "") -> dict:
+        from . import hiring
+
+        with session(ctx, "hire_request", name=name) as (conn, c):
+            return hiring.request(conn, c, name=name, purpose=purpose, role=role, lead=lead,
+                                  permissions=permissions, budget_class=budget_class, lifetime=lifetime,
+                                  instructions=instructions, reason=reason)
+
+    @mcp.tool(description="Decide a hire request you are the decider of: approve (the agent is created, "
+                          "reports to its lead, 7 days on probation) or reject with a note.")
+    def hire_decide(ctx: Context, hire_id: int, approve: bool, note: str = "") -> dict:
+        from . import hiring
+
+        with session(ctx, "hire_decide", hire_id=hire_id, approve=approve) as (conn, c):
+            out = hiring.decide(conn, c, hire_id, approve, note, data_dir=db_path.parent)
+            out.pop("api_key", None)  # the key goes to the owner's worker setup, not into a model's context
+            return out
+
+    @mcp.tool(description="Hire requests, by status pending | approved | rejected.")
+    def hire_list(ctx: Context, status: str | None = "pending") -> list[dict]:
+        from . import hiring
+
+        with session(ctx, "hire_list", status=status) as (conn, c):
+            return hiring.list_requests(conn, status)
 
     @mcp.tool(description="Feedback given to a member (default: you), by status open | applied | dismissed.")
     def feedback_list(ctx: Context, to: str | None = None, status: str | None = "open") -> list[dict]:

@@ -612,6 +612,35 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX feedback_to ON feedback (to_id, status);
     """,
+    # 23: hiring a colleague and probation (pos.hiring).
+    """
+    CREATE TABLE hire_requests (
+        id INTEGER PRIMARY KEY,
+        requested_by INTEGER NOT NULL REFERENCES actors(id),
+        name TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        role TEXT,
+        lead_id INTEGER REFERENCES actors(id),
+        permissions TEXT NOT NULL DEFAULT '[]',
+        budget_class TEXT NOT NULL DEFAULT 'normal',
+        lifetime TEXT NOT NULL DEFAULT 'long_lived',
+        instructions TEXT,
+        reason TEXT,
+        hr_verdict TEXT,
+        needs_owner TEXT,
+        decider_id INTEGER REFERENCES actors(id),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        decided_by INTEGER REFERENCES actors(id),
+        decided_at TEXT,
+        decision_note TEXT,
+        agent_id INTEGER REFERENCES actors(id),
+        created_by INTEGER REFERENCES actors(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    ALTER TABLE actors ADD COLUMN probation_until TEXT;
+    """,
 ]
 
 

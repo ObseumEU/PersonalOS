@@ -123,6 +123,49 @@ def propose_instructions(agent_id: int, body: InstructionsIn, conn=Depends(get_d
     return _wrap(lambda: agents.propose_instructions(conn, ctx, agent_id, body.text, body.reason))
 
 
+class HireIn(BaseModel):
+    name: str
+    purpose: str
+    role: str | None = None
+    lead: str | int | None = None
+    permissions: list[str] | None = None
+    budget_class: str = "normal"
+    lifetime: str = "long_lived"
+    instructions: str = ""
+    reason: str = ""
+
+
+class DecideIn(BaseModel):
+    approve: bool
+    note: str = ""
+
+
+@router.get("/hires")
+def list_hires(status: str | None = None, conn=Depends(get_db)):
+    from . import hiring
+
+    return hiring.list_requests(conn, status)
+
+
+@router.post("/hires", status_code=201)
+def request_hire(body: HireIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import hiring
+
+    out = hiring.request(conn, ctx, **body.model_dump())
+    conn.commit()
+    return out
+
+
+@router.post("/hires/{hire_id}/decide")
+def decide_hire(hire_id: int, body: DecideIn, conn=Depends(get_db), ctx=Depends(get_ctx),
+                settings: Settings = Depends(get_settings)):
+    from . import hiring
+
+    out = _wrap(lambda: hiring.decide(conn, ctx, hire_id, body.approve, body.note, data_dir=settings.data_dir))
+    conn.commit()
+    return out
+
+
 @router.post("/agents/{agent_id}/restore")
 def restore(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return agents.restore(conn, ctx, agent_id)

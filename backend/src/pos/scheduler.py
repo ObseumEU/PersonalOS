@@ -201,6 +201,12 @@ def a2a_sync(conn: sqlite3.Connection) -> dict:
     return a2a.sync(conn)
 
 
+def probation_review(conn: sqlite3.Connection) -> dict:
+    from . import hiring
+
+    return hiring.probation_review(conn)
+
+
 def feedback_digest(conn: sqlite3.Connection) -> dict:
     from . import feedback
 
@@ -216,6 +222,7 @@ def knowlage_files(conn: sqlite3.Connection) -> dict:
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "knowlage_files": knowlage_files,
     "feedback_digest": feedback_digest,
+    "probation_review": probation_review,
     "morning_brief": morning_brief,
     "follow_ups": follow_ups,
     "weekly_review": weekly_review,
@@ -239,6 +246,7 @@ DEFAULT_JOBS = [
     ("Check that the Claude CLI answers with its model", "every 6h", "claude_selfcheck"),
     ("Push files into knowlage (retry what failed)", "every 15m", "knowlage_files"),
     ("Repeated critique of an agent → the Agent coach", "daily 06:30", "feedback_digest"),
+    ("Probation ended → the lead decides", "daily 07:15", "probation_review"),
 ]
 
 

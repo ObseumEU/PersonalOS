@@ -361,6 +361,12 @@ def reviewer_of(conn: sqlite3.Connection, row) -> int:
     if row["reviewer_id"]:
         return row["reviewer_id"]
     assignee = row["assignee_id"]
+    from .hiring import on_probation
+
+    if on_probation(conn, assignee):
+        lead = actors.get(conn, assignee)["reports_to"]
+        if lead and _can_review_as_agent(conn, lead):
+            return lead
     creator = row["created_by"]
     if creator and creator != assignee and _can_review_as_agent(conn, creator):
         return creator
