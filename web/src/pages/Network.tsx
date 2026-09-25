@@ -53,7 +53,7 @@ export default function NetworkPage() {
       clearInterval(t);
     };
   }, [window_]);
-  const onSelect = useCallback((id: number) => navigate(`/agents/${id}`), [navigate]);
+  const onSelect = useCallback((id: number) => navigate(`/team/${id}`), [navigate]);
 
   const names = new Map(data?.nodes.map((n) => [n.id, n.is_owner ? "You" : n.name]));
   const ranked = [...(data?.nodes ?? [])]
@@ -85,13 +85,13 @@ export default function NetworkPage() {
           Org chart
         </button>
         {data?.frozen && <span className="cap ml-2 rounded-sm border border-amber-400/60 px-2 py-1 text-amber-300!">KILL SWITCH ON · agents frozen</span>}
-        <Link to="/org" className="btn ml-auto">
+        <Link to="/team?tab=structure" className="btn ml-auto">
           Org →
         </Link>
-        <Link to="/agents" className="btn">
+        <Link to="/team" className="btn">
           Agents →
         </Link>
-        <Link to="/board" className="btn">
+        <Link to="/team?tab=work" className="btn">
           Work board →
         </Link>
       </div>
@@ -116,7 +116,7 @@ export default function NetworkPage() {
               const load = n.open + 2 * n.working + n.review;
               const max = Math.max(1, ...ranked.map((r) => r.open + 2 * r.working + r.review));
               return (
-                <Link key={n.id} to={n.kind === "human" ? "/board" : `/agents/${n.id}`} className="flex flex-col gap-1 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
+                <Link key={n.id} to={`/team/${n.id}`} className="flex flex-col gap-1 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
                   <span className="flex items-baseline gap-2 text-[13px]">
                     {n.is_owner ? "You" : n.name}
                     <span className="cap ml-auto">

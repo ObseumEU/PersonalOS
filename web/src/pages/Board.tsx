@@ -59,7 +59,7 @@ export default function Board() {
         sub="Same tasks, one board: what each person and agent has queued, is doing, needs from you, and finished today."
       />
       <div className="flex flex-wrap gap-2">
-        <Link to="/network" className="btn">
+        <Link to="/team?tab=network" className="btn">
           Agent network →
         </Link>
         <Link to="/approvals" className="btn">
@@ -77,7 +77,7 @@ export default function Board() {
             ))}
             {rows?.map((r) => (
               <div key={r.actor.id} className="contents">
-                <Link to={r.actor.kind === "human" ? "/tasks" : `/agents/${r.actor.id}`} className="flex flex-col gap-1.5 border-b border-line px-3 py-2.5 hover:bg-raised">
+                <Link to={r.actor.kind === "human" ? "/tasks" : `/team/${r.actor.id}`} className="flex flex-col gap-1.5 border-b border-line px-3 py-2.5 hover:bg-raised">
                   <ActorChip a={r.actor} />
                   <StatusDot status={r.actor.status} />
                 </Link>

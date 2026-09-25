@@ -293,6 +293,9 @@ e-mail by šel přes schválení).
 - Duplicitní panel „Inject/Messages“ na profilu nahradit odkazem na DM
   a polem priority zprávy, které píše do chatu (jeden systém).
 
+Stav: hotovo (commit „Wave 2 / 4.2“). Panel zpráv na profilu už píše do chatu (DM),
+zůstává s odkazem „open DM in chat“.
+
 ### 4.3 Asistent jako kolega
 
 - Stránka Assistant zanikne; ask box na Today zůstane (rychlý dotaz do

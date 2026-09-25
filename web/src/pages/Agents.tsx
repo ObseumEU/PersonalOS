@@ -141,7 +141,7 @@ function Card({ a, rating, maxTokens }: { a: Agent; rating?: Rating; maxTokens: 
   const human = a.kind === "human";
   return (
     <Link
-      to={human ? "/board" : `/agents/${a.id}`}
+      to={`/team/${a.id}`}
       className={`panel fade-in group flex flex-col gap-3 p-4 transition hover:border-accent ${a.archived ? "opacity-45" : ""}`}
     >
       <span className="flex items-center gap-2">
@@ -250,7 +250,7 @@ export default function Agents() {
   const active = data?.agents.filter((a) => a.kind !== "human" && !a.archived) ?? [];
   const maxTokens = Math.max(0, ...active.map((a) => a.tokens_24h));
   const k = data?.hr.kpis ?? {};
-  const onSelect = useCallback((id: number) => navigate(`/agents/${id}`), [navigate]);
+  const onSelect = useCallback((id: number) => navigate(`/team/${id}`), [navigate]);
 
   return (
     <div className="flex flex-col gap-5">
@@ -261,7 +261,7 @@ export default function Agents() {
       />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="FIG. 5" title="Agent network" right={<Link to="/network" className="hover:text-accent">live · full view →</Link>} className="h-[380px] lg:col-span-8" bodyClassName="measure-grid relative">
+        <Panel fig="FIG. 5" title="Agent network" right={<Link to="/team?tab=network" className="hover:text-accent">live · full view →</Link>} className="h-[380px] lg:col-span-8" bodyClassName="measure-grid relative">
           <Suspense fallback={<p className="cap breathe absolute inset-0 grid place-items-center">loading network…</p>}>
             {net && <AgentNetwork data={net} onSelect={onSelect} compact />}
           </Suspense>
@@ -303,7 +303,7 @@ export default function Agents() {
 
       <div className="flex flex-wrap items-center gap-3">
         <span className="cap">TAB. 8 · MEMBERS</span>
-        <Link to="/board" className="btn">
+        <Link to="/team?tab=work" className="btn">
           Work board →
         </Link>
         <Link to="/approvals" className="btn">

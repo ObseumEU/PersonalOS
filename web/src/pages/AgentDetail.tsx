@@ -122,7 +122,7 @@ function OrgPanel({ a, onSaved }: { a: Detail; onSaved: (p: Promise<unknown>, do
             </select>
           </label>
         )}
-        <Link to="/org" className="btn ml-auto">
+        <Link to="/team?tab=structure" className="btn ml-auto">
           Org →
         </Link>
       </div>
@@ -179,7 +179,7 @@ export default function AgentDetail() {
         {a.role && <Pill>{a.role.replace(/_/g, " ")}</Pill>}
         {a.team && <span className="cap">team {a.team}</span>}
         {a.reports_to_name && (
-          <Link to={`/agents/${a.reports_to}`} className="cap hover:text-accent!">
+          <Link to={`/team/${a.reports_to}`} className="cap hover:text-accent!">
             reports to {a.reports_to_name}
           </Link>
         )}
@@ -210,7 +210,7 @@ export default function AgentDetail() {
         <span className="cap">
           created by {a.created_by_name ?? "platform"} · heartbeat {ago(a.last_seen_at)}
         </span>
-        <span className="ml-auto flex flex-wrap gap-2">
+        {a.kind !== "human" && (<span className="ml-auto flex flex-wrap gap-2">
           {a.paused ? (
             <button className="btn" onClick={() => act(agentsApi.action(id, "resume"))}>
               <Play size={13} /> Resume
@@ -248,7 +248,7 @@ export default function AgentDetail() {
               </button>
             )
           )}
-        </span>
+        </span>)}
       </div>
       {notice && <p className="cap break-all text-accent!">{notice}</p>}
       {error && <p className="cap text-red-400!">{error}</p>}

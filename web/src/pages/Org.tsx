@@ -36,7 +36,7 @@ function Branch({
         className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-line py-2 pr-4 hover:bg-raised"
         style={{ paddingLeft: 16 + depth * 28 }}
       >
-        <Link to={`/agents/${m.id}`} className="flex min-w-0 items-center gap-2">
+        <Link to={`/team/${m.id}`} className="flex min-w-0 items-center gap-2">
           {depth > 0 && <span className="cap text-ink-3">└</span>}
           <ActorChip a={m} />
           <Pill>{label(m.role)}</Pill>
@@ -96,10 +96,10 @@ export default function Org() {
         sub="Everyone reports to the Project manager, who reports to you. The PM splits team work into steps and assigns them by role; agents hand work to each other and ask peers directly. Change a member's role, team or manager on its page."
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Link to="/network?view=org" className="btn">
+        <Link to="/team?tab=network&view=org" className="btn">
           Org chart in 3D →
         </Link>
-        <Link to="/agents" className="btn">
+        <Link to="/team" className="btn">
           Agents →
         </Link>
       </div>

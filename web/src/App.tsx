@@ -3,22 +3,19 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { getMe, logout, type Me } from "./api";
 import Shell, { Mark } from "./components/Shell";
 import AgentDetail from "./pages/AgentDetail";
-import Agents from "./pages/Agents";
 import Approvals from "./pages/Approvals";
 import Assistant from "./pages/Assistant";
 import Automations from "./pages/Automations";
 import Calendar from "./pages/Calendar";
-import Board from "./pages/Board";
 import Chat from "./pages/Chat";
 import Connectors from "./pages/Connectors";
 import Files from "./pages/Files";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import Invite from "./pages/Invite";
-import NetworkPage from "./pages/Network";
 import Notes from "./pages/Notes";
 import Projects from "./pages/Projects";
-import Org from "./pages/Org";
+import Team from "./pages/Team";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
@@ -55,11 +52,13 @@ export default function App() {
         <Route path="/today" element={<Today />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/inbox" element={<InboxClarify />} />
-        <Route path="/agents" element={<Agents />} />
+        <Route path="/team" element={<Team />} />
+        <Route path="/team/:id" element={<AgentDetail />} />
+        <Route path="/agents" element={<Navigate to="/team" replace />} />
         <Route path="/agents/:id" element={<AgentDetail />} />
-        <Route path="/network" element={<NetworkPage />} />
-        <Route path="/org" element={<Org />} />
-        <Route path="/board" element={<Board />} />
+        <Route path="/network" element={<KeepQuery to="/team" tab="network" />} />
+        <Route path="/org" element={<Navigate to="/team?tab=structure" replace />} />
+        <Route path="/board" element={<Navigate to="/team?tab=work" replace />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/automations" element={<Automations />} />
@@ -79,4 +78,11 @@ export default function App() {
       </Routes>
     </Shell>
   );
+}
+
+/** An old path that now lives under a tab; its query (e.g. ?view=org) stays. */
+function KeepQuery({ to, tab }: { to: string; tab: string }) {
+  const q = new URLSearchParams(window.location.search);
+  q.set("tab", tab);
+  return <Navigate to={`${to}?${q}`} replace />;
 }
