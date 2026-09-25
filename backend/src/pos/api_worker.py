@@ -181,7 +181,8 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     engine, why, model = engines.choose(conn, ctx.actor_id)
     if engine is None:
         raise HTTPException(409, f"no runtime available: {why}")
-    res = runner.start_external(conn, runner.RunRequest(ctx.actor_id, body.kind, "", task_id=tid, engine=engine))
+    res = runner.start_external(conn, runner.RunRequest(ctx.actor_id, body.kind, "", task_id=tid, engine=engine,
+                                                        model=model))
     if res.status == "blocked":
         raise HTTPException(409, res.error)
     return {"run_id": res.run_id, "engine": engine, "model": model}

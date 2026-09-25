@@ -174,10 +174,32 @@ def cancel_all(conn: sqlite3.Connection, reason: str, actor_id: int | None = Non
     return [i for i in ids if cancel(conn, i, reason)]
 
 
+def reported_model(jsonl: str) -> str | None:
+    """The model a CLI says it used: Claude's `system/init` event, or any
+    top-level `model` field in Codex's JSON events."""
+    for line in jsonl.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            for m in (ev.get("model"), (ev.get("payload") or {}).get("model") if isinstance(ev.get("payload"), dict) else None):
+                if isinstance(m, str) and m:
+                    return m
+    return None
+
+
+def _model_for(req: "RunRequest") -> str | None:
+    from . import engines
+
+    return req.model or engines.default_model(req.engine)
+
+
 def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "", jsonl: str = "") -> sqlite3.Row:
     conn.execute(
-        "UPDATE runs SET status = ?, ended_at = ?, input_tokens = ?, output_tokens = ?, detail = ? WHERE id = ?",
-        (status, now_iso(), tin, tout, detail[:4000], run_id),
+        "UPDATE runs SET status = ?, ended_at = ?, input_tokens = ?, output_tokens = ?, detail = ?, "
+        "model = COALESCE(?, model) WHERE id = ?",
+        (status, now_iso(), tin, tout, detail[:4000], reported_model(jsonl) if jsonl else None, run_id),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
@@ -188,8 +210,9 @@ def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "
 
 def run(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
     cur = conn.execute(
-        "INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) VALUES (?, ?, ?, 'running', ?, ?)",
-        (req.actor_id, req.task_id, req.kind, now_iso(), req.engine),
+        "INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine, model) "
+        "VALUES (?, ?, ?, 'running', ?, ?, ?)",
+        (req.actor_id, req.task_id, req.kind, now_iso(), req.engine, _model_for(req)),
     )
     run_id = cur.lastrowid
     ctx = Ctx(actor_id=req.actor_id, via="runner", run_id=run_id)
@@ -301,8 +324,9 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
 
 def start_external(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
     cur = conn.execute(
-        "INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) VALUES (?, ?, ?, 'running', ?, ?)",
-        (req.actor_id, req.task_id, req.kind, now_iso(), req.engine),
+        "INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine, model) "
+        "VALUES (?, ?, ?, 'running', ?, ?, ?)",
+        (req.actor_id, req.task_id, req.kind, now_iso(), req.engine, _model_for(req)),
     )
     run_id = cur.lastrowid
     audit.log(conn, Ctx(req.actor_id, via="worker", run_id=run_id), "run_start",

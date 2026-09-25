@@ -288,9 +288,19 @@ def test_auto_is_codex_first_and_switches_to_claude_on_the_codex_limit(setup, fa
     assert engines.paused_until(conn, "codex").startswith("2099-09-29")
     # The next run goes to Claude right away and finishes the task.
     assert worker.step() == "ok"
-    runs = conn.execute("SELECT engine, status FROM runs WHERE actor_id = ? ORDER BY id", (agent_id,)).fetchall()
+    runs = conn.execute("SELECT engine, status, model FROM runs WHERE actor_id = ? ORDER BY id", (agent_id,)).fetchall()
     assert [(r["engine"], r["status"]) for r in runs] == [("codex", "error"), ("claude", "ok")]
+    assert runs[1]["model"] == "claude-opus-5-5"  # the fallback's model, as the CLI reported it
     assert tasks.get(conn, owner, t["id"])["status"] == "review"
     # After the reset Codex is first again.
     conn.execute("UPDATE engine_limits SET paused_until = '2000-01-01T00:00:00+00:00' WHERE engine = 'codex'")
     assert engines.choose(conn, agent_id)[0] == "codex"
+
+
+def test_run_records_the_model_the_cli_reports():
+    from pos import runner
+
+    assert runner.reported_model('{"type":"system","subtype":"init","model":"claude-opus-5-5"}') == "claude-opus-5-5"
+    assert runner.reported_model('{"type":"thread.started"}\n{"type":"turn_context","payload":{"model":"gpt-5.5-codex"}}') \
+        == "gpt-5.5-codex"
+    assert runner.reported_model('{"type":"thread.started"}') is None

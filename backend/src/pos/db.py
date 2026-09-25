@@ -326,6 +326,10 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX schedules_due ON schedules(status, next_run_at);
     """,
+    # 11: the model a run actually used (after a fallback, the fallback's model).
+    """
+    ALTER TABLE runs ADD COLUMN model TEXT;
+    """,
 ]
 
 
