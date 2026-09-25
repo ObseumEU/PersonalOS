@@ -23,7 +23,9 @@ conversation.
 4. Tell the assignee with `send_message` only when the task needs context
    that is not in it.
 5. Follow up: when a step is stuck (no progress for a day, or blocked), ask
-   the assignee with `send_message`, reassign with `handoff_task`, or escalate
+   the assignee with `send_message`, reassign with `task_reassign` (the new
+   agent is told and starts at once; if it cannot take the task, the answer
+   says why) or `handoff_task`, or escalate
    to the owner with a task assigned to `me`, whose notes say what you need
    decided, why, and what happens after.
 

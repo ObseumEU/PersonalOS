@@ -3,7 +3,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { type Actor, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
 import Markdown from "../Markdown";
 import { Panel } from "../ui";
+import AgentPicker from "./AgentPicker";
 import { AssigneeChip, StatePill } from "./bits";
+import TaskLive from "./TaskLive";
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -186,10 +188,12 @@ export default function TaskDetail({
           aria-label="Title"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <AssigneeChip type={task.assignee_type} name={task.assignee_name} />
+          <AgentPicker task={task} align="left" onReassigned={() => run(Promise.resolve())} />
           <StatePill task={task} />
           {task.progress_note && <span className="cap">{task.progress_note}</span>}
         </div>
+
+        <TaskLive taskRef={task.ref} version={task.updated_at} onChange={() => run(Promise.resolve())} />
 
         <Description task={task} onSave={(notes) => notes !== task.notes && save({ notes })} />
 
@@ -336,6 +340,9 @@ export default function TaskDetail({
             <button type="button" className="btn" onClick={() => run(tasksApi.complete(task.ref))}>
               <Check size={14} /> Complete
             </button>
+          )}
+          {task.status !== "done" && (
+            <AgentPicker task={task} trigger="button" align="left" onReassigned={() => run(Promise.resolve())} />
           )}
           {agentWork && task.status !== "done" && (
             <button

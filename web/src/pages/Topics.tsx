@@ -1,7 +1,8 @@
 import { Archive, ArrowLeft, Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AssigneeChip, StatePill } from "../components/tasks/bits";
+import AgentPicker from "../components/tasks/AgentPicker";
+import { StatePill } from "../components/tasks/bits";
 import { refreshTopics } from "../components/TopicInput";
 import { PageHeader, Panel } from "../components/ui";
 import { type Topic, type TopicDetail, fmtDate, fmtSize, notesApi, topicsApi } from "../filesApi";
@@ -168,15 +169,16 @@ function TopicPage({ slug }: { slug: string }) {
           {topic.open.map((t) => {
             const due = dueLabel(t);
             return (
-              <Link key={t.id} to={`/tasks?view=next&task=${t.ref}`} className="grid grid-cols-[44px_minmax(0,1fr)_auto_64px] items-center gap-2.5 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
+              <div key={t.id} className="grid grid-cols-[44px_minmax(0,1fr)_auto_64px] items-center gap-2.5 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
                 <span className="cap">{t.ref}</span>
-                <span className="flex min-w-0 items-center gap-2">
+                <Link to={`/tasks?view=next&task=${t.ref}`} className="flex min-w-0 items-center gap-2 hover:text-accent">
                   <span className="truncate text-sm">{t.title}</span>
                   <StatePill task={t} />
-                </span>
-                <AssigneeChip type={t.assignee_type} name={t.assignee_name} />
+                </Link>
+                {/* Same picker and endpoint as Tasks: the new agent is told and starts at once. */}
+                <AgentPicker task={t} onReassigned={() => load()} />
                 <span className={`cap text-right ${due.urgent ? "text-accent!" : ""}`}>{due.text}</span>
-              </Link>
+              </div>
             );
           })}
         </Panel>

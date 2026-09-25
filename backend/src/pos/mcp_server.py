@@ -69,6 +69,8 @@ TOOL_PERMISSIONS = {
     "hr_overview": "hr:read",
     # Your own task needs tasks:claim, someone else's tasks:write (checked in pos.org).
     "handoff_task": "tasks:read", "org_chart": "tasks:read",
+    # Reassign a task and wake the new agent (pos.reassign); the PM routes work with it.
+    "task_reassign": "tasks:write",
     # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.
     "tools_list": "tasks:read", "tools_get": "tasks:read",
     "tools_publish": "tasks:claim", "tools_record_use": "tasks:claim",
@@ -404,6 +406,17 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
         with session(ctx, "handoff_task", task=task, to=to) as (conn, c):
             return org.handoff(conn, c, tasks.parse_id(task), to, note)
+
+    @mcp.tool(description="Reassign a task to another member (name, 'me' or 'ai'). The previous assignee's "
+                          "claim is released and its running run stopped; the new agent gets a DM with the task "
+                          "and starts on it right away. If the agent cannot take it (permissions, private task, "
+                          "paused, kill switch, budget) nothing changes and the answer says why.")
+    def task_reassign(ctx: Context, task_id: str, to: str, note: str = "") -> dict:
+        from . import reassign
+
+        with session(ctx, "task_reassign", task_id=task_id, to=to) as (conn, c):
+            out = reassign.reassign(conn, c, tasks.parse_id(task_id), to, note)
+            return {**{k: v for k, v in out.items() if k != "task"}, "task": brief(out["task"])}
 
     @mcp.tool(description="The team: each member's role (profession), team, whom they report to, status. "
                           "Use it to find who should do a piece of work.")
