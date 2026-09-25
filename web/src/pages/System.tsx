@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { type Engines, agentsApi } from "../agentsApi";
 import KnowledgeGraph from "../components/LazyGraph";
 import { PageHeader, Panel, SampleBadge } from "../components/ui";
 import { GRAPH_LABELS, SUBSYSTEMS } from "../sample";
@@ -48,9 +49,11 @@ const DEPLOY_COLOR: Record<Deploy["status"], string> = {
 export default function System() {
   const [api_, setApi] = useState<{ version: string; phase: string } | null>(null);
   const [deploys, setDeploys] = useState<Deploy[]>([]);
+  const [engines, setEngines] = useState<Engines | null>(null);
   useEffect(() => {
     api<{ version: string; phase: string }>("/api/system").then(setApi, () => setApi(null));
     api<Deploy[]>("/api/deploys").then(setDeploys, () => setDeploys([]));
+    agentsApi.engines().then(setEngines, () => setEngines(null));
   }, []);
 
   return (
@@ -93,6 +96,37 @@ export default function System() {
           ))}
         </div>
       </div>
+      {engines && (
+        <Panel fig="TAB. 18" title="Runtimes and subscriptions" right={`default: ${engines.default} · auto = Claude first, Codex as fallback`}>
+          <div className="grid grid-cols-1 md:grid-cols-2">
+            <div className="flex flex-col gap-1.5 border-b border-line px-4 py-3 md:border-r md:border-b-0">
+              <span className="flex items-center gap-2 text-sm">
+                <span className={`h-1.5 w-1.5 rounded-full ${engines.claude.paused_until ? "bg-amber-300" : "bg-accent"}`} />
+                Claude CLI · claude-opus-5-5
+                <span className="cap ml-auto">{engines.claude.paused_until ? `limit until ${new Date(engines.claude.paused_until).toLocaleString("en-GB")}` : "available"}</span>
+              </span>
+              <span className="cap">
+                5 h: {engines.claude.window_5h.runs} runs · {engines.claude.window_5h.tokens.toLocaleString()} tokens · ${engines.claude.window_5h.cost_usd} · 7 days:{" "}
+                {engines.claude.window_7d.runs} runs · ${engines.claude.window_7d.cost_usd}
+              </span>
+              {engines.claude.last_limit?.resets_at && (
+                <span className="cap">
+                  {engines.claude.last_limit.window ?? "window"} {engines.claude.last_limit.state ?? ""} · resets{" "}
+                  {new Date(engines.claude.last_limit.resets_at).toLocaleString("en-GB")}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5 px-4 py-3">
+              <span className="flex items-center gap-2 text-sm">
+                <span className={`h-1.5 w-1.5 rounded-full ${engines.codex.can_run ? "bg-accent" : "bg-amber-300"}`} />
+                Codex CLI · ChatGPT subscription
+                <span className="cap ml-auto">{engines.codex.can_run ? "available" : "paused by Rozpočtář"}</span>
+              </span>
+              <span className="cap">level: {engines.codex.report?.level ?? "no check yet"}</span>
+            </div>
+          </div>
+        </Panel>
+      )}
       <Panel fig="TAB. 17" title="Deploys" right="agents merge to main · the deployer checks, ships or reverts">
         {deploys.length === 0 && (
           <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">

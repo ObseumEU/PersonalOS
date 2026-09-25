@@ -100,7 +100,7 @@ def _heuristic(conn: sqlite3.Connection, task: dict) -> dict:
         "two_minutes": words <= 4 and assignee == "me",
         "definition_of_done": None,
         "steps": [],
-        "rationale": f"Rule-based suggestion ({reason}). Codex was not used.",
+        "rationale": f"Rule-based suggestion ({reason}). No AI engine was available.",
     }
 
 
@@ -112,19 +112,25 @@ def _codex(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> dict | None:
         agents=", ".join(agent_names) or "none yet", source=task["source"],
         text=f"{task['title']}\n{task['notes']}".strip().replace("</item>", ""),
     )
+    from . import engines
+
+    assistant = actors.assistant_id(conn)
+    engine, _why, model = engines.choose(conn, assistant)
+    if engine is None or not runner.available(engine):
+        return None
     res = runner.run(conn, runner.RunRequest(
-        actor_id=actors.assistant_id(conn), kind="suggest", prompt=prompt,
-        task_id=task["id"], output_schema=SCHEMA, timeout_s=150,
+        actor_id=assistant, kind="suggest", prompt=prompt,
+        task_id=task["id"], output_schema=SCHEMA, timeout_s=150, engine=engine, model=model,
     ))
     if res.status != "ok" or not res.data:
         return None
-    return {**res.data, "run_id": res.run_id}
+    return {**res.data, "run_id": res.run_id, "engine_used": engine}
 
 
 def suggest(conn: sqlite3.Connection, ctx: Ctx, task_id: int, use_codex: bool = True) -> dict:
     task = tasks.get(conn, ctx, task_id)
-    data = _codex(conn, ctx, task) if use_codex and runner.available() else None
-    engine = "codex" if data else "rules"
+    data = _codex(conn, ctx, task) if use_codex else None
+    engine = data.pop("engine_used", "ai") if data else "rules"
     if data is None:
         data = _heuristic(conn, task)
     data["engine"] = engine

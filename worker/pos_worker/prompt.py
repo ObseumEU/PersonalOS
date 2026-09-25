@@ -10,14 +10,14 @@ def _messages(msgs: list[dict]) -> str:
     return "\n".join(out)
 
 
-def build_task_prompt(me: dict, task: dict, context: list[dict]) -> str:
+def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardrails: bool = True) -> str:
     steps = "\n".join(
         f"  - {s['ref']} [{s['status']}] {s['title']} (assignee: {s.get('assignee_name') or 'unassigned'})"
         for s in task.get("steps", [])
     )
     parts = [
-        me.get("guardrails", ""),
-        "---",
+        me.get("guardrails", "") if include_guardrails else "",
+        "---" if include_guardrails else "",
         f"# You are {me['name']}",
         me.get("instructions", "").strip(),
         f"# Your task {task['ref']}: {task['title']}",

@@ -35,6 +35,30 @@ Commands the worker runs itself can be checked with
 the owner). Outside content is wrapped with `POST /api/worker/wrap` before it
 goes into a prompt.
 
+## Runtimes: Claude first, Codex as fallback
+
+Every agent runs on **Claude Code CLI** (`claude -p`, model
+`claude-opus-5-5`) by default, or on **Codex CLI**. Per agent you can pick
+`claude`, `codex` or `auto` (Claude, then Codex when Claude hits its usage
+limit) and the Claude model, on the agent's page. Platform defaults:
+`POS_AGENT_RUNTIME=claude`, `POS_CLAUDE_MODEL=claude-opus-5-5`.
+
+PersonalOS chooses the runtime for every run and tells the worker. Each
+subscription has its own accounting: Codex through Rozpočtář (`pos.budget`),
+Claude through `pos.engines` (tokens and cost from the `result` event, the
+5-hour window from `rate_limit_event`; a usage-limit answer pauses Claude until
+its reset). Both are on the System page.
+
+A Claude agent runs with `--restricted` (no command-running tools, no personal
+settings), an allow-list of tools (`WORKER_CLAUDE_TOOLS`, default: the `pos`
+MCP server, reading, editing in its work folder, web search), the
+constitution as `--append-system-prompt-file`, and the `pos` MCP server with
+its own key. Mid-run messages continue the same session with `--resume`.
+
+Login: on a PC where `claude` is logged in, workers can run directly
+(`ops/start-agents.ps1`). In Docker, set `CLAUDE_CODE_OAUTH_TOKEN` (run
+`claude setup-token` once).
+
 ## Running the agents
 
 Keys: open the agent in PersonalOS → **New key**, and put it in `.env`

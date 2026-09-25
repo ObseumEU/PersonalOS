@@ -229,6 +229,21 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
     return {**detail(conn, agent_id), "api_key": key}
 
 
+def set_engine(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, engine: str | None,
+               model: str | None = None) -> dict:
+    """codex, claude, auto, or None for the platform default; the Claude model (owner only)."""
+    from . import engines
+
+    if not actors.get(conn, ctx.actor_id)["is_owner"]:
+        raise _Forbidden("only the owner chooses an agent's runtime")
+    if engine not in (None, *engines.CHOICES):
+        raise AgentError(f"engine must be one of {engines.CHOICES}")
+    _agent_row(conn, agent_id)
+    versioning.update(conn, ctx, "actor", agent_id, {"engine": engine, "model": model or None}, action="set_engine")
+    conn.commit()
+    return detail(conn, agent_id)
+
+
 def rotate_key(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> str:
     """Give an agent a new API key and revoke the old ones (owner only)."""
     if not actors.get(conn, ctx.actor_id)["is_owner"]:
@@ -400,6 +415,18 @@ def _status(row: sqlite3.Row, working: int, approvals_waiting: int) -> str:
     return "idle"
 
 
+def _default_engine() -> str:
+    from .engines import default_engine
+
+    return default_engine()
+
+
+def _claude_tokens(conn: sqlite3.Connection, actor_id: int, since: datetime) -> int:
+    return conn.execute(
+        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM engine_usage WHERE engine = 'claude' "
+        "AND actor_id = ? AND at >= ?", (actor_id, since.isoformat(timespec="seconds"))).fetchone()[0]
+
+
 def overview(conn: sqlite3.Connection) -> list[dict]:
     """Everyone for the Agents screen: people and agents, with their queue."""
     from .hr import store as hr_store
@@ -441,7 +468,8 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "archived": bool(row["archived_at"]), "created_by": row["created_by"],
             "created_by_name": names.get(row["created_by"] or (p["created_by"] if p else None)),
             "created_at": row["created_at"], "expires_at": p["expires_at"] if p else None,
-            "tokens_24h": budget_store.tokens_between(conn, now - timedelta(days=1), now, str(row["id"])),
+            "engine": row["engine"], "engine_effective": row["engine"] or _default_engine(), "model": row["model"],
+            "tokens_24h": budget_store.tokens_between(conn, now - timedelta(days=1), now, str(row["id"])) + _claude_tokens(conn, row["id"], now - timedelta(days=1)),
             "tokens_7d": budget_store.tokens_between(conn, now - timedelta(days=7), now, str(row["id"])),
             "daily_cap": c["daily_cap"] if c else None,
             "queued": q["queued"] or 0, "working": q["working"] or 0, "review": q["review"] or 0,

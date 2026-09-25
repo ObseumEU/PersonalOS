@@ -16,14 +16,13 @@ import time
 from collections.abc import Callable
 
 from .client import Blocked, PosClient
-from .codex import CodexSession
 from .prompt import build_task_prompt, injection
 
 log = logging.getLogger("pos_worker")
 
 
 class Worker:
-    def __init__(self, client: PosClient, new_session: Callable[[], CodexSession], *, poll_wait: int = 60,
+    def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
                  max_resumes: int = 6, sleep: Callable[[float], None] = time.sleep):
         self.client = client
         self.new_session = new_session
@@ -65,19 +64,22 @@ class Worker:
         # Ask for the run first: if the kill switch or the budget says no, the
         # task stays in the queue untouched instead of hanging in "working".
         try:
-            run_id = self.client.start_run(ref)
+            started = self.client.start_run(ref)
         except Blocked as e:
             log.info("run for %s blocked: %s", ref, e)
             self.sleep(min(self.poll_wait, 30))
             return "blocked"
         try:
+            run_id = started["run_id"]
             self.client.claim(ref)
         except Exception as e:  # someone else took it, or it changed meanwhile
-            self.client.finish_run(run_id, "cancelled", "", f"could not claim {ref}: {e}")
+            self.client.finish_run(started["run_id"], "cancelled", "", f"could not claim {ref}: {e}")
             return "skipped"
 
-        session = self.new_session()
-        prompt = build_task_prompt(self.me, task, self.context)
+        engine = started.get("engine") or "codex"
+        session = self.new_session(engine, started.get("model"), self.me)
+        # Claude takes the constitution as a system prompt; Codex gets it at the top of the prompt.
+        prompt = build_task_prompt(self.me, task, self.context, include_guardrails=engine != "claude")
         self.context = []
         pending_fyi: list[dict] = []
         resumes = 0

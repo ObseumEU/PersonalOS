@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 pytest.importorskip("pos_worker")
+from pos_worker.claude import ClaudeSession  # noqa: E402
 from pos_worker.client import PosClient  # noqa: E402
 from pos_worker.codex import CodexSession  # noqa: E402
 from pos_worker.loop import Worker  # noqa: E402
@@ -37,18 +38,51 @@ else:
 '''
 
 
-@pytest.fixture
-def fake_codex(tmp_path):
-    script = tmp_path / "fake_codex.py"
-    script.write_text(FAKE_CODEX)
+FAKE_CLAUDE = r'''
+import json, sys, time
+args = sys.argv[1:]
+prompt = sys.stdin.read()
+assert "--restricted" in args and "--append-system-prompt-file" in args and "--mcp-config" in args
+sid = args[args.index("--resume") + 1] if "--resume" in args else "sess-42"
+def out(ev):
+    print(json.dumps(ev), flush=True)
+out({"type": "system", "subtype": "init", "session_id": sid, "model": args[args.index("--model") + 1]})
+if "--resume" in args:
+    out({"type": "assistant", "session_id": sid, "message": {"content": [{"type": "text", "text": "Adapted: " + prompt.splitlines()[0]}]}})
+    out({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "result": "Adapted: " + prompt.splitlines()[0],
+         "total_cost_usd": 0.01, "usage": {"input_tokens": 40, "output_tokens": 12, "cache_creation_input_tokens": 0}})
+else:
+    out({"type": "rate_limit_event", "session_id": sid, "rate_limit_info": {"status": "allowed", "resetsAt": 1790368200, "rateLimitType": "five_hour"}})
+    for i in range(4):
+        time.sleep(0.5)
+        out({"type": "assistant", "session_id": sid, "message": {"content": [{"type": "tool_use", "name": "mcp__pos__report_progress"}]}})
+        out({"type": "user", "session_id": sid, "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
+    out({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "result": "Finished without changes",
+         "total_cost_usd": 0.02, "usage": {"input_tokens": 90, "output_tokens": 20, "cache_creation_input_tokens": 10}})
+'''
+
+
+def _wrap(tmp_path, name, code):
+    script = tmp_path / f"fake_{name}.py"
+    script.write_text(code)
     if sys.platform == "win32":
-        cmd = tmp_path / "codex.cmd"
-        cmd.write_text(f'@"{sys.executable}" "{script}" %*\r\n')
+        cmd = tmp_path / f"{name}.cmd"
+        cmd.write_text(f'@set PYTHONUTF8=1\r\n@"{sys.executable}" "{script}" %*\r\n')
         return str(cmd)
-    sh = tmp_path / "codex"
+    sh = tmp_path / name
     sh.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n')
     sh.chmod(0o755)
     return str(sh)
+
+
+@pytest.fixture
+def fake_codex(tmp_path):
+    return _wrap(tmp_path, "codex", FAKE_CODEX)
+
+
+@pytest.fixture
+def fake_claude(tmp_path):
+    return _wrap(tmp_path, "claude", FAKE_CLAUDE)
 
 
 @pytest.fixture
@@ -66,12 +100,29 @@ def setup(tmp_path, monkeypatch):
     client.__exit__(None, None, None)
 
 
-def worker_for(client, key, codex, workdir):
-    return Worker(PosClient("http://testserver", key, http=client),
-                  lambda: CodexSession(binary=codex, workdir=str(workdir)), poll_wait=0, sleep=lambda s: None)
+def worker_for(client, key, binary, workdir):
+    def new_session(engine, model, me):
+        if engine == "claude":
+            return ClaudeSession(binary=binary, workdir=str(workdir), model=model, system_prompt=me["guardrails"],
+                                 mcp_servers={"pos": {"type": "http", "url": "http://x/mcp"}})
+        return CodexSession(binary=binary, workdir=str(workdir))
+
+    return Worker(PosClient("http://testserver", key, http=client), new_session, poll_wait=0, sleep=lambda s: None)
 
 
-def test_worker_runs_a_task_and_injects_a_message(setup, fake_codex, tmp_path):
+def _inject_when_running(tmp_path, owner, agent_id, text):
+    c = connect(Settings(data_dir=tmp_path).db_path)
+    for _ in range(100):
+        if c.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (agent_id,)).fetchone():
+            break
+        time.sleep(0.1)
+    time.sleep(0.3)
+    agents.send_message(c, owner, agent_id, text, priority="change_plan")
+    c.close()
+
+
+def test_worker_runs_a_task_and_injects_a_message(setup, fake_codex, tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
     client, conn, owner, agent_id, key = setup
     from pos import tasks
 
@@ -123,3 +174,41 @@ def test_worker_api_needs_an_agent_key(setup):
     assert client.get("/api/worker/me").status_code == 401
     r = client.get("/api/worker/me", headers={"Authorization": f"Bearer {setup[4]}"})
     assert r.status_code == 200 and "Ústava" in r.json()["guardrails"]
+
+
+def test_claude_worker_injects_via_resume_and_records_usage(setup, fake_claude, tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    client, conn, owner, agent_id, key = setup
+    from pos import engines, tasks
+
+    t = tasks.create(conn, owner, {"title": "Draft the release notes", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    worker = worker_for(client, key, fake_claude, tmp_path)
+    th = threading.Thread(target=_inject_when_running, args=(tmp_path, owner, agent_id, "Mention the A2A facade"))
+    th.start()
+    assert worker.step() == "ok"
+    th.join()
+    run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
+    assert run["engine"] == "claude" and run["status"] == "ok" and run["input_tokens"] == 40
+    done = tasks.get(conn, owner, t["id"])
+    assert done["status"] == "review" and "Adapted" in done["progress_note"]
+    usage = conn.execute("SELECT * FROM engine_usage WHERE actor_id = ?", (agent_id,)).fetchall()
+    assert usage and usage[0]["cost_usd"] > 0
+    st = engines.status(conn)["claude"]
+    assert st["window_5h"]["runs"] == 1 and st["paused_until"] is None
+
+
+def test_claude_usage_limit_pauses_claude_and_auto_falls_back(setup, monkeypatch):
+    client, conn, owner, agent_id, key = setup
+    from pos import agents as agents_mod, engines
+
+    run_id = conn.execute("INSERT INTO runs (actor_id, kind, status, started_at, engine) VALUES (?, 'task', 'ok', 'x', 'claude')",
+                          (agent_id,)).lastrowid
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    jsonl = '{"type":"result","is_error":true,"result":"Claude AI usage limit reached|4102444800","usage":{}}'
+    engines.record_claude(conn, row, jsonl)
+    assert engines.paused_until(conn, "claude").startswith("2100-01-01")
+    assert engines.choose(conn, agent_id)[0] is None or engines.choose(conn, agent_id)[0] == "codex"
+    agents_mod.set_engine(conn, owner, agent_id, "auto")
+    engine, why, _ = engines.choose(conn, agent_id)
+    assert engine == "codex"  # Claude is paused, so auto falls back to Codex

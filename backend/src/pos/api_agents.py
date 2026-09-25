@@ -111,6 +111,23 @@ def restore(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return agents.restore(conn, ctx, agent_id)
 
 
+class EngineIn(BaseModel):
+    engine: str | None = None
+    model: str | None = None
+
+
+@router.put("/agents/{agent_id}/engine")
+def set_engine(agent_id: int, body: EngineIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return _wrap(lambda: agents.set_engine(conn, ctx, agent_id, body.engine, body.model))
+
+
+@router.get("/engines")
+def engine_status(conn=Depends(get_db)):
+    from . import engines
+
+    return engines.status(conn)
+
+
 @router.post("/agents/{agent_id}/key")
 def rotate_key(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return {"api_key": _wrap(lambda: agents.rotate_key(conn, ctx, agent_id))}

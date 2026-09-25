@@ -24,6 +24,9 @@ export type Agent = {
   created_by_name: string | null;
   created_at: string;
   expires_at: string | null;
+  engine: "claude" | "codex" | "auto" | null;
+  engine_effective: "claude" | "codex" | "auto";
+  model: string | null;
   tokens_24h: number;
   tokens_7d: number;
   daily_cap: number | null;
@@ -93,6 +96,17 @@ export type Approval = {
   result?: { status: string; owner_task?: string; error?: string } | null;
 };
 
+export type Engines = {
+  default: string;
+  codex: { report: { level?: string; windows?: Record<string, { used_pct?: number; resets_at?: string }> } | null; can_run: boolean };
+  claude: {
+    window_5h: { tokens: number; cost_usd: number; runs: number };
+    window_7d: { tokens: number; cost_usd: number; runs: number };
+    paused_until: string | null;
+    last_limit: { window: string | null; resets_at: string | null; state: string | null; reason: string | null } | null;
+  };
+};
+
 export type FreezeState = { frozen: boolean; reason?: string; updated_at?: string };
 
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
@@ -113,6 +127,9 @@ export const agentsApi = {
   board: () => api<BoardRow[]>("/api/board"),
   approvals: (status: "pending" | "all" = "pending") => api<Approval[]>(`/api/approvals?status=${status}`),
   decide: (id: number, approve: boolean, comment?: string) => post<Approval>(`/api/approvals/${id}/decide`, { approve, comment }),
+  setEngine: (id: number, engine: string | null, model: string | null) =>
+    api<AgentDetail>(`/api/agents/${id}/engine`, { method: "PUT", body: JSON.stringify({ engine, model }) }),
+  engines: () => api<Engines>("/api/engines"),
   network: (window: string) => api<Network>(`/api/network?window=${window}`),
   freezeState: () => api<FreezeState>("/api/system/freeze"),
   freeze: (reason: string) => post<FreezeState>("/api/system/freeze", { reason }),

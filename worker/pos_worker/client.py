@@ -45,8 +45,9 @@ class PosClient:
     def handback(self, ref: str, note: str) -> dict:
         return self._post(f"/api/worker/tasks/{ref}/handback", {"note": note})
 
-    def start_run(self, ref: str | None, kind: str = "task") -> int:
-        return self._post("/api/worker/runs", {"task_id": ref, "kind": kind})["run_id"]
+    def start_run(self, ref: str | None, kind: str = "task") -> dict:
+        """{"run_id", "engine", "model"}: PersonalOS picks the runtime (Claude or Codex)."""
+        return self._post("/api/worker/runs", {"task_id": ref, "kind": kind})
 
     def heartbeat(self, run_id: int) -> dict:
         return self._post(f"/api/worker/runs/{run_id}/heartbeat")

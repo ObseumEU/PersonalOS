@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 
-# Codex CLI (the agent's engine) and git for agents that work on repositories.
+# Claude Code CLI (default engine), Codex CLI (fallback) and git for repositories.
 RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git ca-certificates \
-    && npm install -g @openai/codex \
+    && npm install -g @anthropic-ai/claude-code @openai/codex \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
