@@ -123,6 +123,32 @@ def propose_instructions(agent_id: int, body: InstructionsIn, conn=Depends(get_d
     return _wrap(lambda: agents.propose_instructions(conn, ctx, agent_id, body.text, body.reason))
 
 
+class InviteIn(BaseModel):
+    email: str
+    name: str
+    reports_to: int | None = None
+    permissions: list[str] | None = None
+    role: str | None = None
+
+
+@router.post("/invites", status_code=201)
+def create_invite(body: InviteIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """A one-time link (7 days) for a new colleague; the token is shown only here."""
+    from . import accounts
+
+    try:
+        return accounts.invite(conn, ctx, **body.model_dump())
+    except accounts.AuthError as e:
+        raise tasks.Invalid(str(e)) from e
+
+
+@router.get("/invites")
+def list_invites(conn=Depends(get_db)):
+    from . import accounts
+
+    return accounts.list_invites(conn)
+
+
 class HireIn(BaseModel):
     name: str
     purpose: str

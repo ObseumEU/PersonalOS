@@ -24,10 +24,8 @@ def test_startup_creates_db_and_files_dir(tmp_path):
 
 def test_login_flow(tmp_path):
     with make_client(tmp_path, password="pw", session_secret="s") as client:
-        assert client.get("/api/auth/me").json() == {
-            "authenticated": False,
-            "login_required": True,
-        }
+        me = client.get("/api/auth/me").json()
+        assert (me["authenticated"], me["login_required"]) == (False, True)
         assert client.get("/api/system").status_code == 401
         assert client.post("/api/auth/login", json={"password": "nope"}).status_code == 401
 
@@ -41,10 +39,8 @@ def test_login_flow(tmp_path):
 
 def test_no_password_means_open_dev_mode(tmp_path):
     with make_client(tmp_path) as client:
-        assert client.get("/api/auth/me").json() == {
-            "authenticated": True,
-            "login_required": False,
-        }
+        me = client.get("/api/auth/me").json()
+        assert (me["authenticated"], me["login_required"], me["is_owner"]) == (True, False, True)
         assert client.get("/api/system").status_code == 200
 
 

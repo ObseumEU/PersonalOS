@@ -1,4 +1,10 @@
-export type Me = { authenticated: boolean; login_required: boolean };
+export type Me = {
+  authenticated: boolean;
+  login_required: boolean;
+  actor_id?: number | null;
+  name?: string | null;
+  is_owner?: boolean;
+};
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -20,6 +26,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const getMe = () => api<Me>("/api/auth/me");
-export const login = (password: string) =>
-  api<Me>("/api/auth/login", { method: "POST", body: JSON.stringify({ password }) });
+export const login = (password: string, email?: string) =>
+  api<Me>("/api/auth/login", { method: "POST", body: JSON.stringify({ password, ...(email ? { email } : {}) }) });
+export const acceptInvite = (token: string, password: string) =>
+  api<Me>("/api/auth/accept", { method: "POST", body: JSON.stringify({ token, password }) });
 export const logout = () => api<Me>("/api/auth/logout", { method: "POST" });

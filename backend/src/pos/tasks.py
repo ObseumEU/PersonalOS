@@ -241,8 +241,15 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         # What a person writes down is theirs unless they hand it over.
         assignee = {"type": "human", "id": me["id"]}
     if owner is None:
-        # Agents create work on behalf of the owner unless they say otherwise.
-        owner = ctx.actor_id if me["kind"] == "human" else actors.owner_id(conn)
+        # A person owns what they write down. An agent works on someone's behalf:
+        # the owner of the task it splits, else the person it reports to, else the owner.
+        if me["kind"] == "human":
+            owner = ctx.actor_id
+        elif parent_id is not None:
+            owner = parent["owner_id"]
+        else:
+            lead = actors.get(conn, me["reports_to"]) if me["reports_to"] else None
+            owner = lead["id"] if lead is not None and lead["kind"] == "human" else actors.owner_id(conn)
     now = now_iso()
     values = {
         "status": "inbox", "visibility": DEFAULT, **fields,

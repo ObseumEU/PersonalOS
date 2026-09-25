@@ -25,9 +25,20 @@ def get_db(settings: Settings = Depends(get_settings)) -> Iterator[sqlite3.Conne
         conn.close()
 
 
-def get_ctx(conn: sqlite3.Connection = Depends(get_db)) -> Ctx:
-    # The web UI is single-user for now: a logged-in session acts as the owner.
-    return Ctx(actors.owner_id(conn), via="api")
+def get_ctx(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> Ctx:
+    """The signed-in person (pos.accounts); the owner's emergency login and a
+    setup without a password act as the owner."""
+    from . import accounts
+    from .auth import session_actor
+
+    aid = session_actor(request)
+    if aid is None:
+        return Ctx(actors.owner_id(conn), via="api")
+    if not accounts.active_actor(conn, aid):
+        from fastapi import HTTPException
+
+        raise HTTPException(401, "this account is disabled")
+    return Ctx(aid, via="api")
 
 
 class TaskIn(BaseModel):

@@ -671,6 +671,31 @@ MIGRATIONS: list[str] = [
     ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id);
     CREATE INDEX tasks_project ON tasks (project_id, status);
     """,
+    # 25: accounts for people (pos.accounts): e-mail login and invitations.
+    """
+    CREATE TABLE human_accounts (
+        actor_id INTEGER PRIMARY KEY REFERENCES actors(id),
+        email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        disabled INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT
+    );
+    CREATE TABLE invites (
+        id INTEGER PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        email TEXT NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT,
+        reports_to INTEGER REFERENCES actors(id),
+        permissions TEXT NOT NULL DEFAULT '[]',
+        invited_by INTEGER NOT NULL REFERENCES actors(id),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used_at TEXT,
+        actor_id INTEGER REFERENCES actors(id)
+    );
+    """,
 ]
 
 

@@ -5,6 +5,7 @@ import { Mark } from "../components/Shell";
 
 export default function Login({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) {
   const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -13,7 +14,7 @@ export default function Login({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) 
     setBusy(true);
     setError(null);
     try {
-      onLoggedIn(await login(password));
+      onLoggedIn(await login(password, email.trim() || undefined));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -29,13 +30,23 @@ export default function Login({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) 
           <span className="font-medium">PersonalOS</span>
         </div>
         <h1 className="mt-6 text-2xl font-light tracking-[-0.02em]">Sign in</h1>
-        <label htmlFor="password" className="cap mt-6 block">
+        <label htmlFor="email" className="cap mt-6 block">
+          E-MAIL <span className="text-ink-3">· empty for the owner's password</span>
+        </label>
+        <input
+          id="email"
+          type="email"
+          autoComplete="username"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="mt-2 h-11 w-full rounded-md border border-line bg-bg px-3 outline-none focus:border-accent"
+        />
+        <label htmlFor="password" className="cap mt-4 block">
           PASSWORD
         </label>
         <input
           id="password"
           type="password"
-          autoFocus
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}

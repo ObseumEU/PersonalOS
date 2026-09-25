@@ -104,3 +104,40 @@ export default function HiringPanel({ members, onHired }: { members: { id: numbe
     </Panel>
   );
 }
+
+/** Invite a person: a one-time link (7 days); they set a password and join. */
+export function InvitePanel() {
+  const [form, setForm] = useState({ name: "", email: "" });
+  const [link, setLink] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <Panel fig="PEOPLE" title="Invite a person" right="a one-time link, valid 7 days">
+      <form
+        className="flex flex-wrap gap-2 p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setError(null);
+          post<{ token: string }>("/api/invites", form).then(
+            (r) => {
+              setLink(`${window.location.origin}/invite/${r.token}`);
+              setForm({ name: "", email: "" });
+            },
+            (e2) => setError(e2.message),
+          );
+        }}
+      >
+        <input className={input} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-label="Name" />
+        <input className={`${input} min-w-56 flex-1`} placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} aria-label="E-mail" />
+        <button type="submit" className="btn-accent" disabled={!form.name.trim() || !form.email.trim()}>
+          Create link
+        </button>
+      </form>
+      {link && (
+        <p className="border-t border-line px-4 py-2.5 text-[13px]">
+          Send this link yourself (shown once): <span className="font-mono text-xs break-all text-accent">{link}</span>
+        </p>
+      )}
+      {error && <p className="cap px-4 py-2 text-red-400!">{error}</p>}
+    </Panel>
+  );
+}

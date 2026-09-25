@@ -276,6 +276,10 @@ klíč v `.env` má přednost.
   nadřazeného úkolu), ne automaticky majitel.
 - Výchozí přihlášení s jedním heslem zůstane jako nouzový účet majitele.
 
+Stav: hotovo (commit „Wave 2 / 4.1“). Hesla scrypt ze standardní knihovny (bez nové
+závislosti). Odkaz pozvánky se zobrazí jednou; e-mail posílá ten, kdo zve (odchozí
+e-mail by šel přes schválení).
+
 ### 4.2 Obrazovka Tým (sloučení Agents + Board + Org + Network)
 
 - `/team` se záložkami: **Lidé a agenti** (adresář, karta člena: role,

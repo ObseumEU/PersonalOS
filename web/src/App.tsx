@@ -14,6 +14,7 @@ import Connectors from "./pages/Connectors";
 import Files from "./pages/Files";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
+import Invite from "./pages/Invite";
 import NetworkPage from "./pages/Network";
 import Notes from "./pages/Notes";
 import Projects from "./pages/Projects";
@@ -43,6 +44,8 @@ export default function App() {
       </div>
     );
   }
+  const invite = window.location.pathname.match(/^\/invite\/([\w-]+)/);
+  if (invite && (!me.authenticated || !me.login_required)) return <Invite token={invite[1]} onJoined={setMe} />;
   if (!me.authenticated) return <Login onLoggedIn={setMe} />;
 
   return (

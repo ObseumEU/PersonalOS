@@ -75,7 +75,7 @@ async def upload(request: Request, background: BackgroundTasks, settings: Settin
     def store():
         conn = connect(settings.db_path)
         try:
-            ctx = get_ctx(conn)
+            ctx = get_ctx(request, conn)
             out = files.upload(
                 conn, ctx, settings.files_dir, upload_file.file, upload_file.filename,
                 topic=_text(form.get("topic")), tags=_text(form.get("tags")),

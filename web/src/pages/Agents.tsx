@@ -5,7 +5,7 @@ import { type Agent, agentsApi } from "../agentsApi";
 import type { Network } from "../components/agents/AgentNetwork";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import FreezeCard from "../components/agents/FreezeCard";
-import HiringPanel from "../components/Hiring";
+import HiringPanel, { InvitePanel } from "../components/Hiring";
 import { PageHeader, Panel } from "../components/ui";
 
 const AgentNetwork = lazy(() => import("../components/agents/AgentNetwork"));
@@ -322,6 +322,7 @@ export default function Agents() {
       {data && (
         <HiringPanel members={data.agents.filter((a) => !a.archived).map((a) => ({ id: a.id, name: a.name, kind: a.kind }))} onHired={load} />
       )}
+      <InvitePanel />
     </div>
   );
 }
