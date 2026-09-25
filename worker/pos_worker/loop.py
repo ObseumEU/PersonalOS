@@ -79,7 +79,7 @@ class Worker:
             return "blocked"
         try:
             run_id = started["run_id"]
-            self.client.claim(ref)
+            self.client.claim(ref, run_id)
         except Exception as e:  # someone else took it, or it changed meanwhile
             self.client.finish_run(started["run_id"], "cancelled", "", f"could not claim {ref}: {e}")
             return "skipped"

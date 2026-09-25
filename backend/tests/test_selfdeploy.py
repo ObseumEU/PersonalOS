@@ -101,11 +101,11 @@ def test_unsigned_constitution_change_is_refused(repo, reporter, tmp_path, monke
     assert client.get("/api/deploys").json()[0]["status"] == "rejected"
 
 
-def test_deploy_api_needs_the_deployer_key(reporter):
+def test_deploy_api_needs_the_deployer_key(reporter, tmp_path):
     _, client, conn = reporter
     assert client.get("/api/deploys/last").status_code == 401
     other = agents.create_agent(conn, Ctx(actors.owner_id(conn)), name="Sneaky", purpose="x",
-                                permissions=["tasks:read"], data_dir=Path("."))["api_key"]
+                                permissions=["tasks:read"], data_dir=tmp_path)["api_key"]
     assert client.get("/api/deploys/last", headers={"Authorization": f"Bearer {other}"}).status_code == 401
 
 

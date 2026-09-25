@@ -77,16 +77,32 @@ def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     }
 
 
+LIVE_RUN_MINUTES = 5  # a run with a heartbeat this recent still has a worker behind it
+
+
+def _live_run_sql() -> tuple[str, str]:
+    """SQL condition "task has a live run of another worker", and its cutoff."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=LIVE_RUN_MINUTES)).isoformat(timespec="seconds")
+    return ("""EXISTS (SELECT 1 FROM runs r WHERE r.task_id = tasks.id AND r.status = 'running'
+               AND COALESCE(r.heartbeat_at, r.started_at) >= ? AND r.id IS NOT ?)""", cutoff)
+
+
 def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     st = _state(conn, ctx.actor_id)
     if st["frozen"] or st["paused"] or st["archived"]:
         return {"state": st}
     unread = conn.execute("SELECT COUNT(*) FROM messages WHERE to_actor = ? AND read_at IS NULL",
                           (ctx.actor_id,)).fetchone()[0]
+    # A "working" task is offered again only when no worker is still on it
+    # (a second worker of the same agent must not pick up the same task).
+    live, cutoff = _live_run_sql()
     row = conn.execute(
-        """SELECT id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL AND status IN ('next', 'working')
+        f"""SELECT id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
+           AND (status = 'next' OR (status = 'working' AND NOT {live}))
            ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 1""",
-        (ctx.actor_id,),
+        (ctx.actor_id, cutoff, None),
     ).fetchone()
     out: dict = {"state": st, "unread_messages": unread}
     if row:
@@ -115,10 +131,13 @@ def get_task(task_id: str, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
 
 
 @router.post("/tasks/{task_id}/claim")
-def claim(task_id: str, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+def claim(task_id: str, run_id: int | None = None, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     t = tasks.get(conn, ctx, tasks.parse_id(task_id))
     if t["status"] == "working" and t["assignee_id"] == ctx.actor_id:
-        return t  # resuming its own work
+        live, cutoff = _live_run_sql()
+        if conn.execute(f"SELECT 1 FROM tasks WHERE id = ? AND {live}", (t["id"], cutoff, run_id)).fetchone():
+            raise HTTPException(409, f"{t['ref']} is already being worked on by another run")
+        return t  # resuming its own work after the previous run stopped
     t = tasks.claim(conn, ctx, t["id"])
     conn.commit()
     return t

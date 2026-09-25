@@ -222,3 +222,30 @@ def test_worker_entry_point_imports_and_reads_config(monkeypatch):
     assert main.extra_config() == ['a="1"', 'b="2"']
     monkeypatch.setenv("WORKER_CLAUDE_MCP", '{"kb": {"type": "http", "url": "http://kb/ingest/mcp"}}')
     assert main.claude_extra_mcp()["kb"]["type"] == "http"
+
+
+def test_second_worker_of_the_same_agent_does_not_take_a_task_in_progress(setup, monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    monkeypatch.delenv("POS_CODEX_DISABLED")
+    client, conn, owner, agent_id, key = setup
+    from pos import tasks
+
+    t = tasks.create(conn, owner, {"title": "Polish the tasks page", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    h = {"Authorization": f"Bearer {key}"}
+    ref = t["ref"]
+    first = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
+    assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={first}", headers=h).status_code == 200
+
+    # A duplicate worker process: the task is not offered, and a claim is refused.
+    assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
+    second = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
+    assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={second}", headers=h).status_code == 409
+    client.post(f"/api/worker/runs/{second}/finish", json={"status": "cancelled", "jsonl": ""}, headers=h)
+
+    # Once the first run is gone (worker crashed), the task can be resumed.
+    conn.execute("UPDATE runs SET status = 'error' WHERE id = ?", (first,))
+    conn.commit()
+    assert client.get("/api/worker/next?wait=0", headers=h).json()["task"]["ref"] == ref
+    third = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
+    assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={third}", headers=h).status_code == 200

@@ -37,6 +37,14 @@ $agents = @(
 )
 
 foreach ($a in $agents) {
+    $pidFile = Join-Path $logs "$($a.Name).pid"
+    if (Test-Path $pidFile) {
+        $old = [int](Get-Content $pidFile | Select-Object -First 1)
+        if (Get-Process -Id $old -ErrorAction SilentlyContinue) {
+            Write-Output "$($a.Name) already running (pid $old); run ops\stop-agents.ps1 first to restart"
+            continue
+        }
+    }
     $key = $vars[$a.Key]
     if (-not $key) { Write-Warning "$($a.Key) missing in .env, skipping $($a.Name)"; continue }
     $work = if ($a.Work) { $a.Work } else { Join-Path $root "data\agent-work\$($a.Name)" }

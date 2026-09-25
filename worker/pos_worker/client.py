@@ -33,8 +33,8 @@ class PosClient:
     def task(self, ref: str) -> dict:
         return self._get(f"/api/worker/tasks/{ref}")
 
-    def claim(self, ref: str) -> dict:
-        return self._post(f"/api/worker/tasks/{ref}/claim")
+    def claim(self, ref: str, run_id: int | None = None) -> dict:
+        return self._post(f"/api/worker/tasks/{ref}/claim" + (f"?run_id={run_id}" if run_id else ""))
 
     def complete(self, ref: str, note: str) -> dict:
         return self._post(f"/api/worker/tasks/{ref}/complete", {"note": note})

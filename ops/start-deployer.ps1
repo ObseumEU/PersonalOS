@@ -18,6 +18,11 @@ $env:POS_DEPLOYER_KEY = $vars["DEPLOYER_KEY"]
 $env:DEPLOY_TEST_CMD = "cd backend && .venv\Scripts\python -m pytest -q && cd ..\web && npm run build"
 $env:DEPLOY_UP_CMD = "set POS_PORT=8091&& docker compose -p pos-staging up -d --build api web"
 $env:DEPLOY_HEALTH_URL = "http://localhost:8091/api/health"
+$pidFile = Join-Path $logs "deployer.pid"
+if ((Test-Path $pidFile) -and (Get-Process -Id ([int](Get-Content $pidFile | Select-Object -First 1)) -ErrorAction SilentlyContinue)) {
+    Write-Output "deployer already running (pid $(Get-Content $pidFile)); stop it first to restart"
+    exit 0
+}
 $log = Join-Path $logs "deployer.log"
 $p = Start-Process -FilePath $python -ArgumentList "-m", "pos.selfdeploy", "--repo", $deploy, "--promote-from", "agent/dev", "--watch", "60" `
     -WorkingDirectory $deploy -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
