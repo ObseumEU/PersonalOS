@@ -9,6 +9,9 @@ export type KNode = {
   source: string | null;
   url: string | null;
   weight: number;
+  /** Documents this node holds (rolled up collection → source → workspace). */
+  count: number;
+  chars: number;
 };
 export type KEdge = { source: string; target: string; type: string; weight: number };
 export type KGraph = {

@@ -78,12 +78,14 @@ function layout(data: KGraph) {
   return { pos, links };
 }
 
-function size(node: KNode) {
-  if (node.type === "workspace") return 0.034;
-  if (node.type === "source") return 0.026;
-  if (node.type === "collection") return 0.012 + Math.min(0.014, Math.log10(1 + node.weight) * 0.0045);
-  return 0.009;
+/** Radius by how much a node holds: sqrt of its document count, so a big
+channel stands out without swamping the rest. */
+function sizer(nodes: KNode[]) {
+  const max = Math.max(1, ...nodes.map((n) => n.count ?? 0));
+  return (node: KNode) => 0.008 + 0.042 * Math.sqrt((node.count ?? 0) / max);
 }
+
+const docs = (n: number) => `${n.toLocaleString("cs-CZ")} dok.`;
 
 /** Slowly orbiting 3D graph of our knowledge base (WebGL). Drag to rotate, scroll to zoom, click to open. */
 export default function KnowledgeGraph({
@@ -125,11 +127,12 @@ export default function KnowledgeGraph({
     camera.position.set(0, 0.16 * distance, distance);
 
     const { pos, links } = layout(data);
+    const size = sizer(data.nodes);
     const hi = new Set(highlight);
     const bigCollections = new Set(
       data.nodes
         .filter((x) => x.type === "collection")
-        .sort((a, b) => b.weight - a.weight)
+        .sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
         .slice(0, labelCollections)
         .map((x) => x.id),
     );
@@ -171,7 +174,8 @@ export default function KnowledgeGraph({
         // CSS2DRenderer owns the outer element's transform, so offset the text inside it.
         const tag = document.createElement("div");
         const text = document.createElement("span");
-        text.textContent = node.label.length > 34 ? `${node.label.slice(0, 33)}…` : node.label;
+        const name = node.label.length > 34 ? `${node.label.slice(0, 33)}…` : node.label;
+        text.textContent = node.type === "document" ? name : `${name} · ${docs(node.count ?? 0)}`;
         const strongLabel = node.type === "workspace" || isHi;
         text.style.cssText = `display: block; margin-left: 10px; font: ${node.type === "workspace" ? "11px" : "10px"} "IBM Plex Mono", monospace; color: ${strongLabel ? "#6cc4dc" : "#a3a9b3"}; white-space: nowrap;`;
         tag.appendChild(text);

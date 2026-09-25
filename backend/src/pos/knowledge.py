@@ -56,60 +56,85 @@ def _collection(doc: dict) -> str:
 
 
 def build_graph(workspaces: list[dict], sources: list[dict], documents: list[dict], *,
-                docs_per_collection: int = 3, max_collections: int = 40) -> dict:
-    """Nodes {id, label, type, workspace, source, url, weight} and edges
-    {source, target, type, weight}: workspace → source → collection → document."""
+                docs_per_collection: int = 3, max_collections: int = 40, sizes: dict | None = None) -> dict:
+    """Nodes {id, label, type, workspace, source, url, weight, count, chars} and edges
+    {source, target, type, weight}: workspace → source → collection → document.
+
+    `count` is how many documents a node holds, over ALL documents (rolled up
+    collection → source → workspace), so the graph can size nodes by content;
+    `sizes` (knowlage's /api/sizes, when it has it) is preferred over counting
+    the document list. Only the biggest collections and their newest documents
+    become nodes."""
     docs = [d for d in documents if d.get("status") != "error" and d.get("workspace")]
-    nodes: dict[str, dict] = {}
-    edges: list[dict] = []
-
-    def node(nid: str, label: str, kind: str, **kw) -> dict:
-        n = nodes.setdefault(nid, {"id": nid, "label": label, "type": kind, "workspace": kw.get("workspace"),
-                                   "source": kw.get("source"), "url": kw.get("url"), "weight": 0})
-        n["weight"] += kw.get("weight", 0)
-        return n
-
-    for w in workspaces:
-        node(f"ws:{w['id']}", w.get("name") or w["id"], "workspace", workspace=w["id"], weight=w.get("documents", 0))
-    # Sources: connectors (GitHub, ...) by id; uploaded files and videos are "files".
     repo_source = {t["target"]: s["id"] for s in sources for t in s.get("targets", [])}
-    for s in sources:
-        node(f"src:{s['id']}", s.get("name") or s["id"], "source", source=s["id"])
+
+    def source_of(coll: str, origin: str | None) -> str:
+        return repo_source.get(coll) or ("files" if origin in (None, "file") else origin)
+
+    # Every collection's size: (workspace, collection) → {count, chars, source}.
+    groups: dict[tuple[str, str], dict] = {}
+    if sizes and sizes.get("groups"):
+        for g in sizes["groups"]:
+            coll = g.get("channel") or "Files"
+            groups[(g["workspace"], coll)] = {"count": int(g.get("documents") or 0), "chars": int(g.get("chars") or 0),
+                                              "source": source_of(coll, g.get("origin"))}
+    else:
+        for d in docs:
+            coll = _collection(d)
+            g = groups.setdefault((d["workspace"], coll), {"count": 0, "chars": 0,
+                                                           "source": source_of(coll, d.get("origin"))})
+            g["count"] += 1
+            g["chars"] += int(d.get("chars") or 0)
     per_collection: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for d in docs:
         per_collection[(d["workspace"], _collection(d))].append(d)
-    top = Counter({k: len(v) for k, v in per_collection.items()}).most_common(max_collections)
-    for (ws, coll), count in top:
-        src_id = repo_source.get(coll) or ("files" if all(d.get("origin") == "file" for d in per_collection[(ws, coll)])
-                                           else per_collection[(ws, coll)][0].get("origin") or "files")
-        src = f"src:{src_id}"
-        if src not in nodes:
-            node(src, "Files and videos" if src_id == "files" else src_id, "source", source=src_id)
+
+    nodes: dict[str, dict] = {}
+    edges: dict[tuple[str, str], dict] = {}
+
+    def node(nid: str, label: str, kind: str, **kw) -> dict:
+        n = nodes.setdefault(nid, {"id": nid, "label": label, "type": kind, "workspace": kw.get("workspace"),
+                                   "source": kw.get("source"), "url": kw.get("url"), "weight": 0, "count": 0,
+                                   "chars": 0})
+        n["count"] += kw.get("count", 0)
+        n["chars"] += kw.get("chars", 0)
+        n["weight"] = n["count"]
+        return n
+
+    def edge(a: str, b: str, w: int) -> None:
+        e = edges.setdefault((a, b), {"source": a, "target": b, "type": "contains", "weight": 0})
+        e["weight"] += w
+
+    for w in workspaces:
+        node(f"ws:{w['id']}", w.get("name") or w["id"], "workspace", workspace=w["id"])
+    names = {s["id"]: s.get("name") or s["id"] for s in sources}
+    # Roll every collection up into its source and workspace, shown or not.
+    for (ws, coll), g in groups.items():
+        src = f"src:{g['source']}"
+        node(src, "Files and videos" if g["source"] == "files" else names.get(g["source"], g["source"]), "source",
+             source=g["source"], count=g["count"], chars=g["chars"])
+        if f"ws:{ws}" in nodes:
+            nodes[f"ws:{ws}"]["count"] += g["count"]
+            nodes[f"ws:{ws}"]["chars"] += g["chars"]
+            nodes[f"ws:{ws}"]["weight"] = nodes[f"ws:{ws}"]["count"]
+        edge(f"ws:{ws}", src, g["count"])
+    top = sorted(groups.items(), key=lambda kv: kv[1]["count"], reverse=True)[:max_collections]
+    for (ws, coll), g in top:
         cid = f"col:{ws}:{coll}"
-        node(cid, coll, "collection", workspace=ws, source=src_id, weight=count,
-             url=f"https://github.com/{coll}" if src_id != "files" and "/" in coll else None)
-        nodes[src]["weight"] += count
-        edges.append({"source": f"ws:{ws}", "target": src, "type": "contains", "weight": count})
-        edges.append({"source": src, "target": cid, "type": "contains", "weight": count})
-        newest = sorted(per_collection[(ws, coll)], key=lambda d: d.get("addedAt") or "", reverse=True)
+        node(cid, coll, "collection", workspace=ws, source=g["source"], count=g["count"], chars=g["chars"],
+             url=f"https://github.com/{coll}" if g["source"] != "files" and "/" in coll else None)
+        edge(f"src:{g['source']}", cid, g["count"])
+        newest = sorted(per_collection.get((ws, coll), []), key=lambda d: d.get("addedAt") or "", reverse=True)
         for d in newest[:docs_per_collection]:
             did = f"doc:{d['id']}"
-            node(did, d.get("name") or d["id"], "document", workspace=ws, source=src_id, url=d.get("url"),
-                 weight=int(d.get("chars") or 0))
-            edges.append({"source": cid, "target": did, "type": "contains", "weight": 1})
-    # One ws→source edge per pair, weights summed.
-    merged: dict[tuple, dict] = {}
-    for e in edges:
-        k = (e["source"], e["target"])
-        if k in merged:
-            merged[k]["weight"] += e["weight"]
-        else:
-            merged[k] = dict(e)
-    stats = {"documents": len(docs), "workspaces": len(workspaces), "sources": len(sources),
-             "collections": len(per_collection)}
-    linked = {x for e in merged.values() for x in (e["source"], e["target"])}
+            node(did, d.get("name") or d["id"], "document", workspace=ws, source=g["source"], url=d.get("url"),
+                 count=1, chars=int(d.get("chars") or 0))
+            edge(cid, did, 1)
+    stats = {"documents": sum(g["count"] for g in groups.values()), "workspaces": len(workspaces),
+             "sources": len({g["source"] for g in groups.values()}), "collections": len(groups)}
+    linked = {x for e in edges.values() for x in (e["source"], e["target"])}
     return {"nodes": [n for n in nodes.values() if n["type"] == "workspace" or n["id"] in linked],
-            "edges": list(merged.values()), "stats": stats}
+            "edges": list(edges.values()), "stats": stats}
 
 
 def graph(*, docs_per_collection: int = 3, max_collections: int = 40, refresh: bool = False) -> dict:
@@ -119,8 +144,13 @@ def graph(*, docs_per_collection: int = 3, max_collections: int = 40, refresh: b
         if hit and not refresh and time.monotonic() - hit[0] < CACHE_S:
             return hit[1]
     try:
+        try:
+            sizes = _get("/api/sizes")  # knowlage's own counts, when it has them
+        except (httpx.HTTPError, ValueError):
+            sizes = None
         data = build_graph(_get("/api/workspaces"), _get("/api/sources"), _get("/api/documents", timeout=60),
-                           docs_per_collection=docs_per_collection, max_collections=max_collections)
+                           docs_per_collection=docs_per_collection, max_collections=max_collections,
+                           sizes=sizes if isinstance(sizes, dict) else None)
         out = {"available": True, "url": public_url(), "fetched_at": time.time(), **data}
     except (httpx.HTTPError, ValueError, KeyError) as e:
         if hit:  # stale is better than nothing
