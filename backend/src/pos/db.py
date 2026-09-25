@@ -274,6 +274,32 @@ MIGRATIONS: list[str] = [
         created_at   TEXT NOT NULL
     );
     """,
+    # 8: two agent runtimes (Codex CLI, Claude Code CLI) with separate accounting.
+    """
+    ALTER TABLE actors ADD COLUMN engine TEXT;
+    ALTER TABLE actors ADD COLUMN model TEXT;
+    ALTER TABLE runs ADD COLUMN engine TEXT;
+    CREATE TABLE engine_usage (
+        id            INTEGER PRIMARY KEY,
+        at            TEXT NOT NULL,
+        engine        TEXT NOT NULL,
+        actor_id      INTEGER REFERENCES actors(id),
+        task_id       INTEGER,
+        run_id        INTEGER REFERENCES runs(id),
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd      REAL NOT NULL DEFAULT 0
+    );
+    CREATE TABLE engine_limits (
+        engine       TEXT PRIMARY KEY,
+        paused_until TEXT,
+        reason       TEXT,
+        window       TEXT,
+        resets_at    TEXT,
+        state        TEXT,
+        updated_at   TEXT NOT NULL
+    );
+    """,
 ]
 
 

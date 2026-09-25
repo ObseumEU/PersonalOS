@@ -156,11 +156,16 @@ def handback(task_id: str, body: NoteIn, conn=Depends(get_db), ctx: Ctx = Depend
 
 @router.post("/runs", status_code=201)
 def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    from . import engines
+
     tid = tasks.parse_id(body.task_id) if body.task_id else None
-    res = runner.start_external(conn, runner.RunRequest(ctx.actor_id, body.kind, "", task_id=tid))
+    engine, why, model = engines.choose(conn, ctx.actor_id)
+    if engine is None:
+        raise HTTPException(409, f"no runtime available: {why}")
+    res = runner.start_external(conn, runner.RunRequest(ctx.actor_id, body.kind, "", task_id=tid, engine=engine))
     if res.status == "blocked":
         raise HTTPException(409, res.error)
-    return {"run_id": res.run_id}
+    return {"run_id": res.run_id, "engine": engine, "model": model}
 
 
 @router.post("/runs/{run_id}/heartbeat")

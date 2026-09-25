@@ -368,6 +368,7 @@ připraví.
 | 16 | ano | `pos.routing`, `pos.outbound`, obrazovka Connectors, `docs/CONNECTORS.md`; znalosti přes knowlage `/ingest/mcp` |
 | 11 | ano | `pos.scheduler` (obrazovka Automations), A2A server i klient `pos.a2a`; A2A fasáda Nexusu v `apps/nexus-process-pilot` |
 | 10 | ano | `pos.selfdeploy` (kontrola ústavy, testy, health check, automatický revert), `docs/SELF-DEPLOY.md`, instrukce agentů v `agents/` |
+| Claude CLI | ano | druhý runtime: `pos.engines`, `worker/pos_worker/claude.py`; výchozí Claude (claude-opus-5-5), Codex jako záloha; Nexus: poskytovatel `claude-cli` |
 | 6, 7, 8, 9 | jiné thready | ústava a guardrails, Rozpočtář, HR agent, knowledge base |
 
 Co musí dodat jen majitel: přihlášení Codexu (limit předplatného do 29. 9.),

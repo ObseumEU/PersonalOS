@@ -3,5 +3,8 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_codex_home(tmp_path, monkeypatch):
-    """Tests never read the machine's real Codex sessions (~/.codex)."""
+    """Tests never read the machine's real Codex sessions (~/.codex) and never
+    call a real AI engine; tests that need one bring a fake binary."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    monkeypatch.setenv("POS_CLAUDE_DISABLED", "1")

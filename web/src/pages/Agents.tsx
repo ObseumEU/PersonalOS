@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from
 import { Link, useNavigate } from "react-router-dom";
 import { type Agent, agentsApi } from "../agentsApi";
 import type { Network } from "../components/agents/AgentNetwork";
-import { ActorChip, Pill, StatusDot } from "../components/agents/bits";
+import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import FreezeCard from "../components/agents/FreezeCard";
 import { PageHeader, Panel } from "../components/ui";
 
@@ -146,6 +146,7 @@ function Card({ a, rating, maxTokens }: { a: Agent; rating?: Rating; maxTokens: 
       <span className="flex items-center gap-2">
         <ActorChip a={a} />
         {a.system && <Pill>system</Pill>}
+        {a.kind !== "human" && <EngineBadge engine={a.engine_effective} model={a.engine_effective === "auto" || a.engine_effective === "claude" ? a.model ?? "claude-opus-5-5" : null} />}
         <span className="ml-auto">
           <StatusDot status={a.status} />
         </span>

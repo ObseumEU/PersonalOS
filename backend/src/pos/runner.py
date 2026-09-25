@@ -41,6 +41,8 @@ class RunRequest:
     timeout_s: int = 180
     sandbox: str = "read-only"
     extra_args: list[str] = field(default_factory=list)
+    engine: str = "codex"  # codex | claude (outside workers may run either)
+    model: str | None = None
 
 
 @dataclass
@@ -72,8 +74,50 @@ def codex_bin() -> str | None:
     return os.environ.get("POS_CODEX_BIN") or shutil.which("codex")
 
 
-def available() -> bool:
+def claude_bin() -> str | None:
+    name = os.environ.get("POS_CLAUDE_BIN") or shutil.which("claude")
+    if name and sys.platform == "win32" and name.lower().endswith(".cmd"):
+        import re
+
+        # npm's claude.cmd only starts a native exe; call it directly so
+        # arguments like --json-schema keep their quotes.
+        text = Path(name).read_text(encoding="utf-8", errors="replace")
+        if m := re.search(r'"%dp0%\\([^"]+\.exe)"', text):
+            exe = Path(name).parent / m[1]
+            if exe.exists():
+                return str(exe)
+    return name
+
+
+def available(engine: str = "codex") -> bool:
+    if engine == "claude":
+        return claude_bin() is not None and os.environ.get("POS_CLAUDE_DISABLED", "") != "1"
     return codex_bin() is not None and os.environ.get("POS_CODEX_DISABLED", "") != "1"
+
+
+def _claude_args(req: "RunRequest", binary: str) -> list[str]:
+    """A tool-less, isolated Claude call: no tools, no MCP, no user settings."""
+    args = [binary, "-p", "--output-format", "stream-json", "--verbose", "--tools", "",
+            "--strict-mcp-config", "--no-session-persistence", "--restricted"]
+    if req.model:
+        args += ["--model", req.model]
+    if req.output_schema:
+        args += ["--json-schema", json.dumps(req.output_schema)]
+    return args
+
+
+def _claude_output(jsonl: str) -> tuple[str, dict | None, str]:
+    """(text, structured output, error) from the stream-json result event."""
+    for line in reversed(jsonl.splitlines()):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") == "result":
+            if ev.get("is_error"):
+                return "", None, str(ev.get("result") or ev.get("subtype") or "failed")
+            return str(ev.get("result") or ""), ev.get("structured_output"), ""
+    return "", None, "no result from claude"
 
 
 def _usage(jsonl: str) -> tuple[int | None, int | None]:
@@ -144,8 +188,8 @@ def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "
 
 def run(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
     cur = conn.execute(
-        "INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, ?, 'running', ?)",
-        (req.actor_id, req.task_id, req.kind, now_iso()),
+        "INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) VALUES (?, ?, ?, 'running', ?, ?)",
+        (req.actor_id, req.task_id, req.kind, now_iso(), req.engine),
     )
     run_id = cur.lastrowid
     ctx = Ctx(actor_id=req.actor_id, via="runner", run_id=run_id)
@@ -159,6 +203,8 @@ def run(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
         _finish(conn, run_id, "blocked", detail=str(e))
         return RunResult(run_id, "blocked", error=str(e))
 
+    if req.engine == "claude":
+        return _run_claude(conn, req, run_id)
     binary = codex_bin()
     if not available() or binary is None:
         _finish(conn, run_id, "error", detail="codex CLI not available")
@@ -205,6 +251,40 @@ def run(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
     return RunResult(run_id, "ok", output, data, tin, tout)
 
 
+def _run_claude(conn: sqlite3.Connection, req: "RunRequest", run_id: int) -> "RunResult":
+    binary = claude_bin()
+    if not available("claude") or binary is None:
+        _finish(conn, run_id, "error", detail="claude CLI not available")
+        return RunResult(run_id, "error", error="claude CLI not available")
+    with tempfile.TemporaryDirectory(prefix="pos-run-") as tmp:
+        proc = subprocess.Popen(_claude_args(req, binary), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=tmp, **_new_group())
+        conn.execute("UPDATE runs SET pid = ? WHERE id = ?", (proc.pid, run_id))
+        conn.commit()
+        try:
+            stdout, stderr = proc.communicate(req.prompt, timeout=req.timeout_s)
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc.pid)
+            proc.communicate()
+            _finish(conn, run_id, "error", detail=f"timeout after {req.timeout_s}s")
+            return RunResult(run_id, "error", error="timeout")
+    if _status(conn, run_id) == "cancelled":
+        return RunResult(run_id, "cancelled", error="cancelled")
+    text, data, err = _claude_output(stdout)
+    if err or proc.returncode != 0:
+        err = err or (stderr or "")[-2000:] or f"exit {proc.returncode}"
+        _finish(conn, run_id, "error", detail=err, jsonl=stdout)
+        return RunResult(run_id, "error", text, None, error=err)
+    if req.output_schema and data is None:
+        try:
+            data = json.loads(text)
+        except ValueError:
+            _finish(conn, run_id, "error", detail="output was not JSON", jsonl=stdout)
+            return RunResult(run_id, "error", text, None, error="output was not JSON")
+    row = _finish(conn, run_id, "ok", jsonl=stdout)
+    return RunResult(run_id, "ok", text, data, row["input_tokens"], row["output_tokens"])
+
+
 def list_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
     rows = conn.execute(
         """SELECT r.*, a.name AS actor_name FROM runs r JOIN actors a ON a.id = r.actor_id
@@ -221,12 +301,12 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
 
 def start_external(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
     cur = conn.execute(
-        "INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, ?, 'running', ?)",
-        (req.actor_id, req.task_id, req.kind, now_iso()),
+        "INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) VALUES (?, ?, ?, 'running', ?, ?)",
+        (req.actor_id, req.task_id, req.kind, now_iso(), req.engine),
     )
     run_id = cur.lastrowid
     audit.log(conn, Ctx(req.actor_id, via="worker", run_id=run_id), "run_start",
-              "task" if req.task_id else None, req.task_id, kind=req.kind, worker=True)
+              "task" if req.task_id else None, req.task_id, kind=req.kind, worker=True, engine=req.engine)
     conn.commit()
     try:
         for fn in _before:

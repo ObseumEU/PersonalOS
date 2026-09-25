@@ -39,9 +39,12 @@ def check_visibility_change(conn: sqlite3.Connection, ctx: Ctx, row, new: str) -
 
 
 def _budget_gate(conn: sqlite3.Connection, req: runner.RunRequest) -> None:
-    decision = budget.can_run(conn, str(req.actor_id))
-    if not decision.allowed:
-        raise runner.RunBlocked(f"budget: {decision.reason}")
+    """Each runtime has its own subscription: ask the one this run uses."""
+    from . import engines
+
+    ok, why = engines.can_run(conn, req.engine, req.actor_id)
+    if not ok:
+        raise runner.RunBlocked(f"budget: {why}")
 
 
 def _constitution_digest(conn: sqlite3.Connection, req: runner.RunRequest) -> None:
@@ -55,6 +58,11 @@ def _guardrails(conn: sqlite3.Connection, req: runner.RunRequest) -> None:
 
 
 def _budget_record(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -> None:
+    if jsonl and "engine" in run_row.keys() and run_row["engine"] == "claude":
+        from . import engines
+
+        engines.record_claude(conn, run_row, jsonl)
+        return
     if jsonl:
         budget.record_exec(conn, jsonl.splitlines(), agent_id=str(run_row["actor_id"]),
                            task_id=str(run_row["task_id"]) if run_row["task_id"] else None)

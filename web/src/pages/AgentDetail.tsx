@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { type AgentDetail as Detail, agentsApi } from "../agentsApi";
-import { ActorChip, Pill, StatusDot } from "../components/agents/bits";
+import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { PageHeader, Panel } from "../components/ui";
 import { tasksApi } from "../tasksApi";
@@ -113,6 +113,30 @@ export default function AgentDetail() {
         <StatusDot status={a.status} />
         {a.system && <Pill>system</Pill>}
         {a.lifetime && <Pill>{a.lifetime.replace("_", "-")}</Pill>}
+        <EngineBadge engine={a.engine_effective} model={a.engine_effective !== "codex" ? a.model ?? "claude-opus-5-5" : null} />
+        {!a.is_owner && (
+          <select
+            aria-label="Runtime"
+            className="h-7 rounded border border-line bg-bg px-1.5 text-xs outline-none focus:border-accent"
+            value={a.engine ?? ""}
+            onChange={(e) => act(agentsApi.setEngine(id, e.target.value || null, a.model), "Runtime saved")}
+          >
+            <option value="">default runtime</option>
+            <option value="claude">Claude CLI</option>
+            <option value="codex">Codex CLI</option>
+            <option value="auto">auto (Claude, then Codex)</option>
+          </select>
+        )}
+        {!a.is_owner && (
+          <input
+            key={a.model ?? "default-model"}
+            aria-label="Claude model"
+            placeholder="claude-opus-5-5"
+            defaultValue={a.model ?? ""}
+            onBlur={(e) => (e.target.value || null) !== a.model && act(agentsApi.setEngine(id, a.engine, e.target.value || null), "Model saved")}
+            className="h-7 w-40 rounded border border-line bg-bg px-2 font-mono text-xs outline-none focus:border-accent"
+          />
+        )}
         <span className="cap">
           created by {a.created_by_name ?? "platform"} · heartbeat {ago(a.last_seen_at)}
         </span>
