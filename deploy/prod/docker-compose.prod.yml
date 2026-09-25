@@ -80,6 +80,10 @@ services:
     logging: *logging
   community-agent:
     logging: *logging
+  agent-coach:
+    logging: *logging
+  project-manager:
+    logging: *logging
 
 networks:
   proxy:

@@ -126,4 +126,8 @@ def execute(conn: sqlite3.Connection, approval: dict) -> dict:
 
 
 def install() -> None:
+    from .guard import policy
+
+    for action in ACTIONS:  # the guard knows every action that has a provider here
+        policy.register_outbound_action(action)
     approvals.on_approved(lambda conn, a: execute(conn, a) if a["action"] in ACTIONS else None)

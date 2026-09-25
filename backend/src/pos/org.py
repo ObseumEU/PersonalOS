@@ -271,8 +271,6 @@ def handoff(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = ""
     versioning.update(conn, ctx, tasks.ENTITY, task_id, changes, action="handoff")
 
     ref = tasks.display_id(task_id)
-    run = conn.execute("SELECT id FROM runs WHERE actor_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
-                       (target["id"],)).fetchone()
     body = f"Handoff {ref} '{row['title']}' from {me['name']}." + (f" Note: {note}" if note else "")
     at = now_iso()
     from . import chat
