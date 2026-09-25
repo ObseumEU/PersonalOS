@@ -7,7 +7,7 @@ hooks and small adapters. `install()` runs once at startup.
 import sqlite3
 from dataclasses import dataclass
 
-from . import actors, audit, runner
+from . import actors, audit, runner, tasks
 from .budget import service as budget
 from .core import Ctx
 from .guard import policy as guard_policy
@@ -47,6 +47,11 @@ def _constitution_digest(conn: sqlite3.Connection, req: runner.RunRequest) -> No
               req.task_id, sha256=guard_prompt.constitution_digest())
 
 
+def _guardrails(conn: sqlite3.Connection, req: runner.RunRequest) -> None:
+    """Every codex exec run starts with the constitution and guardrails (spec 5.2)."""
+    req.prompt = guard_prompt.with_guardrails(req.prompt)
+
+
 def _budget_record(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -> None:
     if jsonl:
         budget.record_exec(conn, jsonl.splitlines(), agent_id=str(run_row["actor_id"]),
@@ -60,6 +65,7 @@ def install() -> None:
         return
     runner.before_run(_budget_gate)
     runner.before_run(_constitution_digest)
+    runner.before_run(_guardrails)
     runner.after_run(_budget_record)
     _installed = True
 
@@ -68,3 +74,40 @@ def register_builtin_agents(conn: sqlite3.Connection) -> None:
     """The assistant is a system agent for the budget (docs/BUDGET.md)."""
     budget.set_agent_class(conn, str(actors.assistant_id(conn)), "system")
     conn.commit()
+
+
+def budget_check(conn: sqlite3.Connection) -> dict:
+    """The budget keeper's hourly check, with its actions carried out in the core:
+    a level change goes to the audit log, an escalation becomes a task for the owner."""
+    report = budget.run_check(conn)
+    ctx = Ctx(actors.assistant_id(conn), via="system")
+    for action in report.actions:
+        if action["type"] == "level_changed":
+            audit.log(conn, ctx, "budget_level", None, None, **{"from": action["from"], "to": action["to"]})
+        elif action["type"] == "notify_owner":
+            tasks.create(conn, ctx, {
+                "title": action["title"], "notes": action["body"], "priority": 1,
+                "topic": "rozpocet", "assignee": "me",
+            })
+    conn.commit()
+    return {"level": report.level, "actions": report.actions}
+
+
+async def budget_loop(db_path, interval_min: int) -> None:
+    """Runs budget_check every `interval_min` minutes until cancelled (spec 4.2: hourly).
+    Stands in for the scheduler until the Nexus one exists."""
+    import asyncio
+    import logging
+
+    from .db import connect
+
+    while True:
+        await asyncio.sleep(interval_min * 60)
+        try:
+            conn = connect(db_path)
+            try:
+                await asyncio.to_thread(budget_check, conn)
+            finally:
+                conn.close()
+        except Exception:  # a failed check must not stop the next one
+            logging.getLogger(__name__).exception("budget check failed")

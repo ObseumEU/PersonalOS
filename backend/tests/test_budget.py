@@ -252,3 +252,27 @@ def test_usage_limit_error_pauses_at_once(tmp_path):
     assert run.limit_reached and run.failed
     assert not service.can_run(conn, "mail", now=NOW).allowed
     assert service.can_run(conn, "hr", now=NOW).allowed
+
+
+def test_core_check_audits_and_creates_owner_task(tmp_path, monkeypatch):
+    from pos import actors, integrations
+    from pos.budget.codex_usage import TokenUsage
+    from pos.db import migrate
+
+    monkeypatch.setenv("POS_BUDGET_CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("POS_BUDGET_MONTHLY_TOKENS", "10000000")
+    conn = connect(tmp_path / "pos.db")
+    migrate(conn)
+    actors.ensure_builtin(conn)
+    store.ensure_schema(conn)
+    store.record_run(conn, at=datetime.now(timezone.utc) - timedelta(hours=1),
+                     usage=TokenUsage(0, 0, 50_000_000, 0), source="exec", agent_id="mail")
+
+    result = integrations.budget_check(conn)
+    assert result["level"] == "throttle"
+    task = conn.execute("SELECT * FROM tasks WHERE topic = 'rozpocet'").fetchone()
+    assert task["assignee_id"] == actors.owner_id(conn) and task["priority"] == 1
+    assert conn.execute("SELECT 1 FROM audit_log WHERE action = 'budget_level'").fetchone()
+
+    integrations.budget_check(conn)  # same level: no second task
+    assert conn.execute("SELECT COUNT(*) FROM tasks WHERE topic = 'rozpocet'").fetchone()[0] == 1
