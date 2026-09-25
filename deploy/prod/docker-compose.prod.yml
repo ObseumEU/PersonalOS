@@ -11,7 +11,7 @@
 services:
   api:
     environment:
-      POS_SECURE_COOKIES: "false"  # the front proxy speaks plain HTTP on the LAN, like knowlage
+      POS_SECURE_COOKIES: "true"  # the front proxy serves HTTPS, like knowlage
       # The API image has the Claude CLI; the agent workers run in containers here,
       # so check that it answers with the configured model (start and every 6 h).
       POS_CLAUDE_SELFCHECK: "1"

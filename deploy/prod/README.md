@@ -48,10 +48,10 @@ validate it (`caddy validate`) and reload. Nothing else in that file changes.
 
 ## Check
 
-- From the LAN or VPN: `http://personalos.obseum.cz/` asks for the password
+- From the LAN or VPN: `https://personalos.obseum.cz/` asks for the password
   (in `Documents\PersonalOS-server-login.txt` on the owner's PC), then Tasks,
   Agents and System show the same data as on the PC.
-- `curl -s http://personalos.obseum.cz/api/health` from the LAN; `/mcp` answers
+- `curl -s https://personalos.obseum.cz/api/health` from the LAN; `/mcp` answers
   with 401 without a key.
 - From outside (VPN off, phone hotspot): 403.
 - System → Runtimes: Codex and Claude (the self-check runs at start).

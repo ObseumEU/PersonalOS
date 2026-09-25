@@ -1,17 +1,28 @@
 # Site block for the host's front proxy (/opt/server/docker-migration/caddy/Caddyfile),
 # next to the knowlage block and with the same access rule: the LAN and the VPN
-# only (10.66.66.1 is the VPN gateway itself, which knowlage denies too), 403 for
-# everything else. Validate before reloading:
-#   docker exec <caddy> caddy validate --config /etc/caddy/Caddyfile
-http://personalos.obseum.cz {
-	@private {
-		remote_ip 192.168.0.0/16 10.66.66.0/24
-		not remote_ip 10.66.66.1
-	}
-	handle @private {
-		reverse_proxy personalos:80 {
-			flush_interval -1
-		}
-	}
-	respond 403
+# only (10.66.66.1 is the VPS tunnel, i.e. the internet, which knowlage denies too),
+# 403 for everything else. HTTPS like knowlage: *.obseum.cz points at the VPS, so
+# the ACME challenge reaches this Caddy through the tunnel. Validate before reloading:
+#   docker exec caddy-proxy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+personalos.obseum.cz {
+    header {
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    @internet_via_vps remote_ip 10.66.66.1
+    handle @internet_via_vps {
+        respond "Forbidden" 403
+    }
+    @trusted remote_ip 192.168.0.0/16 10.66.66.0/24 172.16.0.0/12 127.0.0.1/8 ::1
+    handle @trusted {
+        # PersonalOS web (nginx, alias `personalos` on my-app-network); it proxies /api and /mcp.
+        reverse_proxy personalos:80 {
+            flush_interval -1
+        }
+    }
+    handle {
+        respond "Forbidden" 403
+    }
 }

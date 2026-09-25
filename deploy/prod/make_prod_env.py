@@ -53,7 +53,7 @@ def main() -> None:
     out.write_text("".join(f"{k}={v}\n" for k, v in env.items()), encoding="utf-8")
     a.password_file.parent.mkdir(parents=True, exist_ok=True)
     a.password_file.write_text(
-        "PersonalOS on the server: http://personalos.obseum.cz (LAN and VPN only)\n"
+        "PersonalOS on the server: https://personalos.obseum.cz (LAN and VPN only)\n"
         f"Login password: {password}\n", encoding="utf-8")
     print(f"wrote {out.name} ({len(env)} keys) and the login password to {a.password_file}")
 
