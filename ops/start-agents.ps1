@@ -56,6 +56,7 @@ foreach ($a in $agents) {
     $env:WORKER_CLAUDE_TOOLS = if ($a.Tools) { $a.Tools } else { "" }
     $env:WORKER_CLAUDE_BUILTIN = if ($a.Builtin) { $a.Builtin } else { "" }
     if (-not $a.Tools) { Remove-Item Env:WORKER_CLAUDE_TOOLS -ErrorAction SilentlyContinue }
+    $env:POS_CHILD_PIDFILE = Join-Path $logs "$($a.Name).child.pid"
     $log = Join-Path $logs "$($a.Name).log"
     $p = Start-Process -FilePath $python -ArgumentList "-m", "pos_worker" -WorkingDirectory $work `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru

@@ -56,6 +56,8 @@ def claude_extra_mcp() -> dict:
 
 
 def main() -> None:
+    if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
+        open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     url = os.environ.get("POS_URL", "http://localhost:8000")
     key = os.environ["POS_AGENT_KEY"]

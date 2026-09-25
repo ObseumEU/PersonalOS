@@ -255,6 +255,8 @@ def main() -> None:
     ap.add_argument("--watch", type=int, default=0, help="seconds between checks")
     ap.add_argument("--promote-from", default="", help="branch agents commit to (promote mode)")
     a = ap.parse_args()
+    if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
+        open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
     reporter = Reporter(os.environ.get("POS_URL", "http://localhost:8000"), os.environ["POS_DEPLOYER_KEY"])
     kw = dict(remote=os.environ.get("DEPLOY_REMOTE", "origin"), branch=os.environ.get("DEPLOY_BRANCH", "main"),
               test_cmd=os.environ.get("DEPLOY_TEST_CMD", DEFAULT_TEST), up_cmd=os.environ.get("DEPLOY_UP_CMD", DEFAULT_UP),

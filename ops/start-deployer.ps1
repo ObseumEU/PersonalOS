@@ -23,6 +23,7 @@ if ((Test-Path $pidFile) -and (Get-Process -Id ([int](Get-Content $pidFile | Sel
     Write-Output "deployer already running (pid $(Get-Content $pidFile)); stop it first to restart"
     exit 0
 }
+$env:POS_CHILD_PIDFILE = Join-Path $logs "deployer.child.pid"
 $log = Join-Path $logs "deployer.log"
 $p = Start-Process -FilePath $python -ArgumentList "-m", "pos.selfdeploy", "--repo", $deploy, "--promote-from", "agent/dev", "--watch", "60" `
     -WorkingDirectory $deploy -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
