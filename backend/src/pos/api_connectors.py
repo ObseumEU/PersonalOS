@@ -7,7 +7,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import a2a, actors, outbound, routing, scheduler, schedules, versioning
+from . import a2a, actors, knowledge, outbound, routing, scheduler, schedules, versioning
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .core import Ctx
@@ -187,6 +187,31 @@ def restore_schedule(schedule_id: int, conn=Depends(get_db), ctx=Depends(get_ctx
 @router.get("/schedules/{schedule_id}/history")
 def schedule_history(schedule_id: int, conn=Depends(get_db)):
     return versioning.history(conn, schedules.ENTITY, schedule_id)
+
+
+@router.get("/knowledge/graph")
+def knowledge_graph(docs: int = 3, collections: int = 40, refresh: bool = False):
+    """Our knowlage as a graph: workspace → source → collection → documents."""
+    return knowledge.graph(docs_per_collection=max(0, min(docs, 10)), max_collections=max(1, min(collections, 120)),
+                           refresh=refresh)
+
+
+@router.get("/system/subsystems")
+def system_subsystems(conn=Depends(get_db)):
+    return knowledge.subsystems(conn)
+
+
+class AskIn(BaseModel):
+    question: str
+    workspace: str | None = None
+
+
+@router.post("/knowledge/ask")
+def knowledge_ask(body: AskIn):
+    """Ask knowlage; the answer carries verified citations."""
+    if not body.question.strip():
+        raise HTTPException(422, "empty question")
+    return knowledge.ask(body.question.strip(), body.workspace)
 
 
 @router.get("/a2a/links")

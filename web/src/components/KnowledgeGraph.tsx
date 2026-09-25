@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import type { KGraph, KNode } from "../knowledgeApi";
 
 type Props = {
-  nodes?: number;
-  seed?: number;
-  labels: string[];
-  labelEvery?: number;
-  highlight?: number[];
+  data: KGraph;
+  /** Node ids to light up (e.g. the documents an answer cites). */
+  highlight?: string[];
+  /** How many collections get a label (the biggest ones). */
+  labelCollections?: number;
   /** Seconds per full turn of the slow auto-orbit. */
   period?: number;
   /** Camera distance; smaller is closer. */
@@ -20,9 +21,9 @@ const INK = 0xe6e8eb;
 const DIM = 0x4a515b;
 const ACCENT = 0x6cc4dc;
 const BG = 0x111418;
-const NONE: number[] = [];
+const NONE: string[] = [];
 
-// Small deterministic PRNG so the sample graph is stable between renders.
+// Small deterministic PRNG so the layout is stable between renders.
 function mulberry32(seed: number) {
   return () => {
     seed |= 0;
@@ -33,35 +34,58 @@ function mulberry32(seed: number) {
   };
 }
 
-function buildGraph(n: number, seed: number) {
-  const rnd = mulberry32(seed);
-  const golden = Math.PI * (3 - Math.sqrt(5));
-  const pts: THREE.Vector3[] = [];
-  for (let i = 0; i < n; i++) {
-    const y = 1 - (i / (n - 1)) * 2;
-    const r = Math.sqrt(1 - y * y);
-    const th = golden * i + (rnd() - 0.5) * 0.6;
-    const k = 0.55 + rnd() * 0.45;
-    pts.push(new THREE.Vector3(k * r * Math.cos(th), k * y * 0.82, k * r * Math.sin(th)));
+/** A small 3D force layout: linked nodes pull together, all nodes push apart. */
+function layout(data: KGraph) {
+  const rnd = mulberry32(7);
+  const index = new Map(data.nodes.map((n, i) => [n.id, i]));
+  const n = data.nodes.length;
+  const pos = data.nodes.map(() => new THREE.Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(1.6));
+  const links = data.edges
+    .map((e) => [index.get(e.source), index.get(e.target)] as const)
+    .filter((l): l is readonly [number, number] => l[0] !== undefined && l[1] !== undefined);
+  const rest: Record<string, number> = { workspace: 0.55, source: 0.42, collection: 0.22, document: 0.2 };
+  const d = new THREE.Vector3();
+  for (let it = 0; it < 220; it++) {
+    const cool = 1 - it / 240;
+    const force = pos.map(() => new THREE.Vector3());
+    for (let i = 0; i < n; i++)
+      for (let j = i + 1; j < n; j++) {
+        d.subVectors(pos[i], pos[j]);
+        const l2 = Math.max(d.lengthSq(), 0.0025);
+        d.multiplyScalar(0.0035 / l2);
+        force[i].add(d);
+        force[j].sub(d);
+      }
+    for (const [a, b] of links) {
+      d.subVectors(pos[b], pos[a]);
+      const len = d.length() || 1e-3;
+      d.multiplyScalar(((len - rest[data.nodes[b].type]) / len) * 0.08);
+      force[a].add(d);
+      force[b].sub(d);
+    }
+    for (let i = 0; i < n; i++) {
+      force[i].addScaledVector(pos[i], -0.012); // gentle pull to the centre
+      pos[i].addScaledVector(force[i].clampLength(0, 0.08), cool);
+    }
   }
-  const edges = new Set<string>();
-  pts.forEach((a, i) => {
-    const near = pts
-      .map((b, j) => ({ j, d: a.distanceToSquared(b) }))
-      .sort((p, q) => p.d - q.d)
-      .slice(1, 2 + (i % 2) + 1);
-    near.forEach(({ j }) => edges.add(i < j ? `${i}-${j}` : `${j}-${i}`));
-  });
-  return { pts, edges: [...edges].map((e) => e.split("-").map(Number) as [number, number]) };
+  // Fit into a unit ball.
+  const r = Math.max(...pos.map((p) => p.length()), 1e-3);
+  pos.forEach((p) => p.multiplyScalar(0.95 / r));
+  return { pos, links };
 }
 
-/** Slowly orbiting 3D knowledge graph (WebGL). Drag to rotate, scroll to zoom. */
+function size(node: KNode) {
+  if (node.type === "workspace") return 0.034;
+  if (node.type === "source") return 0.026;
+  if (node.type === "collection") return 0.012 + Math.min(0.014, Math.log10(1 + node.weight) * 0.0045);
+  return 0.009;
+}
+
+/** Slowly orbiting 3D graph of our knowledge base (WebGL). Drag to rotate, scroll to zoom, click to open. */
 export default function KnowledgeGraph({
-  nodes = 52,
-  seed = 7,
-  labels,
-  labelEvery,
+  data,
   highlight = NONE,
+  labelCollections = 8,
   period = 90,
   distance = 3.4,
   className = "",
@@ -71,7 +95,7 @@ export default function KnowledgeGraph({
 
   useEffect(() => {
     const el = host.current;
-    if (!el) return;
+    if (!el || data.nodes.length === 0) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     let renderer: THREE.WebGLRenderer;
@@ -96,21 +120,25 @@ export default function KnowledgeGraph({
     const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 50);
     camera.position.set(0, 0.16 * distance, distance);
 
-    const { pts, edges } = buildGraph(nodes, seed);
+    const { pos, links } = layout(data);
     const hi = new Set(highlight);
-    const every = labelEvery ?? Math.max(1, Math.floor(nodes / labels.length));
-    const labelled = new Map<number, string>();
-    for (let i = 0, k = 0; i < nodes && k < labels.length; i += every, k++) labelled.set(i, labels[k]);
+    const bigCollections = new Set(
+      data.nodes
+        .filter((x) => x.type === "collection")
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, labelCollections)
+        .map((x) => x.id),
+    );
 
     const group = new THREE.Group();
     scene.add(group);
 
-    // Edges: plain ones faint, ones between highlighted nodes in the accent.
+    // Edges: faint, the ones leading to a highlighted node in the accent.
     const plain: number[] = [];
     const strong: number[] = [];
-    for (const [a, b] of edges) {
-      const target = hi.has(a) && hi.has(b) ? strong : plain;
-      target.push(...pts[a].toArray(), ...pts[b].toArray());
+    for (const [a, b] of links) {
+      const target = hi.has(data.nodes[a].id) || hi.has(data.nodes[b].id) ? strong : plain;
+      target.push(...pos[a].toArray(), ...pos[b].toArray());
     }
     const lines = (arr: number[], color: number, opacity: number) => {
       const g = new THREE.BufferGeometry();
@@ -119,24 +147,29 @@ export default function KnowledgeGraph({
     };
     group.add(lines(plain, INK, 0.16), lines(strong, ACCENT, 0.8));
 
-    // Nodes.
+    // Nodes: workspaces in the accent, sources and collections in ink, documents dim.
     const sphere = new THREE.SphereGeometry(1, 16, 12);
-    const pulsing: THREE.Mesh[] = [];
-    pts.forEach((p, i) => {
-      const isHi = hi.has(i);
-      const isLab = labelled.has(i);
-      const color = isHi ? ACCENT : isLab || hi.size === 0 ? INK : DIM;
+    const pulsing: [THREE.Mesh, number][] = [];
+    const meshes: THREE.Mesh[] = [];
+    data.nodes.forEach((node, i) => {
+      const isHi = hi.has(node.id);
+      const color = isHi || node.type === "workspace" ? ACCENT : node.type === "document" && hi.size === 0 ? DIM : node.type === "document" ? DIM : INK;
       const mesh = new THREE.Mesh(sphere, new THREE.MeshBasicMaterial({ color }));
-      mesh.position.copy(p);
-      mesh.scale.setScalar(isHi ? 0.024 : isLab ? 0.019 : 0.011);
+      mesh.position.copy(pos[i]);
+      const s = isHi ? Math.max(size(node), 0.02) : size(node);
+      mesh.scale.setScalar(s);
+      mesh.userData = node;
       group.add(mesh);
-      if (isHi) pulsing.push(mesh);
-      if (isLab) {
+      meshes.push(mesh);
+      if (isHi) pulsing.push([mesh, s]);
+      const labelled = node.type === "workspace" || node.type === "source" || bigCollections.has(node.id) || isHi;
+      if (labelled) {
         // CSS2DRenderer owns the outer element's transform, so offset the text inside it.
         const tag = document.createElement("div");
         const text = document.createElement("span");
-        text.textContent = labelled.get(i)!;
-        text.style.cssText = `display: block; margin-left: 10px; font: 10px "IBM Plex Mono", monospace; color: ${isHi ? "#6cc4dc" : "#a3a9b3"}; white-space: nowrap;`;
+        text.textContent = node.label.length > 34 ? `${node.label.slice(0, 33)}…` : node.label;
+        const strongLabel = node.type === "workspace" || isHi;
+        text.style.cssText = `display: block; margin-left: 10px; font: ${node.type === "workspace" ? "11px" : "10px"} "IBM Plex Mono", monospace; color: ${strongLabel ? "#6cc4dc" : "#a3a9b3"}; white-space: nowrap;`;
         tag.appendChild(text);
         const obj = new CSS2DObject(tag);
         obj.center.set(0, 0.5);
@@ -147,10 +180,27 @@ export default function KnowledgeGraph({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
     controls.enableDamping = true;
-    controls.minDistance = 2;
+    controls.minDistance = 1.6;
     controls.maxDistance = 6;
     controls.autoRotate = !reduced;
     controls.autoRotateSpeed = 60 / period; // OrbitControls: 2.0 = one turn per 30 s
+
+    // Click a node to open it (collection or document link), without breaking drag-to-orbit.
+    const ray = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let down: [number, number] | null = null;
+    const onDown = (e: PointerEvent) => (down = [e.clientX, e.clientY]);
+    const onUp = (e: PointerEvent) => {
+      if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
+      const r = renderer.domElement.getBoundingClientRect();
+      pointer.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(pointer, camera);
+      const hit = ray.intersectObjects(meshes, false)[0];
+      const node = hit?.object.userData as KNode | undefined;
+      if (node?.url) window.open(node.url, "_blank", "noopener");
+    };
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointerup", onUp);
 
     const resize = () => {
       const { clientWidth: w, clientHeight: h } = el;
@@ -169,8 +219,8 @@ export default function KnowledgeGraph({
     const tick = () => {
       frame = requestAnimationFrame(tick);
       if (!reduced) {
-        const s = 0.024 * (1 + 0.18 * Math.sin(clock.getElapsedTime() * 2));
-        pulsing.forEach((m) => m.scale.setScalar(s));
+        const k = 1 + 0.18 * Math.sin(clock.getElapsedTime() * 2);
+        pulsing.forEach(([m, s]) => m.scale.setScalar(s * k));
       }
       controls.update();
       renderer.render(scene, camera);
@@ -182,6 +232,8 @@ export default function KnowledgeGraph({
       cancelAnimationFrame(frame);
       ro.disconnect();
       controls.dispose();
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("pointerup", onUp);
       scene.traverse((o) => {
         if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
           o.geometry.dispose();
@@ -191,18 +243,16 @@ export default function KnowledgeGraph({
       renderer.dispose();
       el.innerHTML = "";
     };
-  }, [nodes, seed, labels, labelEvery, highlight, period, distance]);
+  }, [data, highlight, labelCollections, period, distance]);
 
   return (
     <div
       ref={host}
       className={`relative h-full w-full cursor-grab overflow-hidden active:cursor-grabbing ${className}`}
       role="img"
-      aria-label="3D knowledge graph. Drag to rotate."
+      aria-label={`3D graph of the knowledge base: ${data.nodes.length} nodes. Drag to rotate, click a node to open it.`}
     >
-      {failed && (
-        <p className="cap absolute inset-0 grid place-items-center">WebGL is not available in this browser.</p>
-      )}
+      {failed && <p className="cap absolute inset-0 grid place-items-center">WebGL is not available in this browser.</p>}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { SampleEvent } from "../sample";
+export type AgendaEvent = { start: number; end: number; title: string; meta: string };
 
 const START = 8;
 const END = 18;
@@ -7,7 +7,7 @@ const END = 18;
 const hhmm = (t: number) => `${String(Math.floor(t)).padStart(2, "0")}:${String(Math.round((t % 1) * 60)).padStart(2, "0")}`;
 
 /** Day agenda on a measured time axis (quarter-hour ticks) with a live "now" line. */
-export default function Timeline({ events }: { events: SampleEvent[] }) {
+export default function Timeline({ events }: { events: AgendaEvent[] }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);

@@ -2,7 +2,7 @@ import { LogOut, Power } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { type FreezeState, agentsApi } from "../agentsApi";
-import { SUBSYSTEMS } from "../sample";
+import { useSubsystems } from "../knowledgeApi";
 import { SECTIONS } from "../sections";
 
 export function Mark({ size = 22 }: { size?: number }) {
@@ -52,6 +52,7 @@ function FrozenBanner({ freeze, onUnfreeze }: { freeze: FreezeState; onUnfreeze:
 }
 
 export default function Shell({ children, onLogout }: { children: ReactNode; onLogout?: () => void }) {
+  const subsystems = useSubsystems();
   const { freeze, setFreeze, approvals } = usePlatformState();
   const toggleFreeze = async () => {
     if (freeze.frozen) setFreeze(await agentsApi.unfreeze());
@@ -108,16 +109,13 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
         </button>
         <div className="flex flex-col gap-2 rounded-md border border-line p-3">
           <span className="cap flex items-center justify-between">
-            SUBSYSTEMS <span className="rounded-sm border border-dashed border-ink-3 px-1 text-[9px]">SAMPLE</span>
+            SUBSYSTEMS <span className="text-[9px]">live</span>
           </span>
-          {SUBSYSTEMS.map((s) => (
-            <span key={s.name} className="flex items-center gap-2 text-[13px] text-ink-2">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+          {subsystems?.map((s) => (
+            <span key={s.name} className="flex items-center gap-2 text-[13px] text-ink-2" title={s.detail}>
+              <span className={`h-1.5 w-1.5 rounded-full ${s.ok ? "bg-accent" : "bg-ink-3"}`} />
               {s.name.split(" ")[0]}
-              <span className="cap ml-auto">
-                {s.value}
-                {s.unit.startsWith("ms") ? "ms" : "s"}
-              </span>
+              <span className="cap ml-auto">{s.value !== null ? `${s.value}${s.unit}` : s.ok ? s.detail.split(" ")[0] : "off"}</span>
             </span>
           ))}
         </div>

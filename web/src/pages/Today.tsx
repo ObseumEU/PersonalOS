@@ -1,13 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import KnowledgeGraph from "../components/LazyGraph";
+import KnowledgePanel from "../components/KnowledgePanel";
 import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
-import { AskBox, Legend, PageHeader, Panel, SampleBadge } from "../components/ui";
-import { EVENTS, GRAPH_LABELS } from "../sample";
+import { AskBox, PageHeader, Panel } from "../components/ui";
 import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
-
-const HIGHLIGHT = [0, 5, 11, 16];
 
 function greeting(h: number) {
   if (h < 5) return "Good night";
@@ -20,8 +17,10 @@ export default function Today() {
   const now = new Date();
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [counts, setCounts] = useState<Counts | null>(null);
+  const [review, setReview] = useState<Task[] | null>(null);
   const refresh = () => {
     tasksApi.list("today").then(setTasks, () => setTasks([]));
+    tasksApi.list("review").then(setReview, () => setReview([]));
     tasksApi.counts().then(setCounts, () => undefined);
   };
   useEffect(refresh, []);
@@ -36,28 +35,16 @@ export default function Today() {
         title={`${greeting(now.getHours())}.`}
         sub={
           <span className="flex flex-wrap items-center gap-2">
-            Your day across files, tasks and calendar. <SampleBadge />
+            Your day across tasks, agents and the knowledge base.
           </span>
         }
       />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)_auto]">
-        <Panel
-          fig="FIG. 1"
-          title="Knowledge graph"
-          right="52 nodes · sample"
-          className="h-[340px] lg:col-span-7 lg:h-auto"
-          bodyClassName="measure-grid relative"
-        >
-          <KnowledgeGraph labels={GRAPH_LABELS} highlight={HIGHLIGHT} />
-          <div className="pointer-events-none absolute bottom-3 left-4">
-            <Legend items={[["#6cc4dc", "relevant today"], ["#e6e8eb", "labelled"], ["#4a515b", "other"]]} />
-          </div>
-          <span className="cap pointer-events-none absolute right-4 bottom-3 hidden sm:block">drag to orbit</span>
-        </Panel>
+        <KnowledgePanel fig="FIG. 1" className="h-[340px] lg:col-span-7 lg:h-auto" />
 
         <div className="flex min-h-0 flex-col gap-4 lg:col-span-5">
-          <AskBox id="ask-today" placeholder="Ask about your files, tasks and calendar" />
+          <AskBox id="ask-today" placeholder="Ask our knowledge base (answers cite their sources)" />
           <Panel
             fig="TAB. 1"
             title="Today"
@@ -95,24 +82,36 @@ export default function Today() {
               );
             })}
           </Panel>
-          <Panel bodyClassName="flex flex-col gap-2 px-4 py-3.5">
-            <span className="flex items-baseline gap-2.5">
-              <span className="cap text-accent!">NOTE</span>
-              <span className="text-sm font-medium">Observation</span>
-              <span className="ml-auto">
-                <SampleBadge />
-              </span>
-            </span>
-            <p className="text-sm leading-relaxed text-ink-2">
-              The Acme framework agreement renews on 1 November; notice period 30 days
-              <sup className="text-accent"> [1]</sup>. Decision needed by 1 October.
-            </p>
-            <span className="cap">[1] Acme framework agreement.pdf, p. 3, §7</span>
+          <Panel
+            fig="REVIEW"
+            title="Handed in by agents"
+            right={
+              <Link to="/tasks?view=review" className="hover:text-accent">
+                {review ? `${review.length} to review` : "review"} →
+              </Link>
+            }
+            bodyClassName="max-h-[180px] overflow-y-auto"
+          >
+            {review?.length === 0 && <p className="cap px-4 py-4">Nothing waiting for your review.</p>}
+            {review?.slice(0, 4).map((t) => (
+              <Link key={t.id} to={`/tasks?view=review&task=${t.ref}`} className="flex flex-col gap-0.5 border-b border-line px-4 py-2.5 last:border-0 hover:bg-raised">
+                <span className="flex items-center gap-2">
+                  <span className="truncate text-sm">{t.title}</span>
+                  <span className="ml-auto shrink-0">
+                    <AssigneeChip type={t.assignee_type} name={t.assignee_name} />
+                  </span>
+                </span>
+                {t.progress_note && <span className="cap truncate">{t.progress_note}</span>}
+              </Link>
+            ))}
           </Panel>
         </div>
 
-        <Panel fig="FIG. 2" title="Agenda" right={<SampleBadge />} className="lg:col-span-12" bodyClassName="px-5 pt-3.5 pb-1.5">
-          <Timeline events={EVENTS} />
+        <Panel fig="FIG. 2" title="Agenda" right="no calendar connected yet" className="lg:col-span-12" bodyClassName="relative px-5 pt-3.5 pb-1.5">
+          <Timeline events={[]} />
+          <p className="cap pointer-events-none absolute inset-0 grid place-items-center">
+            Your calendar appears here once the Google Calendar connector is set up (Connectors).
+          </p>
         </Panel>
       </div>
     </div>

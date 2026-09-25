@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { ArrowRight, Orbit } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -79,11 +80,31 @@ export function PageHeader({ kicker, title, sub }: { kicker: string; title: stri
   );
 }
 
-export function AskBox({ placeholder, id }: { placeholder: string; id: string }) {
+export function AskBox({
+  placeholder,
+  id,
+  onAsk,
+  busy = false,
+  defaultValue = "",
+}: {
+  placeholder: string;
+  id: string;
+  /** Without it, asking opens the Assistant with the question. */
+  onAsk?: (question: string) => void;
+  busy?: boolean;
+  defaultValue?: string;
+}) {
+  const navigate = useNavigate();
   return (
     <form
       className="flex h-[52px] items-center gap-3 rounded-md border border-line bg-bg pr-1.5 pl-4 focus-within:border-accent"
-      onSubmit={(e) => e.preventDefault()}
+      onSubmit={(e) => {
+        e.preventDefault();
+        const q = String(new FormData(e.currentTarget).get("q") ?? "").trim();
+        if (!q || busy) return;
+        if (onAsk) onAsk(q);
+        else navigate(`/assistant?q=${encodeURIComponent(q)}`);
+      }}
     >
       <Orbit size={18} strokeWidth={1.5} className="shrink-0 text-accent" />
       <label htmlFor={id} className="sr-only">
@@ -91,15 +112,18 @@ export function AskBox({ placeholder, id }: { placeholder: string; id: string })
       </label>
       <input
         id={id}
+        name="q"
+        defaultValue={defaultValue}
         placeholder={placeholder}
         className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-ink-3"
       />
       <button
         type="submit"
-        title="The assistant arrives in Phase 3"
+        disabled={busy}
+        title="Answered by our knowledge base, with verified citations"
         className="flex h-[38px] items-center gap-1.5 rounded border border-accent bg-accent/10 px-3.5 text-[13px] font-medium text-accent transition hover:bg-accent/20"
       >
-        Ask <ArrowRight size={14} />
+        {busy ? "Asking…" : "Ask"} <ArrowRight size={14} />
       </button>
     </form>
   );
