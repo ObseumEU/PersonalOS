@@ -4,6 +4,7 @@ import KnowledgePanel from "../components/KnowledgePanel";
 import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
 import { AskBox, PageHeader, Panel } from "../components/ui";
+import { type FileItem, filesApi, fmtDate } from "../filesApi";
 import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
 import { type Agenda, agendaApi } from "./Calendar";
 
@@ -20,12 +21,14 @@ export default function Today() {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [review, setReview] = useState<Task[] | null>(null);
   const [agenda, setAgenda] = useState<Agenda | null>(null);
+  const [recent, setRecent] = useState<FileItem[] | null>(null);
   const refresh = () => {
     tasksApi.list("today").then(setTasks, () => setTasks([]));
     tasksApi.list("review").then(setReview, () => setReview([]));
     const d = new Date();
     agendaApi(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`, 1).then(setAgenda, () => setAgenda(null));
     tasksApi.counts().then(setCounts, () => undefined);
+    filesApi.list().then((f) => setRecent(f.slice(0, 4)), () => setRecent([]));
   };
   useEffect(refresh, []);
   const kicker = now
@@ -120,7 +123,7 @@ export default function Today() {
             </Link>
           }
           mock={agenda ? !agenda.configured : false}
-          className="lg:col-span-12"
+          className="lg:col-span-9"
           bodyClassName="relative px-5 pt-3.5 pb-1.5"
         >
           <Timeline
@@ -136,6 +139,36 @@ export default function Today() {
               Connect a calendar on the Calendar page (a private iCal address, no login needed).
             </p>
           )}
+        </Panel>
+
+        <Panel
+          fig="FILES"
+          title="Recent files"
+          right={
+            <Link to="/files" className="hover:text-accent">
+              all files →
+            </Link>
+          }
+          className="lg:col-span-3"
+          bodyClassName="max-h-[180px] overflow-y-auto"
+        >
+          {recent?.length === 0 && (
+            <p className="cap px-4 py-4">
+              No files yet.{" "}
+              <Link to="/files" className="text-accent!">
+                Upload one →
+              </Link>
+            </p>
+          )}
+          {recent?.map((f) => (
+            <Link key={f.id} to={`/files?file=${f.id}`} className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
+              <span className="truncate text-sm">{f.name}</span>
+              <span className="cap ml-auto shrink-0">
+                {f.topic ? `#${f.topic} · ` : ""}
+                {fmtDate(f.created_at)}
+              </span>
+            </Link>
+          ))}
         </Panel>
       </div>
     </div>

@@ -140,5 +140,6 @@ def rollback_run(conn: sqlite3.Connection, ctx: Ctx, run_id: int) -> list[tuple[
     return undone
 
 
-for _entity, _table in (("task", "tasks"), ("note", "notes"), ("file", "files"), ("memory", "memories")):
+for _entity, _table in (("task", "tasks"), ("note", "notes"), ("file", "files"), ("memory", "memories"),
+                        ("topic", "topics")):
     register(_entity, _table)

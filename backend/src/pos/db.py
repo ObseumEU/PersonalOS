@@ -4,6 +4,54 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
+
+def _has_fts5() -> bool:
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE VIRTUAL TABLE t USING fts5(x)")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.close()
+
+
+def has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (name,)).fetchone() is not None
+
+
+# Full-text search for files and notes. SQLite builds without FTS5 skip these
+# tables; pos.files and pos.notes then fall back to LIKE search.
+HAS_FTS5 = _has_fts5()
+_FTS_SQL = """
+    CREATE VIRTUAL TABLE files_fts USING fts5(name, text_extract, content='files', content_rowid='id');
+    CREATE TRIGGER files_fts_ai AFTER INSERT ON files BEGIN
+        INSERT INTO files_fts (rowid, name, text_extract) VALUES (new.id, new.name, new.text_extract);
+    END;
+    CREATE TRIGGER files_fts_ad AFTER DELETE ON files BEGIN
+        INSERT INTO files_fts (files_fts, rowid, name, text_extract)
+        VALUES ('delete', old.id, old.name, old.text_extract);
+    END;
+    CREATE TRIGGER files_fts_au AFTER UPDATE OF name, text_extract ON files BEGIN
+        INSERT INTO files_fts (files_fts, rowid, name, text_extract)
+        VALUES ('delete', old.id, old.name, old.text_extract);
+        INSERT INTO files_fts (rowid, name, text_extract) VALUES (new.id, new.name, new.text_extract);
+    END;
+    INSERT INTO files_fts (files_fts) VALUES ('rebuild');
+    CREATE VIRTUAL TABLE notes_fts USING fts5(title, body, content='notes', content_rowid='id');
+    CREATE TRIGGER notes_fts_ai AFTER INSERT ON notes BEGIN
+        INSERT INTO notes_fts (rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    CREATE TRIGGER notes_fts_ad AFTER DELETE ON notes BEGIN
+        INSERT INTO notes_fts (notes_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+    END;
+    CREATE TRIGGER notes_fts_au AFTER UPDATE OF title, body ON notes BEGIN
+        INSERT INTO notes_fts (notes_fts, rowid, title, body) VALUES ('delete', old.id, old.title, old.body);
+        INSERT INTO notes_fts (rowid, title, body) VALUES (new.id, new.title, new.body);
+    END;
+    INSERT INTO notes_fts (notes_fts) VALUES ('rebuild');
+"""
+
 # Each entry runs once, in order. Never edit a shipped migration; append a new one.
 MIGRATIONS: list[str] = [
     """
@@ -330,6 +378,31 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN model TEXT;
     """,
+    # 15: files, notes and topics (PLAN 3, items 2, 3 and 6). The files and
+    #     notes tables exist since migration 2; this adds what they were missing,
+    #     the topics table, and full-text search (_FTS_SQL, when FTS5 exists).
+    """
+    ALTER TABLE files ADD COLUMN sha256 TEXT;
+    ALTER TABLE files ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE files ADD COLUMN created_by INTEGER REFERENCES actors(id);
+    ALTER TABLE files ADD COLUMN text_extract TEXT NOT NULL DEFAULT '';
+    CREATE INDEX files_sha256 ON files (sha256);
+    CREATE INDEX files_topic ON files (topic);
+    ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE notes ADD COLUMN created_by INTEGER REFERENCES actors(id);
+    CREATE INDEX notes_topic ON notes (topic);
+    CREATE TABLE topics (
+        id          INTEGER PRIMARY KEY,
+        slug        TEXT NOT NULL UNIQUE,
+        name        TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        color       TEXT,
+        created_by  INTEGER REFERENCES actors(id),
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        archived_at TEXT
+    );
+    """ + (_FTS_SQL if HAS_FTS5 else ""),
 ]
 
 
