@@ -75,6 +75,45 @@ def parse(ics: bytes, calendar: str, start: date, end: date) -> list[dict]:
     return out
 
 
+def work_hours() -> tuple[int, int]:
+    """POS_WORK_HOURS="09:00-17:00" as minutes from midnight."""
+    raw = os.environ.get("POS_WORK_HOURS", "09:00-17:00")
+    try:
+        a, b = raw.split("-")
+        start = int(a.split(":")[0]) * 60 + int(a.split(":")[1])
+        end = int(b.split(":")[0]) * 60 + int(b.split(":")[1])
+        if 0 <= start < end <= 24 * 60:
+            return start, end
+    except (ValueError, IndexError):
+        pass
+    return 9 * 60, 17 * 60
+
+
+def capacity(events: list[dict], day: date) -> dict:
+    """The working day minus the timed calendar events in it (overlaps counted once)."""
+    ws, we = work_hours()
+    busy: list[tuple[int, int]] = []
+    for e in events:
+        if e.get("all_day"):
+            continue
+        s, en = datetime.fromisoformat(e["start"]).astimezone(TZ), datetime.fromisoformat(e["end"]).astimezone(TZ)
+        if en.date() < day or s.date() > day:
+            continue
+        a = max(ws, s.hour * 60 + s.minute if s.date() == day else 0)
+        b = min(we, en.hour * 60 + en.minute if en.date() == day else 24 * 60)
+        if a < b:
+            busy.append((a, b))
+    busy.sort()
+    merged: list[list[int]] = []
+    for a, b in busy:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    meetings = sum(b - a for a, b in merged)
+    return {"work_min": we - ws, "meetings_min": meetings, "free_min": max(0, we - ws - meetings)}
+
+
 def agenda(conn, ctx: Ctx, start: date, days: int = 7) -> dict:
     end = start + timedelta(days=days)
     sources, events = [], []
@@ -103,4 +142,5 @@ def agenda(conn, ctx: Ctx, start: date, days: int = 7) -> dict:
                               "kind": "deadline" if kind == "deadline" else "do", "status": t["status"],
                               "assignee_type": t.get("assignee_type"), "assignee_name": t.get("assignee_name")})
     return {"start": start.isoformat(), "days": days, "sources": sources, "events": events, "tasks": dated,
+            "capacity": capacity(events, start),
             "configured": bool(feeds()), "now": datetime.now(timezone.utc).astimezone(TZ).isoformat()}

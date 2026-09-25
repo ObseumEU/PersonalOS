@@ -94,9 +94,28 @@ def _fields(body: BaseModel) -> dict:
 
 
 @router.get("/tasks")
-def list_tasks(view: str = "today", topic: str | None = None, assignee_id: int | None = None,
+def list_tasks(view: str = "today", topic: str | None = None, assignee_id: int | None = None, scope: str = "all",
                conn=Depends(get_db), ctx=Depends(get_ctx)):
-    return tasks.list_tasks(conn, ctx, view, topic=topic, assignee_id=assignee_id)
+    """`scope`: mine (assigned to me), team (me and everyone below me) or all."""
+    return tasks.list_tasks(conn, ctx, view, topic=topic, assignee_id=assignee_id, scope=scope)
+
+
+@router.get("/weekly-review")
+def weekly_review(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The GTD weekly review for the signed-in member: inbox to zero, waiting for,
+    someday, and projects without a next step."""
+    from . import projects
+
+    no_next = [p for p in projects.list_projects(conn, ctx, "active")
+               if not conn.execute("""SELECT 1 FROM tasks WHERE project_id = ? AND archived_at IS NULL
+                                      AND status IN ('next', 'working')""", (p["id"],)).fetchone()]
+    return {
+        "inbox": tasks.list_tasks(conn, ctx, "inbox", scope="mine"),
+        "waiting": tasks.list_tasks(conn, ctx, "waiting", scope="mine"),
+        "someday": tasks.list_tasks(conn, ctx, "someday", scope="mine"),
+        "projects_without_next": [{k: p[k] for k in ("id", "slug", "name", "lead_name", "counts")} for p in no_next],
+        "to_review": tasks.list_tasks(conn, ctx, "to_review"),
+    }
 
 
 @router.get("/tasks/counts")

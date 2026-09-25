@@ -317,6 +317,8 @@ Stav: hotovo (commit „Wave 2 / 4.3“). Zpráva člověka agentovi s `answers_
 - Webová týdenní revize: jedna stránka s kroky GTD (inbox na nulu, waiting,
   someday, projekty bez dalšího kroku); agenti ji mají dál jako prompt.
 
+Stav: hotovo (commit „Wave 2 / 4.4“). Pracovní doba z `POS_WORK_HOURS` (výchozí 09:00-17:00).
+
 ### 4.5 Rozpočet a rutiny v UI
 
 - System: panel Rozpočet (obě předplatná, stav ok/watch/throttle/pause,

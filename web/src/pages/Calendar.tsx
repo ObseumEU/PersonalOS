@@ -15,6 +15,8 @@ export type Agenda = {
   sources: { name: string; ok: boolean; error?: string }[];
   events: CalEvent[];
   tasks: DatedTask[];
+  /** The first day: working hours minus timed events (POS_WORK_HOURS). */
+  capacity?: { work_min: number; meetings_min: number; free_min: number };
 };
 
 export const agendaApi = (start: string, days = 7) => api<Agenda>(`/api/calendar?start=${start}&days=${days}`);

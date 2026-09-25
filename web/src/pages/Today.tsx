@@ -24,8 +24,8 @@ export default function Today() {
   const [agenda, setAgenda] = useState<Agenda | null>(null);
   const [recent, setRecent] = useState<FileItem[] | null>(null);
   const refresh = () => {
-    tasksApi.list("today").then(setTasks, () => setTasks([]));
-    tasksApi.list("review").then(setReview, () => setReview([]));
+    tasksApi.list("today", undefined, "mine").then(setTasks, () => setTasks([]));
+    tasksApi.list("to_review").then(setReview, () => setReview([]));
     const d = new Date();
     agendaApi(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`, 1).then(setAgenda, () => setAgenda(null));
     tasksApi.counts().then(setCounts, () => undefined);
@@ -92,7 +92,7 @@ export default function Today() {
           </Panel>
           <Panel
             fig="REVIEW"
-            title="Handed in by agents"
+            title="Waiting for your review"
             right={
               <Link to="/tasks?view=review" className="hover:text-accent">
                 {review ? `${review.length} to review` : "review"} →

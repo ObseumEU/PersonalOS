@@ -16,6 +16,7 @@ import Invite from "./pages/Invite";
 import Notes from "./pages/Notes";
 import Projects from "./pages/Projects";
 import Team from "./pages/Team";
+import WeeklyReview from "./pages/WeeklyReview";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/today" element={<Today />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/inbox" element={<InboxClarify />} />
+        <Route path="/weekly-review" element={<WeeklyReview />} />
         <Route path="/team" element={<Team />} />
         <Route path="/team/:id" element={<AgentDetail />} />
         <Route path="/agents" element={<Navigate to="/team" replace />} />

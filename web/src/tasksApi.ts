@@ -80,6 +80,9 @@ export type Comment = {
   created_at: string;
 };
 
+/** Whose tasks: assigned to me, to me and everyone below me, or everyone's. */
+export type Scope = "mine" | "team" | "all";
+
 export type Actor = { id: number; kind: "human" | "ai" | "agent"; name: string; is_owner: number };
 export type Version = { version: number; action: string; at: string; actor_name: string | null; run_id: number | null };
 export type Counts = Record<Exclude<View, "done">, number>;
@@ -156,8 +159,8 @@ export type TaskLive = {
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
 export const tasksApi = {
-  list: (view: View, topic?: string) =>
-    api<Task[]>(`/api/tasks?view=${view}${topic ? `&topic=${encodeURIComponent(topic)}` : ""}`),
+  list: (view: View | "to_review", topic?: string, scope: Scope = "all") =>
+    api<Task[]>(`/api/tasks?view=${view}&scope=${scope}${topic ? `&topic=${encodeURIComponent(topic)}` : ""}`),
   counts: () => api<Counts>("/api/tasks/counts"),
   topics: () => api<{ topic: string; open: number }[]>("/api/tasks/topics"),
   actors: () => api<Actor[]>("/api/actors"),

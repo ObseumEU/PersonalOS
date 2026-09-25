@@ -140,8 +140,8 @@ def _view_sql(view: str, actor_id: int | None = None) -> tuple[str, list, str]:
     top = "parent_id IS NULL"
     if view == "inbox":
         return "status = 'inbox'", [], "created_at DESC"
-    if view == "today":
-        return (f"{top} AND status IN ('next', 'working', 'review', 'waiting') "
+    if view == "today":  # steps too: a step planned for today is today's work
+        return ("status IN ('next', 'working', 'review', 'waiting') "
                 "AND ((do_date IS NOT NULL AND do_date <= ?) OR (deadline IS NOT NULL AND deadline <= ?))",
                 [t, t], "COALESCE(priority, 4), CASE energy WHEN 'high' THEN 0 ELSE 1 END, position, id")
     if view == "upcoming":
@@ -166,9 +166,30 @@ def _view_sql(view: str, actor_id: int | None = None) -> tuple[str, list, str]:
     raise Invalid(f"view must be one of {VIEWS}")
 
 
+def _scope_sql(conn: sqlite3.Connection, ctx: Ctx, scope: str) -> tuple[str, list]:
+    """mine: assigned to me, or mine and unassigned; team: me and everyone below me; all."""
+    if scope == "mine":
+        return "(assignee_id = ? OR (assignee_id IS NULL AND owner_id = ?))", [ctx.actor_id, ctx.actor_id]
+    if scope == "team":
+        from .org import manages
+
+        ids = [ctx.actor_id] + [r["id"] for r in conn.execute("SELECT id FROM actors WHERE archived_at IS NULL")
+                                if manages(conn, ctx.actor_id, r["id"])]
+        return f"(assignee_id IN ({','.join('?' for _ in ids)}) OR (assignee_id IS NULL AND owner_id = ?))", \
+            [*ids, ctx.actor_id]
+    if scope in ("all", "", None):
+        return "1", []
+    raise Invalid("scope must be mine, team or all")
+
+
 def list_tasks(conn: sqlite3.Connection, ctx: Ctx, view: str = "today", *, topic: str | None = None,
-               assignee_id: int | None = None, limit: int = 200) -> list[dict]:
+               assignee_id: int | None = None, limit: int = 200, scope: str = "all") -> list[dict]:
     cond, params, order = _view_sql(view, ctx.actor_id)
+    if view == "to_review" and actors.get(conn, ctx.actor_id)["is_owner"]:
+        # results handed in before reviewers existed wait for the owner
+        cond, params = "status = 'review' AND (reviewer_id = ? OR reviewer_id IS NULL)", [ctx.actor_id]
+    scond, sparams = _scope_sql(conn, ctx, scope)
+    cond, params = f"{cond} AND {scond}", [*params, *sparams]
     vis, vparams = visible_sql(ENTITY, ctx.actor_id)
     sql = f"SELECT * FROM tasks WHERE archived_at IS NULL AND {cond} AND {vis}"
     params = [*params, *vparams]

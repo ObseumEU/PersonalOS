@@ -185,16 +185,17 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     # ------------------------------------------------------------- read
 
     @mcp.tool(description="List tasks in a view: inbox, today, upcoming, next, agents, waiting, review, to_review "
-                          "(results waiting for you as their reviewer), someday, done. "
+                          "(results waiting for you as their reviewer), someday, done; scope mine | team | all. "
                           "Optionally filter by topic or assignee name ('me' for yourself).")
     def list_tasks(ctx: Context, view: str = "today", topic: str | None = None,
-                   assignee: str | None = None) -> list[dict]:
+                   assignee: str | None = None, scope: str = "all") -> list[dict]:
         with session(ctx, "list_tasks", view=view, topic=topic, assignee=assignee) as (conn, c):
             assignee_id = None
             if assignee:
                 cols = tasks.resolve_assignee(conn, c, assignee)
                 assignee_id = cols["assignee_id"] or -1
-            return [brief(t) for t in tasks.list_tasks(conn, c, view, topic=topic, assignee_id=assignee_id)]
+            return [brief(t) for t in tasks.list_tasks(conn, c, view, topic=topic, assignee_id=assignee_id,
+                                                       scope=scope)]
 
     @mcp.tool(description="One task with its steps, notes and fields. Accepts T-012 or 12.")
     def get_task(ctx: Context, task_id: str) -> dict:

@@ -4,12 +4,14 @@ import { Link, useSearchParams } from "react-router-dom";
 import AgentPicker from "../components/tasks/AgentPicker";
 import { Energy, StatePill, fmtMinutes } from "../components/tasks/bits";
 import TaskDetail from "../components/tasks/TaskDetail";
+import { agendaApi } from "./Calendar";
 import { MockDot, PageHeader, Panel } from "../components/ui";
 import {
   type Actor,
   type Counts,
   NO_DESCRIPTION,
   PRIORITY_LABEL,
+  type Scope,
   type Task,
   type View,
   descriptionPreview,
@@ -132,17 +134,33 @@ function Row({
 }
 
 function CapacityBar({ tasks }: { tasks: Task[] }) {
+  const [free, setFree] = useState<number | null>(null);
+  const [meetings, setMeetings] = useState(0);
+  useEffect(() => {
+    const d = new Date();
+    agendaApi(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`, 1).then(
+      (a) => {
+        if (a.configured && a.capacity) {
+          setFree(a.capacity.free_min);
+          setMeetings(a.capacity.meetings_min);
+        }
+      },
+      () => undefined,
+    );
+  }, []);
+  const capacity = free ?? DAY_CAPACITY_MIN;
   const mine = tasks
     .filter((t) => (t.assignee_type === "human" || !t.assignee_type) && t.status !== "done")
     .reduce((s, t) => s + (t.estimate_min ?? 0), 0);
-  const pct = Math.min(100, (mine / DAY_CAPACITY_MIN) * 100);
+  const pct = capacity ? Math.min(100, (mine / capacity) * 100) : 100;
   return (
     <div className="flex flex-col gap-2 border-b border-line px-3.5 py-3">
       <div className="flex flex-wrap items-baseline gap-2.5">
         <span className="text-[13px] font-medium">Today’s plan</span>
-        <MockDot why="capacity is a fixed 6 h day until the calendar sync exists" />
+        {free === null && <MockDot why="no calendar connected: a fixed 6 h day" />}
         <span className="cap">
-          {fmtMinutes(mine)} of your time planned · {fmtMinutes(DAY_CAPACITY_MIN)} focus day until calendar sync
+          {fmtMinutes(mine)} of your time planned ·{" "}
+          {free === null ? `${fmtMinutes(DAY_CAPACITY_MIN)} focus day (no calendar)` : `${fmtMinutes(free)} free after ${fmtMinutes(meetings)} of meetings`}
         </span>
       </div>
       <div className="relative h-2 rounded-[1px] bg-line">
@@ -162,6 +180,7 @@ export default function Tasks() {
   const [params, setParams] = useSearchParams();
   const view = (params.get("view") as View) || "today";
   const topic = params.get("topic") ?? undefined;
+  const scope = (params.get("scope") as Scope) || "all";
   const selected = params.get("task");
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [counts, setCounts] = useState<Counts | null>(null);
@@ -170,10 +189,10 @@ export default function Tasks() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    tasksApi.list(view, topic).then(setTasks, (e) => setError(e.message));
+    tasksApi.list(view, topic, scope).then(setTasks, (e) => setError(e.message));
     tasksApi.counts().then(setCounts);
     tasksApi.topics().then(setTopics);
-  }, [view, topic]);
+  }, [view, topic, scope]);
   useEffect(refresh, [refresh]);
   useEffect(() => {
     tasksApi.actors().then(setActors);
@@ -250,7 +269,24 @@ export default function Tasks() {
         <Panel
           fig="TAB. 1"
           title={topic ? `${current.label} · #${topic}` : current.label}
-          right={view === "today" ? "priority, then energy" : `${tasks?.length ?? 0} tasks`}
+          right={
+            <span className="flex items-center gap-2">
+              {(["mine", "team", "all"] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => set({ scope: s === "all" ? null : s })}
+                  className={`cap ${s === scope ? "text-accent!" : "hover:text-ink"}`}
+                >
+                  {s === "mine" ? "mine" : s === "team" ? "my team" : "all"}
+                </button>
+              ))}
+              <span className="cap">· {view === "today" ? "priority, then energy" : `${tasks?.length ?? 0} tasks`}</span>
+              <Link to="/weekly-review" className="cap hover:text-accent">
+                weekly review →
+              </Link>
+            </span>
+          }
           className="min-w-0 flex-1"
           bodyClassName="flex flex-col overflow-y-auto"
         >

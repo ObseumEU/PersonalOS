@@ -195,3 +195,22 @@ def test_restore_and_logs_respect_visibility(conn, me, ai):
     tasks.update(conn, me, t["id"], {"visibility": "public", "title": "Plan v2"})
     out = versioning.restore(conn, ai, "task", t["id"], 1)
     assert out["title"] == "Plan" and out["visibility"] == "public" and out["owner_id"] == me.actor_id
+
+
+def test_my_day_scope_steps_and_capacity(conn, me, ai):
+    from datetime import date
+
+    from pos import agenda
+
+    t = tasks.create(conn, me, {"title": "Launch", "status": "next"})
+    tasks.create(conn, me, {"title": "Book the room", "parent_id": t["ref"], "do_date": today().isoformat()})
+    tasks.create(conn, me, {"title": "AI summary", "assignee": "ai", "do_date": today().isoformat()})
+    todays = [x["title"] for x in tasks.list_tasks(conn, me, "today", scope="mine")]
+    assert "Book the room" in todays and "AI summary" not in todays  # steps count, others' work does not
+    assert "AI summary" in [x["title"] for x in tasks.list_tasks(conn, me, "today", scope="all")]
+    day = date(2026, 9, 28)
+    ev = [{"start": "2026-09-28T10:00:00+02:00", "end": "2026-09-28T11:00:00+02:00", "all_day": False},
+          {"start": "2026-09-28T10:30:00+02:00", "end": "2026-09-28T12:00:00+02:00", "all_day": False},
+          {"start": "2026-09-28T00:00:00+02:00", "end": "2026-09-29T00:00:00+02:00", "all_day": True}]
+    cap = agenda.capacity(ev, day)
+    assert cap == {"work_min": 480, "meetings_min": 120, "free_min": 360}
