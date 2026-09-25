@@ -230,19 +230,23 @@ def restore(task_id: str, body: RestoreIn, conn=Depends(get_db), ctx=Depends(get
 
 
 @router.get("/actors")
-def list_actors(conn=Depends(get_db)):
-    return actors.list_actors(conn)
+def list_actors(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Members; where an agent's instructions file lives is the owner's business."""
+    owner = actors.get(conn, ctx.actor_id)["is_owner"]
+    return [a if owner else {k: v for k, v in a.items() if k != "instructions_path"}
+            for a in actors.list_actors(conn)]
 
 
 @router.get("/audit")
 def audit_log(entity: str | None = None, entity_id: int | None = None, run_id: int | None = None,
-              limit: int = 100, conn=Depends(get_db)):
-    return audit.entries(conn, entity=entity, entity_id=entity_id, run_id=run_id, limit=min(limit, 500))
+              limit: int = 100, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    rows = audit.entries(conn, entity=entity, entity_id=entity_id, run_id=run_id, limit=min(limit, 500))
+    return audit.readable(conn, rows, ctx.actor_id)
 
 
 @router.get("/runs")
-def runs(conn=Depends(get_db)):
-    return runner.list_runs(conn)
+def runs(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return runner.list_runs(conn, actor_id=ctx.actor_id)
 
 
 @router.post("/runs/{run_id}/rollback")

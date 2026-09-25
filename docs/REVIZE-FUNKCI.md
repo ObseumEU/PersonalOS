@@ -123,6 +123,16 @@ Každá položka je samostatná změna s testem.
 - F4: hotovo, db81463
 - F5, F6: hotovo, 7cd6491
 - F7, F8, F9: hotovo, 04db74e (+ testy a42b09b)
+- F10: hotovo, 50c7b53
+- F11, F16: hotovo, 53b3253
+- F12: hotovo, e31cad2
+- F13: hotovo, d86c3d8
+- F14: hotovo, 44d83fe (návrat na poslední dobrou verzi přestavbou z main; tagování image nebylo potřeba)
+- F15: hotovo (tento commit)
+- F17: hotovo, 884e033 (headless Chromium ověřen v kontejneru)
+- F18: hotovo, 97c02c4
+- F19: hotovo, f2dd491
+- F20, F21: hotovo, 30e7284 (`register_outbound_action` se používá: outbound registruje své akce)
 
 ## 3. Vlna 1: kolegiální jádro
 

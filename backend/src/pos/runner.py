@@ -341,10 +341,17 @@ def _run_claude(conn: sqlite3.Connection, req: "RunRequest", run_id: int) -> "Ru
     return RunResult(run_id, "ok", text, data, row["input_tokens"], row["output_tokens"])
 
 
-def list_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+def list_runs(conn: sqlite3.Connection, limit: int = 50, actor_id: int | None = None) -> list[dict]:
+    """Recent runs; with `actor_id`, only runs on tasks that member may read."""
+    where, params = "", []
+    if actor_id is not None:
+        from .visibility import visible_sql
+
+        cond, params = visible_sql("task", actor_id, "t")
+        where = f"WHERE r.task_id IS NULL OR EXISTS (SELECT 1 FROM tasks t WHERE t.id = r.task_id AND {cond})"
     rows = conn.execute(
-        """SELECT r.*, a.name AS actor_name FROM runs r JOIN actors a ON a.id = r.actor_id
-           ORDER BY r.id DESC LIMIT ?""", (limit,)
+        f"""SELECT r.*, a.name AS actor_name FROM runs r JOIN actors a ON a.id = r.actor_id {where}
+           ORDER BY r.id DESC LIMIT ?""", (*params, limit)
     ).fetchall()
     return [dict(r) for r in rows]
 

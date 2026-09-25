@@ -173,3 +173,25 @@ def test_nobody_gets_around_review(conn, me, ai):
     out = tasks.complete(conn, me, t["id"])
     assert out["status"] == "done" and out["completed_at"]
     assert versioning.history(conn, "task", t["id"])[-1]["action"] == "accept"
+
+
+def test_restore_and_logs_respect_visibility(conn, me, ai):
+    from pos import audit, runner
+    from pos.core import Forbidden
+
+    secret = tasks.create(conn, me, {"title": "Salary review", "visibility": "private"})
+    # an agent may neither restore nor see a private task in the log or the run list
+    with pytest.raises(Forbidden):
+        versioning.restore(conn, ai, "task", secret["id"], 1)
+    conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', 'ok', "
+                 "'2026-09-25T10:00:00+00:00')", (ai.actor_id, secret["id"]))
+    assert all(e["entity_id"] != secret["id"] for e in audit.readable(conn, audit.entries(conn, entity="task"),
+                                                                        ai.actor_id))
+    assert audit.readable(conn, audit.entries(conn, entity="task"), me.actor_id)
+    assert all(r["task_id"] != secret["id"] for r in runner.list_runs(conn, actor_id=ai.actor_id))
+    assert any(r["task_id"] == secret["id"] for r in runner.list_runs(conn, actor_id=me.actor_id))
+    # a team task restored by someone else keeps today's owner and visibility
+    t = tasks.create(conn, me, {"title": "Plan", "visibility": "team"})
+    tasks.update(conn, me, t["id"], {"visibility": "public", "title": "Plan v2"})
+    out = versioning.restore(conn, ai, "task", t["id"], 1)
+    assert out["title"] == "Plan" and out["visibility"] == "public" and out["owner_id"] == me.actor_id

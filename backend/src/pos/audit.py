@@ -32,3 +32,23 @@ def entries(conn: sqlite3.Connection, *, entity: str | None = None, entity_id: i
            + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY l.id DESC LIMIT ?")
     rows = conn.execute(sql, [*params, limit]).fetchall()
     return [{**dict(r), "detail": json.loads(r["detail"])} for r in rows]
+
+
+def readable(conn: sqlite3.Connection, entries_: list[dict], actor_id: int) -> list[dict]:
+    """Only the entries about items `actor_id` may read (private items stay private in the log)."""
+    from .versioning import _REGISTRY
+    from .visibility import can_read
+
+    seen: dict[tuple[str, int], bool] = {}
+    out = []
+    for e in entries_:
+        key = (e.get("entity"), e.get("entity_id"))
+        v = _REGISTRY.get(key[0]) if key[0] else None
+        if v is not None and key[1] is not None:
+            if key not in seen:
+                row = conn.execute(f"SELECT * FROM {v.table} WHERE id = ?", (key[1],)).fetchone()
+                seen[key] = row is None or "visibility" not in row.keys() or can_read(conn, key[0], row, actor_id)
+            if not seen[key]:
+                continue
+        out.append(e)
+    return out

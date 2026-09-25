@@ -116,6 +116,19 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, entity: str, entity_id: int, ver
     if snap is None:
         raise NotFound(f"{entity} {entity_id} v{version}")
     data = {k: val for k, val in json.loads(snap["data"]).items() if k not in v.frozen}
+    current = _row(conn, v, entity_id)
+    if "visibility" in current and "owner_id" in current:
+        from .visibility import check_read
+
+        check_read(conn, entity, current, ctx.actor_id)
+        if current["owner_id"] != ctx.actor_id:
+            # Who owns an item and who may see it change only by its owner, never by a restore.
+            data.pop("owner_id", None)
+            data.pop("visibility", None)
+        elif data.get("visibility", current["visibility"]) != current["visibility"]:
+            from .integrations import check_visibility_change
+
+            check_visibility_change(conn, ctx, current, data["visibility"])
     return update(conn, ctx, entity, entity_id, data, action=f"restore:v{version}")
 
 
