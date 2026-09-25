@@ -69,3 +69,30 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 Data lives in the `pos-data` Docker volume.
+
+## Tasks over MCP
+
+PersonalOS exposes its task list as the `pos` MCP server at `/mcp`
+(streamable HTTP). Set `POS_MCP_TOKEN` in `.env` and restart; clients send it
+as `Authorization: Bearer <token>` and act as the owner. Agents get their own
+keys (step 2).
+
+Codex CLI (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.pos]
+url = "http://localhost:8090/mcp"
+bearer_token_env_var = "POS_MCP_TOKEN"
+```
+
+Claude Code:
+
+```bash
+claude mcp add --transport http pos http://localhost:8090/mcp --header "Authorization: Bearer $POS_MCP_TOKEN"
+```
+
+Tools: `list_tasks`, `get_task`, `capture`, `create_task`, `update_task`,
+`complete_task`, `assign_task`, `claim_task`, `heartbeat`, `report_progress`,
+`request_approval`. Resource `tasks://{view}` (today, inbox, waiting, …) and
+prompts `plan_my_day`, `weekly_review`. Every call lands in the audit log.
+For a local stdio server against a dev database: `python -m pos.mcp_server`.

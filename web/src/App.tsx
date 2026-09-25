@@ -4,12 +4,14 @@ import { getMe, logout, type Me } from "./api";
 import Shell, { Mark } from "./components/Shell";
 import Assistant from "./pages/Assistant";
 import ComingSoon from "./pages/ComingSoon";
+import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import System from "./pages/System";
+import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "assistant", "system"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -36,6 +38,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/today" replace />} />
         <Route path="/today" element={<Today />} />
+        <Route path="/tasks" element={<Tasks />} />
+        <Route path="/tasks/inbox" element={<InboxClarify />} />
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />

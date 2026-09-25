@@ -1,7 +1,11 @@
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import KnowledgeGraph from "../components/LazyGraph";
+import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
 import { AskBox, Legend, PageHeader, Panel, SampleBadge } from "../components/ui";
-import { EVENTS, GRAPH_LABELS, TASKS } from "../sample";
+import { EVENTS, GRAPH_LABELS } from "../sample";
+import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
 
 const HIGHLIGHT = [0, 5, 11, 16];
 
@@ -14,6 +18,13 @@ function greeting(h: number) {
 
 export default function Today() {
   const now = new Date();
+  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [counts, setCounts] = useState<Counts | null>(null);
+  const refresh = () => {
+    tasksApi.list("today").then(setTasks, () => setTasks([]));
+    tasksApi.counts().then(setCounts, () => undefined);
+  };
+  useEffect(refresh, []);
   const kicker = now
     .toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
     .toUpperCase();
@@ -47,16 +58,42 @@ export default function Today() {
 
         <div className="flex min-h-0 flex-col gap-4 lg:col-span-5">
           <AskBox id="ask-today" placeholder="Ask about your files, tasks and calendar" />
-          <Panel fig="TAB. 1" title="Due soon" right={<SampleBadge />}>
-            {TASKS.map((t) => (
-              <div key={t.id} className="grid grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-3 border-b border-line px-4 py-2.5 last:border-0">
-                <input id={t.id} type="checkbox" className="h-[15px] w-[15px] accent-accent" />
-                <label htmlFor={t.id} className="truncate text-sm">
-                  {t.title}
-                </label>
-                <span className={`cap text-right ${t.urgent ? "text-accent!" : ""}`}>{t.due}</span>
-              </div>
-            ))}
+          <Panel
+            fig="TAB. 1"
+            title="Today"
+            right={
+              <Link to="/tasks?view=today" className="hover:text-accent">
+                {counts ? `${counts.today} planned · ${counts.inbox} in inbox` : "all tasks"} →
+              </Link>
+            }
+            bodyClassName="overflow-y-auto"
+          >
+            {tasks?.length === 0 && (
+              <p className="cap px-4 py-5">
+                Nothing planned for today.{" "}
+                <Link to="/tasks?view=inbox" className="text-accent!">
+                  Clarify the inbox →
+                </Link>
+              </p>
+            )}
+            {tasks?.slice(0, 6).map((t) => {
+              const due = dueLabel(t);
+              return (
+                <div key={t.id} className="grid grid-cols-[16px_minmax(0,1fr)_auto_64px] items-center gap-3 border-b border-line px-4 py-2.5 last:border-0">
+                  <input
+                    id={t.ref}
+                    type="checkbox"
+                    className="h-[15px] w-[15px] accent-accent"
+                    onChange={() => tasksApi.complete(t.ref).then(refresh)}
+                  />
+                  <Link to={`/tasks?view=today&task=${t.ref}`} className="truncate text-sm hover:text-accent">
+                    {t.title}
+                  </Link>
+                  <AssigneeChip type={t.assignee_type} name={t.assignee_name} />
+                  <span className={`cap text-right ${due.urgent ? "text-accent!" : ""}`}>{due.text}</span>
+                </div>
+              );
+            })}
           </Panel>
           <Panel bodyClassName="flex flex-col gap-2 px-4 py-3.5">
             <span className="flex items-baseline gap-2.5">
