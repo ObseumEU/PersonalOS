@@ -258,7 +258,7 @@ export default function Agents() {
         sub="Everyone works on the same tasks — you in the web app, agents through MCP and A2A — each with their own permissions."
       />
 
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel fig="FIG. 5" title="Agent network" right={<Link to="/network" className="hover:text-accent">live · full view →</Link>} className="h-[380px] lg:col-span-8" bodyClassName="measure-grid relative">
           <Suspense fallback={<p className="cap breathe absolute inset-0 grid place-items-center">loading network…</p>}>
             {net && <AgentNetwork data={net} onSelect={onSelect} compact />}
@@ -299,7 +299,7 @@ export default function Agents() {
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <span className="cap">TAB. 8 · MEMBERS</span>
         <Link to="/board" className="btn">
           Work board →

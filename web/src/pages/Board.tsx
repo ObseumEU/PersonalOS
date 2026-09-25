@@ -58,7 +58,7 @@ export default function Board() {
         title="Work board"
         sub="Same tasks, one board: what each person and agent has queued, is doing, needs from you, and finished today."
       />
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Link to="/network" className="btn">
           Agent network →
         </Link>
@@ -66,7 +66,7 @@ export default function Board() {
           Approvals →
         </Link>
       </div>
-      <div className="grid gap-4 xl:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <Panel fig="FIG. 7" title="Work across all members" right="live · every 10 s" className="xl:col-span-9" bodyClassName="overflow-x-auto">
           <div className="grid min-w-[760px] grid-cols-[200px_repeat(4,minmax(0,1fr))]">
             <div className="border-b border-line" />

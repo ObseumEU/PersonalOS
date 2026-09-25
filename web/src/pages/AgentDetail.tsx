@@ -159,7 +159,7 @@ export default function AgentDetail() {
       {notice && <p className="cap break-all text-accent!">{notice}</p>}
       {error && <p className="cap text-red-400!">{error}</p>}
 
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel fig="QUEUE" title={`Assigned to ${a.name}`} right={`${a.queued} next · ${a.review} review`} className="lg:col-span-3" bodyClassName="overflow-y-auto max-h-[560px]">
           {a.queue.length === 0 && <p className="cap p-4">No tasks.</p>}
           {a.queue.map((t) => (
@@ -264,7 +264,7 @@ export default function AgentDetail() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel fig="TAB. 11" title="Recent runs" right="roll back everything a run changed" className="lg:col-span-6">
           {a.runs.length === 0 && <p className="cap p-4">No runs yet.</p>}
           {a.runs.map((r) => (

@@ -102,7 +102,7 @@ export default function Connectors() {
         sub="Incoming events (e-mail, GitHub, Discord) become tasks for the right member. Anything going out waits for your approval."
       />
       {error && <p className="cap text-red-400!">{error}</p>}
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel fig="TAB. 14" title="What is set up" right="secrets stay on the server" className="lg:col-span-4">
           {status &&
             Object.entries(status.outbound).map(([k, on]) => (
@@ -181,7 +181,7 @@ export default function Connectors() {
         </Panel>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-12">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel fig="LOG" title="Incoming events" right="content is stored as untrusted" className="lg:col-span-8">
           {events.length === 0 && <p className="cap p-4">No events yet. Connector agents report them with emit_event; GitHub through the webhook.</p>}
           {events.map((e) => (

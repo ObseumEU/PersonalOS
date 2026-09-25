@@ -82,6 +82,7 @@ export default function KnowledgeGraph({
       return;
     }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.domElement.style.cssText = "display:block;width:100%;height:100%";
     el.appendChild(renderer.domElement);
 
     const labelRenderer = new CSS2DRenderer();
@@ -154,7 +155,7 @@ export default function KnowledgeGraph({
     const resize = () => {
       const { clientWidth: w, clientHeight: h } = el;
       if (!w || !h) return;
-      renderer.setSize(w, h);
+      renderer.setSize(w, h, false); // size the buffer; CSS keeps it fluid
       labelRenderer.setSize(w, h);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -195,7 +196,7 @@ export default function KnowledgeGraph({
   return (
     <div
       ref={host}
-      className={`relative h-full w-full cursor-grab active:cursor-grabbing ${className}`}
+      className={`relative h-full w-full cursor-grab overflow-hidden active:cursor-grabbing ${className}`}
       role="img"
       aria-label="3D knowledge graph. Drag to rotate."
     >

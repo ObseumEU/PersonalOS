@@ -67,7 +67,7 @@ export default function NetworkPage() {
           Work board →
         </Link>
       </div>
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-12">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel fig="FIG. 6" title="Agent network" right={`window ${window_} · drag to orbit · click a member`} className="h-[520px] lg:col-span-9 lg:h-auto" bodyClassName="measure-grid relative">
           <Suspense fallback={<p className="cap breathe absolute inset-0 grid place-items-center">loading network…</p>}>
             {data && <AgentNetwork data={data} onSelect={onSelect} />}
