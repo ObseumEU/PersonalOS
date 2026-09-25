@@ -3,7 +3,7 @@
 # <name>.child.pid (the real interpreter): both are stopped. Stop-Process is used
 # because taskkill /T depends on WMI, which is broken on some PCs.
 $root = Split-Path -Parent $PSScriptRoot
-$logs = Join-Path $root "datagent-logs"
+$logs = Join-Path $root "data\agent-logs"
 Get-ChildItem $logs -Filter *.pid -ErrorAction SilentlyContinue | Sort-Object Name -Descending | ForEach-Object {
     $procId = [int](Get-Content $_.FullName | Select-Object -First 1)
     if (Get-Process -Id $procId -ErrorAction SilentlyContinue) {
