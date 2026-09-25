@@ -208,6 +208,20 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
     return {**detail(conn, agent_id), "api_key": key}
 
 
+def rotate_key(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> str:
+    """Give an agent a new API key and revoke the old ones (owner only)."""
+    if not actors.get(conn, ctx.actor_id)["is_owner"]:
+        raise _Forbidden("only the owner issues agent keys")
+    row = _agent_row(conn, agent_id)
+    if row["archived_at"]:
+        raise AgentError("restore the agent first")
+    conn.execute("UPDATE api_keys SET revoked_at = ? WHERE actor_id = ? AND revoked_at IS NULL", (now_iso(), agent_id))
+    key = actors.create_key(conn, agent_id, label="rotated by the owner")
+    audit.log(conn, ctx, "rotate_key", "actor", agent_id)
+    conn.commit()
+    return key
+
+
 def retire_if_done(conn: sqlite3.Connection, ctx: Ctx, agent_id: int | None) -> bool:
     """A one-shot agent is archived once it has no open work (spec 3.3)."""
     if not agent_id:

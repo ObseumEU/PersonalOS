@@ -211,3 +211,40 @@ def list_runs(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
            ORDER BY r.id DESC LIMIT ?""", (limit,)
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------------------ runs done by outside workers
+# A Codex worker (worker/, one per agent) runs codex itself. It asks here to
+# start a run, so the same gates apply (kill switch, pause, budget,
+# constitution), and reports the finished run with its raw --json output, so
+# the same after-run hooks record token usage.
+
+def start_external(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
+    cur = conn.execute(
+        "INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, ?, 'running', ?)",
+        (req.actor_id, req.task_id, req.kind, now_iso()),
+    )
+    run_id = cur.lastrowid
+    audit.log(conn, Ctx(req.actor_id, via="worker", run_id=run_id), "run_start",
+              "task" if req.task_id else None, req.task_id, kind=req.kind, worker=True)
+    conn.commit()
+    try:
+        for fn in _before:
+            fn(conn, req)
+    except RunBlocked as e:
+        _finish(conn, run_id, "blocked", detail=str(e))
+        return RunResult(run_id, "blocked", error=str(e))
+    return RunResult(run_id, "running")
+
+
+def finish_external(conn: sqlite3.Connection, run_id: int, actor_id: int, status: str, jsonl: str = "",
+                    detail: str = "") -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None or row["actor_id"] != actor_id:
+        raise ValueError(f"run {run_id} is not yours")
+    if row["status"] != "running":  # cancelled by the kill switch or the owner meanwhile
+        return row
+    if status not in ("ok", "error", "cancelled"):
+        raise ValueError("status must be ok, error or cancelled")
+    tin, tout = _usage(jsonl)
+    return _finish(conn, run_id, status, tin, tout, detail, jsonl)

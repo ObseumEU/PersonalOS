@@ -111,6 +111,11 @@ def restore(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return agents.restore(conn, ctx, agent_id)
 
 
+@router.post("/agents/{agent_id}/key")
+def rotate_key(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return {"api_key": _wrap(lambda: agents.rotate_key(conn, ctx, agent_id))}
+
+
 @router.post("/agents/{agent_id}/message")
 def message(agent_id: int, body: MessageIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return _wrap(lambda: agents.send_message(conn, ctx, agent_id, body.body,
