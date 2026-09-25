@@ -39,6 +39,13 @@ def test_capture_syntax():
     assert capture.parse("Zavolat po obědě pondělí", base)["title"] == "Zavolat po obědě"
 
 
+def test_capture_czech_deadline_word():
+    base = date(2026, 9, 25)
+    p = capture.parse("Zaplatit fakturu termín 1.10. #finance", base)
+    assert p == {"title": "Zaplatit fakturu", "deadline": "2026-10-01", "topic": "finance"}
+    assert capture.parse("Zaplatit fakturu termin 1.10.", base)["deadline"] == "2026-10-01"
+
+
 def test_capture_routes_to_inbox_or_next(conn, me):
     assert tasks.capture(conn, me, "something vague")["status"] == "inbox"
     t = tasks.capture(conn, me, "Pay invoice today #finance")
