@@ -133,26 +133,6 @@ def budget_check(conn: sqlite3.Connection) -> dict:
     return {"level": report.level, "actions": report.actions}
 
 
-async def budget_loop(db_path, interval_min: int) -> None:
-    """Runs budget_check every `interval_min` minutes until cancelled (spec 4.2: hourly).
-    Stands in for the scheduler until the Nexus one exists."""
-    import asyncio
-    import logging
-
-    from .db import connect
-
-    while True:
-        await asyncio.sleep(interval_min * 60)
-        try:
-            conn = connect(db_path)
-            try:
-                await asyncio.to_thread(budget_check, conn)
-            finally:
-                conn.close()
-        except Exception:  # a failed check must not stop the next one
-            logging.getLogger(__name__).exception("budget check failed")
-
-
 async def hr_loop(db_path, interval_min: int = 30) -> None:
     """Runs the HR daily review and weekly report when due (pos.hr.schedule)."""
     import asyncio

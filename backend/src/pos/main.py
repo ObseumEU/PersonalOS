@@ -12,7 +12,6 @@ from . import (a2a, actors, api_agents, api_chat, api_connectors, api_deploys, a
                api_tools, api_worker, chat, integrations, mcp_server, scheduler)
 from .auth import require_user
 from .auth import router as auth_router
-from .budget import service as budget_service
 from .budget.api import router as budget_router
 from .config import Settings, get_settings
 from .db import connect, init_db
@@ -84,9 +83,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             conn.close()
         integrations.install()
-        check_minutes = budget_service.BudgetSettings().check_minutes
-        budget_task = (asyncio.create_task(integrations.budget_loop(settings.db_path, check_minutes))
-                       if check_minutes > 0 else None)
         hr_task = (asyncio.create_task(integrations.hr_loop(settings.db_path))
                    if hr_schedule.HRSettings().scheduler else None)
         sched_task = asyncio.create_task(scheduler.loop(settings.db_path)) if settings.scheduler else None
@@ -96,7 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             async with mcp.session_manager.run():
                 yield
         finally:
-            for task in (budget_task, hr_task, sched_task):
+            for task in (hr_task, sched_task):
                 if task:
                     task.cancel()
 

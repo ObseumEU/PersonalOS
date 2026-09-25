@@ -42,7 +42,7 @@ export default function Automations() {
         sub="Recurring system work runs here until Nexus takes it over through its A2A facade. Jobs are plain code; when thinking is needed they hand a task to an agent."
       />
       {error && <p className="cap text-red-400!">{error}</p>}
-      <Panel fig="TAB. 16" title="Scheduled jobs" right="Europe/Prague · paused by the kill switch except the brief and budget">
+      <Panel fig="TAB. 16" title="Scheduled jobs" right="Europe/Prague · the kill switch pauses all but the morning brief, weekly review and budget check">
         <div className="grid grid-cols-[minmax(0,1.3fr)_130px_90px_90px_minmax(0,1.4fr)_120px] gap-3 border-b border-line px-4 py-2">
           {["JOB", "SCHEDULE", "NEXT", "LAST", "LAST RESULT", ""].map((h) => (
             <span key={h} className="cap">

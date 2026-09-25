@@ -144,3 +144,12 @@ def test_a2a_empty_reply_keeps_the_task_queued_and_the_card_is_cached(app, tmp_p
     assert tasks.get(conn, me, t["id"])["status"] == "next" and a2a.links(conn) == []
     a2a.sync(conn, http=http)
     assert calls["card"] == 1  # the second round used the cached endpoint
+
+
+def test_budget_job_reports_the_level(app):
+    client, conn, me = app
+    out = scheduler.budget_check(conn)
+    assert out["level"] is not None
+    from pos import integrations
+
+    assert not hasattr(integrations, "budget_loop")  # one budget run an hour: the scheduler job

@@ -154,8 +154,7 @@ def nightly_retrospective(conn: sqlite3.Connection) -> dict:
 def budget_check(conn: sqlite3.Connection) -> dict:
     from .integrations import budget_check as run
 
-    report = run(conn)
-    return {"level": getattr(report, "level", None)}
+    return {"level": run(conn)["level"]}
 
 
 def reap_runs(conn: sqlite3.Connection, silent_minutes: int = 20) -> dict:
