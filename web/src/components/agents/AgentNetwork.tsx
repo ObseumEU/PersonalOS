@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import type { EngineView } from "../../agentsApi";
 
 export type NetNode = {
   id: number;
@@ -13,6 +14,7 @@ export type NetNode = {
   review: number;
   tokens: number;
   status: string;
+  engine_view?: EngineView | null;
 };
 export type NetEdge = { from: number; to: number; type: EdgeType; count: number };
 export type NetEvent = { from: number; to: number; type: EdgeType; at: string };
@@ -34,9 +36,12 @@ const BG = 0x111418;
 
 const workload = (n: NetNode) => n.open + 2 * n.working + n.review;
 
-function tag(text: string, sub: string, color: string) {
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+
+function tag(text: string, sub: string, color: string, engine?: { label: string; fallback: boolean }) {
   const outer = document.createElement("div");
-  outer.innerHTML = `<span style="display:block;margin-left:14px;font:11px 'IBM Plex Mono',monospace;color:${color};white-space:nowrap">${text}<br><span style="color:#7d848f;font-size:9px">${sub}</span></span>`;
+  const line = engine ? `<br><span style="color:${engine.fallback ? "#d9a55b" : "#3e7c8d"};font-size:9px">${esc(engine.label)}</span>` : "";
+  outer.innerHTML = `<span style="display:block;margin-left:14px;font:11px 'IBM Plex Mono',monospace;color:${color};white-space:nowrap">${esc(text)}<br><span style="color:#7d848f;font-size:9px">${sub}</span>${line}</span>`;
   const obj = new CSS2DObject(outer);
   obj.center.set(0, 0.5);
   return obj;
@@ -136,7 +141,10 @@ export default function AgentNetwork({
       }
       const name = n.is_owner ? "You" : n.name;
       const sub = n.kind === "hub" ? (data.frozen ? "FROZEN" : "platform") : `${n.working} working · ${n.open} next${n.review ? ` · ${n.review} review` : ""}`;
-      mesh.add(tag(name, sub, n.kind === "human" || n.kind === "hub" ? "#e6e8eb" : dimmed ? "#7d848f" : "#6cc4dc"));
+      const ev = n.engine_view;
+      const shown = ev ? (ev.last_run?.running ? ev.last_run : ev.now) : null;
+      const engine = shown ? { label: shown.label, fallback: "fallback" in shown && !!shown.fallback } : undefined;
+      mesh.add(tag(name, sub, n.kind === "human" || n.kind === "hub" ? "#e6e8eb" : dimmed ? "#7d848f" : "#6cc4dc", engine));
     }
 
     // Edges: straight thin lines, opacity by volume; curved slightly upward so

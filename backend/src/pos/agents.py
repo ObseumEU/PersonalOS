@@ -439,6 +439,9 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
     now = datetime.now(timezone.utc)
     since = (now - timedelta(days=1)).isoformat(timespec="seconds")
     names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM actors")}
+    from .engine_view import Viewer
+
+    runtime_view = Viewer(conn)
     out = []
     for row in conn.execute("SELECT * FROM actors ORDER BY is_owner DESC, archived_at IS NOT NULL, id"):
         q = conn.execute(
@@ -469,6 +472,7 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "created_by_name": names.get(row["created_by"] or (p["created_by"] if p else None)),
             "created_at": row["created_at"], "expires_at": p["expires_at"] if p else None,
             "engine": row["engine"], "engine_effective": row["engine"] or _default_engine(), "model": row["model"],
+            "engine_view": runtime_view.for_actor(row),
             "tokens_24h": budget_store.tokens_between(conn, now - timedelta(days=1), now, str(row["id"])) + _claude_tokens(conn, row["id"], now - timedelta(days=1)),
             "tokens_7d": budget_store.tokens_between(conn, now - timedelta(days=7), now, str(row["id"])),
             "daily_cap": c["daily_cap"] if c else None,

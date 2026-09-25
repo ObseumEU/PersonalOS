@@ -4,6 +4,7 @@ import { NavLink } from "react-router-dom";
 import { type FreezeState, agentsApi } from "../agentsApi";
 import { useSubsystems } from "../knowledgeApi";
 import { SECTIONS } from "../sections";
+import { MockDot } from "./ui";
 
 export function Mark({ size = 22 }: { size?: number }) {
   return (
@@ -72,7 +73,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
           <span className="font-medium tracking-[-0.01em]">PersonalOS</span>
         </div>
         <nav aria-label="Main" className="flex flex-col gap-0.5">
-          {SECTIONS.map(({ path, label, icon: Icon }) => (
+          {SECTIONS.map(({ path, label, icon: Icon, mock }) => (
             <NavLink
               key={path}
               to={`/${path}`}
@@ -88,6 +89,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
                 <>
                   <Icon size={18} strokeWidth={1.5} className={isActive ? "text-accent" : "text-ink-3"} />
                   {label}
+                  {mock && <MockDot className="ml-auto" />}
                   {path === "approvals" && approvals > 0 && (
                     <span className="cap ml-auto rounded-sm bg-amber-300/15 px-1.5 text-amber-300!">{approvals}</span>
                   )}
@@ -96,11 +98,14 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
             </NavLink>
           ))}
         </nav>
+        <span className="cap mt-auto flex items-center gap-2 px-3">
+          <MockDot /> = mock, not real yet
+        </span>
         <button
           type="button"
           onClick={toggleFreeze}
           title="Kill switch: stop every agent at once"
-          className={`mt-auto flex items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] ${
+          className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] ${
             freeze.frozen ? "border-amber-400/70 text-amber-300" : "border-line text-ink-2 hover:border-amber-400/60 hover:text-amber-300"
           }`}
         >
@@ -154,7 +159,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
         aria-label="Main"
         className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-bg px-2 pt-1.5 pb-3 lg:hidden"
       >
-        {SECTIONS.filter((s) => s.mobile).map(({ path, label, icon: Icon }) => (
+        {SECTIONS.filter((s) => s.mobile).map(({ path, label, icon: Icon, mock }) => (
           <NavLink
             key={path}
             to={`/${path}`}
@@ -165,6 +170,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
             <span className="relative">
               <Icon size={20} strokeWidth={1.5} />
               {path === "approvals" && approvals > 0 && <span className="absolute -top-1 -right-1.5 h-2 w-2 rounded-full bg-amber-300" />}
+              {mock && <MockDot className="absolute -top-1 -left-1.5" />}
             </span>
             {label}
           </NavLink>

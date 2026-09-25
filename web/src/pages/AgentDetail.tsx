@@ -114,7 +114,7 @@ export default function AgentDetail() {
         <StatusDot status={a.status} />
         {a.system && <Pill>system</Pill>}
         {a.lifetime && <Pill>{a.lifetime.replace("_", "-")}</Pill>}
-        <EngineBadge engine={a.engine_effective} model={a.engine_effective !== "codex" ? a.model ?? "claude-opus-5-5" : null} />
+        <EngineBadge view={a.engine_view} engine={a.engine_effective} model={a.engine_effective !== "codex" ? a.model ?? "claude-opus-5-5" : null} />
         {!a.is_owner && (
           <select
             aria-label="Runtime"

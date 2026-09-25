@@ -33,6 +33,9 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
     from .budget import store as budget_store
 
     budget_store.ensure_schema(conn)
+    from .engine_view import Viewer
+
+    runtime_view = Viewer(conn)
     nodes = [{"id": HUB, "name": "PersonalOS", "kind": "hub", "open": 0, "working": 0, "review": 0,
               "tokens": 0, "status": "frozen" if frozen else "online", "is_owner": False}]
     for a in conn.execute("SELECT * FROM actors ORDER BY id"):
@@ -47,6 +50,7 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
             "open": load["open"] or 0, "working": load["working"] or 0, "review": load["review"] or 0,
             "tokens": budget_store.tokens_between(conn, now - WINDOWS[window], now, str(a["id"])),
             "last_seen_at": a["last_seen_at"], "status": status,
+            "engine_view": runtime_view.for_actor(a),
         })
 
     edges: dict[tuple[int, int, str], int] = {}

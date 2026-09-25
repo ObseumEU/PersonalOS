@@ -1,11 +1,12 @@
-import { useNavigate } from "react-router-dom";
 import { ArrowRight, Orbit } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 
 export function Panel({
   fig,
   title,
   right,
+  mock,
   className = "",
   bodyClassName = "",
   children,
@@ -13,6 +14,8 @@ export function Panel({
   fig?: string;
   title?: string;
   right?: ReactNode;
+  /** Shows the red mock dot next to the title (see docs/MOCK-STATUS.md). */
+  mock?: boolean;
   className?: string;
   bodyClassName?: string;
   children: ReactNode;
@@ -23,6 +26,7 @@ export function Panel({
         <div className="flex items-baseline gap-2.5 border-b border-line px-4 py-3">
           {fig && <span className="cap text-accent!">{fig}</span>}
           <h2 className="text-sm font-medium">{title}</h2>
+          {mock && <MockDot />}
           {right && <span className="cap ml-auto truncate pl-3">{right}</span>}
         </div>
       )}
@@ -31,13 +35,27 @@ export function Panel({
   );
 }
 
-/** Marks placeholder content until real data arrives in Phase 2. */
-export function SampleBadge() {
+export const MOCK_TITLE = "Mock: sample data or not implemented yet";
+
+/**
+ * Small red dot on anything that is mock (sample data, unwired control, planned
+ * screen). Real, working parts carry no dot. The list lives in docs/MOCK-STATUS.md;
+ * remove the dot there and here when the part is wired to real data.
+ */
+export function MockDot({ className = "" }: { className?: string }) {
   return (
-    <span className="cap rounded-sm border border-dashed border-ink-3 px-1.5 py-px" title="Placeholder content until Phase 2">
-      SAMPLE DATA
-    </span>
+    <span
+      role="img"
+      aria-label={MOCK_TITLE}
+      title={MOCK_TITLE}
+      className={`inline-block h-[7px] w-[7px] shrink-0 rounded-full bg-red-500 ${className}`}
+    />
   );
+}
+
+/** Marks placeholder content until real data arrives. */
+export function SampleBadge() {
+  return <MockDot />;
 }
 
 function useNow() {

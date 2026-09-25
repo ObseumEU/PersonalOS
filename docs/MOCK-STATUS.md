@@ -1,0 +1,41 @@
+# Mock status of the web UI
+
+A small red dot (`MockDot` in `web/src/components/ui.tsx`) marks every part of the
+web UI that is mock: sample data, a control that does nothing yet, or a planned
+screen. Parts that read real data from the backend API carry no dot.
+
+When you wire a part to real data, remove its dot (drop `mock` on the `Panel`,
+the `<MockDot />` / `<SampleBadge />`, or `mock: true` in `web/src/sections.ts`)
+and move its row below to "Real".
+
+Rule used for the audit: a widget is real when it renders data from a backend
+`/api/...` call; it is mock when it renders hardcoded sample text,
+or a control whose handler does nothing.
+
+## Mock (red dot)
+
+| Screen | Widget | Why it is mock |
+| --- | --- | --- |
+| Navigation | Calendar, Files, Topics, Notes | Planned screens (`ComingSoon`), no backend yet |
+| Today | FIG. 2 Agenda | No calendar sync yet (honest empty state) |
+| Calendar, Files, Topics, Notes | Whole page | `ComingSoon` placeholder |
+
+## Real (no dot)
+
+| Screen | Widget | Backend |
+| --- | --- | --- |
+| Today | TAB. 1 Today tasks | `tasksApi.list`, `tasksApi.counts`, complete |
+| Tasks, Inbox clarify, task detail | Everything | `tasksApi.*` |
+| Agents, agent detail | Everything | `agentsApi.*` |
+| Network | 3D agent network, ranking | `agentsApi.network` |
+| Board | Board columns | `agentsApi.board` (the gates list is static policy text, not data) |
+| Approvals | Everything | `agentsApi.approvals`, `decide` |
+| Connectors | Setup status, routing rules, events, test event | `/api/connectors`, `/api/routes`, `/api/events` |
+| Automations | Jobs, schedules, A2A members and links | `/api/jobs`, schedules API, `/api/a2a/links` |
+| System | Runtimes and subscriptions, Deploys | `agentsApi.engines`, `/api/deploys` |
+| Shell | Kill switch, approvals badge | `agentsApi.freeze*`, `agentsApi.approvals` |
+| Shell | SUBSYSTEMS box | `/api/system/subsystems` (live probes of knowlage, Nexus, runtimes) |
+| Today, Assistant, System | FIG. 1, 3, 4 Knowledge graph | `/api/knowledge/graph` (our knowlage: workspaces, sources, collections, documents) |
+| Today, Assistant | Ask box, answers, cited passages | `/api/knowledge/ask` (knowlage, verified citations) |
+| Today | Handed in by agents (was the NOTE) | `tasksApi.list("review")` |
+| System | Subsystem cards | `/api/system/subsystems` |
