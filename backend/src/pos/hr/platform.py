@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .. import actors, audit, tasks
+from ..agents import is_seeded
 from ..budget import store as budget_store
 from ..core import Ctx
 from . import store
@@ -64,6 +65,8 @@ class CorePlatform:
                     expires_at=parse(p["expires_at"]) if p else None,
                     last_active_at=self._last_active(row["id"], row),
                     system=bool(p and p["system"]) or row["name"] in BUILTIN_SYSTEM,
+                    seeded=is_seeded(row["name"]),
+                    lead_id=str(row["reports_to"]) if "reports_to" in row.keys() and row["reports_to"] else "",
                 )
             )
         return out

@@ -30,6 +30,9 @@ class AgentRecord:
     last_active_at: datetime | None = None
     # System agents (HR, budget, assistant) are part of the platform and never retired.
     system: bool = False
+    # Role agents defined in git (agents/<name>/): HR proposes, their lead decides.
+    seeded: bool = False
+    lead_id: str = ""
     permissions: frozenset[str] = field(default_factory=frozenset)
 
     @property

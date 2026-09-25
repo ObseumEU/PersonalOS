@@ -103,6 +103,21 @@ def repo_instructions(name: str) -> Path | None:
     return p if p.exists() else None
 
 
+def is_seeded(name: str) -> bool:
+    """A role agent defined in git (agents/<slug>/): HR never archives it on its own."""
+    root = os.environ.get("POS_AGENTS_REPO_DIR")
+    if root:
+        base = Path(root)
+    else:
+        from .tools import repo_root
+
+        top = repo_root()
+        if top is None:
+            return False
+        base = top / "agents"
+    return (base / _slug(name)).is_dir()
+
+
 def instructions_of(row) -> str | None:
     p = repo_instructions(row["name"])
     if p is None and row["instructions_path"] and Path(row["instructions_path"]).exists():
@@ -127,7 +142,6 @@ def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str,
     when HR stops it at a limit, {"created": False, **HR's decision}."""
     from .guard import policy
     from .hr import service as hr
-    from .budget import service as budget
     from .integrations import guard_actor
 
     name = name.strip()
@@ -159,9 +173,23 @@ def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str,
     if budget_class == "system" and not creator["is_owner"]:
         budget_class = "normal"
 
-    decision = hr.admit_agent(conn, ctx, name=name, purpose=purpose, lifetime=lifetime)
+    decision = hr.admit_agent(conn, ctx, name=name, purpose=purpose, lifetime=lifetime, defer_replace=True)
     if not decision.get("allowed"):
         return {"created": False, **decision}
+    try:
+        return _insert_agent(conn, ctx, creator, decision, name=name, purpose=purpose, lifetime=lifetime,
+                             instructions=instructions, requested=requested, budget_class=budget_class,
+                             expires_at=expires_at, runtime=runtime, a2a_url=a2a_url, data_dir=data_dir)
+    except Exception:
+        conn.rollback()  # HR's replacement is archived only together with a created agent
+        raise
+
+
+def _insert_agent(conn: sqlite3.Connection, ctx: Ctx, creator: sqlite3.Row, decision: dict, *, name: str,
+                  purpose: str, lifetime: str, instructions: str, requested: list[str], budget_class: str,
+                  expires_at: str | None, runtime: str, a2a_url: str | None, data_dir: Path) -> dict:
+    from .budget import service as budget
+    from .hr import service as hr
 
     now = now_iso()
     row = versioning.insert(conn, ctx, "actor", {
@@ -178,6 +206,9 @@ def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str,
     org.place_new(conn, row["id"])  # reports to the Project manager
     key = actors.create_key(conn, row["id"], label=f"created by {creator['name']}")
     audit.log(conn, ctx, "create_agent", "actor", row["id"], name=name, lifetime=lifetime, permissions=requested)
+    if decision.get("replace_id"):
+        archive_no_commit(conn, hr._hr_ctx(conn, ctx.via), decision["replace_id"],
+                          f"HR: místo pro {name}: {decision.get('reason') or ''}".strip(), action="hr_archive_agent")
     conn.commit()
     return {"created": True, "agent": detail(conn, row["id"]), "api_key": key}
 

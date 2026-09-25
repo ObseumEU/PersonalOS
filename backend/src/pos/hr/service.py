@@ -142,7 +142,7 @@ def _created_today(conn: sqlite3.Connection, creator_id: int) -> int:
 
 
 def admit_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, lifetime: str = "one_shot",
-                now: datetime | None = None, policy: HRPolicy | None = None) -> dict:
+                now: datetime | None = None, policy: HRPolicy | None = None, defer_replace: bool = False) -> dict:
     """Check the spec 3.2 limits before create_agent and decide when one is hit.
 
     Returns {"allowed": True} when the agent may be created. Otherwise HR's decision:
@@ -172,8 +172,11 @@ def admit_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, 
     out = {"allowed": False, "limit": reason, "decision": decision.action.value,
            "reason": decision.reason, "target_id": decision.target_id}
     if decision.action is OverLimitAction.REPLACE:
-        platform.archive_agent(decision.target_id, f"HR: místo pro {name}: {decision.reason}")
         out["allowed"] = True
+        if defer_replace:  # the caller archives the target once the new agent exists (one transaction)
+            out["replace_id"] = int(decision.target_id)
+        else:
+            platform.archive_agent(decision.target_id, f"HR: místo pro {name}: {decision.reason}")
     elif decision.action is OverLimitAction.ASK_OWNER:
         out["approval_id"] = approvals.request(
             conn, hr_ctx, "raise_agent_limit",

@@ -222,3 +222,15 @@ def test_approved_limit_raise_lets_the_agent_in(conn):
 
     row = conn.execute("SELECT id FROM settings WHERE key = ?", (SETTING_MAX_ACTIVE,)).fetchone()
     assert versioning.history(conn, "setting", row["id"])[-1]["action"] == "raise_agent_limit"
+
+
+def test_hr_never_archives_a_role_agent_from_git(conn, tmp_path, monkeypatch):
+    (tmp_path / "agents" / "mail-agent").mkdir(parents=True)
+    monkeypatch.setenv("POS_AGENTS_REPO_DIR", str(tmp_path / "agents"))
+    owner = Ctx(actors.owner_id(conn))
+    mail = new_agent(conn, "Mail agent", "Sorts incoming emails")
+    later = service.utcnow() + timedelta(days=20)
+    service.daily_review(conn, owner, now=later)
+    assert actors.get(conn, mail)["archived_at"] is None
+    proposal = conn.execute("SELECT title FROM tasks WHERE title LIKE 'Návrh HR: archivovat Mail agent%'").fetchone()
+    assert proposal is not None

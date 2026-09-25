@@ -256,3 +256,35 @@ def test_archive_stops_runs_and_hands_open_work_on_and_restore_gives_a_new_key(t
     # HR restore is the same restore: a new key, the old one stays revoked
     new_key = service.restore(conn, me, scout)
     assert new_key and actors.actor_for_key(conn, new_key) == scout and actors.actor_for_key(conn, old_key) is None
+
+
+def test_hr_replacement_is_archived_only_with_a_created_agent(tmp_path, monkeypatch):
+    import pytest
+
+    from pos import actors, agents
+    from pos.core import Ctx
+    from pos.db import connect, migrate
+    from pos.hr import service as hr
+
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    conn = connect(tmp_path / "r.db")
+    migrate(conn)
+    actors.ensure_builtin(conn)
+    me = Ctx(actors.owner_id(conn))
+    old = agents.create_agent(conn, me, name="Old", purpose="old work", lifetime="long_lived",
+                              permissions=["tasks:read"], data_dir=tmp_path)["agent"]["id"]
+    monkeypatch.setattr(hr, "admit_agent", lambda *a, **k: {"allowed": True, "replace_id": old, "reason": "idle"})
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(agents, "_write_instructions", broken)
+    with pytest.raises(OSError):
+        agents.create_agent(conn, me, name="New", purpose="new work", permissions=["tasks:read"], data_dir=tmp_path)
+    assert actors.get(conn, old)["archived_at"] is None and actors.find_by_name(conn, "New") is None
+    monkeypatch.undo()
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    monkeypatch.setattr(hr, "admit_agent", lambda *a, **k: {"allowed": True, "replace_id": old, "reason": "idle"})
+    assert agents.create_agent(conn, me, name="New", purpose="new work", permissions=["tasks:read"],
+                               data_dir=tmp_path)["created"]
+    assert actors.get(conn, old)["archived_at"] is not None

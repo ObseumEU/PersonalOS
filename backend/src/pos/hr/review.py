@@ -228,8 +228,17 @@ def run_daily_review(
         return result
 
     names = {a.id: a.name for a in agents}
+    by_id = {a.id: a for a in agents}
     for proposal in result.proposals:
-        if proposal.kind in ARCHIVE_KINDS:
+        agent = by_id.get(proposal.agent_id)
+        if proposal.kind in ARCHIVE_KINDS and agent is not None and agent.seeded:
+            # A role agent from git is not HR's to retire: its lead gets the proposal.
+            result.task_ids.append(actions.create_task(
+                f"Návrh HR: archivovat {agent.name}?",
+                f"{proposal.reason}. {agent.name} je role definovaná v repozitáři (agents/), HR ji "
+                "sám nearchivuje. Rozhodni: upravit instrukce, dát mu práci, nebo archivovat.",
+                assignee=agent.lead_id or hr_agent_id))
+        elif proposal.kind in ARCHIVE_KINDS:
             actions.archive_agent(proposal.agent_id, f"HR: {proposal.reason}")
             result.applied.append(proposal)
         elif proposal.kind is ProposalKind.PROMOTE_LONG_LIVED:
