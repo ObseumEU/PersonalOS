@@ -1,6 +1,7 @@
 # PersonalOS: plan
 
 Status: draft for discussion. Updated 2026-09-25 with the owner's decisions.
+How agents work (lifecycle, budget, constitution, kill switch): [AGENTS-SPEC.md](AGENTS-SPEC.md).
 
 ## 1. What PersonalOS is
 
