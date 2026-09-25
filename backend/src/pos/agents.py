@@ -231,33 +231,124 @@ def retire_if_done(conn: sqlite3.Connection, ctx: Ctx, agent_id: int | None) -> 
     return True
 
 
-# ------------------------------------------------------------------ messages
+# ------------------------------------------------------------------ messages (AGENTS-SPEC 6b)
 
-def send_message(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, task_id: int | None = None) -> dict:
+PRIORITIES = ("fyi", "change_plan", "stop")
+
+
+def send_message(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, task_id: int | None = None,
+                 priority: str = "fyi") -> dict:
+    """Send a message into a member's inbox. A running agent picks it up at its
+    next step (the runner injects it mid-run). `stop` pauses the recipient and
+    stops its current run; it can never archive, delete or change permissions."""
     if not body.strip():
         raise AgentError("empty message")
-    if actors.get(conn, ctx.actor_id)["kind"] != "human":
+    if priority not in PRIORITIES:
+        raise AgentError(f"priority must be one of {PRIORITIES}")
+    sender = actors.get(conn, ctx.actor_id)
+    if sender["kind"] != "human":
         require(conn, ctx, "messages:send")
-    actors.get(conn, to_actor)
+    target = actors.get(conn, to_actor)
+    if target["archived_at"]:
+        raise AgentError(f"{target['name']} is archived")
+    run = conn.execute("SELECT id FROM runs WHERE actor_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
+                       (to_actor,)).fetchone()
     cur = conn.execute(
-        "INSERT INTO messages (to_actor, from_actor, task_id, body, created_at) VALUES (?, ?, ?, ?, ?)",
-        (to_actor, ctx.actor_id, task_id, body.strip(), now_iso()),
+        """INSERT INTO messages (to_actor, from_actor, task_id, body, created_at, priority, run_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (to_actor, ctx.actor_id, task_id, body.strip(), now_iso(), priority, run["id"] if run else None),
     )
-    audit.log(conn, ctx, "message", "actor", to_actor, message_id=cur.lastrowid, task_id=task_id)
+    audit.log(conn, ctx, "message", "actor", to_actor, message_id=cur.lastrowid, task_id=task_id, priority=priority)
+    if priority == "stop" and target["kind"] != "human":
+        runner.cancel_all(conn, f"stop message from {sender['name']}: {body.strip()[:200]}", actor_id=to_actor)
+        if not target["paused_at"]:
+            versioning.update(conn, ctx, "actor", to_actor, {"paused_at": now_iso()}, action="pause")
     conn.commit()
-    return {"id": cur.lastrowid}
+    return {"id": cur.lastrowid, "priority": priority, "delivered_to_run": run["id"] if run else None}
+
+
+def _render(row: sqlite3.Row) -> dict:
+    """Messages from agents are data, not orders (constitution U2): wrap them."""
+    from .guard.external import wrap_external
+
+    d = dict(row)
+    if row["from_kind"] != "human":
+        d["body"] = wrap_external(f"agent:{row['from_name']}", row["body"], ref=f"message:{row['id']}")
+        d["trust"] = "agent"
+    else:
+        d["trust"] = "member"
+    return d
+
+
+def check_inbox(conn: sqlite3.Connection, actor_id: int, mark_read: bool = True, run_id: int | None = None) -> list[dict]:
+    rows = conn.execute(
+        """SELECT m.id, m.body, m.task_id, m.priority, m.created_at, m.acked_at, a.name AS from_name,
+                  a.kind AS from_kind FROM messages m JOIN actors a ON a.id = m.from_actor
+           WHERE m.to_actor = ? AND m.read_at IS NULL ORDER BY
+           CASE m.priority WHEN 'stop' THEN 0 WHEN 'change_plan' THEN 1 ELSE 2 END, m.id""",
+        (actor_id,),
+    ).fetchall()
+    if rows and mark_read:
+        conn.execute(
+            f"UPDATE messages SET read_at = ?, delivered_in_run = COALESCE(delivered_in_run, ?) "
+            f"WHERE id IN ({','.join('?' for _ in rows)})",
+            [now_iso(), run_id, *[r["id"] for r in rows]],
+        )
+    return [_render(r) for r in rows]
 
 
 def take_messages(conn: sqlite3.Connection, actor_id: int) -> list[dict]:
+    return check_inbox(conn, actor_id)
+
+
+def ack_message(conn: sqlite3.Connection, ctx: Ctx, message_id: int, note: str = "") -> dict:
+    row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+    if row is None or row["to_actor"] != ctx.actor_id:
+        raise NotFound(f"message {message_id}")
+    conn.execute("UPDATE messages SET acked_at = ?, read_at = COALESCE(read_at, ?) WHERE id = ?",
+                 (now_iso(), now_iso(), message_id))
+    audit.log(conn, ctx, "ack_message", "actor", row["from_actor"], message_id=message_id, note=note)
+    conn.commit()
+    return {"id": message_id, "acked": True}
+
+
+def conversation(conn: sqlite3.Connection, actor_id: int, limit: int = 50) -> list[dict]:
     rows = conn.execute(
-        """SELECT m.id, m.body, m.task_id, m.created_at, a.name AS from_name FROM messages m
-           JOIN actors a ON a.id = m.from_actor WHERE m.to_actor = ? AND m.read_at IS NULL ORDER BY m.id""",
-        (actor_id,),
+        """SELECT m.*, f.name AS from_name, t.name AS to_name FROM messages m
+           JOIN actors f ON f.id = m.from_actor JOIN actors t ON t.id = m.to_actor
+           WHERE m.to_actor = ? OR m.from_actor = ? ORDER BY m.id DESC LIMIT ?""",
+        (actor_id, actor_id, limit),
     ).fetchall()
-    if rows:
-        conn.execute(f"UPDATE messages SET read_at = ? WHERE id IN ({','.join('?' for _ in rows)})",
-                     [now_iso(), *[r["id"] for r in rows]])
     return [dict(r) for r in rows]
+
+
+def status(conn: sqlite3.Connection, actor_id: int) -> dict:
+    """What a member is doing right now (for other agents: get_agent_status)."""
+    row = actors.get(conn, actor_id)
+    run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC LIMIT 1", (actor_id,)).fetchone()
+    task = conn.execute(
+        "SELECT id, title, progress, progress_note FROM tasks WHERE assignee_id = ? AND status = 'working' "
+        "AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1", (actor_id,)
+    ).fetchone()
+    recent = [e for e in audit.entries(conn, limit=200) if e["actor_id"] == actor_id][:8]
+    return {
+        "name": row["name"], "kind": row["kind"], "paused": bool(row["paused_at"]),
+        "archived": bool(row["archived_at"]), "last_seen_at": row["last_seen_at"],
+        "run": {k: run[k] for k in ("id", "kind", "status", "started_at", "task_id")} if run else None,
+        "task": {"ref": tasks.display_id(task["id"]), "title": task["title"], "progress": task["progress"],
+                 "note": task["progress_note"]} if task else None,
+        "recent": [{"at": e["at"], "action": e["action"]} for e in recent],
+        "unread_messages": conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE to_actor = ? AND read_at IS NULL", (actor_id,)).fetchone()[0],
+    }
+
+
+def active_runs(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        """SELECT r.id, r.kind, r.started_at, r.task_id, a.name AS actor_name, r.actor_id FROM runs r
+           JOIN actors a ON a.id = r.actor_id WHERE r.status = 'running' ORDER BY r.id"""
+    ).fetchall()
+    return [{**dict(r), "task_ref": tasks.display_id(r["task_id"]) if r["task_id"] else None} for r in rows]
 
 
 # ------------------------------------------------------------------ views
@@ -283,7 +374,9 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
     budget_store.ensure_schema(conn)
     profiles = hr_store.profiles(conn)
     classes = budget_store.agents(conn)
-    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(days=1)).isoformat(timespec="seconds")
+    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM actors")}
     out = []
     for row in conn.execute("SELECT * FROM actors ORDER BY is_owner DESC, archived_at IS NOT NULL, id"):
         q = conn.execute(
@@ -311,6 +404,11 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "status": "online" if row["kind"] == "human" and not row["archived_at"] else _status(row, q["working"] or 0, waiting),
             "last_seen_at": row["last_seen_at"], "paused": bool(row["paused_at"]),
             "archived": bool(row["archived_at"]), "created_by": row["created_by"],
+            "created_by_name": names.get(row["created_by"] or (p["created_by"] if p else None)),
+            "created_at": row["created_at"], "expires_at": p["expires_at"] if p else None,
+            "tokens_24h": budget_store.tokens_between(conn, now - timedelta(days=1), now, str(row["id"])),
+            "tokens_7d": budget_store.tokens_between(conn, now - timedelta(days=7), now, str(row["id"])),
+            "daily_cap": c["daily_cap"] if c else None,
             "queued": q["queued"] or 0, "working": q["working"] or 0, "review": q["review"] or 0,
             "done_today": q["done_today"] or 0, "approvals_waiting": waiting,
             "current": {"id": current["id"], "ref": tasks.display_id(current["id"]), "title": current["title"]} if current else None,

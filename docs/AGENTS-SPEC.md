@@ -284,6 +284,51 @@ platby faktur, třídění inboxu, noční retrospektiva (vstup pro kap. 6), zá
 a aktualizace závislostí. Každý běh se v PersonalOS objeví jako úkol s
 řešitelem Nexus.
 
+## 6b. Komunikace mezi agenty za běhu
+
+Doplněno 2026-09-25 na přání majitele: agenti si posílají zprávy, vidí, co
+řeší ostatní, a umí vstoupit do cizí práce tak, aby to druhý agent vzal na
+vědomí hned, ne až po dvou hodinách tupého dokončování.
+
+**Zprávy.** Každý člen (člověk i agent) má inbox. Zpráva má prioritu:
+
+| Priorita | Význam | Co udělá platforma |
+|---|---|---|
+| `fyi` | nová informace | doručí se při dalším kroku příjemce |
+| `change_plan` | příjemce má upravit, co právě dělá | runner ji vloží do běžícího sezení (viz níže) |
+| `stop` | zastav se | běh příjemce se ukončí a agent se pozastaví; nic se nemaže |
+
+`stop` od jiného agenta smí jen pozastavit. Nikdy nearchivuje, nemaže ani
+nemění oprávnění (to smí jen majitel).
+
+**Nástroje MCP (`pos`):** `send_message(to, body, priority, task_id?)`,
+`check_inbox`, `ack_message(id, note)`, `get_agent_status(name)` (běh, úkol,
+postup, poslední heartbeat) a `list_active_runs`. Stejné akce přes A2A
+(`SendMessage` na kartu agenta se doručí do jeho inboxu) přidá krok 5.
+REST pro web: `POST /api/agents/{id}/message`, `GET /api/agents/{id}/messages`,
+`GET /api/agents/{id}/status`, `GET /api/runs/active`.
+
+**Vložení do běžícího sezení (krok 3).** `codex exec` běží s `--json` a runner
+čte události průběžně. Po každé události (volání nástroje, konec kroku)
+zkontroluje inbox:
+
+- `fyi` a `change_plan`: v bezpečném bodě běh ukončí a pokračuje ve **stejném
+  sezení** přes `codex exec resume <session_id>` s promptem „Nová informace od
+  X, priorita Y: …“;
+- `stop`: běh přeruší a agenta pozastaví.
+
+Druhá cesta: šablona agenta ho učí volat `check_inbox` po každém kroku.
+
+**Důvěra.** Zprávy od lidí jsou pokyny člena týmu. Zprávy od agentů se agentovi
+předávají zabalené přes `pos.guard.external.wrap_external` (`source="agent:…"`,
+`trust="untrusted"`): informují nebo žádají, ale nikdy nepřebijí ústavu,
+oprávnění ani rozpočet. Každá zpráva a potvrzení je v audit logu.
+
+**UI.** Detail agenta ukazuje inbox, živý běh (trace) a pole pro vložení zprávy
+s prioritou do běžícího sezení. 3D pohled „Agent network“ (`/network`) kreslí
+zprávy, předání úkolů, žádosti o schválení a volání MCP jako hrany a nejnovější
+události jako částice, které po nich běží.
+
 ## 7. Úkoly
 
 Pořadí odpovídá závislostem. „Thread A“ = „Map PersonalOS assistant state“,

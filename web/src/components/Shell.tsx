@@ -1,6 +1,7 @@
-import { LogOut } from "lucide-react";
-import type { ReactNode } from "react";
+import { LogOut, Power } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { type FreezeState, agentsApi } from "../agentsApi";
 import { SUBSYSTEMS } from "../sample";
 import { SECTIONS } from "../sections";
 
@@ -14,7 +15,53 @@ export function Mark({ size = 22 }: { size?: number }) {
   );
 }
 
+/** Live platform state for the chrome: kill switch and approvals waiting. */
+function usePlatformState() {
+  const [freeze, setFreeze] = useState<FreezeState>({ frozen: false });
+  const [approvals, setApprovals] = useState(0);
+  useEffect(() => {
+    const load = () => {
+      agentsApi.freezeState().then(setFreeze, () => undefined);
+      agentsApi.approvals().then((a) => setApprovals(a.length), () => undefined);
+    };
+    load();
+    const t = setInterval(load, 20000);
+    window.addEventListener("pos:freeze", load);
+    window.addEventListener("pos:approvals", load);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("pos:freeze", load);
+      window.removeEventListener("pos:approvals", load);
+    };
+  }, []);
+  return { freeze, setFreeze, approvals };
+}
+
+function FrozenBanner({ freeze, onUnfreeze }: { freeze: FreezeState; onUnfreeze: () => void }) {
+  if (!freeze.frozen) return null;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-amber-400/70 bg-amber-300/5 px-4 py-2.5">
+      <Power size={15} className="text-amber-300" />
+      <span className="text-sm text-amber-200">All agents are frozen.</span>
+      <span className="cap">{freeze.reason || "No new runs; queues are stopped. Nothing was deleted."}</span>
+      <button className="btn-accent ml-auto" onClick={onUnfreeze}>
+        Unfreeze
+      </button>
+    </div>
+  );
+}
+
 export default function Shell({ children, onLogout }: { children: ReactNode; onLogout?: () => void }) {
+  const { freeze, setFreeze, approvals } = usePlatformState();
+  const toggleFreeze = async () => {
+    if (freeze.frozen) setFreeze(await agentsApi.unfreeze());
+    else {
+      const reason = window.prompt("Freeze every agent now. Why? (optional)");
+      if (reason === null) return;
+      setFreeze(await agentsApi.freeze(reason));
+    }
+    window.dispatchEvent(new Event("pos:freeze"));
+  };
   return (
     <div className="min-h-screen bg-bg">
       {/* Desktop rail */}
@@ -40,12 +87,26 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
                 <>
                   <Icon size={18} strokeWidth={1.5} className={isActive ? "text-accent" : "text-ink-3"} />
                   {label}
+                  {path === "approvals" && approvals > 0 && (
+                    <span className="cap ml-auto rounded-sm bg-amber-300/15 px-1.5 text-amber-300!">{approvals}</span>
+                  )}
                 </>
               )}
             </NavLink>
           ))}
         </nav>
-        <div className="mt-auto flex flex-col gap-2 rounded-md border border-line p-3">
+        <button
+          type="button"
+          onClick={toggleFreeze}
+          title="Kill switch: stop every agent at once"
+          className={`mt-auto flex items-center gap-2.5 rounded-md border px-3 py-2 text-[13px] ${
+            freeze.frozen ? "border-amber-400/70 text-amber-300" : "border-line text-ink-2 hover:border-amber-400/60 hover:text-amber-300"
+          }`}
+        >
+          <Power size={15} />
+          {freeze.frozen ? "Frozen · unfreeze" : "Freeze all agents"}
+        </button>
+        <div className="flex flex-col gap-2 rounded-md border border-line p-3">
           <span className="cap flex items-center justify-between">
             SUBSYSTEMS <span className="rounded-sm border border-dashed border-ink-3 px-1 text-[9px]">SAMPLE</span>
           </span>
@@ -75,14 +136,20 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
       <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b border-line bg-bg/90 px-4 py-3 backdrop-blur lg:hidden">
         <Mark size={20} />
         <span className="font-medium">PersonalOS</span>
+        <button type="button" onClick={toggleFreeze} aria-label={freeze.frozen ? "Unfreeze agents" : "Freeze all agents"} className={`ml-auto p-1.5 ${freeze.frozen ? "text-amber-300" : "text-ink-3"}`}>
+          <Power size={18} strokeWidth={1.5} />
+        </button>
         {onLogout && (
-          <button type="button" onClick={onLogout} aria-label="Log out" className="ml-auto p-1.5 text-ink-3">
+          <button type="button" onClick={onLogout} aria-label="Log out" className="p-1.5 text-ink-3">
             <LogOut size={18} strokeWidth={1.5} />
           </button>
         )}
       </header>
 
-      <main className="px-4 pt-5 pb-24 sm:px-6 lg:ml-52 lg:px-9 lg:pt-6 lg:pb-6">{children}</main>
+      <main className="px-4 pt-5 pb-24 sm:px-6 lg:ml-52 lg:px-9 lg:pt-6 lg:pb-6">
+        <FrozenBanner freeze={freeze} onUnfreeze={toggleFreeze} />
+        {children}
+      </main>
 
       {/* Phone tab bar */}
       <nav
@@ -97,7 +164,10 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
               `flex flex-1 flex-col items-center gap-1 py-1.5 text-[11px] ${isActive ? "text-accent" : "text-ink-3"}`
             }
           >
-            <Icon size={20} strokeWidth={1.5} />
+            <span className="relative">
+              <Icon size={20} strokeWidth={1.5} />
+              {path === "approvals" && approvals > 0 && <span className="absolute -top-1 -right-1.5 h-2 w-2 rounded-full bg-amber-300" />}
+            </span>
             {label}
           </NavLink>
         ))}

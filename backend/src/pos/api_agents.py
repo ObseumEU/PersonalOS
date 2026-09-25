@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from . import agents, approvals, killswitch, tasks
+from . import agents, approvals, killswitch, network, tasks
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .config import Settings, get_settings
@@ -30,6 +30,7 @@ class PermissionsIn(BaseModel):
 class MessageIn(BaseModel):
     body: str
     task_id: str | None = None
+    priority: str = "fyi"
 
 
 class DecideIn(BaseModel):
@@ -48,9 +49,21 @@ def _wrap(fn):
         raise tasks.Invalid(str(e)) from e
 
 
+def _hr(conn) -> dict:
+    """HR's read-only view (scores, proposals). Missing HR data never breaks the screen."""
+    from .hr import service as hr
+
+    try:
+        report = hr.agents_overview(conn)
+    except Exception as e:  # noqa: BLE001 - HR is optional for this view
+        return {"error": str(e), "ratings": {}}
+    return {**report, "ratings": {str(r["agent_id"]): r for r in report.get("ratings", [])}}
+
+
 @router.get("/agents")
 def list_agents(conn=Depends(get_db)):
-    return {"agents": agents.overview(conn), "permissions": agents.PERMISSIONS}
+    return {"agents": agents.overview(conn), "permissions": agents.PERMISSIONS,
+            "frozen": killswitch.is_frozen(conn), "hr": _hr(conn)}
 
 
 @router.post("/agents", status_code=201)
@@ -61,7 +74,11 @@ def create_agent(body: AgentIn, conn=Depends(get_db), ctx=Depends(get_ctx),
 
 @router.get("/agents/{agent_id}")
 def agent_detail(agent_id: int, conn=Depends(get_db)):
-    return agents.detail(conn, agent_id)
+    out = agents.detail(conn, agent_id)
+    hr = _hr(conn)
+    out["hr"] = {"rating": hr["ratings"].get(str(agent_id)),
+                 "proposals": [p for p in hr.get("proposals", []) if str(p.get("agent_id")) == str(agent_id)]}
+    return out
 
 
 @router.put("/agents/{agent_id}/permissions")
@@ -97,7 +114,30 @@ def restore(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
 @router.post("/agents/{agent_id}/message")
 def message(agent_id: int, body: MessageIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return _wrap(lambda: agents.send_message(conn, ctx, agent_id, body.body,
-                                             tasks.parse_id(body.task_id) if body.task_id else None))
+                                             tasks.parse_id(body.task_id) if body.task_id else None, body.priority))
+
+
+@router.get("/agents/{agent_id}/messages")
+def messages(agent_id: int, conn=Depends(get_db)):
+    return agents.conversation(conn, agent_id)
+
+
+@router.get("/agents/{agent_id}/status")
+def agent_status(agent_id: int, conn=Depends(get_db)):
+    return agents.status(conn, agent_id)
+
+
+@router.get("/runs/active")
+def active_runs(conn=Depends(get_db)):
+    return agents.active_runs(conn)
+
+
+@router.get("/network")
+def get_network(window: str = "24h", conn=Depends(get_db)):
+    try:
+        return network.build(conn, window)
+    except ValueError as e:
+        raise tasks.Invalid(str(e)) from e
 
 
 @router.get("/board")

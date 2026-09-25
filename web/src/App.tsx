@@ -2,16 +2,21 @@ import { useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { getMe, logout, type Me } from "./api";
 import Shell, { Mark } from "./components/Shell";
+import AgentDetail from "./pages/AgentDetail";
+import Agents from "./pages/Agents";
+import Approvals from "./pages/Approvals";
 import Assistant from "./pages/Assistant";
+import Board from "./pages/Board";
 import ComingSoon from "./pages/ComingSoon";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
+import NetworkPage from "./pages/Network";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "network", "approvals"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -40,6 +45,11 @@ export default function App() {
         <Route path="/today" element={<Today />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/inbox" element={<InboxClarify />} />
+        <Route path="/agents" element={<Agents />} />
+        <Route path="/agents/:id" element={<AgentDetail />} />
+        <Route path="/network" element={<NetworkPage />} />
+        <Route path="/board" element={<Board />} />
+        <Route path="/approvals" element={<Approvals />} />
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />

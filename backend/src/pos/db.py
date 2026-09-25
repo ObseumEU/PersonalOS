@@ -192,6 +192,14 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX messages_to ON messages (to_actor, read_at);
     """,
+    # 4: agent-to-agent messages with priority and acknowledgement (AGENTS-SPEC 6b).
+    """
+    ALTER TABLE messages ADD COLUMN priority TEXT NOT NULL DEFAULT 'fyi'
+        CHECK (priority IN ('fyi', 'change_plan', 'stop'));
+    ALTER TABLE messages ADD COLUMN run_id INTEGER REFERENCES runs(id);
+    ALTER TABLE messages ADD COLUMN acked_at TEXT;
+    ALTER TABLE messages ADD COLUMN delivered_in_run INTEGER REFERENCES runs(id);
+    """,
 ]
 
 

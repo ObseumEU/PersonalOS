@@ -1,5 +1,8 @@
 import {
+  Bot,
   Box,
+  Share2,
+  ShieldCheck,
   CalendarDays,
   CheckSquare,
   FileText,
@@ -30,12 +33,12 @@ export const SECTIONS: Section[] = [
     features: ["Quick-add", "Due dates and priority", "Grouped by topic", "Created by the assistant"],
   },
   {
-    path: "calendar", label: "Calendar", icon: CalendarDays, phase: 4, mobile: true,
+    path: "calendar", label: "Calendar", icon: CalendarDays, phase: 4,
     blurb: "Your Google or Microsoft 365 calendar, next to your tasks.",
     features: ["Synced events", "Day and week view", "Tasks alongside events"],
   },
   {
-    path: "files", label: "Files", icon: FolderOpen, phase: 2, mobile: true,
+    path: "files", label: "Files", icon: FolderOpen, phase: 2,
     blurb: "Every document in one place, searchable in full text.",
     features: ["Drag-and-drop upload", "Preview", "Tags and topics", "Full-text search"],
   },
@@ -49,6 +52,9 @@ export const SECTIONS: Section[] = [
     blurb: "Markdown notes that belong to your topics.",
     features: ["Markdown editor", "Linked to topics", "Searchable"],
   },
-  { path: "assistant", label: "Assistant", icon: Orbit, phase: 3, mobile: true, blurb: "", features: [] },
+  { path: "assistant", label: "Assistant", icon: Orbit, phase: 3, blurb: "", features: [] },
+  { path: "agents", label: "Agents", icon: Bot, phase: 2, mobile: true, blurb: "", features: [] },
+  { path: "network", label: "Network", icon: Share2, phase: 2, blurb: "", features: [] },
+  { path: "approvals", label: "Approvals", icon: ShieldCheck, phase: 2, mobile: true, blurb: "", features: [] },
   { path: "system", label: "System", icon: Box, phase: 5, blurb: "", features: [] },
 ];

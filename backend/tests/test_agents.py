@@ -188,3 +188,43 @@ def test_http_api(tmp_path):
         assert isinstance(client.get("/api/board").json(), list)
         assert client.get("/api/approvals").json() == []
         assert client.post("/api/agents", json={"name": "Dev agent", "purpose": "dup"}).status_code == 422
+
+
+def test_network(conn, me, assistant):
+    from pos import network
+
+    t = tasks.create(conn, me, {"title": "Summarise", "assignee": "ai"})
+    agents.send_message(conn, me, assistant.actor_id, "hi")
+    approvals.request(conn, assistant, "send_email", {}, t["id"])
+    net = network.build(conn, "24h")
+    kinds = {(e["from"], e["to"], e["type"]) for e in net["edges"]}
+    assert (me.actor_id, assistant.actor_id, "assign") in kinds
+    assert (me.actor_id, assistant.actor_id, "message") in kinds
+    assert (assistant.actor_id, me.actor_id, "approval") in kinds
+    node = next(n for n in net["nodes"] if n["id"] == assistant.actor_id)
+    assert node["open"] == 1 and net["events"][0]["at"]
+    with pytest.raises(ValueError):
+        network.build(conn, "1y")
+
+
+def test_message_priorities_and_trust(conn, me, assistant, tmp_path):
+    worker = make(conn, me, tmp_path, "Worker", permissions=["tasks:read", "tasks:claim", "messages:send"])["agent"]["id"]
+    rid = conn.execute("INSERT INTO runs (actor_id, kind, status, started_at) VALUES (?, 'task', 'running', 'x')",
+                       (worker,)).lastrowid
+    sent = agents.send_message(conn, assistant, worker, "The client moved the call to 14:00", priority="change_plan")
+    assert sent["delivered_to_run"] == rid
+    agents.send_message(conn, me, worker, "Also check the invoice", priority="fyi")
+    inbox = agents.check_inbox(conn, worker)
+    assert [m["priority"] for m in inbox] == ["change_plan", "fyi"]
+    assert inbox[0]["trust"] == "agent" and inbox[0]["body"].startswith("<external source=\"agent:Assistant\"")
+    assert inbox[1]["trust"] == "member" and inbox[1]["body"] == "Also check the invoice"
+    assert agents.ack_message(conn, Ctx(worker), inbox[0]["id"], "moved my plan")["acked"]
+    st = agents.status(conn, worker)
+    assert st["run"]["id"] == rid and st["unread_messages"] == 0
+
+    agents.send_message(conn, assistant, worker, "stop, wrong customer", priority="stop")
+    assert conn.execute("SELECT status FROM runs WHERE id = ?", (rid,)).fetchone()[0] == "cancelled"
+    assert actors.get(conn, worker)["paused_at"] is not None
+    assert actors.get(conn, worker)["archived_at"] is None
+    with pytest.raises(agents.AgentError):
+        agents.send_message(conn, me, worker, "x", priority="urgent")
