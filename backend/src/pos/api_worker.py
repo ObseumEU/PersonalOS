@@ -13,7 +13,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import actors, agents, killswitch, runner, tasks
+from . import actors, agents, chat, killswitch, runner, tasks
 from .api_tasks import get_db
 from .config import Settings, get_settings
 from .core import Ctx, now_iso
@@ -93,8 +93,7 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     st = _state(conn, ctx.actor_id)
     if st["frozen"] or st["paused"] or st["archived"]:
         return {"state": st}
-    unread = conn.execute("SELECT COUNT(*) FROM messages WHERE to_actor = ? AND read_at IS NULL",
-                          (ctx.actor_id,)).fetchone()[0]
+    unread = chat.inbox_unread(conn, ctx.actor_id)
     # A "working" task is offered again only when no worker is still on it
     # (a second worker of the same agent must not pick up the same task).
     live, cutoff = _live_run_sql()

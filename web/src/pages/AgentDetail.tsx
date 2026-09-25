@@ -306,7 +306,17 @@ export default function AgentDetail() {
         </Panel>
 
         <div className="flex flex-col gap-4 lg:col-span-3">
-          <Panel fig="INBOX" title="Messages" right={`${messages.filter((m) => !m.read_at).length} unread`} bodyClassName="max-h-[240px] overflow-y-auto">
+          <Panel
+            fig="INBOX"
+            title="Messages"
+            right={
+              <span className="flex items-center gap-2">
+                {messages.filter((m) => m.to_actor === id && !m.read_at).length} unread
+                <Link to={`/chat?dm=${id}`} className="text-accent!">open DM in chat →</Link>
+              </span>
+            }
+            bodyClassName="max-h-[240px] overflow-y-auto"
+          >
             {messages.length === 0 && <p className="cap p-4">No messages.</p>}
             {messages.map((m) => (
               <div key={m.id} className="flex flex-col gap-0.5 border-b border-line px-4 py-2">

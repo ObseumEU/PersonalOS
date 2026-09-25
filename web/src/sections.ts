@@ -13,6 +13,7 @@ import {
   Hash,
   Network,
   type LucideIcon,
+  MessagesSquare,
   Orbit,
   Sun,
 } from "lucide-react";
@@ -59,6 +60,7 @@ export const SECTIONS: Section[] = [
     features: ["Markdown editor", "Linked to topics", "Searchable"],
   },
   { path: "assistant", label: "Assistant", icon: Orbit, phase: 3, blurb: "", features: [] },
+  { path: "chat", label: "Chat", icon: MessagesSquare, phase: 2, mobile: true, blurb: "", features: [] },
   { path: "agents", label: "Agents", icon: Bot, phase: 2, mobile: true, blurb: "", features: [] },
   { path: "org", label: "Org", icon: Network, phase: 2, blurb: "", features: [] },
   { path: "network", label: "Network", icon: Share2, phase: 2, blurb: "", features: [] },

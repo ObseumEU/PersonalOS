@@ -9,6 +9,7 @@ import Assistant from "./pages/Assistant";
 import Automations from "./pages/Automations";
 import Calendar from "./pages/Calendar";
 import Board from "./pages/Board";
+import Chat from "./pages/Chat";
 import ComingSoon from "./pages/ComingSoon";
 import Connectors from "./pages/Connectors";
 import InboxClarify from "./pages/InboxClarify";
@@ -21,7 +22,7 @@ import Today from "./pages/Today";
 import Tools from "./pages/Tools";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar", "tools"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "org", "network", "approvals", "connectors", "automations", "calendar", "tools", "chat"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="/tools" element={<Tools />} />
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/calendar" element={<Calendar />} />
+        <Route path="/chat" element={<Chat />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />
         {SECTIONS.filter((s) => !BUILT.has(s.path)).map((s) => (

@@ -341,7 +341,7 @@ MIGRATIONS: list[str] = [
         from_actor INTEGER NOT NULL REFERENCES actors(id),
         to_actor   INTEGER NOT NULL REFERENCES actors(id),
         note       TEXT NOT NULL DEFAULT '',
-        message_id INTEGER REFERENCES messages(id),
+        message_id INTEGER REFERENCES chat_messages(id),
         run_id     INTEGER REFERENCES runs(id),
         created_at TEXT NOT NULL
     );
@@ -369,6 +369,94 @@ MIGRATIONS: list[str] = [
         ok       INTEGER NOT NULL DEFAULT 1
     );
     CREATE INDEX tool_usage_tool ON tool_usage(tool, at);
+    """,
+    # 14: chat (channels, members, messages, reactions, reads). The agent
+    #     messages from migrations 3-4 become DM channels; `messages` stays as
+    #     the frozen legacy copy (archive, never delete). `chat_inbox` is the
+    #     per-recipient delivery a worker reads (read, ack, delivered_in_run).
+    """
+    CREATE TABLE channels (
+        id          INTEGER PRIMARY KEY,
+        kind        TEXT NOT NULL CHECK (kind IN ('dm', 'group')),
+        name        TEXT,
+        topic       TEXT NOT NULL DEFAULT '',
+        visibility  TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('public', 'team', 'private')),
+        dm_key      TEXT UNIQUE,
+        created_by  INTEGER REFERENCES actors(id),
+        created_at  TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE UNIQUE INDEX channels_group_name ON channels (name COLLATE NOCASE)
+        WHERE kind = 'group' AND archived_at IS NULL;
+    CREATE TABLE channel_members (
+        channel_id           INTEGER NOT NULL REFERENCES channels(id),
+        actor_id             INTEGER NOT NULL REFERENCES actors(id),
+        role                 TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'member')),
+        joined_at            TEXT NOT NULL,
+        last_read_message_id INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (channel_id, actor_id)
+    );
+    CREATE INDEX channel_members_actor ON channel_members (actor_id);
+    CREATE TABLE chat_messages (
+        id          INTEGER PRIMARY KEY,
+        channel_id  INTEGER NOT NULL REFERENCES channels(id),
+        author_id   INTEGER NOT NULL REFERENCES actors(id),
+        body        TEXT NOT NULL,
+        reply_to    INTEGER REFERENCES chat_messages(id),
+        mentions    TEXT NOT NULL DEFAULT '[]',
+        attachments TEXT NOT NULL DEFAULT '[]',
+        priority    TEXT CHECK (priority IN ('fyi', 'change_plan', 'stop')),
+        trust       TEXT NOT NULL CHECK (trust IN ('owner', 'person', 'agent', 'external')),
+        created_at  TEXT NOT NULL,
+        edited_at   TEXT,
+        archived_at TEXT
+    );
+    CREATE INDEX chat_messages_channel ON chat_messages (channel_id, id);
+    CREATE INDEX chat_messages_author ON chat_messages (author_id, created_at);
+    CREATE TABLE chat_reactions (
+        message_id  INTEGER NOT NULL REFERENCES chat_messages(id),
+        actor_id    INTEGER NOT NULL REFERENCES actors(id),
+        emoji       TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        archived_at TEXT,
+        PRIMARY KEY (message_id, actor_id, emoji)
+    );
+    CREATE TABLE chat_inbox (
+        message_id       INTEGER NOT NULL REFERENCES chat_messages(id),
+        actor_id         INTEGER NOT NULL REFERENCES actors(id),
+        reason           TEXT NOT NULL CHECK (reason IN ('dm', 'mention', 'priority', 'reply')),
+        run_id           INTEGER REFERENCES runs(id),
+        read_at          TEXT,
+        acked_at         TEXT,
+        delivered_in_run INTEGER REFERENCES runs(id),
+        PRIMARY KEY (message_id, actor_id)
+    );
+    CREATE INDEX chat_inbox_unread ON chat_inbox (actor_id, read_at);
+
+    INSERT INTO channels (kind, visibility, dm_key, created_by, created_at)
+    SELECT 'dm', 'private', MIN(from_actor, to_actor) || ':' || MAX(from_actor, to_actor),
+           MIN(from_actor, to_actor), MIN(created_at)
+    FROM messages GROUP BY MIN(from_actor, to_actor), MAX(from_actor, to_actor);
+    INSERT INTO channel_members (channel_id, actor_id, joined_at)
+    SELECT id, CAST(substr(dm_key, 1, instr(dm_key, ':') - 1) AS INTEGER), created_at FROM channels;
+    INSERT OR IGNORE INTO channel_members (channel_id, actor_id, joined_at)
+    SELECT id, CAST(substr(dm_key, instr(dm_key, ':') + 1) AS INTEGER), created_at FROM channels;
+    INSERT INTO chat_messages (id, channel_id, author_id, body, attachments, priority, trust, created_at)
+    SELECT m.id, c.id, m.from_actor, m.body,
+           CASE WHEN m.task_id IS NULL THEN '[]'
+                ELSE json_array(json_object('type', 'task', 'id', m.task_id)) END,
+           m.priority,
+           CASE WHEN a.is_owner = 1 THEN 'owner' WHEN a.kind = 'human' THEN 'person' ELSE 'agent' END,
+           m.created_at
+    FROM messages m JOIN actors a ON a.id = m.from_actor
+    JOIN channels c ON c.dm_key = MIN(m.from_actor, m.to_actor) || ':' || MAX(m.from_actor, m.to_actor);
+    INSERT INTO chat_inbox (message_id, actor_id, reason, run_id, read_at, acked_at, delivered_in_run)
+    SELECT id, to_actor, 'dm', run_id, read_at, acked_at, delivered_in_run FROM messages;
+    UPDATE channel_members SET last_read_message_id = COALESCE((
+        SELECT MAX(cm.id) FROM chat_messages cm
+        WHERE cm.channel_id = channel_members.channel_id AND (cm.author_id = channel_members.actor_id
+              OR EXISTS (SELECT 1 FROM chat_inbox i WHERE i.message_id = cm.id
+                         AND i.actor_id = channel_members.actor_id AND i.read_at IS NOT NULL))), 0);
     """,
 ]
 

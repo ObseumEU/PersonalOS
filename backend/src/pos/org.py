@@ -267,11 +267,12 @@ def handoff(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = ""
                        (target["id"],)).fetchone()
     body = f"Handoff {ref} '{row['title']}' from {me['name']}." + (f" Note: {note}" if note else "")
     at = now_iso()
-    message_id = conn.execute(
-        """INSERT INTO messages (to_actor, from_actor, task_id, body, created_at, priority, run_id)
-           VALUES (?, ?, ?, ?, ?, 'fyi', ?)""",
-        (target["id"], ctx.actor_id, task_id, body, at, run["id"] if run else None),
-    ).lastrowid
+    from . import chat
+
+    # The note reaches the receiver's inbox as a DM (low priority; the handoff is
+    # the permission, so the sender needs no messages:send).
+    message_id = chat.send_dm(conn, ctx, target["id"], body, priority="fyi",
+                              attachments=[{"type": "task", "id": task_id}], system=True)["id"]
     handoff_id = conn.execute(
         """INSERT INTO handoffs (task_id, from_actor, to_actor, note, message_id, run_id, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
