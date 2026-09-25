@@ -84,3 +84,12 @@ foreach ($a in $agents) {
     Write-Output "$($a.Name) started (pid $($p.Id)), log $log"
 }
 Remove-Item Env:POS_AGENT_KEY -ErrorAction SilentlyContinue
+
+# The API container cannot reach the LAN on Docker Desktop; this forwards
+# 127.0.0.1:8097 to knowlage (POS_KNOWLAGE_URL=http://host.docker.internal:8097).
+$bridgePid = Join-Path $logs "knowlage-bridge.pid"
+if (-not ((Test-Path $bridgePid) -and (Get-Process -Id ([int](Get-Content $bridgePid)) -ErrorAction SilentlyContinue))) {
+    $b = Start-Process -FilePath $python -ArgumentList (Join-Path $root "ops\knowlage-bridge.py") -WindowStyle Hidden -PassThru
+    Set-Content -Path $bridgePid -Value $b.Id
+    Write-Output "knowlage bridge started (pid $($b.Id)) on 127.0.0.1:8097"
+}

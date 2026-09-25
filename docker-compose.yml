@@ -14,6 +14,7 @@ services:
       POS_ENGINE_ORDER: ${POS_ENGINE_ORDER:-codex,claude}
       POS_CODEX_MODEL: ${POS_CODEX_MODEL:-}
       POS_CLAUDE_MODEL: ${POS_CLAUDE_MODEL:-claude-opus-5-5}
+      POS_KNOWLAGE_URL: ${POS_KNOWLAGE_URL:-https://knowlage.obseum.cz}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
       - pos-data:/data

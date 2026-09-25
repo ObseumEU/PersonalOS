@@ -28,6 +28,11 @@ def base_url() -> str:
     return os.environ.get("POS_KNOWLAGE_URL", "https://knowlage.obseum.cz").rstrip("/")
 
 
+def public_url() -> str:
+    """The address people open (links in the UI); the API may reach knowlage another way."""
+    return os.environ.get("POS_KNOWLAGE_PUBLIC_URL", "https://knowlage.obseum.cz").rstrip("/")
+
+
 def _headers() -> dict:
     key = os.environ.get("POS_KNOWLAGE_API_KEY")
     return {"Authorization": f"Bearer {key}", "X-KB-Actor": "agent:personalos"} if key else \
@@ -116,11 +121,11 @@ def graph(*, docs_per_collection: int = 3, max_collections: int = 40, refresh: b
     try:
         data = build_graph(_get("/api/workspaces"), _get("/api/sources"), _get("/api/documents", timeout=60),
                            docs_per_collection=docs_per_collection, max_collections=max_collections)
-        out = {"available": True, "url": base_url(), "fetched_at": time.time(), **data}
+        out = {"available": True, "url": public_url(), "fetched_at": time.time(), **data}
     except (httpx.HTTPError, ValueError, KeyError) as e:
         if hit:  # stale is better than nothing
             return {**hit[1], "stale": True, "error": str(e)[:200]}
-        return {"available": False, "url": base_url(), "error": str(e)[:200], "nodes": [], "edges": [], "stats": {}}
+        return {"available": False, "url": public_url(), "error": str(e)[:200], "nodes": [], "edges": [], "stats": {}}
     with _lock:
         _cache[key] = (time.monotonic(), out)
     return out
@@ -148,7 +153,7 @@ def ask(question: str, workspace: str | None = None, timeout: float = 300) -> di
                     elif event == "progress":
                         steps += 1
                     elif event == "answer":
-                        return {"ok": True, "thread_id": thread, "steps": steps, "url": base_url(),
+                        return {"ok": True, "thread_id": thread, "steps": steps, "url": public_url(),
                                 "answer": data.get("content", ""), "citations": data.get("citations", []),
                                 "verified": data.get("verified"), "problems": data.get("problems", []),
                                 "insufficient_evidence": data.get("insufficient_evidence", False)}
@@ -190,7 +195,7 @@ def subsystems(conn) -> list[dict]:
         detail = (f"{stats['documents']:,} documents · {stats['chunks']:,} chunks".replace(",", " ")
                   if isinstance(stats, dict) else "unreachable")
         out.append({"name": "Knowledge base", "proto": "knowlage · A2A", "ok": ok, "value": ms, "unit": "ms",
-                    "detail": detail, "url": base_url()})
+                    "detail": detail, "url": public_url()})
         nexus = os.environ.get("POS_NEXUS_URL") or os.environ.get("POS_NEXUS_A2A_URL", "").split("/a2a")[0]
         if nexus:
             ok, ms, info = _probe(nexus.rstrip("/") + "/health")

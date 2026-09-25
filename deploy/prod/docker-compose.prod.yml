@@ -17,6 +17,7 @@ services:
       POS_CLAUDE_SELFCHECK: "1"
       # Our knowledge base and Nexus, over the shared proxy network.
       POS_KNOWLAGE_URL: ${POS_KNOWLAGE_URL:-http://knowlage:8080}
+      POS_KNOWLAGE_PUBLIC_URL: ${POS_KNOWLAGE_PUBLIC_URL:-http://knowlage.obseum.cz}
       POS_KNOWLAGE_A2A_URL: ${POS_KNOWLAGE_A2A_URL:-http://knowlage:8080/a2a/default}
       POS_NEXUS_A2A_URL: ${POS_NEXUS_A2A_URL:-}
     networks:
