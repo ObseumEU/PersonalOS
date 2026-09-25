@@ -8,6 +8,7 @@ import Approvals from "./pages/Approvals";
 import Assistant from "./pages/Assistant";
 import Board from "./pages/Board";
 import ComingSoon from "./pages/ComingSoon";
+import Connectors from "./pages/Connectors";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import NetworkPage from "./pages/Network";
@@ -16,7 +17,7 @@ import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import { SECTIONS } from "./sections";
 
-const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "network", "approvals"]);
+const BUILT = new Set(["today", "tasks", "assistant", "system", "agents", "network", "approvals", "connectors"]);
 
 export default function App() {
   const [me, setMe] = useState<Me | null>(null);
@@ -50,6 +51,7 @@ export default function App() {
         <Route path="/network" element={<NetworkPage />} />
         <Route path="/board" element={<Board />} />
         <Route path="/approvals" element={<Approvals />} />
+        <Route path="/connectors" element={<Connectors />} />
         <Route path="/assistant" element={<Assistant />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />

@@ -200,6 +200,41 @@ MIGRATIONS: list[str] = [
     ALTER TABLE messages ADD COLUMN acked_at TEXT;
     ALTER TABLE messages ADD COLUMN delivered_in_run INTEGER REFERENCES runs(id);
     """,
+    # 5: connectors (step 4): routing rules, incoming events, outbound results.
+    """
+    CREATE TABLE routing_rules (
+        id          INTEGER PRIMARY KEY,
+        name        TEXT NOT NULL,
+        source      TEXT NOT NULL,
+        match       TEXT NOT NULL DEFAULT '{}',
+        assignee    TEXT,
+        priority    INTEGER CHECK (priority IN (1, 2, 3)),
+        topic       TEXT,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        position    INTEGER NOT NULL DEFAULT 100,
+        hits        INTEGER NOT NULL DEFAULT 0,
+        created_by  INTEGER REFERENCES actors(id),
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE TABLE events (
+        id          INTEGER PRIMARY KEY,
+        source      TEXT NOT NULL,
+        kind        TEXT,
+        ref         TEXT,
+        title       TEXT NOT NULL,
+        payload     TEXT NOT NULL,
+        rule_id     INTEGER REFERENCES routing_rules(id),
+        task_id     INTEGER REFERENCES tasks(id),
+        received_by INTEGER REFERENCES actors(id),
+        received_at TEXT NOT NULL,
+        signals     TEXT NOT NULL DEFAULT ''
+    );
+    CREATE UNIQUE INDEX events_ref ON events (source, ref) WHERE ref IS NOT NULL;
+    ALTER TABLE approvals ADD COLUMN result TEXT;
+    ALTER TABLE approvals ADD COLUMN executed_at TEXT;
+    """,
 ]
 
 

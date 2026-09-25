@@ -69,9 +69,10 @@ def install() -> None:
     runner.before_run(_constitution_digest)
     runner.before_run(_guardrails)
     runner.after_run(_budget_record)
-    from . import killswitch
+    from . import killswitch, outbound
 
     killswitch.install()
+    outbound.install()
     _installed = True
 
 
@@ -81,9 +82,10 @@ def register_builtin_agents(conn: sqlite3.Connection) -> None:
     budget.set_agent_class(conn, str(actors.assistant_id(conn)), "system")
     conn.commit()
     hr.ensure_hr_agent(conn)
-    from . import agents
+    from . import agents, routing
 
     agents.seed_builtin_permissions(conn)
+    routing.seed_defaults(conn)
 
 
 def register_mcp_tools(mcp, session) -> None:

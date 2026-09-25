@@ -7,7 +7,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
 
 from . import __doc__ as description
-from . import actors, api_agents, api_tasks, api_worker, integrations, mcp_server
+from . import actors, api_agents, api_connectors, api_tasks, api_worker, integrations, mcp_server
 from .auth import require_user
 from .auth import router as auth_router
 from .budget import service as budget_service
@@ -101,6 +101,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_tasks.router)
     app.include_router(api_agents.router)
     app.include_router(api_worker.router)
+    app.include_router(api_connectors.router)
+    app.include_router(api_connectors.hooks)
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
 

@@ -28,6 +28,10 @@ services:
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${DEV_AGENT_KEY:-}
+      # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
+      WORKER_CODEX_CONFIG: ${DEV_AGENT_CODEX_CONFIG:-}
+      KB_AGENT_KEY: ${DEV_KB_AGENT_KEY:-}
+      GITHUB_TOKEN: ${DEV_GITHUB_TOKEN:-}
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - dev-agent-work:/work
@@ -40,6 +44,9 @@ services:
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${MAIL_AGENT_KEY:-}
+      # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
+      WORKER_CODEX_CONFIG: ${MAIL_AGENT_CODEX_CONFIG:-}
+      KB_AGENT_KEY: ${MAIL_KB_AGENT_KEY:-}
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - mail-agent-work:/work
@@ -52,6 +59,10 @@ services:
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${COMMUNITY_AGENT_KEY:-}
+      # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
+      WORKER_CODEX_CONFIG: ${COMMUNITY_AGENT_CODEX_CONFIG:-}
+      KB_AGENT_KEY: ${COMMUNITY_KB_AGENT_KEY:-}
+      DISCORD_TOKEN: ${COMMUNITY_DISCORD_TOKEN:-}
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - community-agent-work:/work

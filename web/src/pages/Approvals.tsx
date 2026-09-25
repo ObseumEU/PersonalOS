@@ -55,6 +55,13 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
         </span>
       )}
       {a.comment && <span className="cap">“{a.comment}”</span>}
+      {a.result && (
+        <span className={`cap ${a.result.status === "sent" ? "text-accent!" : a.result.status === "failed" ? "text-red-400!" : ""}`}>
+          result: {a.result.status}
+          {a.result.owner_task ? ` · send it by hand: ${a.result.owner_task}` : ""}
+          {a.result.error ? ` · ${a.result.error}` : ""}
+        </span>
+      )}
       {error && <span className="cap text-red-400!">{error}</span>}
     </div>
   );

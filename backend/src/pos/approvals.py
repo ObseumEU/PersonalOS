@@ -11,6 +11,14 @@ import sqlite3
 from . import actors, audit
 from .core import Ctx, Forbidden, NotFound, now_iso
 
+_on_approved = []
+
+
+def on_approved(fn) -> None:
+    """Register fn(conn, approval) to run when the owner approves something
+    (e.g. pos.outbound sends the approved e-mail)."""
+    _on_approved.append(fn)
+
 
 def request(conn: sqlite3.Connection, ctx: Ctx, action: str, details: dict | None = None,
             task_id: int | None = None) -> dict:
@@ -27,7 +35,10 @@ def get(conn: sqlite3.Connection, approval_id: int) -> dict:
     row = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
     if row is None:
         raise NotFound(f"approval {approval_id}")
-    return {**dict(row), "details": json.loads(row["details"])}
+    out = {**dict(row), "details": json.loads(row["details"])}
+    if out.get("result"):
+        out["result"] = json.loads(out["result"])
+    return out
 
 
 def pending(conn: sqlite3.Connection) -> list[dict]:
@@ -46,4 +57,7 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, approval_id: int, approve: bool, 
         ("approved" if approve else "rejected", ctx.actor_id, now_iso(), comment, approval_id),
     )
     audit.log(conn, ctx, "approve" if approve else "reject", "approval", approval_id)
+    if approve:
+        for fn in _on_approved:
+            fn(conn, get(conn, approval_id))
     return get(conn, approval_id)
