@@ -1,7 +1,8 @@
 # The deployer (pos.selfdeploy): git + docker compose + the PersonalOS backend package.
 FROM docker:27-cli
-RUN apk add --no-cache python3 py3-pip git bash \
-    && git config --global --add safe.directory /repo
+# node and npm for the web build check.
+RUN apk add --no-cache python3 py3-pip git bash nodejs npm \
+    && git config --global --add safe.directory "*"
 WORKDIR /app
 COPY backend/pyproject.toml ./
 COPY backend/src ./src

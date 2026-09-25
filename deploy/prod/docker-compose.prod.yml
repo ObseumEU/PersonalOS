@@ -1,0 +1,86 @@
+# Production override for svr03 (same host and pattern as knowlage and Nexus):
+# nothing is published on the host's network except a loopback port. The web
+# container joins the shared reverse-proxy network, and the host's front proxy
+# serves personalos.obseum.cz only to the LAN and the VPN.
+#
+#   docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml \
+#     --profile agents --profile deploy up -d --build
+#
+# Full steps: deploy/prod/README.md
+
+services:
+  api:
+    environment:
+      POS_SECURE_COOKIES: "false"  # the front proxy speaks plain HTTP on the LAN, like knowlage
+      # The API image has the Claude CLI; the agent workers run in containers here,
+      # so check that it answers with the configured model (start and every 6 h).
+      POS_CLAUDE_SELFCHECK: "1"
+      # Our knowledge base and Nexus, over the shared proxy network.
+      POS_KNOWLAGE_URL: ${POS_KNOWLAGE_URL:-http://knowlage:8080}
+      POS_KNOWLAGE_A2A_URL: ${POS_KNOWLAGE_A2A_URL:-http://knowlage:8080/a2a/default}
+      POS_NEXUS_A2A_URL: ${POS_NEXUS_A2A_URL:-}
+    networks:
+      default:
+      proxy:
+    security_opt:
+      - no-new-privileges:true
+    logging: &logging
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    # The front proxy reaches this nginx as personalos:80 over the proxy network;
+    # a host-native front proxy can use 127.0.0.1:${POS_LOOPBACK_PORT}.
+    ports: !override
+      - "127.0.0.1:${POS_LOOPBACK_PORT:-8096}:80"
+    networks:
+      default:
+      proxy:
+        aliases:
+          - personalos
+    logging: *logging
+
+  # The deployer promotes the Dev agent's commits: it fetches agent/dev from the
+  # agent's clone (remote "dev"), merges it into the latest main in this checkout,
+  # runs the constitution check, the backend tests and the web build, rebuilds
+  # api and web, checks health, and only then pushes main. On failure nothing
+  # reaches main and the Dev agent gets a task with the log. Restart-safe: the
+  # last promoted commit is kept in .pos-promote-state.
+  # The checkout is mounted at its own host path, so the docker compose the
+  # deployer runs resolves bind mounts (./agents, ./data/...) to real host paths.
+  deployer:
+    working_dir: ${POS_CHECKOUT:?set POS_CHECKOUT to this checkout's absolute path}
+    command: ["python", "-m", "pos.selfdeploy", "--repo", "${POS_CHECKOUT}", "--promote-from", "dev/agent/dev",
+              "--source-remote", "dev", "--watch", "60"]
+    environment:
+      DEPLOY_TEST_CMD: >-
+        cd backend && pip install -q -e .[dev] && python -m pytest -q && cd ../web && npm ci --silent && npm run build
+      DEPLOY_UP_CMD: >-
+        docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml up -d --build api web
+      DEPLOY_HEALTH_URL: http://web/api/health
+    volumes: !override
+      - ${POS_CHECKOUT}:${POS_CHECKOUT}
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${POS_DEV_WORK:-./data/dev-work}:/dev-work:ro
+    logging: *logging
+
+  # The Dev agent works in its own clone (branch agent/dev, never pushes).
+  dev-agent:
+    environment:
+      WORKER_WORKDIR: /work/PersonalOS
+    volumes: !override
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - ${POS_DEV_WORK:-./data/dev-work}:/work
+    logging: *logging
+  assistant:
+    logging: *logging
+  mail-agent:
+    logging: *logging
+  community-agent:
+    logging: *logging
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-my-app-network}

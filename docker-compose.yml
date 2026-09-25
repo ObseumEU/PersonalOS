@@ -77,6 +77,19 @@ services:
       - dev-agent-work:/work
     restart: unless-stopped
 
+  assistant:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on: [api]
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${ASSISTANT_AGENT_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - assistant-work:/work
+    restart: unless-stopped
+
   mail-agent:
     profiles: ["agents"]
     build: ./worker
@@ -112,6 +125,7 @@ services:
 
 volumes:
   pos-data:
+  assistant-work:
   dev-agent-work:
   mail-agent-work:
   community-agent-work:

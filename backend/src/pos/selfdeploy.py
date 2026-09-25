@@ -191,9 +191,13 @@ def tick(repo: Path, reporter: Reporter, *, remote: str, branch: str, test_cmd: 
 
 
 def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, target: str, test_cmd: str,
-                 up_cmd: str, health_url: str | None) -> Result:
-    """One promotion attempt of `source` into `remote/target`, in the worktree `wt`."""
+                 up_cmd: str, health_url: str | None, source_remote: str | None = None) -> Result:
+    """One promotion attempt of `source` into `remote/target`, in the worktree `wt`.
+    `source_remote`: fetch it first when the branch lives in another repository
+    (on the server: the Dev agent's clone, e.g. source "dev/agent/dev")."""
     state = wt / ".pos-promote-state"
+    if source_remote:
+        git(wt, "fetch", source_remote)
     git(wt, "fetch", remote, target)
     base = git(wt, "rev-parse", f"{remote}/{target}")
     tip = git(wt, "rev-parse", source)
@@ -254,6 +258,7 @@ def main() -> None:
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--watch", type=int, default=0, help="seconds between checks")
     ap.add_argument("--promote-from", default="", help="branch agents commit to (promote mode)")
+    ap.add_argument("--source-remote", default="", help="remote to fetch the promote branch from first")
     a = ap.parse_args()
     if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
         open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
@@ -264,7 +269,8 @@ def main() -> None:
     while True:
         if a.promote_from:
             res = promote_tick(Path(a.repo), reporter, source=a.promote_from, remote=kw["remote"], target=kw["branch"],
-                               test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"], health_url=kw["health_url"])
+                               test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"], health_url=kw["health_url"],
+                               source_remote=a.source_remote or None)
         else:
             res = tick(Path(a.repo), reporter, **kw)
         if res.status != "nothing":
