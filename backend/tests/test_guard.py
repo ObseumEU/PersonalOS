@@ -313,3 +313,33 @@ def test_repo_config_cannot_fake_the_verifier(repo, tmp_path):
     old = git(repo, "rev-parse", "HEAD")
     new = commit(repo, "docs/CONSTITUTION.md", "x\n")
     assert len(gitcheck.check_range(repo, old, new, signers=signers).problems) == 1
+
+
+def test_with_guardrails_is_idempotent():
+    once = prompt.with_guardrails("Shrň inbox")
+    assert once.endswith("Shrň inbox") and "Guardrails" in once
+    assert prompt.with_guardrails(once) == once
+
+
+def test_every_codex_run_gets_the_guardrails(tmp_path, monkeypatch):
+    from pos import actors, integrations, runner
+    from pos.db import connect, migrate
+
+    fake = tmp_path / "codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "args = sys.argv\n"
+        "open(args[args.index('-o') + 1], 'w').write(sys.stdin.read())\n"
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("POS_CODEX_BIN", str(fake))
+    monkeypatch.delenv("POS_CODEX_DISABLED", raising=False)
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    actors.ensure_builtin(conn)
+    integrations.install()
+    result = runner.run(conn, runner.RunRequest(actors.assistant_id(conn), "test", "Shrň inbox"))
+    conn.close()
+    assert result.status == "ok", result.error
+    assert "Ústava PersonalOS" in result.output and result.output.endswith("Shrň inbox")

@@ -47,6 +47,11 @@ def _constitution_digest(conn: sqlite3.Connection, req: runner.RunRequest) -> No
               req.task_id, sha256=guard_prompt.constitution_digest())
 
 
+def _guardrails(conn: sqlite3.Connection, req: runner.RunRequest) -> None:
+    """Every codex exec run starts with the constitution and guardrails (spec 5.2)."""
+    req.prompt = guard_prompt.with_guardrails(req.prompt)
+
+
 def _budget_record(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -> None:
     if jsonl:
         budget.record_exec(conn, jsonl.splitlines(), agent_id=str(run_row["actor_id"]),
@@ -60,6 +65,7 @@ def install() -> None:
         return
     runner.before_run(_budget_gate)
     runner.before_run(_constitution_digest)
+    runner.before_run(_guardrails)
     runner.after_run(_budget_record)
     _installed = True
 
