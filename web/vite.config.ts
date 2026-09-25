@@ -7,6 +7,6 @@ export default defineConfig({
   server: {
     port: 5173,
     // In dev the API runs separately (uvicorn on :8000); in Docker nginx does this.
-    proxy: { "/api": "http://localhost:8000" },
+    proxy: { "/api": process.env.POS_API ?? "http://localhost:8000" },
   },
 });
