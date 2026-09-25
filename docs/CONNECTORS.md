@@ -39,6 +39,7 @@ content, so nothing is sent silently and nothing is lost.
 | `email.send` | `POS_SMTP_HOST`, `POS_SMTP_PORT` (587), `POS_SMTP_USER`, `POS_SMTP_PASSWORD` (Gmail: an app password), `POS_SMTP_FROM` |
 | `github.comment` | `POS_GITHUB_TOKEN` (fine-grained token, issues: write) |
 | `discord.post` | `POS_DISCORD_WEBHOOK_URL` |
+| Machine events (knowlage new mail) | `POS_EVENTS_TOKENS=knowlage:<token>`; knowlage sets `KB_EVENTS_URL=http://personalos:80/api/events` and `KB_EVENTS_TOKEN=<token>`. The token opens only `POST /api/events`; labels (workspaces, `channel:<domain>`) and optional `headers` feed routing rules and the mail prefilter. |
 | GitHub webhook | `POS_GITHUB_WEBHOOK_SECRET`; in GitHub point the webhook at `https://<your host>/api/hooks/github` (events: issues, pull requests, issue comments) |
 
 ## Agents and their MCP servers

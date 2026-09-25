@@ -7,6 +7,8 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from .config import Settings, get_settings
+
 from . import a2a, actors, knowledge, outbound, routing, scheduler, schedules, versioning
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
@@ -14,6 +16,9 @@ from .core import Ctx
 
 router = APIRouter(prefix="/api", tags=["connectors"], dependencies=[Depends(require_user)])
 hooks = APIRouter(prefix="/api/hooks", tags=["connectors"])
+# POST /api/events also takes machine clients (knowlage pushes new Gmail mail):
+# a logged-in session or "Authorization: Bearer <token>" from POS_EVENTS_TOKENS.
+machine = APIRouter(prefix="/api", tags=["connectors"])
 
 
 class RuleIn(BaseModel):
@@ -36,6 +41,33 @@ class EventIn(BaseModel):
     url: str | None = None
     author: str | None = None
     labels: list[str] = []
+    headers: dict[str, str] | list[dict] | None = None
+
+
+def event_tokens() -> dict[str, str]:
+    """POS_EVENTS_TOKENS="knowlage:<token>,other:<token>": token → source name."""
+    out = {}
+    for item in os.environ.get("POS_EVENTS_TOKENS", "").split(","):
+        name, _, token = item.strip().partition(":")
+        if name and len(token) >= 16:
+            out[token] = name
+    return out
+
+
+def event_sender(request: Request, settings: Settings = Depends(get_settings)) -> str | None:
+    """The machine client's name (bearer token), None for a logged-in session."""
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        given = auth[7:].strip().encode()
+        name = None
+        for token, sender in event_tokens().items():  # constant time, every token compared
+            if hmac.compare_digest(given, token.encode()):
+                name = sender
+        if name is None:
+            raise HTTPException(401, "bad event token")
+        return name
+    require_user(request, settings)
+    return None
 
 
 @router.get("/connectors")
@@ -81,12 +113,23 @@ def list_events(conn=Depends(get_db)):
     return routing.list_events(conn)
 
 
-@router.post("/events", status_code=201)
-def post_event(body: EventIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
-    """Add an event by hand (for testing a rule)."""
+@machine.post("/events", status_code=201)
+def post_event(body: EventIn, conn=Depends(get_db), ctx=Depends(get_ctx), sender=Depends(event_sender)):
+    """Add an event: by hand (for testing a rule) or from a machine client with
+    its token (knowlage: {source:"gmail", kind:"email", labels:[workspaces…,
+    "channel:<domain>"], headers?}). Labels and headers feed routing and the
+    mail prefilter; the content stays untrusted."""
     data = body.model_dump()
-    data["meta"] = {"labels": data.pop("labels")}
-    out = routing.ingest(conn, Ctx(ctx.actor_id, via="api"), data)
+    meta = {"labels": data.pop("labels")}
+    headers = data.pop("headers")
+    if headers:
+        meta["headers"] = headers
+    if sender:
+        meta["sender"] = sender
+    data["meta"] = meta
+    actor = actors.find_by_name(conn, sender) if sender else None
+    via = f"events:{sender}" if sender else "api"
+    out = routing.ingest(conn, Ctx(actor["id"] if actor else ctx.actor_id, via=via), data)
     conn.commit()
     return out
 

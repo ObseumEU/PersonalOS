@@ -146,3 +146,35 @@ def test_issue_labelled_agent_after_it_was_opened_reaches_the_dev_agent(tmp_path
         assert "rerouted" not in routing.ingest(conn, ctx, routing.github_events(
             "issues", {"action": "labeled", "repository": repo, "issue": issue})[0])
         conn.close()
+
+
+def test_events_take_a_machine_token(tmp_path, monkeypatch):
+    """knowlage pushes new Gmail mail to /api/events with its bearer token."""
+    token = "k" * 40
+    monkeypatch.setenv("POS_EVENTS_TOKENS", f"knowlage:{token}")
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    with TestClient(create_app(Settings(data_dir=tmp_path, password="pw", session_secret="t" * 32))) as client:
+        mail = {"source": "gmail", "kind": "email", "title": "Nabídka", "body": "Dobrý den… https://kb/doc/1",
+                "ref": "gmail:thread-1", "url": "https://kb/doc/1", "author": "Jana <jana@firma.cz>",
+                "labels": ["obseum", "channel:firma.cz"]}
+        assert client.post("/api/events", json=mail).status_code == 401  # no login, no token
+        bad = client.post("/api/events", json=mail, headers={"Authorization": "Bearer " + "x" * 40})
+        assert bad.status_code == 401
+        ok = client.post("/api/events", json=mail, headers={"Authorization": f"Bearer {token}"})
+        assert ok.status_code == 201 and ok.json()["task_id"] and ok.json()["assignee"] == "Mail agent"
+        dup = client.post("/api/events", json=mail, headers={"Authorization": f"Bearer {token}"})
+        assert dup.json()["duplicate"] is True
+        # headers from the payload feed the mail prefilter
+        news = {**mail, "ref": "gmail:thread-2", "headers": {"List-Unsubscribe": "<mailto:x@y>"}}
+        skipped = client.post("/api/events", json=news, headers={"Authorization": f"Bearer {token}"})
+        assert skipped.status_code == 201 and skipped.json()["skipped"].startswith("mailing list")
+        # the token opens only this endpoint
+        assert client.get("/api/events", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+
+
+def test_event_label_routes_by_channel(conn, me):
+    routing.create_rule(conn, me, {"name": "Firma → Nexus", "source": "gmail", "match": {"label": "channel:firma.cz"},
+                                   "assignee": "Nexus", "priority": 1, "position": 0})
+    out = routing.ingest(conn, me, {"source": "gmail", "kind": "email", "title": "Hi", "ref": "r1",
+                                    "meta": {"labels": ["channel:firma.cz"]}})
+    assert out["rule"] == "Firma → Nexus"

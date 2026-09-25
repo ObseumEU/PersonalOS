@@ -123,6 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_chat.router)
     app.include_router(api_connectors.router)
     app.include_router(api_connectors.hooks)
+    app.include_router(api_connectors.machine)
     app.include_router(a2a.router)
     app.include_router(api_deploys.router)
     app.include_router(api_tools.router)
