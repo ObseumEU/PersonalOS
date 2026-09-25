@@ -84,7 +84,8 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
     # change): hr:read for the HR agent, which hr_overview requires; messages:send
     # for the role agents, so they can answer the standup and colleagues in chat.
     for name, perm in (("HR agent", "hr:read"), ("Dev agent", "messages:send"), ("Agent coach", "messages:send"),
-                       ("Project manager", "tasks:review")):
+                       ("Project manager", "tasks:review"), ("HR agent", "routes:write"),
+                       ("Agent coach", "routes:write"), ("Project manager", "routes:write")):
         row = conn.execute("SELECT id, permissions FROM actors WHERE name = ?", (name,)).fetchone()
         if row and perm not in json.loads(row["permissions"] or "[]"):
             conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",

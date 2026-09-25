@@ -344,6 +344,8 @@ Stav: hotovo (commit „Wave 2 / 4.5“).
   doplnit provider `github.issue` a `github.review` (GitHub token existuje),
   `payment` a `web.post` vždy jen jako úkol majiteli.
 
+Stav: hotovo (commit „Wave 2 / 4.6“; háček knowlage 3a9f59d, Community mimo profil agents c272f0d).
+
 ### 4.7 Soubory a viditelnost
 
 - Files: hledání přes knowlage dělá jádro (probíhá). Doplnit: `restore`

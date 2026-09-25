@@ -11,7 +11,10 @@ the prepared content, so nothing is lost and nothing is sent silently.
 - email.send     SMTP (e.g. Gmail with an app password): POS_SMTP_HOST, POS_SMTP_PORT,
                  POS_SMTP_USER, POS_SMTP_PASSWORD, POS_SMTP_FROM
 - github.comment GitHub REST: POS_GITHUB_TOKEN
+- github.issue   open an issue (repo, title, body, labels?): POS_GITHUB_TOKEN
+- github.review  review a pull request (repo, number, body, event COMMENT|APPROVE|REQUEST_CHANGES)
 - discord.post   Discord webhook: POS_DISCORD_WEBHOOK_URL
+- payment, web.post  never automatic: on approval they become a task for the owner
 """
 
 import json
@@ -25,19 +28,29 @@ import httpx
 from . import actors, approvals, audit, tasks
 from .core import Ctx, now_iso
 
-ACTIONS = ("email.send", "github.comment", "discord.post")
+ACTIONS = ("email.send", "github.comment", "github.issue", "github.review", "discord.post", "payment", "web.post")
 REQUIRED = {
     "email.send": ("to", "subject", "body"),
     "github.comment": ("repo", "number", "body"),
+    "github.issue": ("repo", "title", "body"),
+    "github.review": ("repo", "number", "body"),
     "discord.post": ("content",),
+    "payment": ("to", "amount", "reason"),
+    "web.post": ("url", "content"),
 }
+# Only ever done by a person: approved, they become a task for the owner.
+OWNER_ONLY = {"payment", "web.post"}
 
 
 def configured() -> dict[str, bool]:
     return {
         "email.send": bool(os.environ.get("POS_SMTP_HOST") and os.environ.get("POS_SMTP_USER")),
         "github.comment": bool(os.environ.get("POS_GITHUB_TOKEN")),
+        "github.issue": bool(os.environ.get("POS_GITHUB_TOKEN")),
+        "github.review": bool(os.environ.get("POS_GITHUB_TOKEN")),
         "discord.post": bool(os.environ.get("POS_DISCORD_WEBHOOK_URL")),
+        "payment": False,
+        "web.post": False,
     }
 
 
@@ -78,13 +91,37 @@ def _github(p: dict) -> dict:
     return {"url": r.json().get("html_url")}
 
 
+def _gh_headers() -> dict:
+    return {"Authorization": f"Bearer {os.environ['POS_GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"}
+
+
+def _github_issue(p: dict) -> dict:
+    body = {"title": p["title"], "body": p["body"]}
+    if p.get("labels"):
+        body["labels"] = list(p["labels"])
+    r = httpx.post(f"https://api.github.com/repos/{p['repo']}/issues", headers=_gh_headers(), json=body, timeout=30)
+    r.raise_for_status()
+    return {"url": r.json().get("html_url"), "number": r.json().get("number")}
+
+
+def _github_review(p: dict) -> dict:
+    event = (p.get("event") or "COMMENT").upper()
+    if event not in ("COMMENT", "APPROVE", "REQUEST_CHANGES"):
+        raise ValueError("event is COMMENT, APPROVE or REQUEST_CHANGES")
+    r = httpx.post(f"https://api.github.com/repos/{p['repo']}/pulls/{int(p['number'])}/reviews",
+                   headers=_gh_headers(), json={"body": p["body"], "event": event}, timeout=30)
+    r.raise_for_status()
+    return {"url": r.json().get("html_url"), "state": r.json().get("state")}
+
+
 def _discord(p: dict) -> dict:
     r = httpx.post(os.environ["POS_DISCORD_WEBHOOK_URL"], json={"content": p["content"][:2000]}, timeout=30)
     r.raise_for_status()
     return {"http_status": r.status_code}
 
 
-PROVIDERS = {"email.send": _email, "github.comment": _github, "discord.post": _discord}
+PROVIDERS = {"email.send": _email, "github.comment": _github, "github.issue": _github_issue,
+             "github.review": _github_review, "discord.post": _discord}
 
 
 def execute(conn: sqlite3.Connection, approval: dict) -> dict:
@@ -100,8 +137,9 @@ def execute(conn: sqlite3.Connection, approval: dict) -> dict:
     ctx = Ctx(requester, via="outbound")
     if not configured()[action]:
         owner = actors.owner_id(conn)
+        by_hand = action in OWNER_ONLY
         t = tasks.create(conn, Ctx(owner, via="system"), {
-            "title": f"Send by hand: {action} (connector not set up)",
+            "title": f"Do by hand: {action}" if by_hand else f"Send by hand: {action} (connector not set up)",
             "notes": f"Purpose: you approved {action} (approval {approval['id']}), but its connector is not set "
                      "up, so nothing was sent. Send it by hand, or set up the connector to send automatically.\n"
                      "Source: the approval queue.\n\n"

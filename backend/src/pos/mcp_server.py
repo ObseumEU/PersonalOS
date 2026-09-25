@@ -75,6 +75,7 @@ TOOL_PERMISSIONS = {
     "task_comment": "tasks:read",
     # Feedback: any member gives it; resolving is checked in pos.feedback.
     "propose_instructions": "tasks:claim",
+    "route_update": "routes:write",
     # Projects: reading needs tasks:read; creating tasks:write, members by the project's lead (pos.projects).
     "project_list": "tasks:read", "project_get": "tasks:read", "project_create": "tasks:write",
     "project_add_member": "tasks:read",
@@ -317,6 +318,16 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "project_add_member", project=project, member=member) as (conn, c):
             p = projects.add_member(conn, c, project, member, role)
             return {"slug": p["slug"], "members": [f"{m['name']} ({m['role']})" for m in p["members"]]}
+
+    @mcp.tool(description="Change an event routing rule (list_routes shows them): name, source, match "
+                          "(kind, label, from_contains, text_regex), assignee, priority, topic, enabled, position. "
+                          "Say why in `reason`; every change is versioned. For the HR agent, the Agent coach and "
+                          "the Project manager (routes:write).")
+    def route_update(ctx: Context, rule_id: int, changes: dict, reason: str = "") -> dict:
+        from . import routing
+
+        with session(ctx, "route_update", rule_id=rule_id) as (conn, c):
+            return routing.update_rule(conn, c, rule_id, {**changes, **({"reason": reason} if reason else {})})
 
     @mcp.tool(description="Feedback given to a member (default: you), by status open | applied | dismissed.")
     def feedback_list(ctx: Context, to: str | None = None, status: str | None = "open") -> list[dict]:

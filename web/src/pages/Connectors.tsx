@@ -36,14 +36,68 @@ type Status = {
   mail_prefilter?: { days: number; total: number; by_reason: Record<string, number> };
 };
 
-const SOURCES = ["gmail", "github", "discord", "calendar", "nexus", "web", "manual", "any"];
+// calendar, nexus and web come back when something sends them.
+const SOURCES = ["gmail", "github", "discord", "manual", "any"];
 const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
 const SETUP: Record<string, string> = {
   "email.send": "POS_SMTP_HOST, POS_SMTP_PORT, POS_SMTP_USER, POS_SMTP_PASSWORD, POS_SMTP_FROM",
   "github.comment": "POS_GITHUB_TOKEN",
   "discord.post": "POS_DISCORD_WEBHOOK_URL",
+  "github.issue": "POS_GITHUB_TOKEN",
+  "github.review": "POS_GITHUB_TOKEN",
+  "payment": "never automatic: approved, it becomes your task",
+  "web.post": "never automatic: approved, it becomes your task",
 };
+
+/** Every field of a routing rule, edited in place (versioned on the server). */
+function EditRule({ r, onSave, onCancel }: { r: Rule; onSave: (changes: Record<string, unknown>) => void; onCancel: () => void }) {
+  const firstKey = Object.keys(r.match)[0] ?? "text_regex";
+  const [f, setF] = useState({
+    name: r.name, source: r.source, key: firstKey, value: r.match[firstKey] ?? "", assignee: r.assignee ?? "",
+    priority: r.priority ? String(r.priority) : "", topic: r.topic ?? "",
+  });
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-line bg-raised px-4 py-2.5">
+      <input className={`${input} w-44`} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label="Rule name" />
+      <select className={input} value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label="Source">
+        {[...new Set([...SOURCES, r.source])].map((s) => (
+          <option key={s}>{s}</option>
+        ))}
+      </select>
+      <select className={input} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} aria-label="Match">
+        <option value="text_regex">text matches</option>
+        <option value="from_contains">from contains</option>
+        <option value="kind">kind is</option>
+        <option value="label">has label</option>
+      </select>
+      <input className={`${input} w-36`} placeholder="(every event)" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} aria-label="Match value" />
+      <input className={`${input} w-36`} placeholder="assignee" value={f.assignee} onChange={(e) => setF({ ...f, assignee: e.target.value })} aria-label="Assignee" />
+      <select className={input} value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} aria-label="Priority">
+        <option value="">no priority</option>
+        <option value="1">P1</option>
+        <option value="2">P2</option>
+        <option value="3">P3</option>
+      </select>
+      <input className={`${input} w-28`} placeholder="topic" value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} aria-label="Topic" />
+      <button
+        type="button"
+        className="btn-accent"
+        onClick={() =>
+          onSave({
+            name: f.name, source: f.source, match: f.value ? { [f.key]: f.value } : {}, assignee: f.assignee || null,
+            priority: f.priority ? Number(f.priority) : null, topic: f.topic || null,
+          })
+        }
+      >
+        Save
+      </button>
+      <button type="button" className="cap hover:text-accent!" onClick={onCancel}>
+        cancel
+      </button>
+    </div>
+  );
+}
 
 function matchText(m: Record<string, string>) {
   const parts = Object.entries(m).map(([k, v]) => `${k.replace("_", " ")} ${v}`);
@@ -56,6 +110,7 @@ export default function Connectors() {
   const [events, setEvents] = useState<Event[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rule, setRule] = useState({ name: "", source: "gmail", key: "text_regex", value: "", assignee: "", priority: "" });
+  const [editing, setEditing] = useState<number | null>(null);
   const [test, setTest] = useState({ source: "gmail", title: "", body: "", author: "" });
 
   const load = useCallback(() => {
@@ -158,15 +213,25 @@ export default function Connectors() {
         </Panel>
 
         <Panel fig="TAB. 15" title="Routing rules" right="first match wins · versioned · agents may propose changes" className="lg:col-span-8">
-          <div className="grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_70px] gap-2 border-b border-line px-4 py-2">
+          <div className="grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_110px] gap-2 border-b border-line px-4 py-2">
             {["RULE", "SOURCE", "MATCH", "→ ASSIGNEE", "PRIO", "HITS", ""].map((h) => (
               <span key={h} className="cap">
                 {h}
               </span>
             ))}
           </div>
-          {rules.map((r) => (
-            <div key={r.id} className={`grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_70px] items-center gap-2 border-b border-line px-4 py-2 text-[13px] ${r.enabled ? "" : "opacity-45"}`}>
+          {rules.map((r) =>
+            editing === r.id ? (
+              <EditRule
+                key={r.id}
+                r={r}
+                onCancel={() => setEditing(null)}
+                onSave={(changes) =>
+                  run(api(`/api/routes/${r.id}`, { method: "PATCH", body: JSON.stringify(changes) })).then(() => setEditing(null))
+                }
+              />
+            ) : (
+            <div key={r.id} className={`grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_110px] items-center gap-2 border-b border-line px-4 py-2 text-[13px] ${r.enabled ? "" : "opacity-45"}`}>
               <span className="truncate">{r.name}</span>
               <span className="font-mono text-xs">{r.source}</span>
               <span className="cap truncate">{matchText(r.match)}</span>
@@ -177,12 +242,16 @@ export default function Connectors() {
                 <button className="cap hover:text-accent!" onClick={() => run(api(`/api/routes/${r.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !r.enabled }) }))}>
                   {r.enabled ? "off" : "on"}
                 </button>
+                <button className="cap hover:text-accent!" onClick={() => setEditing(r.id)}>
+                  edit
+                </button>
                 <button className="cap hover:text-red-400!" onClick={() => run(api(`/api/routes/${r.id}/archive`, { method: "POST" }))}>
                   archive
                 </button>
               </span>
             </div>
-          ))}
+            ),
+          )}
           <form onSubmit={addRule} className="flex flex-wrap items-center gap-2 px-4 py-3">
             <input required placeholder="New rule name" className={`${input} w-48`} value={rule.name} onChange={(e) => setRule({ ...rule, name: e.target.value })} />
             <select className={input} value={rule.source} onChange={(e) => setRule({ ...rule, source: e.target.value })}>

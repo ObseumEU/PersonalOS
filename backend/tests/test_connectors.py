@@ -208,3 +208,28 @@ def test_invoice_rule_follows_the_nexus_url(tmp_path, monkeypatch):
     routing.sync_nexus_rule(c)
     assert rule()["enabled"] is False
     c.close()
+
+
+def test_github_issue_and_owner_only_actions(conn, me, monkeypatch):
+    monkeypatch.setenv("POS_GITHUB_TOKEN", "t")
+    calls = []
+
+    class R:
+        status_code = 201
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"html_url": "https://gh/9", "number": 9}
+
+    monkeypatch.setattr(outbound.httpx, "post", lambda url, **kw: calls.append((url, kw["json"])) or R())
+    mail = Ctx(actors.find_by_name(conn, "Mail agent")["id"])
+    ap = outbound.request(conn, mail, "github.issue", {"repo": "ObseumEU/PersonalOS", "title": "Bug", "body": "x"})
+    approvals.decide(conn, me, ap["id"], True)
+    assert calls[0][0].endswith("/repos/ObseumEU/PersonalOS/issues") and calls[0][1]["title"] == "Bug"
+    pay = outbound.request(conn, mail, "payment", {"to": "CZ65 0800", "amount": "1200 CZK", "reason": "invoice 7"})
+    out = approvals.decide(conn, me, pay["id"], True)
+    assert out["result"]["status"] == "not_configured" and len(calls) == 1  # a payment is never automatic
+    t = tasks.get(conn, me, tasks.parse_id(out["result"]["owner_task"]))
+    assert t["title"] == "Do by hand: payment"
