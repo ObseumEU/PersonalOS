@@ -96,3 +96,24 @@ Tools: `list_tasks`, `get_task`, `capture`, `create_task`, `update_task`,
 `request_approval`. Resource `tasks://{view}` (today, inbox, waiting, …) and
 prompts `plan_my_day`, `weekly_review`. Every call lands in the audit log.
 For a local stdio server against a dev database: `python -m pos.mcp_server`.
+
+## Agents and runtimes
+
+Agents are separate workers, not part of the API. Each one waits for tasks and
+messages with its own key and works through the `pos` MCP server. See
+[docs/WORKERS.md](docs/WORKERS.md).
+
+The default runtime is **Claude Code CLI** (Opus 5.5). When Claude hits its
+usage limit, a worker set to `auto` falls back to **Codex CLI**.
+
+Start the workers on a Windows PC where `claude` is logged in with
+[`ops/start-agents.ps1`](ops/start-agents.ps1) (stop them with
+[`ops/stop-agents.ps1`](ops/stop-agents.ps1)), or run them in Docker:
+
+```bash
+docker compose --profile agents up -d --build
+```
+
+Agents can improve PersonalOS itself. The Dev agent commits to `agent/dev`, and
+the deployer merges to main only after the constitution check, tests and a
+health check pass. See [docs/SELF-DEPLOY.md](docs/SELF-DEPLOY.md).
