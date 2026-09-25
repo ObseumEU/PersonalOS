@@ -1,0 +1,22 @@
+# PersonalOS stack. Works on the laptop as-is; on the server add
+# docker-compose.prod.yml (see README).
+services:
+  api:
+    build: ./backend
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - pos-data:/data
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    depends_on:
+      - api
+    ports:
+      - "${POS_PORT:-8080}:80"
+    restart: unless-stopped
+
+volumes:
+  pos-data:
