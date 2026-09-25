@@ -555,6 +555,19 @@ MIGRATIONS: list[str] = [
     DROP TRIGGER IF EXISTS files_fts_au;
     DROP TABLE IF EXISTS files_fts;
     """,
+    # 19: settings the owner changes at run time (pos.settings_store), versioned like tasks,
+    #     e.g. hr.max_active_agents raised by an approved raise_agent_limit.
+    """
+    CREATE TABLE settings (
+        id INTEGER PRIMARY KEY,
+        key TEXT NOT NULL UNIQUE,
+        value TEXT NOT NULL,
+        created_by INTEGER REFERENCES actors(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    """,
 ]
 
 

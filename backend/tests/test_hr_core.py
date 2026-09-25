@@ -203,3 +203,22 @@ def test_schedule_runs_daily_then_weekly_once(conn):
     assert schedule.run_due(conn, monday) == ["daily", "weekly"]
     assert schedule.run_due(conn, monday) == []
     assert schedule.run_due(conn, tuesday) == ["daily"]
+
+
+def test_approved_limit_raise_lets_the_agent_in(conn):
+    from pos import approvals, settings_store
+    from pos.hr.policy import SETTING_MAX_ACTIVE, current
+
+    owner = Ctx(actors.owner_id(conn))
+    settings_store.put(conn, owner, SETTING_MAX_ACTIVE, 1)
+    new_agent(conn, "Mail agent", "Sorts incoming emails")
+    pm = Ctx(new_agent(conn, "Project manager", "Splits team work by role"), via="mcp")
+    ask = service.admit_agent(conn, pm, name="Research", purpose="market research")
+    assert ask["allowed"] is False and ask["decision"] == "ask_owner"
+    approvals.decide(conn, owner, ask["approval_id"], True)
+    assert current(conn).max_active_agents > 1  # room for one more
+    assert service.admit_agent(conn, pm, name="Research", purpose="market research") == {"allowed": True}
+    from pos import versioning
+
+    row = conn.execute("SELECT id FROM settings WHERE key = ?", (SETTING_MAX_ACTIVE,)).fetchone()
+    assert versioning.history(conn, "setting", row["id"])[-1]["action"] == "raise_agent_limit"

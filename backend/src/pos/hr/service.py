@@ -12,7 +12,7 @@ from .limits import OverLimitAction, decide_over_limit
 from .metrics import TeamKpis
 from .models import CreateAgentRequest, Lifetime
 from .platform import CorePlatform, iso
-from .policy import HRPolicy
+from .policy import SETTING_MAX_ACTIVE, HRPolicy, current
 from .report import file_weekly_report
 from .review import ReviewResult, run_daily_review
 
@@ -75,7 +75,8 @@ def _serialize(result: ReviewResult, names: dict[str, str]) -> dict:
 
 
 def daily_review(conn: sqlite3.Connection, ctx: Ctx | None = None, *, apply: bool = True,
-                 now: datetime | None = None, policy: HRPolicy = HRPolicy()) -> dict:
+                 now: datetime | None = None, policy: HRPolicy | None = None) -> dict:
+    policy = policy or current(conn)
     hr_ctx = _hr_ctx(conn, ctx.via if ctx else "system")
     if apply and ctx is not None:
         _may_run_hr(conn, ctx)
@@ -95,8 +96,9 @@ def daily_review(conn: sqlite3.Connection, ctx: Ctx | None = None, *, apply: boo
 
 
 def weekly_report(conn: sqlite3.Connection, ctx: Ctx | None = None, *, now: datetime | None = None,
-                  policy: HRPolicy = HRPolicy()) -> dict:
+                  policy: HRPolicy | None = None) -> dict:
     """Dry-run review over the last week and a "k přečtení" task for the owner."""
+    policy = policy or current(conn)
     hr_ctx = _hr_ctx(conn, ctx.via if ctx else "system")
     if ctx is not None:
         _may_run_hr(conn, ctx)
@@ -140,13 +142,14 @@ def _created_today(conn: sqlite3.Connection, creator_id: int) -> int:
 
 
 def admit_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, lifetime: str = "one_shot",
-                now: datetime | None = None, policy: HRPolicy = HRPolicy()) -> dict:
+                now: datetime | None = None, policy: HRPolicy | None = None) -> dict:
     """Check the spec 3.2 limits before create_agent and decide when one is hit.
 
     Returns {"allowed": True} when the agent may be created. Otherwise HR's decision:
     reuse an existing agent, replace (HR archives a weak one and then allows), defer
     to tomorrow, or ask the owner (an approval is queued). Never refuses silently.
     """
+    policy = policy or current(conn)
     hr_ctx = _hr_ctx(conn, ctx.via)
     platform = CorePlatform(conn, hr_ctx)
     now = now or utcnow()
@@ -202,3 +205,21 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> str:
     conn.commit()
     return key
 
+
+
+def _on_limit_approved(conn: sqlite3.Connection, approval: dict) -> None:
+    """The owner approved raise_agent_limit: one more active agent is allowed
+    (a versioned setting HRPolicy reads), so the requester can create it now."""
+    if approval["action"] != "raise_agent_limit":
+        return
+    details = approval.get("details") or {}
+    active = len(_active_agents(CorePlatform(conn, _hr_ctx(conn, "approval"))))
+    new = max(current(conn).max_active_agents, int(details.get("max_active_agents") or 0), active) + 1
+    from ..settings_store import put
+
+    owner = Ctx(approval["decided_by"] or actors.owner_id(conn), via="approval")
+    put(conn, owner, SETTING_MAX_ACTIVE, new, action="raise_agent_limit")
+    audit.log(conn, owner, "hr_limit_raised", "approval", approval["id"], max_active_agents=new)
+
+
+approvals.on_approved(_on_limit_approved)

@@ -1,6 +1,7 @@
 """Tunable thresholds. Defaults follow spec 3.2 and 8; the owner may change them."""
 
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 
@@ -30,3 +31,18 @@ class HRPolicy:
     one_shot_done_after: timedelta = timedelta(days=1)
     # A one-shot agent that keeps getting work becomes long-lived.
     promote_after_tasks: int = 3
+
+
+# Settings (pos.settings_store) that override the defaults above.
+SETTING_MAX_ACTIVE = "hr.max_active_agents"
+
+
+def current(conn: sqlite3.Connection | None) -> HRPolicy:
+    """The defaults with what the owner changed (an approved raise_agent_limit)."""
+    policy = HRPolicy()
+    if conn is None:
+        return policy
+    from ..settings_store import get
+
+    limit = get(conn, SETTING_MAX_ACTIVE)
+    return replace(policy, max_active_agents=int(limit)) if limit else policy
