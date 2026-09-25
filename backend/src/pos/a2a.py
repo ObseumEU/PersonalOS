@@ -156,6 +156,11 @@ async def a2a_rpc(request: Request, conn: sqlite3.Connection = Depends(get_db)):
 
 # ------------------------------------------------------------------ client
 
+# Agent card URL -> (fetched at, JSON-RPC endpoint): the card is read once per 10 minutes, not per call.
+_CARD_TTL_S = 600
+_endpoints: dict[str, tuple[float, str]] = {}
+
+
 class A2AClient:
     def __init__(self, url: str, key: str | None = None, http: httpx.Client | None = None, timeout: float = 30):
         self.url = url.rstrip("/")
@@ -165,9 +170,16 @@ class A2AClient:
     def endpoint(self) -> str:
         """Accept a card URL, a base URL or the JSON-RPC URL itself."""
         if self.url.endswith(".json"):
+            import time
+
+            hit = _endpoints.get(self.url)
+            if hit and time.monotonic() - hit[0] < _CARD_TTL_S:
+                return hit[1]
             c = self.http.get(self.url, headers=self.headers).json()
             ifaces = c.get("supportedInterfaces") or []
-            return (ifaces[0].get("url") if ifaces else None) or c["url"]
+            url = (ifaces[0].get("url") if ifaces else None) or c["url"]
+            _endpoints[self.url] = (time.monotonic(), url)
+            return url
         return self.url if self.url.endswith("/a2a") or "/a2a/" in self.url else f"{self.url}/a2a"
 
     def call(self, method: str, params: dict) -> dict:
@@ -239,6 +251,11 @@ def sync(conn: sqlite3.Connection, http: httpx.Client | None = None) -> dict:
             tasks.complete(conn, ctx, t["id"], answer[:4000] or "Answered.")
             finished.append(tasks.display_id(t["id"]))
             continue
+        if not remote.get("id"):
+            # Neither a task nor a message: nothing to follow. The task stays queued
+            # (tried again next minute) instead of hanging in "working" for ever.
+            audit.log(conn, ctx, "a2a_empty_reply", "task", t["id"], member=m["name"])
+            continue
         conn.execute(
             "INSERT INTO a2a_links (task_id, member_id, remote_url, remote_task_id, context_id, state, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -294,6 +311,7 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, member_name: str, question: str, wai
     client = A2AClient(m["a2a_url"], _key_for(dict(m)), http)
     res = client.send(question)
     audit.log(conn, ctx, "a2a_ask", "actor", m["id"])
+    conn.commit()
     if res.get("message"):
         return {"answer": "\n".join(p.get("text", "") for p in res["message"].get("parts", []))}
     task = res.get("task") or {}

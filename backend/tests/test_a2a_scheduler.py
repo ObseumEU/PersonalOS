@@ -120,3 +120,27 @@ def test_reaper_releases_runs_of_dead_workers(app):
     assert out["released"] == [rid]
     assert tasks.get(conn, me, t["id"])["status"] == "next"
     assert conn.execute("SELECT status FROM runs WHERE id = ?", (rid,)).fetchone()[0] == "error"
+
+
+def test_a2a_empty_reply_keeps_the_task_queued_and_the_card_is_cached(app, tmp_path):
+    import httpx
+
+    client, conn, me = app
+    calls = {"card": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".json"):
+            calls["card"] += 1
+            return httpx.Response(200, json={"url": "http://remote/a2a"})
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": "1", "result": {}})  # neither task nor message
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    silent = agents.create_agent(conn, me, name="Silent", purpose="remote", lifetime="long_lived", runtime="a2a",
+                                 a2a_url="http://remote/.well-known/agent-card.json",
+                                 permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
+    t = tasks.create(conn, me, {"title": "Ping", "assignee": {"type": "agent", "id": silent}})
+    conn.commit()
+    assert a2a.sync(conn, http=http)["sent"] == []
+    assert tasks.get(conn, me, t["id"])["status"] == "next" and a2a.links(conn) == []
+    a2a.sync(conn, http=http)
+    assert calls["card"] == 1  # the second round used the cached endpoint
