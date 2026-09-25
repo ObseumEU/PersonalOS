@@ -5,6 +5,7 @@ import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
 import { AskBox, PageHeader, Panel } from "../components/ui";
 import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
+import { type Agenda, agendaApi } from "./Calendar";
 
 function greeting(h: number) {
   if (h < 5) return "Good night";
@@ -18,9 +19,12 @@ export default function Today() {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [counts, setCounts] = useState<Counts | null>(null);
   const [review, setReview] = useState<Task[] | null>(null);
+  const [agenda, setAgenda] = useState<Agenda | null>(null);
   const refresh = () => {
     tasksApi.list("today").then(setTasks, () => setTasks([]));
     tasksApi.list("review").then(setReview, () => setReview([]));
+    const d = new Date();
+    agendaApi(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`, 1).then(setAgenda, () => setAgenda(null));
     tasksApi.counts().then(setCounts, () => undefined);
   };
   useEffect(refresh, []);
@@ -107,11 +111,31 @@ export default function Today() {
           </Panel>
         </div>
 
-        <Panel fig="FIG. 2" title="Agenda" right="no calendar connected yet" mock="calendar sync not built; no events yet" className="lg:col-span-12" bodyClassName="relative px-5 pt-3.5 pb-1.5">
-          <Timeline events={[]} />
-          <p className="cap pointer-events-none absolute inset-0 grid place-items-center">
-            Your calendar appears here once the Google Calendar connector is set up (Connectors).
-          </p>
+        <Panel
+          fig="FIG. 2"
+          title="Agenda"
+          right={
+            <Link to="/calendar" className="hover:text-accent">
+              {agenda?.configured ? `${agenda.events.length} events today` : "no calendar connected yet"} →
+            </Link>
+          }
+          mock={agenda ? !agenda.configured : false}
+          className="lg:col-span-12"
+          bodyClassName="relative px-5 pt-3.5 pb-1.5"
+        >
+          <Timeline
+            events={(agenda?.events ?? [])
+              .filter((e) => !e.all_day)
+              .map((e) => {
+                const h = (s: string) => Number(s.slice(11, 13)) + Number(s.slice(14, 16)) / 60;
+                return { start: h(e.start), end: Math.max(h(e.end), h(e.start) + 0.25), title: e.title, meta: e.location ?? e.calendar };
+              })}
+          />
+          {agenda && !agenda.configured && (
+            <p className="cap pointer-events-none absolute inset-0 grid place-items-center">
+              Connect a calendar on the Calendar page (a private iCal address, no login needed).
+            </p>
+          )}
         </Panel>
       </div>
     </div>

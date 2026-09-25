@@ -37,7 +37,7 @@ export const SECTIONS: Section[] = [
     features: ["Quick-add", "Due dates and priority", "Grouped by topic", "Created by the assistant"],
   },
   {
-    path: "calendar", mock: "planned screen, no calendar sync yet", label: "Calendar", icon: CalendarDays, phase: 4,
+    path: "calendar", label: "Calendar", icon: CalendarDays, phase: 4,
     blurb: "Your Google or Microsoft 365 calendar, next to your tasks.",
     features: ["Synced events", "Day and week view", "Tasks alongside events"],
   },

@@ -224,3 +224,18 @@ def install_error_handlers(app: FastAPI) -> None:
             return JSONResponse(status_code=code, content={"detail": str(e)})
 
         app.add_exception_handler(exc, handler)
+
+
+@router.get("/calendar")
+def calendar(start: str | None = None, days: int = 7, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx)):
+    """Calendar events (iCal feeds) and dated tasks from `start` (YYYY-MM-DD, default today)."""
+    from datetime import date
+
+    from . import agenda
+    from .core import today
+
+    try:
+        first = date.fromisoformat(start) if start else today()
+    except ValueError as e:
+        raise tasks.Invalid("start must be YYYY-MM-DD") from e
+    return agenda.agenda(conn, ctx, first, max(1, min(days, 42)))
