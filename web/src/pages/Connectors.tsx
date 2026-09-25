@@ -28,7 +28,13 @@ type Event = {
   signals: string;
   received_by_name: string | null;
 };
-type Status = { outbound: Record<string, boolean>; github_webhook: boolean; knowlage_ingest: string };
+type Status = {
+  outbound: Record<string, boolean>;
+  github_webhook: boolean;
+  knowlage_ingest: string;
+  event_senders?: string[];
+  mail_prefilter?: { days: number; total: number; by_reason: Record<string, number> };
+};
 
 const SOURCES = ["gmail", "github", "discord", "calendar", "nexus", "web", "manual", "any"];
 const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
@@ -122,6 +128,28 @@ export default function Connectors() {
                 GitHub webhook <span className="font-mono text-xs text-ink-3">/api/hooks/github</span>
                 <span className="cap ml-auto">{status.github_webhook ? "on" : "off · POS_GITHUB_WEBHOOK_SECRET"}</span>
               </div>
+              <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
+                <span className={`h-1.5 w-1.5 rounded-full ${status.event_senders?.length ? "bg-accent" : "bg-dim"}`} />
+                Machine events <span className="font-mono text-xs text-ink-3">/api/events</span>
+                <span className="cap ml-auto">{status.event_senders?.length ? status.event_senders.join(", ") : "off · POS_EVENTS_TOKENS"}</span>
+              </div>
+              {status.mail_prefilter && (
+                <div className="flex flex-col gap-1 border-b border-line px-4 py-2.5">
+                  <span className="flex items-center gap-2 text-[13px]">
+                    Mail prefilter
+                    <span className="cap ml-auto">
+                      {status.mail_prefilter.total} skipped · {status.mail_prefilter.days} days
+                    </span>
+                  </span>
+                  {Object.entries(status.mail_prefilter.by_reason).map(([reason, n]) => (
+                    <span key={reason} className="flex justify-between gap-2 text-xs text-ink-2">
+                      <span className="truncate">{reason}</span>
+                      <span className="font-mono">{n}</span>
+                    </span>
+                  ))}
+                  {status.mail_prefilter.total === 0 && <span className="cap">no bulk or automatic mail dropped yet</span>}
+                </div>
+              )}
               <p className="px-4 py-2.5 text-xs leading-relaxed text-ink-2">
                 Knowledge: agents push what they read into knowlage-agent themselves, each with its own KB key ({status.knowlage_ingest}).
               </p>

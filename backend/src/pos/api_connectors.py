@@ -77,6 +77,7 @@ def connectors(conn=Depends(get_db)):
     return {
         "outbound": out,
         "github_webhook": bool(os.environ.get("POS_GITHUB_WEBHOOK_SECRET")),
+        "event_senders": sorted(set(event_tokens().values())),  # names only, never the tokens
         "knowlage_ingest": "knowlage ingests e-mail and GitHub itself (its own connectors)",
         "mail_prefilter": routing.skipped_mail(conn),
     }

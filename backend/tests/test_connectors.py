@@ -178,3 +178,13 @@ def test_event_label_routes_by_channel(conn, me):
     out = routing.ingest(conn, me, {"source": "gmail", "kind": "email", "title": "Hi", "ref": "r1",
                                     "meta": {"labels": ["channel:firma.cz"]}})
     assert out["rule"] == "Firma → Nexus"
+
+
+def test_connectors_status_shows_prefilter_counts_and_event_senders(tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    monkeypatch.setenv("POS_EVENTS_TOKENS", "knowlage:" + "t" * 32)
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        client.post("/api/events", json={"source": "gmail", "title": "Sale!", "ref": "n1", "author": "noreply@shop.cz"})
+        status = client.get("/api/connectors").json()
+        assert status["event_senders"] == ["knowlage"] and "t" * 32 not in str(status)
+        assert status["mail_prefilter"]["total"] == 1
