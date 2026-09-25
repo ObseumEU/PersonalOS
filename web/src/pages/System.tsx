@@ -97,7 +97,7 @@ export default function System() {
         </div>
       </div>
       {engines && (
-        <Panel fig="TAB. 18" title="Runtimes and subscriptions" right={`default: ${engines.default} · auto = Claude first, Codex as fallback`}>
+        <Panel fig="TAB. 18" title="Runtimes and subscriptions" right={`default: ${engines.default} · auto = Codex first, Claude as fallback`}>
           <div className="grid grid-cols-1 md:grid-cols-2">
             <div className="flex flex-col gap-1.5 border-b border-line px-4 py-3 md:border-r md:border-b-0">
               <span className="flex items-center gap-2 text-sm">

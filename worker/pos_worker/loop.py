@@ -147,7 +147,11 @@ class Worker:
                 continue
             break
 
-        self.client.finish_run(run_id, outcome, session.jsonl, session.failed or ("stopped" if outcome == "cancelled" else ""))
+        done = self.client.finish_run(run_id, outcome, session.jsonl,
+                                      session.failed or ("stopped" if outcome == "cancelled" else ""))
+        if done.get("requeued"):  # the runtime hit its usage limit; PersonalOS retries on the other one
+            log.info("%s: %s hit its usage limit, task requeued", ref, engine)
+            return "requeued"
         if outcome == "ok":
             # The agent may have handed it in itself (complete_task over MCP).
             if self.client.task(ref)["status"] == "working":

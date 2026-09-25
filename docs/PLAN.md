@@ -26,7 +26,7 @@ work behind it.
 
 | Topic | Decision |
 |---|---|
-| Brain | **Claude Code CLI** (`claude -p`, model claude-opus-5-5, Claude subscription), **Codex CLI** (`codex exec`, ChatGPT subscription) as the fallback. No paid API by default. |
+| Brain | **Codex CLI** (`codex exec`, ChatGPT subscription) first, **Claude Code CLI** (`claude -p`, model claude-opus-5-5, Claude subscription) as the fallback when Codex hits its usage limit, and back after the reset. No paid API by default. |
 | Protocols | **MCP** for tools and data, **A2A** for delegating to subsystems |
 | Backend | **Python** (FastAPI) |
 | Primary interface | **Web** (React; Lovable-compatible like the other apps) |

@@ -64,9 +64,12 @@ def _budget_record(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -
         engines.record_claude(conn, run_row, jsonl)
         return
     if jsonl:
+        from . import engines
+
         budget.record_exec(conn, jsonl.splitlines(), agent_id=str(run_row["actor_id"]),
                            task_id=str(run_row["task_id"]) if run_row["task_id"] else None)
         conn.commit()
+        engines.record_codex_limit(conn, jsonl)
 
 
 def install() -> None:

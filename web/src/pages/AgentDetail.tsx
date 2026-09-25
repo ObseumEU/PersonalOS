@@ -124,7 +124,7 @@ export default function AgentDetail() {
             <option value="">default runtime</option>
             <option value="claude">Claude CLI</option>
             <option value="codex">Codex CLI</option>
-            <option value="auto">auto (Claude, then Codex)</option>
+            <option value="auto">auto (Codex, then Claude)</option>
           </select>
         )}
         {!a.is_owner && (

@@ -103,8 +103,10 @@ Agents are separate workers, not part of the API. Each one waits for tasks and
 messages with its own key and works through the `pos` MCP server. See
 [docs/WORKERS.md](docs/WORKERS.md).
 
-The default runtime is **Claude Code CLI** (Opus 5.5). When Claude hits its
-usage limit, a worker set to `auto` falls back to **Codex CLI**.
+The default runtime is `auto`: **Codex CLI** first and **Claude Code CLI**
+(Opus 5.5) as the fallback. When Codex hits its usage limit, the task goes
+straight back to the queue and runs on Claude; after the reset Codex is used
+again.
 
 Start the workers on a Windows PC where `claude` is logged in with
 [`ops/start-agents.ps1`](ops/start-agents.ps1) (stop them with

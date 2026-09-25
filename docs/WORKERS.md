@@ -35,13 +35,20 @@ Commands the worker runs itself can be checked with
 the owner). Outside content is wrapped with `POST /api/worker/wrap` before it
 goes into a prompt.
 
-## Runtimes: Claude first, Codex as fallback
+## Runtimes: Codex first, Claude as fallback
 
-Every agent runs on **Claude Code CLI** (`claude -p`, model
-`claude-opus-5-5`) by default, or on **Codex CLI**. Per agent you can pick
-`claude`, `codex` or `auto` (Claude, then Codex when Claude hits its usage
-limit) and the Claude model, on the agent's page. Platform defaults:
-`POS_AGENT_RUNTIME=claude`, `POS_CLAUDE_MODEL=claude-opus-5-5`.
+Every agent runs with `auto` by default: **Codex CLI** first, **Claude Code
+CLI** (`claude -p`, model `claude-opus-5-5`) as the fallback. Per agent you can
+pick `auto`, `codex` or `claude` and the Claude model, on the agent's page.
+Platform defaults: `POS_AGENT_RUNTIME=auto`, `POS_ENGINE_ORDER=codex,claude`,
+`POS_CLAUDE_MODEL=claude-opus-5-5`.
+
+When a run is refused because its subscription is used up, that engine is
+paused until its reset (Codex: from its rate-limit windows or the "try again
+at" message; Claude: from `rate_limit_event`). The task is not failed: it goes
+straight back to the agent's queue, and the next run starts on the other
+engine. After the reset the first engine is used again (and the budget check
+re-runs at once, so the budget's own pause lifts too).
 
 PersonalOS chooses the runtime for every run and tells the worker. Each
 subscription has its own accounting: Codex through Rozpočtář (`pos.budget`),

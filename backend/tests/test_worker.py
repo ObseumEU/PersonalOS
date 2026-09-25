@@ -249,3 +249,48 @@ def test_second_worker_of_the_same_agent_does_not_take_a_task_in_progress(setup,
     assert client.get("/api/worker/next?wait=0", headers=h).json()["task"]["ref"] == ref
     third = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
     assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={third}", headers=h).status_code == 200
+
+
+FAKE_CODEX_LIMITED = r'''
+import json, sys
+sys.stdin.read()
+print(json.dumps({"type": "thread.started", "thread_id": "thread-lim"}), flush=True)
+print(json.dumps({"type": "error", "message": "You've hit your usage limit. Try again at Sep 29th, 2099 8:47 AM."}), flush=True)
+print(json.dumps({"type": "turn.failed", "error": {"message": "You've hit your usage limit."}}), flush=True)
+sys.exit(1)
+'''
+
+
+def test_auto_is_codex_first_and_switches_to_claude_on_the_codex_limit(setup, fake_claude, tmp_path, monkeypatch):
+    monkeypatch.delenv("POS_AGENT_RUNTIME", raising=False)
+    monkeypatch.delenv("POS_CODEX_DISABLED")
+    client, conn, owner, agent_id, key = setup
+    from pos import engines, tasks
+
+    assert engines.default_engine() == "auto" and engines.auto_order() == ["codex", "claude"]
+    assert engines.choose(conn, agent_id)[0] == "codex"
+    limited = _wrap(tmp_path, "codex_limited", FAKE_CODEX_LIMITED)
+
+    def new_session(engine, model, me):
+        if engine == "claude":
+            return ClaudeSession(binary=fake_claude, workdir=str(tmp_path), model=model, system_prompt=me["guardrails"],
+                                 mcp_servers={"pos": {"type": "http", "url": "http://x/mcp"}})
+        return CodexSession(binary=limited, workdir=str(tmp_path))
+
+    worker = Worker(PosClient("http://testserver", key, http=client), new_session, poll_wait=0, sleep=lambda s: None)
+    t = tasks.create(conn, owner, {"title": "Summarise the inbox", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+
+    # Codex refuses: the task is not failed or handed back, it waits in the queue.
+    assert worker.step() == "requeued"
+    back = tasks.get(conn, owner, t["id"])
+    assert back["status"] == "next" and back["assignee_id"] == agent_id and "usage limit" in back["progress_note"]
+    assert engines.paused_until(conn, "codex").startswith("2099-09-29")
+    # The next run goes to Claude right away and finishes the task.
+    assert worker.step() == "ok"
+    runs = conn.execute("SELECT engine, status FROM runs WHERE actor_id = ? ORDER BY id", (agent_id,)).fetchall()
+    assert [(r["engine"], r["status"]) for r in runs] == [("codex", "error"), ("claude", "ok")]
+    assert tasks.get(conn, owner, t["id"])["status"] == "review"
+    # After the reset Codex is first again.
+    conn.execute("UPDATE engine_limits SET paused_until = '2000-01-01T00:00:00+00:00' WHERE engine = 'codex'")
+    assert engines.choose(conn, agent_id)[0] == "codex"

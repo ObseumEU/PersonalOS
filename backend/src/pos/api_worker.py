@@ -196,11 +196,26 @@ def heartbeat(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
 
 @router.post("/runs/{run_id}/finish")
 def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    from . import engines
+
     try:
         row = runner.finish_external(conn, run_id, ctx.actor_id, body.status, body.jsonl, body.detail)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
-    return dict(row)
+    out = dict(row)
+    # The run failed because its engine hit the subscription limit: not the task's
+    # fault. It goes straight back to the queue; the next run uses the other engine.
+    until = engines.paused_until(conn, row["engine"]) if row["engine"] and body.status == "error" else None
+    if until and row["task_id"]:
+        t = conn.execute("SELECT status, assignee_id FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
+        if t and t["status"] == "working" and t["assignee_id"] == ctx.actor_id:
+            tasks.update(conn, ctx, row["task_id"], {
+                "status": "next",
+                "progress_note": f"{row['engine'].capitalize()} hit its usage limit (until {until}); "
+                                 "retrying on the other runtime."})
+            conn.commit()
+            out["requeued"] = True
+    return out
 
 
 @router.get("/inbox")

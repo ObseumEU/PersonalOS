@@ -9,8 +9,9 @@ services:
     environment:
       # Agent instructions from git override the first version (AGENTS-SPEC 6).
       POS_AGENTS_REPO_DIR: /repo-agents
-      # Runtimes: claude (default, Opus 5.5) with codex as fallback.
-      POS_AGENT_RUNTIME: ${POS_AGENT_RUNTIME:-claude}
+      # Runtimes: auto = codex first, claude (Opus 5.5) as fallback.
+      POS_AGENT_RUNTIME: ${POS_AGENT_RUNTIME:-auto}
+      POS_ENGINE_ORDER: ${POS_ENGINE_ORDER:-codex,claude}
       POS_CLAUDE_MODEL: ${POS_CLAUDE_MODEL:-claude-opus-5-5}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:

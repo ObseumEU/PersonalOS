@@ -1,10 +1,12 @@
 """Agent runtimes: Codex CLI and Claude Code CLI, each on its own subscription.
 
-Every agent has an engine: `claude` (the default, POS_AGENT_RUNTIME), `codex`
-or `auto`. `auto` prefers Claude and falls back to Codex when Claude hits its
-usage limit, and the other way round. The Claude model is claude-opus-5-5 by
-default (POS_CLAUDE_MODEL), configurable per agent. Each subscription has its
-own accounting:
+Every agent has an engine: `auto` (the default, POS_AGENT_RUNTIME), `codex` or
+`claude`. `auto` tries the engines in POS_ENGINE_ORDER (default: Codex first,
+Claude as the fallback). When an engine hits its subscription limit it is
+paused until the reset, its task goes straight back to the queue and the next
+run uses the other engine; after the reset the first engine is used again.
+The Claude model is claude-opus-5-5 by default (POS_CLAUDE_MODEL), configurable
+per agent. Each subscription has its own accounting:
 
 - Codex: pos.budget (rolling windows from `codex exec --json` and session logs);
 - Claude: here. Usage comes from the `result` event of `claude -p
@@ -25,8 +27,14 @@ CHOICES = ("auto", *ENGINES)
 
 
 def default_engine() -> str:
-    e = os.environ.get("POS_AGENT_RUNTIME", "claude")
-    return e if e in CHOICES else "claude"
+    e = os.environ.get("POS_AGENT_RUNTIME", "auto")
+    return e if e in CHOICES else "auto"
+
+
+def auto_order() -> list[str]:
+    """Engines `auto` tries, first to last (POS_ENGINE_ORDER, default codex,claude)."""
+    order = [e.strip() for e in os.environ.get("POS_ENGINE_ORDER", "codex,claude").split(",") if e.strip() in ENGINES]
+    return order + [e for e in ("codex", "claude") if e not in order]
 
 
 def default_model(engine: str) -> str | None:
@@ -48,15 +56,28 @@ def paused_until(conn: sqlite3.Connection, engine: str) -> str | None:
     return None
 
 
+def _codex_reset_passed(conn: sqlite3.Connection) -> None:
+    """Codex's limit window has just reset: re-run the budget check now (its
+    instant "pause" on the limit would otherwise hold until the hourly check)."""
+    row = conn.execute("SELECT paused_until FROM engine_limits WHERE engine = 'codex'").fetchone()
+    if row and row["paused_until"]:
+        conn.execute("UPDATE engine_limits SET paused_until = NULL WHERE engine = 'codex'")
+        from .integrations import budget_check
+
+        budget_check(conn)
+        conn.commit()
+
+
 def can_run(conn: sqlite3.Connection, engine: str, actor_id: int) -> tuple[bool, str]:
+    until = paused_until(conn, engine)
+    if until:
+        return False, f"{engine} usage limit until {until}"
     if engine == "codex":
+        _codex_reset_passed(conn)
         from .budget import service as budget
 
         d = budget.can_run(conn, str(actor_id))
         return d.allowed, d.reason
-    until = paused_until(conn, engine)
-    if until:
-        return False, f"{engine} usage limit until {until}"
     return True, "ok"
 
 
@@ -64,7 +85,7 @@ def choose(conn: sqlite3.Connection, actor_id: int) -> tuple[str | None, str, st
     """Pick (engine, why, model) for an agent's next run; engine None if none can run."""
     row = conn.execute("SELECT engine, model FROM actors WHERE id = ?", (actor_id,)).fetchone()
     wanted = (row["engine"] if row and row["engine"] else None) or default_engine()
-    order = [wanted] if wanted in ENGINES else ["claude", "codex"]
+    order = [wanted] if wanted in ENGINES else auto_order()
     reasons = []
     for engine in order:
         ok, why = can_run(conn, engine, actor_id)
@@ -73,6 +94,58 @@ def choose(conn: sqlite3.Connection, actor_id: int) -> tuple[str | None, str, st
             return engine, why, model
         reasons.append(why)
     return None, "; ".join(reasons), None
+
+
+def pause(conn: sqlite3.Connection, engine: str, until: str, reason: str) -> None:
+    conn.execute(
+        """INSERT INTO engine_limits (engine, paused_until, reason, updated_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT (engine) DO UPDATE SET paused_until = excluded.paused_until, reason = excluded.reason,
+             updated_at = excluded.updated_at""",
+        (engine, until, reason[:300], now_iso()),
+    )
+
+
+# ------------------------------------------------------------------ Codex limit
+
+CODEX_AGAIN_RE = re.compile(
+    r"try again at ([A-Z][a-z]{2})[a-z]* (\d{1,2})(?:st|nd|rd|th)?,? (\d{4}),? (\d{1,2}):(\d{2}) ?([AP]M)", re.IGNORECASE)
+
+
+def codex_reset(conn: sqlite3.Connection, message: str) -> datetime:
+    """When the exhausted Codex window resets: from the rate-limit snapshots
+    (session logs), else from the error message, else in an hour."""
+    rows = []
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'budget_limit_snapshots'").fetchone():
+        rows = conn.execute(
+            """SELECT resets_at FROM budget_limit_snapshots s WHERE used_percent >= 100 AND resets_at > ?
+               AND at = (SELECT MAX(at) FROM budget_limit_snapshots WHERE window = s.window)""",
+            (int(_utcnow().timestamp()),),
+        ).fetchall()
+    if rows:
+        return datetime.fromtimestamp(max(r["resets_at"] for r in rows), timezone.utc)
+    if m := CODEX_AGAIN_RE.search(message):
+        mon, day, year, hh, mm, ampm = m.groups()
+        try:
+            local = datetime.strptime(f"{mon} {day} {year} {hh}:{mm} {ampm}", "%b %d %Y %I:%M %p")
+            return local.astimezone().astimezone(timezone.utc)  # Codex names the reset in local time
+        except ValueError:
+            pass
+    return _utcnow() + timedelta(hours=1)
+
+
+def record_codex_limit(conn: sqlite3.Connection, jsonl: str) -> str | None:
+    """If a Codex run was refused for the subscription limit, pause Codex until
+    the reset and return that time."""
+    from .budget.codex_usage import parse_exec_jsonl
+
+    lines = jsonl.splitlines()
+    if not parse_exec_jsonl(lines).limit_reached:
+        return None
+    message = next((line for line in lines if "usage limit" in line.lower()), "Codex usage limit")
+    until = codex_reset(conn, message).isoformat(timespec="seconds")
+    pause(conn, "codex", until, "Codex usage limit")
+    conn.commit()
+    return until
 
 
 # ------------------------------------------------------------------ Claude accounting
@@ -160,13 +233,17 @@ def status(conn: sqlite3.Connection) -> dict:
         return {"tokens": row["t"], "cost_usd": round(row["c"], 4), "runs": row["n"]}
 
     limit = conn.execute("SELECT * FROM engine_limits WHERE engine = 'claude'").fetchone()
+    codex_limit = conn.execute("SELECT * FROM engine_limits WHERE engine = 'codex'").fetchone()
     try:
         codex = budget.status(conn)
     except Exception:  # noqa: BLE001 - the budget module may not have checked yet
         codex = None
     return {
         "default": default_engine(),
-        "codex": {"report": codex, "can_run": budget.can_run(conn, "0").allowed},
+        "order": auto_order(),
+        "codex": {"report": codex, "can_run": budget.can_run(conn, "0").allowed and not paused_until(conn, "codex"),
+                  "paused_until": paused_until(conn, "codex"),
+                  "last_limit": dict(codex_limit) if codex_limit else None},
         "claude": {"window_5h": window(5), "window_7d": window(24 * 7),
                    "paused_until": paused_until(conn, "claude"),
                    "last_limit": dict(limit) if limit else None},
