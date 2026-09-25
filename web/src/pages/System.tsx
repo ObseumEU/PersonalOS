@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { type Engines, agentsApi } from "../agentsApi";
 import KnowledgeGraph from "../components/LazyGraph";
-import { PageHeader, Panel, SampleBadge } from "../components/ui";
+import { MockDot, PageHeader, Panel } from "../components/ui";
 import { GRAPH_LABELS, SUBSYSTEMS } from "../sample";
 
 const HIGHLIGHT = [0, 8, 24, 40, 56];
@@ -64,7 +64,7 @@ export default function System() {
         sub={
           <span className="flex flex-wrap items-center gap-2">
             API {api_ ? `v${api_.version}, phase ${api_.phase}` : "unreachable"}. Graph and subsystem numbers are sample data
-            until Phases 2 and 5. <SampleBadge />
+            until Phases 2 and 5.
           </span>
         }
       />
@@ -73,6 +73,7 @@ export default function System() {
           fig="FIG. 4"
           title="Knowledge graph, full"
           right="96 nodes · sample"
+          mock
           className="h-[420px] lg:col-span-9 lg:h-auto"
           bodyClassName="measure-grid relative"
         >
@@ -84,6 +85,7 @@ export default function System() {
             <Panel key={s.name} bodyClassName="flex flex-col gap-2.5 px-4 py-3.5">
               <span className="flex items-baseline gap-2.5">
                 <span className="text-sm font-medium">{s.name}</span>
+                <MockDot />
                 <span className="cap ml-auto">{s.proto}</span>
               </span>
               <span className="flex items-baseline gap-2">

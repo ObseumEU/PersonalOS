@@ -36,7 +36,7 @@ export default function Today() {
         title={`${greeting(now.getHours())}.`}
         sub={
           <span className="flex flex-wrap items-center gap-2">
-            Your day across files, tasks and calendar. <SampleBadge />
+            Your day across files, tasks and calendar.
           </span>
         }
       />
@@ -46,6 +46,7 @@ export default function Today() {
           fig="FIG. 1"
           title="Knowledge graph"
           right="52 nodes · sample"
+          mock
           className="h-[340px] lg:col-span-7 lg:h-auto"
           bodyClassName="measure-grid relative"
         >

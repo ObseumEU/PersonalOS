@@ -17,7 +17,7 @@ export default function Assistant() {
         }
       />
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="SESSION" title="Example" right="codex · 4 sources · 2.8 s" className="lg:col-span-7" bodyClassName="flex flex-col">
+        <Panel fig="SESSION" title="Example" right="codex · 4 sources · 2.8 s" mock className="lg:col-span-7" bodyClassName="flex flex-col">
           <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 py-5">
             <div className="flex flex-col gap-1.5">
               <span className="cap">QUERY</span>
@@ -61,12 +61,13 @@ export default function Assistant() {
             fig="FIG. 3"
             title="Sources in the knowledge graph"
             right="4 of 38 nodes"
+            mock
             className="h-[320px] lg:h-auto lg:flex-[1.2]"
             bodyClassName="measure-grid relative"
           >
             <KnowledgeGraph nodes={38} seed={3} labels={GRAPH_LABELS.slice(0, 6)} highlight={SOURCES} period={110} />
           </Panel>
-          <Panel fig="TAB. 2" title="Retrieval trace" right="total 2.78 s">
+          <Panel fig="TAB. 2" title="Retrieval trace" right="total 2.78 s" mock>
             {ANSWER.trace.map((t, i) => (
               <div key={t.step} className="grid grid-cols-[26px_minmax(0,1fr)_76px_54px] gap-2.5 border-b border-line px-4 py-2 last:border-0">
                 <span className="cap">{i + 1}</span>
