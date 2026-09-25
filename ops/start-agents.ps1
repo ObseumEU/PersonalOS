@@ -18,9 +18,20 @@ Get-Content $envFile | Where-Object { $_ -match '^\s*([A-Z0-9_]+)=(.*)$' } | For
 }
 $port = if ($vars["POS_PORT"]) { $vars["POS_PORT"] } else { "8080" }
 
+# The Dev agent works in its own git worktree (branch agent/dev, see
+# ops/setup-self-improvement.ps1) with git (no push), tests and the web build.
+# The deployer promotes its commits to main after the checks.
+$devRepo = Join-Path $root "data\agent-work\dev-agent\PersonalOS"
+$devTools = @(
+    "mcp__pos", "Read", "Glob", "Grep", "Write", "Edit",
+    "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)",
+    "Bash(git commit:*)", "Bash(git fetch origin:*)", "Bash(git merge origin/main:*)",
+    "Bash(backend/.venv/Scripts/python -m pytest:*)", "Bash(npm run build:*)"
+) -join "|"
+
 $agents = @(
     @{ Name = "assistant"; Key = "ASSISTANT_AGENT_KEY" },
-    @{ Name = "dev-agent"; Key = "DEV_AGENT_KEY" },
+    @{ Name = "dev-agent"; Key = "DEV_AGENT_KEY"; Work = $devRepo; Tools = $devTools; Builtin = "Bash,Read,Edit,Write,Glob,Grep" },
     @{ Name = "mail-agent"; Key = "MAIL_AGENT_KEY" },
     @{ Name = "community-agent"; Key = "COMMUNITY_AGENT_KEY" }
 )
@@ -28,12 +39,15 @@ $agents = @(
 foreach ($a in $agents) {
     $key = $vars[$a.Key]
     if (-not $key) { Write-Warning "$($a.Key) missing in .env, skipping $($a.Name)"; continue }
-    $work = Join-Path $root "data\agent-work\$($a.Name)"
+    $work = if ($a.Work) { $a.Work } else { Join-Path $root "data\agent-work\$($a.Name)" }
     New-Item -ItemType Directory -Force $work | Out-Null
     $env:POS_URL = "http://localhost:$port"
     $env:POS_AGENT_KEY = $key
     $env:WORKER_WORKDIR = $work
     $env:WORKER_POLL = "60"
+    $env:WORKER_CLAUDE_TOOLS = if ($a.Tools) { $a.Tools } else { "" }
+    $env:WORKER_CLAUDE_BUILTIN = if ($a.Builtin) { $a.Builtin } else { "" }
+    if (-not $a.Tools) { Remove-Item Env:WORKER_CLAUDE_TOOLS -ErrorAction SilentlyContinue }
     $log = Join-Path $logs "$($a.Name).log"
     $p = Start-Process -FilePath $python -ArgumentList "-m", "pos_worker" -WorkingDirectory $work `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru

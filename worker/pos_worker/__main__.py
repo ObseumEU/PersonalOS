@@ -11,7 +11,9 @@ Environment:
     WORKER_POLL      long-poll seconds (default 60)
     CODEX_BIN        codex binary (default codex); CODEX_HOME holds its login
     CLAUDE_BIN       claude binary (default claude); logged in, or CLAUDE_CODE_OAUTH_TOKEN
-    WORKER_CLAUDE_TOOLS  tools a Claude agent may use (default: pos MCP, read, edit, web)
+    WORKER_CLAUDE_TOOLS  tools a Claude agent may use (default: pos MCP, read, edit, web);
+                     entries separated by '|' when they contain spaces
+    WORKER_CLAUDE_BUILTIN  built-in tools that exist at all, comma-separated (e.g. Bash,Read,Edit)
     WORKER_CLAUDE_MCP    more MCP servers for Claude, as JSON
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
                      GitHub, Gmail, Discord) with their own tokens in env vars
@@ -35,6 +37,13 @@ def extra_config() -> list[str]:
     """
     raw = os.environ.get("WORKER_CODEX_CONFIG", "").replace("||", chr(10))
     return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def tool_list(raw: str) -> list[str]:
+    """Split an allow-list on '|' when given (entries like "Bash(git commit:*)"
+    contain spaces), else on whitespace."""
+    parts = raw.split("|") if "|" in raw else raw.split()
+    return [p.strip() for p in parts if p.strip()]
 
 
 def claude_extra_mcp() -> dict:
@@ -64,7 +73,8 @@ def main() -> None:
                 # The agent reaches PersonalOS through the pos MCP server, as itself.
                 mcp_servers={"pos": {"type": "http", "url": mcp_url, "headers": {"Authorization": f"Bearer {key}"}},
                              **claude_extra_mcp()},
-                allowed_tools=os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS).split(),
+                allowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS)),
+                builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
             )
         return CodexSession(
             binary=os.environ.get("CODEX_BIN", "codex"),
