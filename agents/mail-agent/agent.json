@@ -1,0 +1,17 @@
+{
+  "name": "Mail agent",
+  "role": "mail",
+  "team": "communication",
+  "reports_to": "Project manager",
+  "permissions": [
+    "tasks:read",
+    "tasks:claim",
+    "approvals:request",
+    "events:emit",
+    "messages:send"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "mail-agent"
+}

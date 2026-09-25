@@ -255,6 +255,10 @@ svého úkolu; stránka Projekty s boardem a přetahováním.
 - HR a Rozpočtář dostanou `agent.json` s `worker: none` (běží v jádře), ať je
   seznam úplný. HR úkoly bez coache jdou coachovi (který teď vždy existuje).
 
+Stav: hotovo (commit „Wave 1 / 3.7“). Klíče workerů zapisuje jádro do
+`data/worker-keys/<worker>/key` (bind mount do workeru jen pro čtení), ne do `.env`;
+klíč v `.env` má přednost.
+
 ## 4. Vlna 2: víc lidí a sjednocené obrazovky
 
 ### 4.1 Účty pro lidi

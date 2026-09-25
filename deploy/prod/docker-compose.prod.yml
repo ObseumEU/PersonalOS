@@ -73,6 +73,7 @@ services:
     volumes: !override
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - ${POS_DEV_WORK:-./data/dev-work}:/work
+      - ./data/worker-keys/dev-agent:/run/pos-key:ro
     logging: *logging
   assistant:
     logging: *logging

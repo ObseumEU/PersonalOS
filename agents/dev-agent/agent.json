@@ -1,0 +1,16 @@
+{
+  "name": "Dev agent",
+  "role": "developer",
+  "team": "engineering",
+  "reports_to": "Project manager",
+  "permissions": [
+    "tasks:read",
+    "tasks:claim",
+    "approvals:request",
+    "messages:send"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "dev-agent"
+}

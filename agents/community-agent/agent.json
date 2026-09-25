@@ -1,0 +1,19 @@
+{
+  "name": "Community agent",
+  "role": "community",
+  "team": "communication",
+  "reports_to": "Project manager",
+  "permissions": [
+    "tasks:read",
+    "tasks:claim",
+    "approvals:request",
+    "events:emit",
+    "messages:send"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "community-agent",
+  "enabled": false,
+  "note": "Off until a Discord MCP server is connected (REVIZE-FUNKCI #33)."
+}

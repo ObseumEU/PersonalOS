@@ -1,0 +1,18 @@
+{
+  "name": "Project manager",
+  "role": "project_manager",
+  "team": "leadership",
+  "reports_to": "Owner",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:review",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "project-manager"
+}

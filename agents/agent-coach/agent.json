@@ -1,0 +1,18 @@
+{
+  "name": "Agent coach",
+  "role": "hr",
+  "team": "operations",
+  "reports_to": "Project manager",
+  "permissions": [
+    "tasks:read",
+    "tasks:claim",
+    "tasks:write",
+    "hr:read",
+    "messages:send",
+    "approvals:request"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "agent-coach"
+}

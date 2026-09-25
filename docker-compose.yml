@@ -18,8 +18,17 @@ services:
       POS_CLAUDE_MODEL: ${POS_CLAUDE_MODEL:-claude-opus-5-5}
       POS_KNOWLAGE_URL: ${POS_KNOWLAGE_URL:-https://knowlage.obseum.cz}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      POS_WORKER_KEYS_DIR: /worker-keys
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
     volumes:
       - pos-data:/data
+      # Worker keys the core writes itself (agents as code, pos.agents_code): one folder per worker.
+      - ./data/worker-keys:/worker-keys
       - ./agents:/repo-agents:ro
       - ./agents:/repo-tools/agents:ro
       - ./shared:/repo-tools/shared:ro
@@ -41,7 +50,9 @@ services:
     build:
       context: .
       dockerfile: ops/deployer.Dockerfile
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     working_dir: /repo
     command: ["python", "-m", "pos.selfdeploy", "--repo", "/repo", "--watch", "60"]
     environment:
@@ -61,7 +72,9 @@ services:
   dev-agent:
     profiles: ["agents"]
     build: ./worker
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${DEV_AGENT_KEY:-}
@@ -84,12 +97,15 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - dev-agent-work:/work
+      - ./data/worker-keys/dev-agent:/run/pos-key:ro
     restart: unless-stopped
 
   assistant:
     profiles: ["agents"]
     build: ./worker
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${ASSISTANT_AGENT_KEY:-}
@@ -97,6 +113,7 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - assistant-work:/work
+      - ./data/worker-keys/assistant:/run/pos-key:ro
     restart: unless-stopped
 
   # The Agent coach reviews the agents' work daily (agents/agent-coach/INSTRUCTIONS.md):
@@ -104,7 +121,9 @@ services:
   agent-coach:
     profiles: ["agents"]
     build: ./worker
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${COACH_AGENT_KEY:-}
@@ -119,12 +138,15 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - agent-coach-work:/work
+      - ./data/worker-keys/agent-coach:/run/pos-key:ro
     restart: unless-stopped
 
   mail-agent:
     profiles: ["agents"]
     build: ./worker
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${MAIL_AGENT_KEY:-}
@@ -135,12 +157,15 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - mail-agent-work:/work
+      - ./data/worker-keys/mail-agent:/run/pos-key:ro
     restart: unless-stopped
 
   community-agent:
-    profiles: ["agents"]
+    profiles: ["community"]  # off until a Discord MCP server is connected
     build: ./worker
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${COMMUNITY_AGENT_KEY:-}
@@ -152,13 +177,16 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - community-agent-work:/work
+      - ./data/worker-keys/community-agent:/run/pos-key:ro
     restart: unless-stopped
 
   # Splits team work and assigns it by role; runs the weekday standup (pos.org).
   project-manager:
     profiles: ["agents"]
     build: ./worker
-    depends_on: [api]
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${PM_AGENT_KEY:-}
@@ -167,6 +195,7 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - project-manager-work:/work
+      - ./data/worker-keys/project-manager:/run/pos-key:ro
     restart: unless-stopped
 
 volumes:

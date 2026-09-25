@@ -1,0 +1,17 @@
+{
+  "name": "HR agent",
+  "role": "hr",
+  "team": "operations",
+  "reports_to": "Owner",
+  "permissions": [
+    "tasks:read",
+    "tasks:write",
+    "approvals:request",
+    "hr:read"
+  ],
+  "budget_class": "system",
+  "lifetime": "long_lived",
+  "runtime": "builtin",
+  "worker": "none",
+  "note": "Runs inside the core (pos.hr)."
+}

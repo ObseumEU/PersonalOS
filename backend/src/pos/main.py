@@ -1,6 +1,7 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from mcp.server.transport_security import TransportSecuritySettings
@@ -80,9 +81,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             a2a.configure_builtin(conn)
             scheduler.seed(conn)
             chat.ensure_team_channel(conn)
-            from . import projects
+            from . import agents_code, projects
 
             projects.migrate_step_projects(conn)  # once: tasks with steps become projects
+            agents_code.ensure_from_repo(conn, settings.data_dir)  # role agents from agents/*/agent.json
+            if os.environ.get("POS_WORKER_KEYS_DIR"):
+                agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
         finally:
             conn.close()
         integrations.install()

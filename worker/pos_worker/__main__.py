@@ -5,7 +5,9 @@
 Environment:
     POS_URL          PersonalOS API (inside compose: http://api:8000)
     POS_MCP_URL      MCP endpoint the agent's Codex uses (default POS_URL + /mcp)
-    POS_AGENT_KEY    the agent's API key (shown once when the agent is created)
+    POS_AGENT_KEY    the agent's API key (shown once when the agent is created); when empty,
+                     read from POS_AGENT_KEY_FILE (default /run/pos-key/key), which the core
+                     writes on the server (agents as code, pos.agents_code)
     WORKER_WORKDIR   where Codex works (default /work)
     WORKER_SANDBOX   codex sandbox mode (default workspace-write)
     WORKER_POLL      long-poll seconds (default 60)
@@ -81,12 +83,31 @@ def claude_extra_mcp() -> dict:
     return json.loads(raw) if raw else {}
 
 
+def agent_key(wait_s: float = 120) -> str:
+    """POS_AGENT_KEY, else the key file the core writes (it may appear a moment
+    after the API starts)."""
+    import time
+
+    key = os.environ.get("POS_AGENT_KEY", "").strip()
+    path = os.environ.get("POS_AGENT_KEY_FILE", "/run/pos-key/key")
+    deadline = time.monotonic() + wait_s
+    while not key:
+        try:
+            key = open(path, encoding="utf-8").read().strip()
+        except OSError:
+            if time.monotonic() > deadline:
+                raise SystemExit(f"no POS_AGENT_KEY and no key file at {path}")
+            time.sleep(3)
+    os.environ["POS_AGENT_KEY"] = key  # Codex and the command hook read it from the environment
+    return key
+
+
 def main() -> None:
     if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
         open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     url = os.environ.get("POS_URL", "http://localhost:8000")
-    key = os.environ["POS_AGENT_KEY"]
+    key = agent_key()
     mcp_url = os.environ.get("POS_MCP_URL", url.rstrip("/") + "/mcp")
     workdir = os.environ.get("WORKER_WORKDIR", "/work")
     os.makedirs(workdir, exist_ok=True)

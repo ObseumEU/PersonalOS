@@ -46,6 +46,11 @@ docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml \
 Then add `front-proxy.Caddyfile` to the front proxy next to the knowlage block,
 validate it (`caddy validate`) and reload. Nothing else in that file changes.
 
+Agents as code: the role agents (`agents/*/agent.json`) are created at start if
+missing, and the core writes each worker's key to `data/worker-keys/<worker>/key`
+(mounted read-only into that worker as `/run/pos-key`), so no `*_AGENT_KEY` has to
+be copied into `.env`. A key set in `.env` still wins.
+
 ## Check
 
 - From the LAN or VPN: `https://personalos.obseum.cz/` asks for the password
