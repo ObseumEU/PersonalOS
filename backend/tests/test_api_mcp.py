@@ -73,8 +73,10 @@ def test_mcp_tools_as_an_agent(tmp_path):
     conn = connect(db)
     migrate(conn)
     ids = actors.ensure_builtin(conn)
+    from pos import agents
+    agents.seed_builtin_permissions(conn)
     conn.close()
-    agent = ids["Knowledge agent"]
+    agent = ids["Nexus"]
     server = mcp_server.build(db, default_actor=lambda c: agent)
 
     async def scenario():
@@ -82,7 +84,7 @@ def test_mcp_tools_as_an_agent(tmp_path):
             names = {t.name for t in (await c.list_tools()).tools}
             assert {"list_tasks", "get_task", "capture", "create_task", "update_task", "complete_task",
                     "assign_task", "claim_task", "heartbeat", "report_progress", "request_approval"} <= names
-            t = _call(await c.call_tool("create_task", {"title": "Compare pricing", "assignee": "Knowledge agent"}))
+            t = _call(await c.call_tool("create_task", {"title": "Compare pricing", "assignee": "Nexus"}))
             assert t["status"] == "next"
             hb = _call(await c.call_tool("heartbeat", {}))
             assert [q["ref"] for q in hb["queue"]] == [t["ref"]]
