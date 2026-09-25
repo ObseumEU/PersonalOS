@@ -1,79 +1,86 @@
 @import "tailwindcss";
-@import "@fontsource-variable/inter";
+@import "@fontsource/ibm-plex-sans/300.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 
-/* Design tokens. Light is the base; dark follows the OS setting. */
+/* "Lab" design tokens: dark neutral ground, one cool accent, thin lines. */
 @theme {
-  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
-  --color-bg: #f6f7fb;
-  --color-surface: #ffffff;
-  --color-surface-2: #f1f3f9;
-  --color-line: #e4e7f0;
-  --color-ink: #0f1222;
-  --color-ink-2: #4a5068;
-  --color-ink-3: #8a90a8;
-  --color-brand: #6d5dfc;
-  --color-brand-2: #22c3ee;
-  --color-brand-ink: #ffffff;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #0a0b14;
-    --color-surface: #121424;
-    --color-surface-2: #1a1d31;
-    --color-line: #262a42;
-    --color-ink: #eef0fa;
-    --color-ink-2: #b3b8d0;
-    --color-ink-3: #767c98;
-    --color-brand: #8b7dff;
-    --color-brand-2: #38d6f5;
-  }
+  --color-bg: #0b0d10;
+  --color-surface: #111418;
+  --color-raised: #171b20;
+  --color-line: #232830;
+  --color-ink: #e6e8eb;
+  --color-ink-2: #a3a9b3;
+  --color-ink-3: #7d848f;
+  --color-dim: #4a515b;
+  --color-accent: #6cc4dc;
 }
 
 html,
 body {
   background: var(--color-bg);
   color: var(--color-ink);
-  font-feature-settings: "cv11", "ss01";
+  color-scheme: dark;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Soft colour glow behind the whole app. */
-.app-glow {
-  background:
-    radial-gradient(60rem 30rem at 85% -10%, color-mix(in oklab, var(--color-brand) 16%, transparent), transparent 70%),
-    radial-gradient(40rem 24rem at 0% 110%, color-mix(in oklab, var(--color-brand-2) 12%, transparent), transparent 70%),
-    var(--color-bg);
-}
-
-.brand-gradient {
-  background-image: linear-gradient(135deg, var(--color-brand), var(--color-brand-2));
-}
-
-.text-gradient {
-  background-image: linear-gradient(135deg, var(--color-brand), var(--color-brand-2));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-.card {
-  background: color-mix(in oklab, var(--color-surface) 86%, transparent);
+/* Panel with measurement corner ticks. */
+.panel {
+  position: relative;
+  background: var(--color-surface);
   border: 1px solid var(--color-line);
-  border-radius: 1.25rem;
-  backdrop-filter: blur(12px);
-  box-shadow:
-    0 1px 0 color-mix(in oklab, white 6%, transparent) inset,
-    0 10px 30px -12px rgb(15 18 34 / 0.12);
+  border-radius: 6px;
+}
+.panel::before,
+.panel::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-color: var(--color-ink-3);
+  border-style: solid;
+  pointer-events: none;
+}
+.panel::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.panel::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+
+.cap {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-3);
 }
 
-@keyframes rise {
-  from { opacity: 0; transform: translateY(6px); }
+.measure-grid {
+  background-image:
+    linear-gradient(rgb(255 255 255 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.035) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
-.rise { animation: rise 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.fade-in { animation: fade-in 0.6s ease both; }
+
+@keyframes sonar {
+  0% { box-shadow: 0 0 0 0 rgb(108 196 220 / 0.35); }
+  100% { box-shadow: 0 0 0 10px rgb(108 196 220 / 0); }
+}
+.sonar { animation: sonar 4s ease-out infinite; }
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.breathe { animation: breathe 3s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .rise { animation: none; }
+  .fade-in, .sonar, .breathe { animation: none; }
 }

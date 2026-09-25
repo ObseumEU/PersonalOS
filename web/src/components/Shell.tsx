@@ -1,150 +1,106 @@
-import { LogOut, Search, UserRound } from "lucide-react";
+import { LogOut } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
-import { SECTIONS, type Section } from "../sections";
-import Logo from "./Logo";
+import { SUBSYSTEMS } from "../sample";
+import { SECTIONS } from "../sections";
 
-function NavItem({ s }: { s: Section }) {
-  const Icon = s.icon;
+export function Mark({ size = 22 }: { size?: number }) {
   return (
-    <NavLink
-      to={`/${s.path}`}
-      className={({ isActive }) =>
-        `group relative flex items-center gap-3 rounded-xl px-3 py-2 text-[0.9rem] font-medium transition ${
-          isActive
-            ? "bg-surface-2 text-ink"
-            : "text-ink-2 hover:bg-surface-2 hover:text-ink"
-        }`
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <span
-            className={`absolute top-1/2 left-0 h-5 w-1 -translate-y-1/2 rounded-r-full brand-gradient transition-opacity ${
-              isActive ? "opacity-100" : "opacity-0"
-            }`}
-          />
-          <Icon
-            size={18}
-            strokeWidth={isActive ? 2.3 : 1.9}
-            className={isActive ? "text-brand" : ""}
-          />
-          {s.label}
-        </>
-      )}
-    </NavLink>
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#6cc4dc" strokeWidth="1.4" aria-hidden>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="3" fill="#6cc4dc" />
+      <path d="M12 1v4M12 19v4M1 12h4M19 12h4" />
+    </svg>
   );
 }
 
-const group = (g: Section["group"]) => SECTIONS.filter((s) => s.group === g);
-
-export default function Shell({
-  children,
-  onLogout,
-}: {
-  children: ReactNode;
-  onLogout?: () => void;
-}) {
+export default function Shell({ children, onLogout }: { children: ReactNode; onLogout?: () => void }) {
   return (
-    <div className="app-glow min-h-screen">
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-line bg-[color-mix(in_oklab,var(--color-surface)_70%,transparent)] px-5 py-6 backdrop-blur-xl lg:flex">
-        <div className="flex items-center gap-3 px-1">
-          <Logo />
-          <div>
-            <div className="text-[0.95rem] font-semibold tracking-tight">PersonalOS</div>
-            <div className="text-xs text-ink-3">Your life, organised</div>
-          </div>
+    <div className="min-h-screen bg-bg">
+      {/* Desktop rail */}
+      <aside className="fixed inset-y-0 left-0 hidden w-52 flex-col gap-6 border-r border-line px-3.5 pt-6 pb-5 lg:flex">
+        <div className="flex items-center gap-2.5 px-2">
+          <Mark />
+          <span className="font-medium tracking-[-0.01em]">PersonalOS</span>
         </div>
-
-        <button
-          type="button"
-          className="mt-6 flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm text-ink-3 transition hover:border-brand"
-        >
-          <Search size={16} />
-          Search or ask…
-          <kbd className="ml-auto rounded-md border border-line px-1.5 text-[0.7rem]">Ctrl K</kbd>
-        </button>
-
-        <nav className="mt-6 flex flex-1 flex-col gap-6 overflow-y-auto">
-          <div className="space-y-1">
-            <div className="px-3 pb-1 text-[0.7rem] font-semibold tracking-wider text-ink-3 uppercase">
-              Daily
-            </div>
-            {group("daily").map((s) => (
-              <NavItem key={s.path} s={s} />
-            ))}
-          </div>
-          <div className="space-y-1">
-            <div className="px-3 pb-1 text-[0.7rem] font-semibold tracking-wider text-ink-3 uppercase">
-              Assistant
-            </div>
-            {group("assistant").map((s) => (
-              <NavItem key={s.path} s={s} />
-            ))}
-          </div>
-          <div className="mt-auto space-y-1">
-            {group("system").map((s) => (
-              <NavItem key={s.path} s={s} />
-            ))}
-          </div>
-        </nav>
-
-        <div className="mt-4 flex items-center gap-3 rounded-xl border border-line bg-surface p-2.5">
-          <div className="grid h-8 w-8 place-items-center rounded-full bg-surface-2 text-ink-2">
-            <UserRound size={16} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">Owner</div>
-            <div className="text-xs text-ink-3">Single-user mode</div>
-          </div>
-          {onLogout && (
-            <button
-              type="button"
-              onClick={onLogout}
-              title="Log out"
-              className="rounded-lg p-1.5 text-ink-3 transition hover:bg-surface-2 hover:text-ink"
+        <nav aria-label="Main" className="flex flex-col gap-0.5">
+          {SECTIONS.map(({ path, label, icon: Icon }) => (
+            <NavLink
+              key={path}
+              to={`/${path}`}
+              className={({ isActive }) =>
+                `flex h-[38px] items-center gap-3 rounded px-3 text-sm transition ${
+                  isActive
+                    ? "bg-raised text-ink shadow-[inset_2px_0_0_var(--color-accent)]"
+                    : "text-ink-2 hover:bg-raised hover:text-ink"
+                }`
+              }
             >
-              <LogOut size={16} />
-            </button>
-          )}
+              {({ isActive }) => (
+                <>
+                  <Icon size={18} strokeWidth={1.5} className={isActive ? "text-accent" : "text-ink-3"} />
+                  {label}
+                </>
+              )}
+            </NavLink>
+          ))}
+        </nav>
+        <div className="mt-auto flex flex-col gap-2 rounded-md border border-line p-3">
+          <span className="cap flex items-center justify-between">
+            SUBSYSTEMS <span className="rounded-sm border border-dashed border-ink-3 px-1 text-[9px]">SAMPLE</span>
+          </span>
+          {SUBSYSTEMS.map((s) => (
+            <span key={s.name} className="flex items-center gap-2 text-[13px] text-ink-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+              {s.name.split(" ")[0]}
+              <span className="cap ml-auto">
+                {s.value}
+                {s.unit.startsWith("ms") ? "ms" : "s"}
+              </span>
+            </span>
+          ))}
         </div>
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="flex items-center gap-3 rounded px-3 py-2 text-sm text-ink-3 hover:bg-raised hover:text-ink"
+          >
+            <LogOut size={16} strokeWidth={1.5} /> Log out
+          </button>
+        )}
       </aside>
 
-      {/* Mobile top bar */}
-      <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-line bg-[color-mix(in_oklab,var(--color-bg)_80%,transparent)] px-4 py-3 backdrop-blur-xl lg:hidden">
-        <Logo size={30} />
-        <span className="font-semibold tracking-tight">PersonalOS</span>
+      {/* Phone top bar */}
+      <header className="sticky top-0 z-20 flex items-center gap-2.5 border-b border-line bg-bg/90 px-4 py-3 backdrop-blur lg:hidden">
+        <Mark size={20} />
+        <span className="font-medium">PersonalOS</span>
         {onLogout && (
-          <button type="button" onClick={onLogout} title="Log out" className="ml-auto p-1.5 text-ink-3">
-            <LogOut size={18} />
+          <button type="button" onClick={onLogout} aria-label="Log out" className="ml-auto p-1.5 text-ink-3">
+            <LogOut size={18} strokeWidth={1.5} />
           </button>
         )}
       </header>
 
-      <main className="px-4 pt-6 pb-28 sm:px-8 lg:ml-64 lg:px-12 lg:pt-10 lg:pb-12">
-        <div className="mx-auto max-w-6xl">{children}</div>
-      </main>
+      <main className="px-4 pt-5 pb-24 sm:px-6 lg:ml-52 lg:px-9 lg:pt-6 lg:pb-6">{children}</main>
 
-      {/* Mobile tab bar */}
-      <nav className="fixed inset-x-3 bottom-3 z-20 flex justify-between rounded-2xl border border-line bg-[color-mix(in_oklab,var(--color-surface)_85%,transparent)] p-1.5 shadow-xl backdrop-blur-xl lg:hidden">
-        {SECTIONS.filter((s) => ["today", "tasks", "calendar", "files", "assistant"].includes(s.path)).map((s) => {
-          const Icon = s.icon;
-          return (
-            <NavLink
-              key={s.path}
-              to={`/${s.path}`}
-              className={({ isActive }) =>
-                `flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1.5 text-[0.65rem] font-medium ${
-                  isActive ? "bg-surface-2 text-brand" : "text-ink-3"
-                }`
-              }
-            >
-              <Icon size={20} />
-              {s.label}
-            </NavLink>
-          );
-        })}
+      {/* Phone tab bar */}
+      <nav
+        aria-label="Main"
+        className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-bg px-2 pt-1.5 pb-3 lg:hidden"
+      >
+        {SECTIONS.filter((s) => s.mobile).map(({ path, label, icon: Icon }) => (
+          <NavLink
+            key={path}
+            to={`/${path}`}
+            className={({ isActive }) =>
+              `flex flex-1 flex-col items-center gap-1 py-1.5 text-[11px] ${isActive ? "text-accent" : "text-ink-3"}`
+            }
+          >
+            <Icon size={20} strokeWidth={1.5} />
+            {label}
+          </NavLink>
+        ))}
       </nav>
     </div>
   );

@@ -1,136 +1,82 @@
-import { ArrowUpRight, CalendarDays, CheckSquare, FolderOpen, Hash, Sparkles, type LucideIcon } from "lucide-react";
-import { Link } from "react-router-dom";
-import PhaseBadge from "../components/PhaseBadge";
+import KnowledgeGraph from "../components/LazyGraph";
+import Timeline from "../components/Timeline";
+import { AskBox, Legend, PageHeader, Panel, SampleBadge } from "../components/ui";
+import { EVENTS, GRAPH_LABELS, TASKS } from "../sample";
 
-function greeting(hour: number) {
-  if (hour < 5) return "Good night";
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
+const HIGHLIGHT = [0, 5, 11, 16];
+
+function greeting(h: number) {
+  if (h < 5) return "Good night";
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
   return "Good evening";
-}
-
-function Widget({
-  to,
-  icon: Icon,
-  title,
-  phase,
-  empty,
-  hint,
-  className = "",
-  delay = 0,
-}: {
-  to: string;
-  icon: LucideIcon;
-  title: string;
-  phase: number;
-  empty: string;
-  hint: string;
-  className?: string;
-  delay?: number;
-}) {
-  return (
-    <Link
-      to={to}
-      className={`card rise group flex flex-col p-5 transition hover:-translate-y-0.5 hover:border-brand/50 ${className}`}
-      style={{ animationDelay: `${delay}ms` }}
-    >
-      <div className="flex items-center gap-3">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-surface-2 text-brand">
-          <Icon size={18} />
-        </div>
-        <h2 className="font-semibold tracking-tight">{title}</h2>
-        <ArrowUpRight
-          size={16}
-          className="ml-auto text-ink-3 opacity-0 transition group-hover:opacity-100"
-        />
-      </div>
-      <div className="flex flex-1 flex-col items-center justify-center py-8 text-center">
-        <p className="text-sm font-medium text-ink-2">{empty}</p>
-        <p className="mt-1 max-w-xs text-xs text-ink-3">{hint}</p>
-      </div>
-      <PhaseBadge phase={phase} />
-    </Link>
-  );
 }
 
 export default function Today() {
   const now = new Date();
-  const date = now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+  const kicker = now
+    .toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+    .toUpperCase();
 
   return (
-    <div className="space-y-8">
-      <header className="rise">
-        <p className="text-sm font-medium text-ink-3">{date}</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
-          {greeting(now.getHours())}. <span className="text-gradient">What's on today?</span>
-        </h1>
-      </header>
+    <div className="flex flex-col gap-5 lg:h-[calc(100vh-3rem)]">
+      <PageHeader
+        kicker={kicker}
+        title={`${greeting(now.getHours())}.`}
+        sub={
+          <span className="flex flex-wrap items-center gap-2">
+            Your day across files, tasks and calendar. <SampleBadge />
+          </span>
+        }
+      />
 
-      <div className="card rise relative overflow-hidden p-2" style={{ animationDelay: "60ms" }}>
-        <div className="brand-gradient pointer-events-none absolute -top-24 -right-24 h-48 w-48 rounded-full opacity-20 blur-3xl" />
-        <form
-          className="relative flex items-center gap-3 rounded-2xl bg-surface px-4 py-3"
-          onSubmit={(e) => e.preventDefault()}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12 lg:grid-rows-[minmax(0,1fr)_auto]">
+        <Panel
+          fig="FIG. 1"
+          title="Knowledge graph"
+          right="52 nodes · sample"
+          className="h-[340px] lg:col-span-7 lg:h-auto"
+          bodyClassName="measure-grid relative"
         >
-          <Sparkles size={20} className="shrink-0 text-brand" />
-          <input
-            disabled
-            placeholder="Ask about your files, tasks and calendar…"
-            className="min-w-0 flex-1 bg-transparent text-[0.95rem] outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
-          />
-          <PhaseBadge phase={3} compact />
-        </form>
-        <div className="relative flex flex-wrap gap-2 px-3 pt-3 pb-2">
-          {["What's open for client X this week?", "Summarize yesterday's contract", "Plan my Friday"].map((q) => (
-            <span
-              key={q}
-              className="rounded-full border border-line bg-surface-2 px-3 py-1 text-xs text-ink-2"
-            >
-              {q}
-            </span>
-          ))}
-        </div>
-      </div>
+          <KnowledgeGraph labels={GRAPH_LABELS} highlight={HIGHLIGHT} />
+          <div className="pointer-events-none absolute bottom-3 left-4">
+            <Legend items={[["#6cc4dc", "relevant today"], ["#e6e8eb", "labelled"], ["#4a515b", "other"]]} />
+          </div>
+          <span className="cap pointer-events-none absolute right-4 bottom-3 hidden sm:block">drag to orbit</span>
+        </Panel>
 
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-        <Widget
-          to="/calendar"
-          icon={CalendarDays}
-          title="Agenda"
-          phase={4}
-          empty="No calendar connected yet"
-          hint="Your Google or Microsoft 365 events will show up here."
-          className="xl:row-span-2"
-          delay={120}
-        />
-        <Widget
-          to="/tasks"
-          icon={CheckSquare}
-          title="Due soon"
-          phase={2}
-          empty="Nothing due"
-          hint="Tasks with a due date in the next few days land here."
-          delay={170}
-        />
-        <Widget
-          to="/files"
-          icon={FolderOpen}
-          title="Recent files"
-          phase={2}
-          empty="No files yet"
-          hint="Drop documents in Files and the latest appear here."
-          delay={220}
-        />
-        <Widget
-          to="/topics"
-          icon={Hash}
-          title="Topics"
-          phase={2}
-          empty="No topics yet"
-          hint="Clients, projects, health, house: one home for each."
-          className="md:col-span-2"
-          delay={270}
-        />
+        <div className="flex min-h-0 flex-col gap-4 lg:col-span-5">
+          <AskBox id="ask-today" placeholder="Ask about your files, tasks and calendar" />
+          <Panel fig="TAB. 1" title="Due soon" right={<SampleBadge />}>
+            {TASKS.map((t) => (
+              <div key={t.id} className="grid grid-cols-[16px_minmax(0,1fr)_72px] items-center gap-3 border-b border-line px-4 py-2.5 last:border-0">
+                <input id={t.id} type="checkbox" className="h-[15px] w-[15px] accent-accent" />
+                <label htmlFor={t.id} className="truncate text-sm">
+                  {t.title}
+                </label>
+                <span className={`cap text-right ${t.urgent ? "text-accent!" : ""}`}>{t.due}</span>
+              </div>
+            ))}
+          </Panel>
+          <Panel bodyClassName="flex flex-col gap-2 px-4 py-3.5">
+            <span className="flex items-baseline gap-2.5">
+              <span className="cap text-accent!">NOTE</span>
+              <span className="text-sm font-medium">Observation</span>
+              <span className="ml-auto">
+                <SampleBadge />
+              </span>
+            </span>
+            <p className="text-sm leading-relaxed text-ink-2">
+              The Acme framework agreement renews on 1 November; notice period 30 days
+              <sup className="text-accent"> [1]</sup>. Decision needed by 1 October.
+            </p>
+            <span className="cap">[1] Acme framework agreement.pdf, p. 3, §7</span>
+          </Panel>
+        </div>
+
+        <Panel fig="FIG. 2" title="Agenda" right={<SampleBadge />} className="lg:col-span-12" bodyClassName="px-5 pt-3.5 pb-1.5">
+          <Timeline events={EVENTS} />
+        </Panel>
       </div>
     </div>
   );

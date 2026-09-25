@@ -1,12 +1,12 @@
 import {
-  Bot,
+  Box,
   CalendarDays,
   CheckSquare,
   FileText,
   FolderOpen,
   Hash,
   type LucideIcon,
-  Settings2,
+  Orbit,
   Sun,
 } from "lucide-react";
 
@@ -15,85 +15,40 @@ export type Section = {
   label: string;
   icon: LucideIcon;
   phase: number;
-  group: "daily" | "assistant" | "system";
   blurb: string;
   features: string[];
+  /** Shown in the phone tab bar. */
+  mobile?: boolean;
 };
 
-// Sections from docs/PLAN.md §3. Each gets its real page in a later phase.
+// Sections from docs/PLAN.md §3.
 export const SECTIONS: Section[] = [
+  { path: "today", label: "Today", icon: Sun, phase: 4, mobile: true, blurb: "Your day at a glance.", features: [] },
   {
-    path: "today",
-    label: "Today",
-    icon: Sun,
-    phase: 4,
-    group: "daily",
-    blurb: "Your day at a glance.",
-    features: ["Today's calendar", "Tasks due soon", "Recent files", "Ask anything"],
-  },
-  {
-    path: "tasks",
-    label: "Tasks",
-    icon: CheckSquare,
-    phase: 2,
-    group: "daily",
+    path: "tasks", label: "Tasks", icon: CheckSquare, phase: 2, mobile: true,
     blurb: "Everything you need to get done, by topic and due date.",
     features: ["Quick-add", "Due dates and priority", "Grouped by topic", "Created by the assistant"],
   },
   {
-    path: "calendar",
-    label: "Calendar",
-    icon: CalendarDays,
-    phase: 4,
-    group: "daily",
+    path: "calendar", label: "Calendar", icon: CalendarDays, phase: 4, mobile: true,
     blurb: "Your Google or Microsoft 365 calendar, next to your tasks.",
     features: ["Synced events", "Day and week view", "Tasks alongside events"],
   },
   {
-    path: "files",
-    label: "Files",
-    icon: FolderOpen,
-    phase: 2,
-    group: "daily",
+    path: "files", label: "Files", icon: FolderOpen, phase: 2, mobile: true,
     blurb: "Every document in one place, searchable in full text.",
     features: ["Drag-and-drop upload", "Preview", "Tags and topics", "Full-text search"],
   },
   {
-    path: "topics",
-    label: "Topics",
-    icon: Hash,
-    phase: 2,
-    group: "daily",
+    path: "topics", label: "Topics", icon: Hash, phase: 2,
     blurb: "One home for each area of your life and work.",
-    features: ["Files, notes and tasks together", "Events and conversations", "Clients, projects, health, house"],
+    features: ["Files, notes and tasks together", "Events and conversations"],
   },
   {
-    path: "notes",
-    label: "Notes",
-    icon: FileText,
-    phase: 2,
-    group: "daily",
+    path: "notes", label: "Notes", icon: FileText, phase: 2,
     blurb: "Markdown notes that belong to your topics.",
     features: ["Markdown editor", "Linked to topics", "Searchable"],
   },
-  {
-    path: "assistant",
-    label: "Assistant",
-    icon: Bot,
-    phase: 3,
-    group: "assistant",
-    blurb: "Ask about your files, tasks and calendar. Answers link to their sources.",
-    features: ["Runs on Codex CLI", "Cites files, tasks and events", "Delegates deep research to subsystems"],
-  },
-  {
-    path: "admin",
-    label: "Admin",
-    icon: Settings2,
-    phase: 5,
-    group: "system",
-    blurb: "Subsystems, connected accounts and settings.",
-    features: ["Subsystem health", "Links to Nexus and Knowledge agent", "Codex login", "Connected accounts"],
-  },
+  { path: "assistant", label: "Assistant", icon: Orbit, phase: 3, mobile: true, blurb: "", features: [] },
+  { path: "system", label: "System", icon: Box, phase: 5, blurb: "", features: [] },
 ];
-
-export const bySlug = (path: string) => SECTIONS.find((s) => s.path === path)!;
