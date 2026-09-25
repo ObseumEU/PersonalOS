@@ -10,6 +10,7 @@ import {
   CheckSquare,
   FileText,
   FolderOpen,
+  FolderKanban,
   Hash,
   Network,
   type LucideIcon,
@@ -48,6 +49,11 @@ export const SECTIONS: Section[] = [
     path: "files", label: "Files", icon: FolderOpen, phase: 2,
     blurb: "Every document in one place, searchable in full text.",
     features: ["Drag-and-drop upload", "Preview", "Tags and topics", "Full-text search"],
+  },
+  {
+    path: "projects", label: "Projects", icon: FolderKanban, phase: 2,
+    blurb: "Shared work with a goal, a lead, members and a channel.",
+    features: ["Board", "Lead reviews", "Project channel"],
   },
   {
     path: "topics", label: "Topics", icon: Hash, phase: 2,

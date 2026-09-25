@@ -223,6 +223,7 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     fields = dict(fields)
     assignee = fields.pop("assignee", None)
     reviewer = fields.pop("reviewer", None)
+    project = fields.pop("project", None)
     parent_id = fields.pop("parent_id", None)
     owner = fields.pop("owner_id", None)
     source = fields.pop("source", ctx.via)
@@ -250,7 +251,10 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         "created_at": now, "updated_at": now,
         **resolve_assignee(conn, ctx, assignee),
         **({"reviewer_id": resolve_reviewer(conn, ctx, reviewer)} if reviewer not in (None, "") else {}),
+        **({"project_id": resolve_project(conn, ctx, project)} if project not in (None, "") else {}),
     }
+    if values.get("project_id") is None and parent_id is not None:
+        values["project_id"] = parent["project_id"]  # a step belongs to its task's project
     if values.get("topic"):
         values["topic"] = values["topic"].lower().lstrip("#")
     if values["assignee_type"] == "external":
@@ -279,6 +283,9 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     changes = dict(changes)
     row = _row(conn, ctx, task_id)
     extra = {}
+    if "project" in changes:
+        value = changes.pop("project")
+        extra["project_id"] = resolve_project(conn, ctx, value) if value not in (None, "") else None
     if "reviewer" in changes:
         value = changes.pop("reviewer")
         extra["reviewer_id"] = resolve_reviewer(conn, ctx, value) if value not in (None, "") else None
@@ -336,6 +343,23 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
 
 # ------------------------------------------------------------------ review between colleagues (3.2)
 
+def resolve_project(conn: sqlite3.Connection, ctx: Ctx, value) -> int:
+    """A project by id or slug that the caller can see."""
+    from . import projects
+
+    return projects._row(conn, ctx, value)["id"]
+
+
+def list_project(conn: sqlite3.Connection, ctx: Ctx, project_id: int) -> list[dict]:
+    """A project's tasks the caller can see, for its board."""
+    vis, vparams = visible_sql(ENTITY, ctx.actor_id)
+    rows = conn.execute(
+        f"""SELECT * FROM tasks WHERE project_id = ? AND archived_at IS NULL AND {vis}
+            ORDER BY CASE status WHEN 'working' THEN 0 WHEN 'review' THEN 1 WHEN 'next' THEN 2 ELSE 3 END,
+            COALESCE(priority, 4), position, id""", [project_id, *vparams]).fetchall()
+    return [to_dict(r) for r in rows]
+
+
 def resolve_reviewer(conn: sqlite3.Connection, ctx: Ctx, value) -> int:
     """A member (id, name, 'me' or 'ai') who reviews the result; never someone outside."""
     if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
@@ -367,6 +391,11 @@ def reviewer_of(conn: sqlite3.Connection, row) -> int:
         lead = actors.get(conn, assignee)["reports_to"]
         if lead and _can_review_as_agent(conn, lead):
             return lead
+    from .projects import lead_of_task
+
+    project_lead = lead_of_task(conn, row)
+    if project_lead and project_lead != assignee and _can_review_as_agent(conn, project_lead):
+        return project_lead
     creator = row["created_by"]
     if creator and creator != assignee and _can_review_as_agent(conn, creator):
         return creator

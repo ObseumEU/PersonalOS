@@ -80,6 +80,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             a2a.configure_builtin(conn)
             scheduler.seed(conn)
             chat.ensure_team_channel(conn)
+            from . import projects
+
+            projects.migrate_step_projects(conn)  # once: tasks with steps become projects
         finally:
             conn.close()
         integrations.install()

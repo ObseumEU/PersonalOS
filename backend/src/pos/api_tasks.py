@@ -45,6 +45,7 @@ class TaskIn(BaseModel):
     follow_up: str | None = None
     assignee: Any = None
     reviewer: Any = None  # who reviews the result (default: who asked, the lead, the owner)
+    project: Any = None  # project id or slug
 
 
 class CaptureIn(BaseModel):
@@ -235,6 +236,64 @@ def history(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
     tid = tasks.parse_id(task_id)
     tasks.get(conn, ctx, tid)  # visibility check
     return versioning.history(conn, "task", tid)
+
+
+class ProjectIn(BaseModel):
+    name: str
+    goal: str = ""
+    definition_of_done: str = ""
+    lead: Any = None
+    members: list[Any] = []
+    visibility: str = "team"
+    labels: list[str] = []
+    due: str | None = None
+
+
+class MemberIn(BaseModel):
+    member: Any
+    role: str = "member"
+
+
+@router.get("/projects")
+def list_projects(status: str | None = None, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import projects
+
+    return projects.list_projects(conn, ctx, status)
+
+
+@router.post("/projects", status_code=201)
+def create_project(body: ProjectIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import projects
+
+    d = body.model_dump()
+    p = projects.create(conn, ctx, member_refs=d.pop("members"), **d)
+    conn.commit()
+    return p
+
+
+@router.get("/projects/{ref}")
+def get_project(ref: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import projects
+
+    return projects.get(conn, ctx, ref)
+
+
+@router.patch("/projects/{ref}")
+def update_project(ref: str, body: dict, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import projects
+
+    p = projects.update(conn, ctx, ref, body)
+    conn.commit()
+    return p
+
+
+@router.post("/projects/{ref}/members")
+def add_project_member(ref: str, body: MemberIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import projects
+
+    p = projects.add_member(conn, ctx, ref, body.member, body.role)
+    conn.commit()
+    return p
 
 
 @router.get("/tasks/{task_id}/comments")

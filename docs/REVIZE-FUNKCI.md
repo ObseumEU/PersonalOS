@@ -240,6 +240,9 @@ Spuštění workeru nového agenta přijde s 3.7.
 - MCP: `project_list`, `project_get`, `project_create`, `project_add_member`.
 - Topics zůstávají štítky napříč (viz 21), projekt může mít více štítků.
 
+Stav: hotovo (commit „Wave 1 / 3.6“). Kroky zůstávají (parent_id) a patří do projektu
+svého úkolu; stránka Projekty s boardem a přetahováním.
+
 ### 3.7 Agenti jako kód (samo-založení role agentů)
 
 - Každý `agents/<slug>/` dostane `agent.json`: name, role, team, reports_to,

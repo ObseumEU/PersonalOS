@@ -16,6 +16,7 @@ import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import NetworkPage from "./pages/Network";
 import Notes from "./pages/Notes";
+import Projects from "./pages/Projects";
 import Org from "./pages/Org";
 import System from "./pages/System";
 import Tasks from "./pages/Tasks";
@@ -64,6 +65,8 @@ export default function App() {
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/files" element={<Files />} />
+        <Route path="/projects" element={<Projects />} />
+        <Route path="/projects/:slug" element={<Projects />} />
         <Route path="/topics" element={<Topics />} />
         <Route path="/topics/:slug" element={<Topics />} />
         <Route path="/notes" element={<Notes />} />

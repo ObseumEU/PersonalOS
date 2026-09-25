@@ -75,6 +75,9 @@ TOOL_PERMISSIONS = {
     "task_comment": "tasks:read",
     # Feedback: any member gives it; resolving is checked in pos.feedback.
     "propose_instructions": "tasks:claim",
+    # Projects: reading needs tasks:read; creating tasks:write, members by the project's lead (pos.projects).
+    "project_list": "tasks:read", "project_get": "tasks:read", "project_create": "tasks:write",
+    "project_add_member": "tasks:read",
     # Hiring: asking needs agents:create or tasks:write, deciding is the decider's (pos.hiring).
     "hire_request": "tasks:read", "hire_decide": "tasks:read", "hire_list": "tasks:read",
     "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
@@ -274,6 +277,46 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "hire_list", status=status) as (conn, c):
             return hiring.list_requests(conn, status)
 
+    @mcp.tool(description="Projects you can see (active and paused by default): goal, lead, members, task counts.")
+    def project_list(ctx: Context, status: str | None = None) -> list[dict]:
+        from . import projects
+
+        with session(ctx, "project_list", status=status) as (conn, c):
+            return [{k: p[k] for k in ("id", "slug", "name", "goal", "status", "lead_name", "counts", "due")}
+                    | {"members": [m["name"] for m in p["members"]]} for p in projects.list_projects(conn, c, status)]
+
+    @mcp.tool(description="One project (id or slug): goal, definition of done, lead, members and its tasks.")
+    def project_get(ctx: Context, project: str) -> dict:
+        from . import projects
+
+        with session(ctx, "project_get", project=project) as (conn, c):
+            p = projects.get(conn, c, project)
+            p["tasks"] = [brief(t) for t in p["tasks"]]
+            return p
+
+    @mcp.tool(description="Start a project: name, goal, definition_of_done, lead (member name; default you), "
+                          "members (names), labels (topics). It gets its own chat channel #<slug>. Put its tasks "
+                          "in it with create_task(project=<slug>); its lead reviews them by default.")
+    def project_create(ctx: Context, name: str, goal: str = "", definition_of_done: str = "",
+                       lead: str | None = None, members: list[str] | None = None,
+                       labels: list[str] | None = None, due: str | None = None) -> dict:
+        from . import projects
+
+        with session(ctx, "project_create", name=name) as (conn, c):
+            p = projects.create(conn, c, name=name, goal=goal, definition_of_done=definition_of_done, lead=lead,
+                                member_refs=members, labels=labels, due=due)
+            p["tasks"] = [brief(t) for t in p["tasks"]]
+            return p
+
+    @mcp.tool(description="Add a member to a project (role member or lead). The project's lead, creator, "
+                          "their lead or the owner.")
+    def project_add_member(ctx: Context, project: str, member: str, role: str = "member") -> dict:
+        from . import projects
+
+        with session(ctx, "project_add_member", project=project, member=member) as (conn, c):
+            p = projects.add_member(conn, c, project, member, role)
+            return {"slug": p["slug"], "members": [f"{m['name']} ({m['role']})" for m in p["members"]]}
+
     @mcp.tool(description="Feedback given to a member (default: you), by status open | applied | dismissed.")
     def feedback_list(ctx: Context, to: str | None = None, status: str | None = "open") -> list[dict]:
         from . import feedback
@@ -320,11 +363,13 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                     priority: int | None = None, do_date: str | None = None, deadline: str | None = None,
                     estimate_min: int | None = None, energy: str | None = None, assignee: str | None = None,
                     parent_id: str | None = None, definition_of_done: str | None = None,
-                    visibility: str | None = None, status: str | None = None) -> dict:
+                    visibility: str | None = None, status: str | None = None, project: str | None = None,
+                    reviewer: str | None = None) -> dict:
         fields = {k: v for k, v in dict(
             title=title, notes=notes, topic=topic, priority=priority, do_date=do_date, deadline=deadline,
             estimate_min=estimate_min, energy=energy, assignee=assignee, parent_id=parent_id,
-            definition_of_done=definition_of_done, visibility=visibility, status=status,
+            definition_of_done=definition_of_done, visibility=visibility, status=status, project=project,
+            reviewer=reviewer,
         ).items() if v is not None}
         with session(ctx, "create_task", title=title) as (conn, c):
             return brief(tasks.create(conn, c, fields))

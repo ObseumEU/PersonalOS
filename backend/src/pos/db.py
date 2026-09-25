@@ -641,6 +641,36 @@ MIGRATIONS: list[str] = [
     );
     ALTER TABLE actors ADD COLUMN probation_until TEXT;
     """,
+    # 24: projects as shared work (pos.projects): lead, members, channel; tasks belong to one.
+    """
+    CREATE TABLE projects (
+        id INTEGER PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        goal TEXT,
+        definition_of_done TEXT,
+        lead_id INTEGER REFERENCES actors(id),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'done', 'archived')),
+        visibility TEXT NOT NULL DEFAULT 'team' CHECK (visibility IN ('public', 'team', 'private')),
+        owner_id INTEGER NOT NULL REFERENCES actors(id),
+        labels TEXT NOT NULL DEFAULT '[]',
+        channel_id INTEGER,
+        due TEXT,
+        created_by INTEGER REFERENCES actors(id),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE TABLE project_members (
+        project_id INTEGER NOT NULL REFERENCES projects(id),
+        actor_id INTEGER NOT NULL REFERENCES actors(id),
+        role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('lead', 'member')),
+        added_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, actor_id)
+    );
+    ALTER TABLE tasks ADD COLUMN project_id INTEGER REFERENCES projects(id);
+    CREATE INDEX tasks_project ON tasks (project_id, status);
+    """,
 ]
 
 
