@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     session_secret: str = "dev-only-change-me"
     # Send the session cookie only over HTTPS (set true on the server).
     secure_cookies: bool = False
+    # Bearer key that lets MCP clients act as the owner over HTTP (/mcp).
+    # Agents get their own keys (actors.create_key). Empty: no owner key.
+    mcp_token: str = ""
 
     @property
     def db_path(self) -> Path:
