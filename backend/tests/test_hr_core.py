@@ -236,3 +236,18 @@ def test_hr_never_archives_a_role_agent_from_git(conn, tmp_path, monkeypatch):
     assert actors.get(conn, mail)["archived_at"] is None
     proposal = conn.execute("SELECT title FROM tasks WHERE title LIKE 'Návrh HR: archivovat Mail agent%'").fetchone()
     assert proposal is not None
+
+
+def test_weekly_report_says_which_shared_tools_help(conn):
+    from pos import comments
+
+    owner = Ctx(actors.owner_id(conn))
+    dev = new_agent(conn, "Dev agent", "Fixes GitHub issues")
+    for ok in (1, 1, 0):
+        conn.execute("INSERT INTO tool_usage (tool, actor_id, at, ok) VALUES ('shared/pdf-to-text', ?, ?, ?)",
+                     (dev, now_iso(), ok))
+    conn.commit()
+    report = service.weekly_report(conn, owner)
+    assert report["tool_usage"][0] == {"tool": "shared/pdf-to-text", "uses": 3, "failed": 1, "by": ["Dev agent"]}
+    notes = [a["body"] for a in comments.list_for(conn, owner, int(report["report_task_id"]))]
+    assert any("shared/pdf-to-text: 3× (1 failed)" in n for n in notes)

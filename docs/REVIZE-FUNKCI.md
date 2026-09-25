@@ -373,6 +373,10 @@ s `tasks:write` (PM musí dál rozdělovat práci).
 - Dokument `docs/COACH.md` a `docs/TEAM.md` (jak funguje tým: role,
   vedoucí, review, zpětná vazba, nábor).
 
+Stav: hotovo (commit „Wave 3“). ComingSoon a `BUILT` pryč už ve F21, `share()` se
+používá (4.7). UI je anglicky; česky zůstávají obsahy úkolů a zdůvodnění HR.
+`ack_message` zůstává (zaznamená, že agent zprávu zpracoval; chat na to nemá obdobu).
+
 ## 6. Co zůstává beze změny
 
 Kill switch, ústava a guard (kromě F16), verzování a audit (kromě F15),

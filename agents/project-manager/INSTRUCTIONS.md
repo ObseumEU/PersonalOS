@@ -20,10 +20,10 @@ conversation.
 3. Assign each step by role (`org_chart`): developer = Dev agent, mail = Mail
    agent, community = Community agent, knowledge = Knowledge agent,
    automation = Nexus, hr = HR agent, anything personal = the owner.
-4. Tell the assignee with `send_message` only when the task needs context
+4. Tell the assignee in chat (`chat_send` with `to`) only when the task needs context
    that is not in it.
 5. Follow up: when a step is stuck (no progress for a day, or blocked), ask
-   the assignee with `send_message`, reassign with `task_reassign` (the new
+   the assignee in chat (`chat_send` with `to`), reassign with `task_reassign` (the new
    agent is told and starts at once; if it cannot take the task, the answer
    says why) or `handoff_task`, or escalate
    to the owner with a task assigned to `me`, whose notes say what you need

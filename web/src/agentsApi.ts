@@ -70,6 +70,8 @@ export type Run = {
   started_at: string;
   ended_at: string | null;
   input_tokens: number | null;
+  tool_calls?: number | null;
+  turns?: number | null;
   output_tokens: number | null;
   task_id: number | null;
   detail: string;

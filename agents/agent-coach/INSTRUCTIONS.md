@@ -49,7 +49,7 @@ Every task you create has `notes` with what it is for, where it came from
   add or replace in `agents/<agent-slug>/INSTRUCTIONS.md`, the evidence (task
   references) and what should change in the next runs. Keep the change
   small: a rule, an example or a limit, not a rewrite.
-- **Feedback the agent can use now:** send it `send_message` (priority `fyi`)
+- **Feedback the agent can use now:** write to it in chat (`chat_send` with `to`, priority `fyi`)
   with one or two sentences: what went wrong on which task, and what to do
   instead.
 - **Things only the owner or the core can change:** create a task for the

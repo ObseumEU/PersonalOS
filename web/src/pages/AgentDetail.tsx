@@ -376,7 +376,9 @@ export default function AgentDetail() {
               <span className="cap">#{r.id}</span>
               <span className={r.status === "ok" ? "text-accent" : r.status === "running" ? "text-accent" : "text-ink-3"}>{r.status}</span>
               <span className="truncate text-ink-2">
-                {r.kind} · {ago(r.started_at)} {r.detail ? `· ${r.detail.slice(0, 80)}` : ""}
+                {r.kind} · {ago(r.started_at)}
+                {r.tool_calls != null ? ` · ${r.tool_calls} tool calls` : ""}
+                {r.turns != null ? ` · ${r.turns} turns` : ""} {r.detail ? `· ${r.detail.slice(0, 80)}` : ""}
               </span>
               <span className="cap text-right">{r.input_tokens != null ? fmtTokens((r.input_tokens ?? 0) + (r.output_tokens ?? 0)) : "—"} tok</span>
               <button

@@ -42,7 +42,7 @@ def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardra
         "what it is for, where it came from (this task's ref, the message or event) and what done looks like, "
         "plus definition_of_done. A bare title is not enough for whoever picks it up.",
         "- Not yours? handoff_task it to the right member (org_chart) with a note; ask peers or the Project "
-        "manager with send_message.",
+        "manager in chat (chat_send to=<name>).",
         "- When you are done, finish with a short summary of what you did and what the owner should check.",
     ]
     if me.get("feedback"):

@@ -110,10 +110,26 @@ def weekly_report(conn: sqlite3.Connection, ctx: Ctx | None = None, *, now: date
     previous = TeamKpis(**last["kpis"]) if last else None
     agents = platform.list_agents()
     task_id = file_weekly_report(result, agents, platform, owner_id=str(actors.owner_id(conn)), previous=previous)
-    report = {**_serialize(result, {a.id: a.name for a in agents}), "report_task_id": task_id}
+    tools = tool_usage(conn, now - timedelta(days=7), now)
+    if tools:
+        from .. import comments
+
+        lines = "\n".join(f"- {t['tool']}: {t['uses']}× ({t['failed']} failed) by {', '.join(t['by'])}" for t in tools)
+        comments.log(conn, hr_ctx, int(task_id), f"Sdílené nástroje za týden (co kolegům pomáhá):\n{lines}", "system")
+    report = {**_serialize(result, {a.id: a.name for a in agents}), "report_task_id": task_id, "tool_usage": tools}
     store.save_review(conn, "weekly", False, report)
     conn.commit()
     return report
+
+
+def tool_usage(conn: sqlite3.Connection, since: datetime, until: datetime) -> list[dict]:
+    """Which shared tools the team used in the window, how often, by whom, how often they failed."""
+    rows = conn.execute(
+        """SELECT u.tool, COUNT(*) AS uses, SUM(u.ok = 0) AS failed, GROUP_CONCAT(DISTINCT a.name) AS by_names
+           FROM tool_usage u LEFT JOIN actors a ON a.id = u.actor_id WHERE u.at >= ? AND u.at <= ?
+           GROUP BY u.tool ORDER BY uses DESC""", (iso(since), iso(until))).fetchall()
+    return [{"tool": r["tool"], "uses": r["uses"], "failed": r["failed"] or 0,
+             "by": sorted((r["by_names"] or "").split(",")) if r["by_names"] else []} for r in rows]
 
 
 def register_agent(conn: sqlite3.Connection, actor_id: int, *, purpose: str, lifetime: str = "long_lived",
