@@ -1,4 +1,4 @@
-"""Wires the independent modules (pos.budget, pos.guard) into the core.
+"""Wires the independent modules (pos.budget, pos.guard, pos.hr) into the core.
 
 They never import the core; the core calls them here, through the runner
 hooks and small adapters. `install()` runs once at startup.
@@ -12,6 +12,8 @@ from .budget import service as budget
 from .core import Ctx
 from .guard import policy as guard_policy
 from .guard import prompt as guard_prompt
+from .hr import mcp as hr_mcp
+from .hr import service as hr
 
 _installed = False
 
@@ -71,9 +73,16 @@ def install() -> None:
 
 
 def register_builtin_agents(conn: sqlite3.Connection) -> None:
-    """The assistant is a system agent for the budget (docs/BUDGET.md)."""
+    """The assistant is a system agent for the budget (docs/BUDGET.md); the HR
+    agent is a system agent too (docs/HR-AGENT.md)."""
     budget.set_agent_class(conn, str(actors.assistant_id(conn)), "system")
     conn.commit()
+    hr.ensure_hr_agent(conn)
+
+
+def register_mcp_tools(mcp, session) -> None:
+    """Extra tools on the `pos` MCP server; `session` is its auth + audit helper."""
+    hr_mcp.register(mcp, session)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:
@@ -111,3 +120,23 @@ async def budget_loop(db_path, interval_min: int) -> None:
                 conn.close()
         except Exception:  # a failed check must not stop the next one
             logging.getLogger(__name__).exception("budget check failed")
+
+
+async def hr_loop(db_path, interval_min: int = 30) -> None:
+    """Runs the HR daily review and weekly report when due (pos.hr.schedule)."""
+    import asyncio
+    import logging
+
+    from .db import connect
+    from .hr import schedule
+
+    while True:
+        await asyncio.sleep(interval_min * 60)
+        try:
+            conn = connect(db_path)
+            try:
+                await asyncio.to_thread(schedule.run_due, conn)
+            finally:
+                conn.close()
+        except Exception:  # a failed review must not stop the next one
+            logging.getLogger(__name__).exception("HR review failed")

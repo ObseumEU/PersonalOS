@@ -15,6 +15,8 @@ from .budget.api import router as budget_router
 from .config import Settings, get_settings
 from .db import connect, init_db
 from .guard import api as guard_api
+from .hr import schedule as hr_schedule
+from .hr.api import router as hr_router
 
 
 class MCPAuth:
@@ -70,12 +72,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         check_minutes = budget_service.BudgetSettings().check_minutes
         budget_task = (asyncio.create_task(integrations.budget_loop(settings.db_path, check_minutes))
                        if check_minutes > 0 else None)
+        hr_task = (asyncio.create_task(integrations.hr_loop(settings.db_path))
+                   if hr_schedule.HRSettings().scheduler else None)
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
-            if budget_task:
-                budget_task.cancel()
+            for task in (budget_task, hr_task):
+                if task:
+                    task.cancel()
 
     app = FastAPI(title="PersonalOS", description=description, lifespan=lifespan)
     app.dependency_overrides[get_settings] = lambda: settings
@@ -90,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(auth_router)
     app.include_router(budget_router)
+    app.include_router(hr_router)
     app.include_router(guard_api.router)
     guard_api.install_error_handler(app)
     app.include_router(api_tasks.router)
