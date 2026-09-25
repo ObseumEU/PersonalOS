@@ -8,7 +8,8 @@ src="$(cd "$1" && pwd)"
 cd "$(dirname "$0")/../.."
 compose=(docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml)
 
-(cd "$src" && sha256sum -c SHA256SUMS)
+# --ignore-missing: codex-home.tgz is optional (the Codex login can be done on the server instead).
+(cd "$src" && sha256sum -c --ignore-missing SHA256SUMS)
 [ -f .env ] || { install -m 600 "$src/env" .env; echo "installed .env from the migration"; }
 
 project="$(grep -E '^COMPOSE_PROJECT_NAME=' .env | cut -d= -f2 || true)"
