@@ -69,6 +69,75 @@ export type Actor = { id: number; kind: "human" | "ai" | "agent"; name: string; 
 export type Version = { version: number; action: string; at: string; actor_name: string | null; run_id: number | null };
 export type Counts = Record<Exclude<View, "done">, number>;
 
+/** Why a member cannot take a task now. Soft reasons (pause, kill switch, budget) pass on the owner's say. */
+export type Blocker = { code: string; text: string; soft: boolean };
+
+/** Someone a task can go to, for the agent picker (pos.reassign.candidates). */
+export type Candidate = {
+  id: number;
+  name: string;
+  kind: "human" | "ai" | "agent";
+  is_owner: boolean;
+  role: string | null;
+  team: string | null;
+  engine: string | null;
+  model: string | null;
+  engine_label: string | null;
+  current: boolean;
+  available: boolean;
+  blocked: Blocker[];
+  worker_online: boolean | null;
+};
+
+export type ReassignResult = {
+  task: Task;
+  from: string | null;
+  to: string;
+  cancelled_runs: number[];
+  message_id: number | null;
+  woke_workers: number;
+  waiting_for: Blocker[];
+};
+
+export type LiveRun = {
+  id: number;
+  status: string;
+  engine: string | null;
+  model: string | null;
+  label: string | null;
+  actor_id: number;
+  actor_name: string;
+  started_at: string;
+  ended_at: string | null;
+  heartbeat_at: string | null;
+  detail: string | null;
+};
+
+/** The task's live state (pos.reassign.live). */
+export type TaskLive = {
+  ref: string;
+  status: Status;
+  state: string;
+  progress: number | null;
+  progress_note: string | null;
+  assignee: {
+    id: number;
+    name: string;
+    kind: string;
+    role: string | null;
+    engine?: string | null;
+    model?: string | null;
+    engine_label?: string | null;
+    worker_online?: boolean;
+    worker_waiting?: boolean;
+  } | null;
+  run: LiveRun | null;
+  runs: LiveRun[];
+  blocked: Blocker[];
+  notes: { at: string; by: string | null; note: string; progress: number | null; action: string }[];
+  at: string;
+};
+
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
 export const tasksApi = {
@@ -92,6 +161,11 @@ export const tasksApi = {
     post<Task>(`/api/tasks/${ref}/clarify`, { action, fields }),
   history: (ref: string) => api<Version[]>(`/api/tasks/${ref}/history`),
   restore: (ref: string, version: number) => post<Task>(`/api/tasks/${ref}/restore`, { version }),
+  reassignOptions: (ref: string) => api<Candidate[]>(`/api/tasks/${ref}/reassign/options`),
+  /** Hand the task to someone: the old run stops, the new agent is told and starts at once. */
+  reassign: (ref: string, to: number | string, note?: string, force = false) =>
+    post<ReassignResult>(`/api/tasks/${ref}/reassign`, { to, note: note || null, force }),
+  live: (ref: string) => api<TaskLive>(`/api/tasks/${ref}/live`),
 };
 
 export const PRIORITY_LABEL: Record<number, string> = { 1: "Must", 2: "Should", 3: "Could" };

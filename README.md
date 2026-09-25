@@ -92,7 +92,8 @@ claude mcp add --transport http pos http://localhost:8090/mcp --header "Authoriz
 ```
 
 Tools: `list_tasks`, `get_task`, `capture`, `create_task`, `update_task`,
-`complete_task`, `assign_task`, `claim_task`, `heartbeat`, `report_progress`,
+`complete_task`, `assign_task`, `task_reassign` (hand a task to an agent: it is
+told and its worker starts at once), `claim_task`, `heartbeat`, `report_progress`,
 `request_approval`. Resource `tasks://{view}` (today, inbox, waiting, …) and
 prompts `plan_my_day`, `weekly_review`. Every call lands in the audit log.
 For a local stdio server against a dev database: `python -m pos.mcp_server`.

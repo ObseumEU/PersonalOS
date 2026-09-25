@@ -365,6 +365,10 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
             if not target["paused_at"]:
                 versioning.update(conn, ctx, "actor", aid, {"paused_at": now_iso()}, action="pause")
     conn.commit()
+    from . import wake
+
+    for aid in inbox:  # a waiting worker reads it now, not at its next poll
+        wake.wake(aid)
     out = message_view(conn, mid, ctx.actor_id)
     dm_target = others[0] if ch["kind"] == "dm" and others else None
     out["delivered_to_run"] = runs.get(dm_target) if dm_target else None

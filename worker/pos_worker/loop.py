@@ -170,9 +170,14 @@ class Worker:
         if done.get("requeued"):  # the runtime hit its usage limit; PersonalOS retries on the other one
             log.info("%s: %s hit its usage limit, task requeued", ref, engine)
             return "requeued"
+        now = self.client.task(ref)
+        if now.get("assignee_id") not in (None, self.me.get("id")):
+            # Reassigned to someone else meanwhile: it is theirs now, leave it alone.
+            log.info("%s: reassigned to %s, not handing anything in", ref, now.get("assignee_name"))
+            return "reassigned"
         if outcome == "ok":
             # The agent may have handed it in itself (complete_task over MCP).
-            if self.client.task(ref)["status"] == "working":
+            if now["status"] == "working":
                 self.client.complete(ref, session.last_message[:2000] or "Done.")
         elif outcome == "error":
             self.client.handback(ref, session.failed[:400])

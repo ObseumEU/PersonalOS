@@ -373,3 +373,35 @@ def test_runs_count_tool_calls_and_turns():
         '{"type":"turn.completed","usage":{}}'])
     assert runner.work_counts(codex) == (2, 1)
     assert runner.work_counts("") == (None, None)
+
+
+def test_reassign_mid_run_stops_the_old_worker_and_the_task_stays_with_the_new_agent(setup, fake_codex, tmp_path,
+                                                                                      monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    client, conn, owner, agent_id, key = setup
+    from pos import reassign, tasks
+
+    other = agents.create_agent(conn, owner, name="Mail agent", purpose="mail", lifetime="long_lived",
+                                permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
+    t = tasks.create(conn, owner, {"title": "Answer the invoice e-mail", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    worker = worker_for(client, key, fake_codex, tmp_path)
+
+    def hand_over():
+        c = connect(Settings(data_dir=tmp_path).db_path)
+        for _ in range(100):
+            if c.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (agent_id,)).fetchone():
+                break
+            time.sleep(0.1)
+        time.sleep(0.3)
+        reassign.reassign(c, owner, t["id"], "Mail agent", "this is mail")
+        c.close()
+
+    th = threading.Thread(target=hand_over)
+    th.start()
+    assert worker.step() in ("cancelled", "reassigned")
+    th.join()
+    after = tasks.get(conn, owner, t["id"])
+    assert after["assignee_id"] == other and after["status"] == "next"
+    run = conn.execute("SELECT status FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
+    assert run["status"] == "cancelled"

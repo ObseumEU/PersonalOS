@@ -153,6 +153,40 @@ def assign(task_id: str, body: AssignIn, conn=Depends(get_db), ctx=Depends(get_c
     return t
 
 
+class ReassignIn(BaseModel):
+    to: Any
+    note: str | None = None
+    force: bool = False
+
+
+@router.get("/tasks/{task_id}/reassign/options")
+def reassign_options(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Who the task could go to: role, engine/model, and why someone cannot take it now."""
+    from . import reassign
+
+    return reassign.candidates(conn, ctx, tasks.parse_id(task_id))
+
+
+@router.post("/tasks/{task_id}/reassign")
+def reassign_task(task_id: str, body: ReassignIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Hand the task to another member: releases the old claim, cancels its run,
+    records it, DMs the new assignee and wakes its worker (pos.reassign)."""
+    from . import reassign
+
+    try:
+        return reassign.reassign(conn, ctx, tasks.parse_id(task_id), body.to, body.note or "", force=body.force)
+    except reassign.Refused as e:
+        return JSONResponse(status_code=409, content={"detail": str(e), "to": e.target, "reasons": e.reasons})
+
+
+@router.get("/tasks/{task_id}/live")
+def live(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Live state for the task detail: current run, engine/model, progress notes, blockers."""
+    from . import reassign
+
+    return reassign.live(conn, ctx, tasks.parse_id(task_id))
+
+
 @router.post("/tasks/{task_id}/archive")
 def archive(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
     t = tasks.archive(conn, ctx, tasks.parse_id(task_id))

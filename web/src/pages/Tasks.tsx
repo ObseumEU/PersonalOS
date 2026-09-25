@@ -1,7 +1,8 @@
 import { Archive, CalendarDays, CheckCheck, Clock, Inbox, ListChecks, Orbit, Sun, Users, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { AssigneeChip, Energy, StatePill, fmtMinutes } from "../components/tasks/bits";
+import AgentPicker from "../components/tasks/AgentPicker";
+import { Energy, StatePill, fmtMinutes } from "../components/tasks/bits";
 import TaskDetail from "../components/tasks/TaskDetail";
 import { MockDot, PageHeader, Panel } from "../components/ui";
 import {
@@ -74,12 +75,14 @@ function Row({
   hideTopic,
   onSelect,
   onToggle,
+  onReassigned,
 }: {
   task: Task;
   selected: boolean;
   hideTopic: boolean;
   onSelect: () => void;
   onToggle: () => void;
+  onReassigned: () => void;
 }) {
   const due = dueLabel(task);
   const done = task.status === "done";
@@ -120,7 +123,7 @@ function Row({
           <span className="text-[12px] text-ink-3 italic">{NO_DESCRIPTION}</span>
         )}
       </button>
-      <AssigneeChip type={task.assignee_type} name={task.assignee_name} />
+      <AgentPicker task={task} onReassigned={onReassigned} />
       <span className="cap text-ink-2!">{task.assignee_type === "human" || !task.assignee_type ? fmtMinutes(task.estimate_min) : "—"}</span>
       <Energy level={task.energy} />
       <span className={`cap text-right ${due.urgent ? "text-accent!" : ""}`}>{due.text}</span>
@@ -283,6 +286,7 @@ export default function Tasks() {
                   hideTopic={!!selected}
                   onSelect={() => set({ task: t.ref })}
                   onToggle={() => toggle(t)}
+                  onReassigned={refresh}
                 />
               ))}
             </div>

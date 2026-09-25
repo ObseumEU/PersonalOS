@@ -5,7 +5,6 @@ Waiting for work is a long poll: the worker sleeps on the server side, so an
 idle agent never spends tokens (AGENTS-SPEC 4.2).
 """
 
-import asyncio
 import json
 import sqlite3
 import time
@@ -109,19 +108,29 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     return out
 
 
+POLL_FALLBACK_S = 2.0  # re-check the database this often even without a wake (other processes)
+
+
 @router.get("/next")
 async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Settings = Depends(get_settings)):
-    """Long poll: returns as soon as there is a task or a message, else after `wait` s."""
+    """Long poll: returns as soon as there is a task or a message, else after `wait` s.
+
+    A reassignment or a DM wakes the wait at once (pos.wake); the database is
+    still re-checked every POLL_FALLBACK_S seconds for changes made elsewhere."""
+    from . import wake
+
     deadline = time.monotonic() + max(0, min(wait, 120))
-    while True:
-        conn = connect(settings.db_path)
-        try:
-            out = _next_work(conn, ctx)
-        finally:
-            conn.close()
-        if out.get("task") or out.get("unread_messages") or time.monotonic() >= deadline:
-            return out
-        await asyncio.sleep(2)
+    async with wake.listener(ctx.actor_id) as woken:
+        while True:
+            conn = connect(settings.db_path)
+            try:
+                out = _next_work(conn, ctx)
+            finally:
+                conn.close()
+            remaining = deadline - time.monotonic()
+            if out.get("task") or out.get("unread_messages") or remaining <= 0:
+                return out
+            await wake.wait(woken, min(POLL_FALLBACK_S, remaining))
 
 
 @router.get("/tasks/{task_id}")
@@ -146,9 +155,17 @@ class NoteIn(BaseModel):
     note: str = ""
 
 
+def _still_mine(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> None:
+    """A task reassigned meanwhile is no longer this worker's to finish or hand back."""
+    row = conn.execute("SELECT assignee_id, assignee_name FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is not None and row["assignee_id"] not in (None, ctx.actor_id):
+        raise HTTPException(409, f"{tasks.display_id(task_id)} was reassigned to {row['assignee_name']}")
+
+
 @router.post("/tasks/{task_id}/complete")
 def complete(task_id: str, body: NoteIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """Hand in the result: it goes to the owner's review."""
+    _still_mine(conn, ctx, tasks.parse_id(task_id))
     t = tasks.complete(conn, ctx, tasks.parse_id(task_id), body.note or None)
     conn.commit()
     return t
@@ -156,6 +173,7 @@ def complete(task_id: str, body: NoteIn, conn=Depends(get_db), ctx: Ctx = Depend
 
 @router.post("/tasks/{task_id}/progress")
 def progress(task_id: str, body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    _still_mine(conn, ctx, tasks.parse_id(task_id))
     t = tasks.report_progress(conn, ctx, tasks.parse_id(task_id), int(body.get("percent", 0)), str(body.get("message", "")))
     conn.commit()
     return t
@@ -165,6 +183,7 @@ def progress(task_id: str, body: dict, conn=Depends(get_db), ctx: Ctx = Depends(
 def handback(task_id: str, body: NoteIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """The agent could not finish: the task goes back to the owner, with the reason."""
     tid = tasks.parse_id(task_id)
+    _still_mine(conn, ctx, tid)
     name = actors.get(conn, ctx.actor_id)["name"]
     tasks.update(conn, ctx, tid, {"status": "next", "progress_note": f"{name} handed it back: {body.note}"[:500]})
     t = tasks.assign(conn, ctx, tid, {"type": "human", "id": actors.owner_id(conn)})
