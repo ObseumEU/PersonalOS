@@ -9,7 +9,7 @@ import json
 import sqlite3
 from datetime import date, timedelta
 
-from . import actors, capture as capture_syntax, versioning
+from . import actors, capture as capture_syntax, task_descriptions, versioning
 from .core import Ctx, Forbidden, NotFound, now_iso, today
 from .visibility import DEFAULT, LAYERS, check_read, visible_sql
 
@@ -251,6 +251,10 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         values["status"] = "next"
     if values["status"] == "done":
         values["completed_at"] = now
+    if task_descriptions.needs_description(values.get("notes")):
+        # Every task says what it is for, where it came from and what done looks like.
+        values["notes"] = task_descriptions.build(conn, values)
+        values["description_generated"] = 1
     return get(conn, ctx, versioning.insert(conn, ctx, ENTITY, values)["id"])
 
 
@@ -278,6 +282,13 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         check_visibility_change(conn, ctx, row, changes["visibility"])
     if changes.get("topic"):
         changes["topic"] = changes["topic"].lower().lstrip("#")
+    if "notes" in changes and (changes["notes"] or "") != row["notes"]:
+        if task_descriptions.needs_description(changes["notes"]):
+            # Clearing the description brings the generated one back, never an empty task.
+            changes["notes"] = task_descriptions.build(conn, {**dict(row), **changes}, task_id)
+            extra["description_generated"] = 1
+        else:
+            extra["description_generated"] = 0
     if "status" in changes:
         if changes["status"] == "done" and row["status"] != "done":
             extra["completed_at"] = now_iso()
@@ -434,7 +445,7 @@ def clarify(conn: sqlite3.Connection, ctx: Ctx, task_id: int, action: str, field
         # Not actionable but worth keeping: becomes a note, the item is archived.
         now = now_iso()
         versioning.insert(conn, ctx, "note", {
-            "title": row["title"], "body": row["notes"], "topic": row["topic"],
+            "title": row["title"], "body": "" if row["description_generated"] else row["notes"], "topic": row["topic"],
             "visibility": row["visibility"], "owner_id": row["owner_id"], "created_at": now, "updated_at": now,
         })
     return archive(conn, ctx, task_id)

@@ -48,10 +48,13 @@ def next_run(schedule: str, after: datetime) -> datetime:
 
 # ------------------------------------------------------------------ actions
 
-def _owner_task(conn, title: str, notes: str, priority: int = 3, topic: str = "routine") -> str:
+def _owner_task(conn, title: str, notes: str, priority: int = 3, topic: str = "routine", *,
+                purpose: str = "", done: str | None = None) -> str:
     ctx = Ctx(actors.owner_id(conn), via="scheduler")
-    return tasks.create(conn, ctx, {"title": title, "notes": notes, "priority": priority, "topic": topic,
-                                    "assignee": "me", "status": "next", "do_date": today().isoformat()})["ref"]
+    head = f"Purpose: {purpose}\nSource: a PersonalOS routine (scheduler).\n\n" if purpose else ""
+    return tasks.create(conn, ctx, {"title": title, "notes": head + notes, "priority": priority, "topic": topic,
+                                    "definition_of_done": done, "assignee": "me", "status": "next",
+                                    "do_date": today().isoformat()})["ref"]
 
 
 def morning_brief(conn: sqlite3.Connection) -> dict:
@@ -71,7 +74,9 @@ def morning_brief(conn: sqlite3.Connection) -> dict:
         "", "Planned:", *lines, "",
         "Agents working now:", *([f"- {w['name']}: {w['title']}" for w in working] or ["- none"]),
     ])
-    ref = _owner_task(conn, f"Morning brief · {today().strftime('%a %d %b')}", body, 3, "brief")
+    ref = _owner_task(conn, f"Morning brief · {today().strftime('%a %d %b')}", body, 3, "brief",
+                      purpose="start the day knowing what is planned, what waits on you and what agents do.",
+                      done="You read it and adjusted today's plan if needed.")
     return {"task": ref}
 
 
@@ -87,7 +92,11 @@ def follow_ups(conn: sqlite3.Connection) -> dict:
         step = tasks.create(conn, owner, {
             "title": f"Draft a friendly reminder to {t['assignee_name'] or 'them'} about: {t['title']}",
             "parent_id": t["id"], "assignee": "ai", "status": "next",
-            "notes": "Draft only. Sending needs the owner's approval (request_outbound).",
+            "notes": f"Purpose: {t['assignee_name'] or 'someone'} has not delivered {tasks.display_id(t['id'])} "
+                     f"by its follow-up date; a friendly nudge keeps it moving.\n"
+                     "Source: the daily follow-up routine.\n\n"
+                     "Draft only. Sending needs the owner's approval (request_outbound).",
+            "definition_of_done": "A short reminder draft is ready and waits for the owner's approval.",
         })
         tasks.update(conn, owner, t["id"], {"follow_up": (today() + timedelta(days=3)).isoformat()})
         made.append(step["ref"])
@@ -104,7 +113,9 @@ def weekly_review(conn: sqlite3.Connection) -> dict:
         "- [ ] Every topic has a next action", "",
         "Get creative", f"- [ ] Someday: promote or drop ({c['someday']})", "- [ ] Three outcomes for next week",
     ])
-    return {"task": _owner_task(conn, f"Weekly review · week {today().isocalendar()[1]}", body, 2, "review")}
+    return {"task": _owner_task(conn, f"Weekly review · week {today().isocalendar()[1]}", body, 2, "review",
+                                purpose="the GTD weekly review: get clear, get current, get creative.",
+                                done="Every checklist item is ticked or consciously skipped.")}
 
 
 def nightly_retrospective(conn: sqlite3.Connection) -> dict:
@@ -127,7 +138,11 @@ def nightly_retrospective(conn: sqlite3.Connection) -> dict:
     ctx = Ctx(actors.assistant_id(conn), via="scheduler")
     t = tasks.create(conn, ctx, {
         "title": f"Nightly retrospective · {today().isoformat()}",
-        "notes": "Look at yesterday's numbers and the audit log. Propose up to 5 concrete improvements "
+        "definition_of_done": "Up to 5 improvements, each with evidence, are in the completion note "
+                              "(or 'nothing worth changing').",
+        "notes": "Purpose: learn from yesterday so PersonalOS and its agents get better. "
+                 "Source: the nightly retrospective routine.\n\n"
+                 "Look at yesterday's numbers and the audit log. Propose up to 5 concrete improvements "
                  "(routing rules, agent instructions, defaults, platform issues for the Dev agent), each with "
                  "the evidence. Do not change permissions, limits or the constitution.\n\n"
                  + json.dumps(stats, indent=2),

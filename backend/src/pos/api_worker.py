@@ -247,8 +247,11 @@ def check_command(body: CommandIn, conn=Depends(get_db), ctx: Ctx = Depends(work
     if d.outcome.value == "needs_owner":
         t = tasks.create(conn, ctx, {
             "title": f"Approve or run: {body.command[:80]}",
-            "notes": f"{actors.get(conn, ctx.actor_id)['name']} wanted to run:\n\n{body.command}\n\n"
+            "notes": f"Purpose: an agent is blocked on a shell command the constitution reserves for the "
+                     f"owner. Source: the command guard.\n\n"
+                     f"{actors.get(conn, ctx.actor_id)['name']} wanted to run:\n\n{body.command}\n\n"
                      f"Constitution {d.rule}: {d.reason}",
+            "definition_of_done": "The owner ran the command (or decided not to) and told the agent.",
             "priority": 1, "assignee": "me", "status": "next",
         })
         out["owner_task"] = t["ref"]

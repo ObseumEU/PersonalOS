@@ -61,16 +61,24 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
                 "error": "failed and the redeploy needs a person"}[body.status]
         t = tasks.create(conn, ctx, {
             "title": f"Your change {body.old_sha[:8]}..{body.new_sha[:8]} {what} ({body.stage})",
-            "notes": f"The deployer checked {body.commits} commit(s). Stage: {body.stage}.\n"
+            "notes": f"Purpose: find out why your change did not ship and fix it, so main deploys again.\n"
+                     f"Source: the self-deploy pipeline ({body.status} at stage {body.stage}).\n\n"
+                     f"The deployer checked {body.commits} commit(s). Stage: {body.stage}.\n"
                      f"Revert commit: {body.reverted_sha or '-'}\n\nLog:\n{body.log[-4000:]}",
+            "definition_of_done": "The cause is fixed and the change deploys with all checks green "
+                                  "(or it is dropped with a note why).",
             "priority": 1 if body.status == "error" else 2, "topic": "platform", "status": "next",
             "assignee": assignee,
         })
         task_ref = t["ref"]
         if body.status == "error":  # the platform may be down: the owner must know
             tasks.create(conn, ctx, {"title": "Deploy failed and could not roll back by itself", "priority": 1,
-                                     "notes": f"See {t['ref']}.", "assignee": "me", "status": "next",
-                                     "topic": "platform"})
+                                     "notes": f"Purpose: the platform may be down or half-deployed; a person "
+                                              f"has to restore it.\nSource: the self-deploy pipeline, stage "
+                                              f"{body.stage}. Details and log: {t['ref']}.",
+                                     "definition_of_done": "PersonalOS runs a known-good commit and the health "
+                                                           "check passes.",
+                                     "assignee": "me", "status": "next", "topic": "platform"})
     cur = conn.execute(
         """INSERT INTO deploys (old_sha, new_sha, status, stage, log, author, reverted_sha, commits, task_id, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",

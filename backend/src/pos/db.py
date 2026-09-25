@@ -536,6 +536,10 @@ MIGRATIONS: list[str] = [
     ALTER TABLE runs ADD COLUMN tool_calls INTEGER;
     ALTER TABLE runs ADD COLUMN turns INTEGER;
     """,
+    # 17: task descriptions PersonalOS wrote itself (pos.task_descriptions), told apart from real ones.
+    """
+    ALTER TABLE tasks ADD COLUMN description_generated INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 

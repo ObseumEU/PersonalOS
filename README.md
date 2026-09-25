@@ -97,6 +97,12 @@ Tools: `list_tasks`, `get_task`, `capture`, `create_task`, `update_task`,
 prompts `plan_my_day`, `weekly_review`. Every call lands in the audit log.
 For a local stdio server against a dev database: `python -m pos.mcp_server`.
 
+Every task has a description (`notes`): what it is for, where it came from and
+what done looks like. When a task is created without one, PersonalOS builds it
+from the task's fields and links (no model call) and flags it
+`description_generated`. To fill old tasks with empty descriptions
+(idempotent; `--dry-run` only counts): `python -m pos.task_descriptions backfill`.
+
 ## Agents and runtimes
 
 Agents are separate workers, not part of the API. Each one waits for tasks and

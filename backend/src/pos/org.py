@@ -13,7 +13,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from . import actors, agents, audit, tasks, versioning
+from . import actors, agents, audit, task_descriptions, tasks, versioning
 from .core import Ctx, Forbidden, NotFound, now_iso
 
 PM_NAME = "Project manager"
@@ -45,7 +45,9 @@ STANDUP_TEMPLATE = {
     "topic": "standup",
     "priority": 2,
     "estimate_min": 10,
-    "notes": ("1. org_chart: the active agents.\n"
+    "notes": ("Purpose: keep the owner informed about what every agent did, is doing and is stuck on, "
+              "without the owner asking each one. Source: the Project manager's weekday schedule.\n\n"
+              "1. org_chart: the active agents.\n"
               "2. send_message to each one: 'Standup: done since yesterday, doing now, blocked by?' "
               "(priority fyi, this task's id).\n"
               "3. get_agent_status for each, and read replies already in your inbox.\n"
@@ -260,6 +262,12 @@ def handoff(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = ""
     if row["status"] in ("inbox", "working", "waiting"):
         changes["status"] = "next"
     changes["progress_note"] = f"Handed off by {me['name']}" + (f": {note}" if note else "")
+    if row["description_generated"] or task_descriptions.needs_description(row["notes"]):
+        # The receiver needs to know what the task is for: fill or refresh a generated description.
+        changes["notes"] = task_descriptions.build(
+            conn, {**dict(row), **changes}, task_id,
+            extra=[f"Handed off by {me['name']} to {target['name']}" + (f": {note}" if note else "")])
+        changes["description_generated"] = 1
     versioning.update(conn, ctx, tasks.ENTITY, task_id, changes, action="handoff")
 
     ref = tasks.display_id(task_id)

@@ -34,6 +34,8 @@ export type Task = {
   parent_id: number | null;
   title: string;
   notes: string;
+  // 1 when PersonalOS wrote the description from the task's fields (pos.task_descriptions).
+  description_generated?: number;
   status: Status;
   priority: 1 | 2 | 3 | null;
   do_date: string | null;
@@ -104,4 +106,19 @@ export function dueLabel(t: Pick<Task, "do_date" | "deadline" | "follow_up" | "s
   const d = t.do_date ?? t.deadline ?? (t.status === "waiting" ? t.follow_up : null);
   if (!d) return { text: "", urgent: false };
   return { text: fmt(d), urgent: d <= today };
+}
+
+export const NO_DESCRIPTION = "Bez popisu";
+
+/** A short plain-text preview of a task's description (markdown marks and wrappers stripped). */
+export function descriptionPreview(notes: string | null | undefined, max = 180): string {
+  const text = (notes ?? "")
+    .replace(/<\/?external[^>]*>/g, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^_Generated from the task's fields.*$/m, "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/^\s*(#{1,6}|>|[-+*]|\d+\.)\s+/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
 }

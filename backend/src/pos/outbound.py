@@ -102,8 +102,12 @@ def execute(conn: sqlite3.Connection, approval: dict) -> dict:
         owner = actors.owner_id(conn)
         t = tasks.create(conn, Ctx(owner, via="system"), {
             "title": f"Send by hand: {action} (connector not set up)",
-            "notes": "The approved content is below; set up the connector to send automatically.\n\n"
+            "notes": f"Purpose: you approved {action} (approval {approval['id']}), but its connector is not set "
+                     "up, so nothing was sent. Send it by hand, or set up the connector to send automatically.\n"
+                     "Source: the approval queue.\n\n"
                      + json.dumps(payload, ensure_ascii=False, indent=2),
+            "definition_of_done": "The content was sent by hand (or the connector is set up) and the "
+                                  "recipient has it.",
             "priority": 2, "assignee": "me", "status": "next",
             "topic": "connectors",
         })
