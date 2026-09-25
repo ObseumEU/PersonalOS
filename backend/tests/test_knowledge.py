@@ -45,3 +45,18 @@ def test_sizes_from_knowlage_count_every_collection_even_the_ones_not_shown():
     assert ids["col:default:AlexHormozi"]["count"] == 492 and "col:default:Other" not in ids
     assert ids["ws:default"]["count"] == 500 and ids["src:files"]["count"] == 500  # includes the hidden one
     assert ids["src:github-obseumeu"]["count"] == 120 and g["stats"]["documents"] == 620
+
+
+def test_one_pile_sizes_with_workspaces_as_labels():
+    ws = [{"id": "firma", "name": "Celá firma"}, {"id": "hormozi", "name": "Hormozi"}]
+    sizes = {"company": "firma", "documents": 620,
+             "workspaces": [{"workspace": "firma", "documents": 620}, {"workspace": "hormozi", "documents": 492}],
+             "groups": [{"origin": "file", "channel": "AlexHormozi", "documents": 492, "labels": {"hormozi": 492}},
+                        {"origin": "github", "channel": "ObseumEU/Nexus", "documents": 128, "labels": {}}]}
+    g = knowledge.build_graph(ws, SRC, DOCS, sizes=sizes)
+    ids = {n["id"]: n for n in g["nodes"]}
+    assert ids["ws:firma"]["count"] == 620 and ids["ws:hormozi"]["count"] == 492
+    assert ids["col:firma:AlexHormozi"]["count"] == 492
+    kinds = {(e["source"], e["target"]): e["type"] for e in g["edges"]}
+    assert kinds[("ws:hormozi", "col:firma:AlexHormozi")] == "label"
+    assert kinds[("ws:firma", "src:files")] == "contains"

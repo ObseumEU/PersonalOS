@@ -71,13 +71,18 @@ def build_graph(workspaces: list[dict], sources: list[dict], documents: list[dic
     def source_of(coll: str, origin: str | None) -> str:
         return repo_source.get(coll) or ("files" if origin in (None, "file") else origin)
 
-    # Every collection's size: (workspace, collection) → {count, chars, source}.
+    # Every collection's size: (workspace, collection) → {count, chars, source, labels}.
     groups: dict[tuple[str, str], dict] = {}
     if sizes and sizes.get("groups"):
+        # New knowlage (one pile): groups are counted once in the company
+        # workspace; project workspaces are labels on them.
+        company = sizes.get("company") or "firma"
         for g in sizes["groups"]:
             coll = g.get("channel") or "Files"
-            groups[(g["workspace"], coll)] = {"count": int(g.get("documents") or 0), "chars": int(g.get("chars") or 0),
-                                              "source": source_of(coll, g.get("origin"))}
+            ws = g.get("workspace") or company
+            groups[(ws, coll)] = {"count": int(g.get("documents") or 0), "chars": int(g.get("chars") or 0),
+                                  "source": source_of(coll, g.get("origin")),
+                                  "labels": {k: int(v) for k, v in (g.get("labels") or {}).items() if k != ws}}
     else:
         for d in docs:
             coll = _collection(d)
@@ -86,8 +91,13 @@ def build_graph(workspaces: list[dict], sources: list[dict], documents: list[dic
             g["count"] += 1
             g["chars"] += int(d.get("chars") or 0)
     per_collection: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    company = (sizes or {}).get("company")
+    seen: set[str] = set()
     for d in docs:
-        per_collection[(d["workspace"], _collection(d))].append(d)
+        if company and d["id"] in seen:
+            continue
+        seen.add(d["id"])
+        per_collection[(company or d["workspace"], _collection(d))].append(d)
 
     nodes: dict[str, dict] = {}
     edges: dict[tuple[str, str], dict] = {}
@@ -107,6 +117,7 @@ def build_graph(workspaces: list[dict], sources: list[dict], documents: list[dic
 
     for w in workspaces:
         node(f"ws:{w['id']}", w.get("name") or w["id"], "workspace", workspace=w["id"])
+    labelled = bool(sizes and sizes.get("company"))
     names = {s["id"]: s.get("name") or s["id"] for s in sources}
     # Roll every collection up into its source and workspace, shown or not.
     for (ws, coll), g in groups.items():
@@ -118,12 +129,25 @@ def build_graph(workspaces: list[dict], sources: list[dict], documents: list[dic
             nodes[f"ws:{ws}"]["chars"] += g["chars"]
             nodes[f"ws:{ws}"]["weight"] = nodes[f"ws:{ws}"]["count"]
         edge(f"ws:{ws}", src, g["count"])
+        for label, n in g.get("labels", {}).items():  # a project workspace holds part of it
+            if f"ws:{label}" in nodes and not labelled:
+                nodes[f"ws:{label}"]["count"] += n
+    if labelled:  # workspace sizes as knowlage counts them
+        for w in sizes.get("workspaces") or []:
+            if f"ws:{w['workspace']}" in nodes:
+                nodes[f"ws:{w['workspace']}"].update(count=int(w.get("documents") or 0),
+                                                     chars=int(w.get("chars") or 0),
+                                                     weight=int(w.get("documents") or 0))
     top = sorted(groups.items(), key=lambda kv: kv[1]["count"], reverse=True)[:max_collections]
     for (ws, coll), g in top:
         cid = f"col:{ws}:{coll}"
         node(cid, coll, "collection", workspace=ws, source=g["source"], count=g["count"], chars=g["chars"],
              url=f"https://github.com/{coll}" if g["source"] != "files" and "/" in coll else None)
         edge(f"src:{g['source']}", cid, g["count"])
+        for label, n in g.get("labels", {}).items():
+            if f"ws:{label}" in nodes:
+                edges.setdefault((f"ws:{label}", cid), {"source": f"ws:{label}", "target": cid, "type": "label",
+                                                         "weight": n})
         newest = sorted(per_collection.get((ws, coll), []), key=lambda d: d.get("addedAt") or "", reverse=True)
         for d in newest[:docs_per_collection]:
             did = f"doc:{d['id']}"
