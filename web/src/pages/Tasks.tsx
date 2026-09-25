@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { AssigneeChip, Energy, StatePill, fmtMinutes } from "../components/tasks/bits";
 import TaskDetail from "../components/tasks/TaskDetail";
-import { PageHeader, Panel } from "../components/ui";
+import { MockDot, PageHeader, Panel } from "../components/ui";
 import { type Actor, type Counts, PRIORITY_LABEL, type Task, type View, dueLabel, tasksApi } from "../tasksApi";
 
 const VIEWS: { id: View; label: string; icon: LucideIcon }[] = [
@@ -114,6 +114,7 @@ function CapacityBar({ tasks }: { tasks: Task[] }) {
     <div className="flex flex-col gap-2 border-b border-line px-3.5 py-3">
       <div className="flex flex-wrap items-baseline gap-2.5">
         <span className="text-[13px] font-medium">Today’s plan</span>
+        <MockDot why="capacity is a fixed 6 h day until the calendar sync exists" />
         <span className="cap">
           {fmtMinutes(mine)} of your time planned · {fmtMinutes(DAY_CAPACITY_MIN)} focus day until calendar sync
         </span>

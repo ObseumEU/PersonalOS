@@ -24,8 +24,8 @@ export type Section = {
   features: string[];
   /** Shown in the phone tab bar. */
   mobile?: boolean;
-  /** Not implemented yet: gets the red mock dot in the navigation. */
-  mock?: boolean;
+  /** Not implemented yet: red mock dot in the navigation; the text is the tooltip. */
+  mock?: string;
 };
 
 // Sections from docs/PLAN.md §3.
@@ -37,22 +37,22 @@ export const SECTIONS: Section[] = [
     features: ["Quick-add", "Due dates and priority", "Grouped by topic", "Created by the assistant"],
   },
   {
-    path: "calendar", mock: true, label: "Calendar", icon: CalendarDays, phase: 4,
+    path: "calendar", mock: "planned screen, no calendar sync yet", label: "Calendar", icon: CalendarDays, phase: 4,
     blurb: "Your Google or Microsoft 365 calendar, next to your tasks.",
     features: ["Synced events", "Day and week view", "Tasks alongside events"],
   },
   {
-    path: "files", mock: true, label: "Files", icon: FolderOpen, phase: 2,
+    path: "files", mock: "planned screen, no file storage yet", label: "Files", icon: FolderOpen, phase: 2,
     blurb: "Every document in one place, searchable in full text.",
     features: ["Drag-and-drop upload", "Preview", "Tags and topics", "Full-text search"],
   },
   {
-    path: "topics", mock: true, label: "Topics", icon: Hash, phase: 2,
+    path: "topics", mock: "planned screen, not built yet", label: "Topics", icon: Hash, phase: 2,
     blurb: "One home for each area of your life and work.",
     features: ["Files, notes and tasks together", "Events and conversations"],
   },
   {
-    path: "notes", mock: true, label: "Notes", icon: FileText, phase: 2,
+    path: "notes", mock: "planned screen, not built yet", label: "Notes", icon: FileText, phase: 2,
     blurb: "Markdown notes that belong to your topics.",
     features: ["Markdown editor", "Linked to topics", "Searchable"],
   },
