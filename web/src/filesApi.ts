@@ -97,7 +97,8 @@ export const filesApi = {
   },
   update: (id: number, changes: Partial<Pick<FileItem, "name" | "topic" | "tags" | "visibility">>) => patch<FileItem>(`/api/files/${id}`, changes),
   archive: (id: number) => post<FileItem>(`/api/files/${id}/archive`),
-  restore: (id: number) => post<FileItem>(`/api/files/${id}/restore`),
+  unarchive: (id: number) => post<FileItem>(`/api/files/${id}/unarchive`),
+  restore: (id: number, version: number) => post<FileItem>(`/api/files/${id}/restore`, { version }),
   history: (id: number) => api<Version[]>(`/api/files/${id}/history`),
 };
 
@@ -119,6 +120,9 @@ export const topicsApi = {
   update: (slug: string, changes: Partial<Pick<Topic, "name" | "description" | "color">>) =>
     patch<TopicDetail>(`/api/topics/${encodeURIComponent(slug)}`, changes),
   archive: (slug: string) => post<Topic>(`/api/topics/${encodeURIComponent(slug)}/archive`),
+  /** Rename the label everywhere; into an existing topic it merges. */
+  rename: (slug: string, to: string) =>
+    post<TopicDetail & { merged: boolean }>(`/api/topics/${encodeURIComponent(slug)}/rename`, { to }),
 };
 
 export const searchApi = (q: string) => api<SearchResult>(`/api/search?q=${encodeURIComponent(q)}`);

@@ -18,7 +18,7 @@ from .tasks import Invalid
 from .visibility import visible_sql
 
 ENTITY = "topic"
-EDITABLE = {"name", "description", "color"}
+EDITABLE = {"name", "description", "color", "visibility"}
 
 
 def _slug(value: str) -> str:
@@ -83,10 +83,16 @@ def list_topics(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:
     counts = _counts(conn, ctx)
     rows = {r["slug"]: r for r in conn.execute("SELECT * FROM topics")}
     out = []
+    from . import actors
+
+    is_owner = actors.get(conn, ctx.actor_id)["is_owner"]
     for slug in sorted(set(counts) | set(rows)):
         row = rows.get(slug)
         if row is not None and row["archived_at"]:
             continue
+        if row is not None and row["visibility"] == "private" and not is_owner \
+                and ctx.actor_id not in (row["owner_id"], row["created_by"]):
+            continue  # someone's private topic
         c = counts.get(slug, {"open_tasks": 0, "done_tasks": 0, "upcoming": 0, "file_count": 0, "note_count": 0})
         out.append({**_describe(row, slug), **c})
     out.sort(key=lambda t: (-(t["open_tasks"] + t["file_count"] + t["note_count"]), t["slug"]))
@@ -173,8 +179,53 @@ def _row_or_create(conn: sqlite3.Connection, ctx: Ctx, slug: str) -> sqlite3.Row
 def update(conn: sqlite3.Connection, ctx: Ctx, slug: str, changes: dict) -> dict:
     slug = _slug(slug)
     row = _row_or_create(conn, ctx, slug)
-    versioning.update(conn, ctx, ENTITY, row["id"], _clean(changes))
+    clean = _clean(changes)
+    if "visibility" in clean:
+        from .visibility import LAYERS
+
+        if clean["visibility"] not in LAYERS:
+            raise Invalid(f"visibility must be one of {LAYERS}")
+        if clean["visibility"] == "private" and not row["owner_id"]:
+            clean["owner_id"] = ctx.actor_id  # a private topic is its owner's
+    versioning.update(conn, ctx, ENTITY, row["id"], clean)
     return get(conn, ctx, slug, with_events=False)
+
+
+def rename(conn: sqlite3.Connection, ctx: Ctx, slug: str, new: str) -> dict:
+    """Rename a label everywhere (tasks, files, notes, projects). When the new
+    name exists already, the two merge into it and the old topic is archived."""
+    import json
+
+    from . import actors, audit
+    from .visibility import check_write
+
+    old, new = _slug(slug), _slug(new)
+    if not new or old == new:
+        raise Invalid("a different new name")
+    row = _row_or_create(conn, ctx, old)
+    if not actors.get(conn, ctx.actor_id)["is_owner"] and ctx.actor_id not in (row["owner_id"], row["created_by"]):
+        check_write(conn, ENTITY, {**dict(row), "owner_id": row["owner_id"] or row["created_by"]}, ctx.actor_id)
+    in_use = new in _counts(conn, ctx) or conn.execute("SELECT 1 FROM topics WHERE slug = ?", (new,)).fetchone()
+    moved = {}
+    for table in ("tasks", "files", "notes"):
+        moved[table] = conn.execute(f"UPDATE {table} SET topic = ? WHERE topic = ?", (new, old)).rowcount
+    for p in conn.execute("SELECT id, labels FROM projects").fetchall():
+        labels = json.loads(p["labels"] or "[]")
+        if old in labels:
+            conn.execute("UPDATE projects SET labels = ? WHERE id = ?",
+                         (json.dumps(sorted({*(x for x in labels if x != old), new})), p["id"]))
+    target = conn.execute("SELECT * FROM topics WHERE slug = ?", (new,)).fetchone()
+    if target is None:
+        versioning.update(conn, ctx, ENTITY, row["id"], {"slug": new, "name": new if row["name"] == old else row["name"]},
+                          action="rename")
+        merged = bool(in_use)
+    else:
+        versioning.archive(conn, ctx, ENTITY, row["id"])
+        if target["archived_at"]:
+            versioning.unarchive(conn, ctx, ENTITY, target["id"])
+        merged = True
+    audit.log(conn, ctx, "topic_merge" if merged else "topic_rename", ENTITY, row["id"], old=old, new=new, **moved)
+    return {**get(conn, ctx, new, with_events=False), "merged": merged, "moved": moved}
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, slug: str) -> dict:

@@ -5,7 +5,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from . import files, kb_files, notes, topics, versioning
@@ -144,12 +144,55 @@ def archive_file(file_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return out
 
 
-@router.post("/files/{file_id}/restore")
-def restore_file(file_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+@router.post("/files/{file_id}/unarchive")
+def unarchive_file(file_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     """Bring an archived file back."""
     out = files.unarchive(conn, ctx, file_id)
     conn.commit()
     return out
+
+
+@router.post("/files/{file_id}/restore")
+def restore_file(file_id: int, body: dict | None = None, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """With {"version": n}: back to that version. Without (old clients): unarchive."""
+    if not body or "version" not in body:
+        out = files.unarchive(conn, ctx, file_id)
+    else:
+        out = files.restore_version(conn, ctx, file_id, int(body["version"]))
+    conn.commit()
+    return out
+
+
+class ShareIn(BaseModel):
+    entity: str
+    id: int
+    with_: str | int = Field(alias="with")
+
+
+@router.post("/share")
+def share(body: ShareIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Share a private task, note, file or project with a member or with a project ("project:<slug>")."""
+    from .visibility import share_item, shared_with
+
+    share_item(conn, ctx, body.entity, body.id, body.with_)
+    conn.commit()
+    return shared_with(conn, body.entity, body.id)
+
+
+@router.get("/share/{entity}/{entity_id}")
+def list_shares(entity: str, entity_id: int, conn=Depends(get_db)):
+    from .visibility import shared_with
+
+    return shared_with(conn, entity, entity_id)
+
+
+@router.delete("/share/{entity}/{entity_id}/{actor_id}")
+def unshare(entity: str, entity_id: int, actor_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from .visibility import shared_with, unshare as stop
+
+    stop(conn, ctx, entity, entity_id, actor_id)
+    conn.commit()
+    return shared_with(conn, entity, entity_id)
 
 
 @router.get("/files/{file_id}/history")
@@ -227,6 +270,14 @@ def get_topic(slug: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
 @router.patch("/topics/{slug}")
 def patch_topic(slug: str, body: dict, conn=Depends(get_db), ctx=Depends(get_ctx)):
     out = topics.update(conn, ctx, slug, body)
+    conn.commit()
+    return out
+
+
+@router.post("/topics/{slug}/rename")
+def rename_topic(slug: str, body: dict, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """{"to": "new-name"}: renames the label everywhere; into an existing one it merges."""
+    out = topics.rename(conn, ctx, slug, str(body.get("to") or ""))
     conn.commit()
     return out
 

@@ -696,6 +696,11 @@ MIGRATIONS: list[str] = [
         actor_id INTEGER REFERENCES actors(id)
     );
     """,
+    # 26: topics have a visibility like everything else (a private topic shows only to its owner).
+    """
+    ALTER TABLE topics ADD COLUMN visibility TEXT NOT NULL DEFAULT 'team';
+    ALTER TABLE topics ADD COLUMN owner_id INTEGER REFERENCES actors(id);
+    """,
 ]
 
 

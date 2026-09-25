@@ -146,6 +146,21 @@ function TopicPage({ slug }: { slug: string }) {
           onBlur={(e) => e.target.value !== topic.description && save({ description: e.target.value })}
           className={`${input} min-w-0 flex-1`}
         />
+        <button
+          type="button"
+          className="btn"
+          title="Rename the label on every task, file, note and project; into an existing topic it merges"
+          onClick={() => {
+            const to = window.prompt("New name (an existing topic merges):", slug);
+            if (to && to !== slug)
+              topicsApi.rename(slug, to).then((t) => {
+                refreshTopics();
+                navigate(`/topics/${t.slug}`);
+              }, (e) => setError(e.message));
+          }}
+        >
+          Rename / merge
+        </button>
         {topic.id && (
           <button
             type="button"

@@ -75,6 +75,7 @@ TOOL_PERMISSIONS = {
     "task_comment": "tasks:read",
     # Feedback: any member gives it; resolving is checked in pos.feedback.
     "propose_instructions": "tasks:claim",
+    "file_list": "tasks:read", "file_upload": "tasks:write",
     "route_update": "routes:write",
     # Projects: reading needs tasks:read; creating tasks:write, members by the project's lead (pos.projects).
     "project_list": "tasks:read", "project_get": "tasks:read", "project_create": "tasks:write",
@@ -793,6 +794,35 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             # Uploaded documents are outside content (constitution U2).
             f["text_extract"] = wrap_external("file", f["text_extract"][:100_000], ref=f"file:{file_id}")
             return f
+
+    @mcp.tool(description="Files you can see, newest first, optionally in a topic or with a tag.")
+    def file_list(ctx: Context, topic: str | None = None, tag: str | None = None, limit: int = 50) -> list[dict]:
+        from . import files
+
+        with session(ctx, "file_list", topic=topic, tag=tag) as (conn, c):
+            keep = ("id", "name", "mime", "size", "topic", "tags", "visibility", "created_at")
+            return [{k: f.get(k) for k in keep} for f in files.list_files(conn, c, topic=topic, tag=tag)[:max(1, min(limit, 200))]]
+
+    @mcp.tool(description="Share a document with the team as a file: a name (with its extension, e.g. "
+                          "report.md) and its text, or base64 for binary content. Optional topic, tags, visibility. "
+                          "It is searchable through the knowledge base once pushed there.")
+    def file_upload(ctx: Context, name: str, text: str | None = None, base64: str | None = None,
+                    topic: str | None = None, tags: list[str] | None = None, visibility: str | None = None) -> dict:
+        import base64 as b64
+        import io
+
+        from . import files
+        from .config import get_settings
+
+        if (text is None) == (base64 is None):
+            raise ToolError("send either text or base64")
+        data = text.encode("utf-8") if text is not None else b64.b64decode(base64)
+        settings = get_settings()
+        with session(ctx, "file_upload", name=name) as (conn, c):
+            # the files live next to the database (Settings.files_dir)
+            f = files.upload(conn, c, db_path.parent / "files", io.BytesIO(data), name, topic=topic,
+                             tags=tags, visibility=visibility, max_bytes=settings.max_upload_mb * 1024 * 1024)
+            return {k: f.get(k) for k in ("id", "name", "mime", "size", "topic", "visibility")}
 
     @mcp.tool(description="Write a markdown note, optionally in a topic (a slug like 'acme' or 'health').")
     def note_create(ctx: Context, title: str, body: str = "", topic: str | None = None,

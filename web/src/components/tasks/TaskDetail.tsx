@@ -1,5 +1,6 @@
 import { Archive, Check, History, Pencil, RotateCcw, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { api } from "../../api";
 import { type Actor, type Comment, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
 import { FeedbackForm } from "../Feedback";
 import Markdown from "../Markdown";
@@ -234,6 +235,38 @@ function ReviewBox({ onAccept, onReturn }: { onAccept: () => void; onReturn: (co
   );
 }
 
+/** A private task: who else may see it (a member, or everyone in a project: "project:<slug>"). */
+function ShareBox({ taskId }: { taskId: number }) {
+  const [who, setWho] = useState<{ id: number; name: string }[]>([]);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const load = () => api<{ id: number; name: string }[]>(`/api/share/task/${taskId}`).then(setWho, () => setWho([]));
+  useEffect(() => {
+    load();
+  }, [taskId]);
+  const share = () =>
+    api<{ id: number; name: string }[]>("/api/share", { method: "POST", body: JSON.stringify({ entity: "task", id: taskId, with: value.trim() }) }).then(
+      (r) => {
+        setWho(r);
+        setValue("");
+        setError(null);
+      },
+      (e) => setError(e.message),
+    );
+  return (
+    <div className="flex flex-col gap-1.5 rounded border border-line p-3">
+      <span className="cap">PRIVATE · shared with {who.length ? who.map((w) => w.name).join(", ") : "nobody"}</span>
+      <div className="flex gap-2">
+        <input className={`${input} flex-1`} placeholder="Member name, or project:slug" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Share with" />
+        <button type="button" className="btn" disabled={!value.trim()} onClick={share}>
+          Share
+        </button>
+      </div>
+      {error && <span className="cap text-red-400!">{error}</span>}
+    </div>
+  );
+}
+
 export default function TaskDetail({
   taskRef,
   actors,
@@ -448,6 +481,8 @@ export default function TaskDetail({
             </form>
           </div>
         )}
+
+        {task.visibility === "private" && <ShareBox taskId={task.id} />}
 
         <Activity taskRef={task.ref} version={task.updated_at} />
 

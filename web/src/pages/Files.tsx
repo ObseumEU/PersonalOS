@@ -141,7 +141,7 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
             <Download size={14} /> Download
           </a>
           {file.archived_at ? (
-            <button type="button" className="btn" onClick={() => run(filesApi.restore(file.id))}>
+            <button type="button" className="btn" onClick={() => run(filesApi.unarchive(file.id))}>
               <RotateCcw size={14} /> Restore
             </button>
           ) : (

@@ -107,6 +107,9 @@ def test_history_restore_and_archive(conn, me):
 
 
 def test_rollback_a_run(conn, me):
+    from pos import agents
+
+    agents.seed_builtin_permissions(conn)  # the assistant has tasks:write, so it may change others' tasks
     keep = tasks.create(conn, me, {"title": "Keep me", "priority": 2})
     run_id = conn.execute(
         "INSERT INTO runs (actor_id, kind, status, started_at) VALUES (?, 'task', 'ok', '2026-01-01')",
@@ -214,3 +217,28 @@ def test_my_day_scope_steps_and_capacity(conn, me, ai):
           {"start": "2026-09-28T00:00:00+02:00", "end": "2026-09-29T00:00:00+02:00", "all_day": True}]
     cap = agenda.capacity(ev, day)
     assert cap == {"work_min": 480, "meetings_min": 120, "free_min": 360}
+
+
+
+def test_who_may_change_a_task(conn, me, tmp_path):
+    from pos import accounts, agents
+    from pos.core import Forbidden
+    from pos.visibility import share_item
+
+    inv = accounts.invite(conn, me, email="eva@firma.cz", name="Eva")
+    eva = Ctx(accounts.accept(conn, inv["token"], "eva-password-1"))
+    inv2 = accounts.invite(conn, me, email="petr@firma.cz", name="Petr")
+    petr = Ctx(accounts.accept(conn, inv2["token"], "petr-password-1"))
+    t = tasks.create(conn, eva, {"title": "Eva's plan", "status": "next"})
+    with pytest.raises(Forbidden):  # Petr reads team work but does not change Eva's
+        tasks.update(conn, petr, t["id"], {"title": "Petr's plan"})
+    tasks.create(conn, petr, {"title": "comment instead"})
+    assert tasks.update(conn, me, t["id"], {"priority": 1})["priority"] == 1  # the company owner may
+    # a private item shared with Petr: he reads it
+    secret = tasks.create(conn, eva, {"title": "Salary", "visibility": "private"})
+    with pytest.raises(Forbidden):
+        tasks.get(conn, petr, secret["id"])
+    share_item(conn, eva, "task", secret["id"], "Petr")
+    assert tasks.get(conn, petr, secret["id"])["title"] == "Salary"
+    with pytest.raises(Forbidden):
+        share_item(conn, petr, "task", secret["id"], "Assistant")  # only its owner shares it

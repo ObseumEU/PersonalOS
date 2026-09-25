@@ -99,6 +99,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
 
 def update(conn: sqlite3.Connection, ctx: Ctx, note_id: int, changes: dict) -> dict:
     row = _row(conn, ctx, note_id)
+    from .visibility import check_write
+
+    check_write(conn, ENTITY, row, ctx.actor_id)
     clean = _clean(changes)
     if "visibility" in clean and clean["visibility"] != row["visibility"]:
         from .integrations import check_visibility_change
@@ -109,7 +112,9 @@ def update(conn: sqlite3.Connection, ctx: Ctx, note_id: int, changes: dict) -> d
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, note_id: int) -> dict:
-    _row(conn, ctx, note_id)
+    from .visibility import check_write
+
+    check_write(conn, ENTITY, _row(conn, ctx, note_id), ctx.actor_id)
     versioning.archive(conn, ctx, ENTITY, note_id)
     return get(conn, ctx, note_id)
 

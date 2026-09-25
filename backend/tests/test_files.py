@@ -397,3 +397,51 @@ def test_files_api(client, kb):
     s = client.get("/api/search?q=paint").json()
     assert len(s["files"]) == 1 and len(s["notes"]) == 1
     assert client.get("/api/files/999").status_code == 404
+
+
+def test_topics_rename_merge_and_private(tmp_path, monkeypatch):
+    from pos import accounts, actors, tasks, topics
+    from pos.core import Ctx
+    from pos.db import connect, migrate
+
+    c = connect(tmp_path / "t.db")
+    migrate(c)
+    actors.ensure_builtin(c)
+    me = Ctx(actors.owner_id(c))
+    tasks.create(c, me, {"title": "A", "topic": "acme"})
+    tasks.create(c, me, {"title": "B", "topic": "acme-corp"})
+    out = topics.rename(c, me, "acme-corp", "acme")
+    assert out["merged"] is True and out["moved"]["tasks"] == 1
+    assert {t["slug"] for t in topics.list_topics(c, me)} == {"acme"}
+    renamed = topics.rename(c, me, "acme", "acme-sro")
+    assert renamed["merged"] is False and renamed["slug"] == "acme-sro"
+    topics.update(c, me, "acme-sro", {"visibility": "private"})
+    inv = accounts.invite(c, me, email="x@firma.cz", name="Xena")
+    xena = Ctx(accounts.accept(c, inv["token"], "xena-password-1"))
+    assert all(t["slug"] != "acme-sro" for t in topics.list_topics(c, xena))
+    c.close()
+
+
+def test_mcp_file_upload_and_list(tmp_path, monkeypatch):
+    import anyio
+    from mcp.client import Client
+
+    from pos import actors, agents, mcp_server
+    from pos.db import connect, migrate
+
+    db = tmp_path / "personalos.db"
+    c = connect(db)
+    migrate(c)
+    ids = actors.ensure_builtin(c)
+    agents.seed_builtin_permissions(c)
+    c.close()
+    server = mcp_server.build(db, default_actor=lambda conn: ids["Assistant"])
+
+    async def scenario():
+        async with Client(server) as cl:
+            up = await cl.call_tool("file_upload", {"name": "zapis.md", "text": "# Porada\nrozhodnuti", "topic": "acme"})
+            assert not up.is_error, up.content
+            got = await cl.call_tool("file_list", {"topic": "acme"})
+            assert "zapis.md" in str(got.structured_content or got.content)
+
+    anyio.run(scenario)

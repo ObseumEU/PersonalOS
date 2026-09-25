@@ -312,6 +312,9 @@ def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO
 
 def update(conn: sqlite3.Connection, ctx: Ctx, file_id: int, changes: dict) -> dict:
     row = _row(conn, ctx, file_id)
+    from .visibility import check_write
+
+    check_write(conn, ENTITY, row, ctx.actor_id)
     unknown = set(changes) - EDITABLE
     if unknown:
         raise Invalid(f"unknown fields: {sorted(unknown)}")
@@ -338,7 +341,9 @@ def update(conn: sqlite3.Connection, ctx: Ctx, file_id: int, changes: dict) -> d
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, file_id: int) -> dict:
-    _row(conn, ctx, file_id)
+    from .visibility import check_write
+
+    check_write(conn, ENTITY, _row(conn, ctx, file_id), ctx.actor_id)
     versioning.archive(conn, ctx, ENTITY, file_id)
     return get(conn, ctx, file_id)
 
@@ -346,6 +351,18 @@ def archive(conn: sqlite3.Connection, ctx: Ctx, file_id: int) -> dict:
 def unarchive(conn: sqlite3.Connection, ctx: Ctx, file_id: int) -> dict:
     _row(conn, ctx, file_id)
     versioning.unarchive(conn, ctx, ENTITY, file_id)
+    return get(conn, ctx, file_id)
+
+
+def restore_version(conn: sqlite3.Connection, ctx: Ctx, file_id: int, version: int) -> dict:
+    """Put the file's name, topic, tags and visibility back to an earlier version."""
+    from .visibility import check_write
+
+    check_write(conn, ENTITY, _row(conn, ctx, file_id), ctx.actor_id)
+    versioning.restore(conn, ctx, ENTITY, file_id, version)
+    from . import kb_files
+
+    kb_files.mark_changed(conn, file_id)
     return get(conn, ctx, file_id)
 
 

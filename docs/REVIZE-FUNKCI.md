@@ -357,6 +357,9 @@ Stav: hotovo (commit „Wave 2 / 4.6“; háček knowlage 3a9f59d, Community mim
   vedoucí vlastníka a majitel; ostatní jen číst (a komentovat).
 - Témata: `topics` dostanou viditelnost; přejmenování a sloučení štítku.
 
+Stav: hotovo (commit „Wave 2 / 4.7“). Zápis smí navíc i tvůrce položky a agenti
+s `tasks:write` (PM musí dál rozdělovat práci).
+
 ## 5. Vlna 3: úklid a drobnosti
 
 - Smazat ComingSoon, `BUILT` v `App.tsx`, mrtvé `share()` jen pokud 4.7

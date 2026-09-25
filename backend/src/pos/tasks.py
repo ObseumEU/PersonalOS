@@ -11,7 +11,7 @@ from datetime import date, timedelta
 
 from . import actors, capture as capture_syntax, task_descriptions, versioning
 from .core import Ctx, Forbidden, NotFound, now_iso, today
-from .visibility import DEFAULT, LAYERS, check_read, visible_sql
+from .visibility import DEFAULT, LAYERS, check_read, check_write, visible_sql
 
 ENTITY = "task"
 STATUSES = ("inbox", "next", "working", "review", "waiting", "someday", "done")
@@ -310,6 +310,9 @@ def capture(conn: sqlite3.Connection, ctx: Ctx, text: str, source: str | None = 
 def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> dict:
     changes = dict(changes)
     row = _row(conn, ctx, task_id)
+    if set(changes) - {"progress", "progress_note", "status"} or changes.get("status") not in (None, "done", "review"):
+        # Handing work in or reporting on it is the assignee's; everything else needs the right to write.
+        check_write(conn, ENTITY, row, ctx.actor_id)
     extra = {}
     if "project" in changes:
         value = changes.pop("project")
@@ -590,7 +593,7 @@ def report_progress(conn: sqlite3.Connection, ctx: Ctx, task_id: int, percent: i
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
-    _row(conn, ctx, task_id)
+    check_write(conn, ENTITY, _row(conn, ctx, task_id), ctx.actor_id)
     versioning.archive(conn, ctx, ENTITY, task_id)
     return to_dict(conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone())
 
