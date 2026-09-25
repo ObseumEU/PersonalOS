@@ -1,0 +1,119 @@
+import { ArrowRight, Orbit } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+
+export function Panel({
+  fig,
+  title,
+  right,
+  className = "",
+  bodyClassName = "",
+  children,
+}: {
+  fig?: string;
+  title?: string;
+  right?: ReactNode;
+  className?: string;
+  bodyClassName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className={`panel fade-in flex min-h-0 flex-col ${className}`}>
+      {title && (
+        <div className="flex items-baseline gap-2.5 border-b border-line px-4 py-3">
+          {fig && <span className="cap text-accent!">{fig}</span>}
+          <h2 className="text-sm font-medium">{title}</h2>
+          {right && <span className="cap ml-auto truncate pl-3">{right}</span>}
+        </div>
+      )}
+      <div className={`min-h-0 flex-1 ${bodyClassName}`}>{children}</div>
+    </section>
+  );
+}
+
+/** Marks placeholder content until real data arrives in Phase 2. */
+export function SampleBadge() {
+  return (
+    <span className="cap rounded-sm border border-dashed border-ink-3 px-1.5 py-px" title="Placeholder content until Phase 2">
+      SAMPLE DATA
+    </span>
+  );
+}
+
+function useNow() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return now;
+}
+
+export function PageHeader({ kicker, title, sub }: { kicker: string; title: string; sub?: ReactNode }) {
+  const now = useNow();
+  const hm = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const s = String(now.getSeconds()).padStart(2, "0");
+  return (
+    <header className="flex flex-wrap items-end gap-6 border-b border-line pb-4">
+      <div className="flex min-w-0 flex-col gap-2">
+        <span className="cap">{kicker}</span>
+        <h1 className="text-3xl leading-tight font-light tracking-[-0.03em] sm:text-[40px]">{title}</h1>
+        {sub && <p className="text-sm text-ink-2">{sub}</p>}
+      </div>
+      <div className="ml-auto hidden items-end gap-7 text-right sm:flex">
+        <div className="flex flex-col gap-1">
+          <span className="cap">LOCAL TIME</span>
+          <span className="font-mono text-[22px]">
+            {hm}
+            <span className="text-ink-3">:{s}</span>
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="cap">STATUS</span>
+          <span className="flex items-center gap-2 text-sm">
+            <span className="sonar h-[7px] w-[7px] rounded-full bg-accent" />
+            API online
+          </span>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+export function AskBox({ placeholder, id }: { placeholder: string; id: string }) {
+  return (
+    <form
+      className="flex h-[52px] items-center gap-3 rounded-md border border-line bg-bg pr-1.5 pl-4 focus-within:border-accent"
+      onSubmit={(e) => e.preventDefault()}
+    >
+      <Orbit size={18} strokeWidth={1.5} className="shrink-0 text-accent" />
+      <label htmlFor={id} className="sr-only">
+        Ask PersonalOS
+      </label>
+      <input
+        id={id}
+        placeholder={placeholder}
+        className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-ink-3"
+      />
+      <button
+        type="submit"
+        title="The assistant arrives in Phase 3"
+        className="flex h-[38px] items-center gap-1.5 rounded border border-accent bg-accent/10 px-3.5 text-[13px] font-medium text-accent transition hover:bg-accent/20"
+      >
+        Ask <ArrowRight size={14} />
+      </button>
+    </form>
+  );
+}
+
+export function Legend({ items }: { items: [string, string][] }) {
+  return (
+    <div className="flex flex-wrap gap-4">
+      {items.map(([color, label]) => (
+        <span key={label} className="cap flex items-center gap-1.5">
+          <span className="h-[7px] w-[7px] rounded-full" style={{ background: color }} />
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
