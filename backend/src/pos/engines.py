@@ -151,6 +151,41 @@ def record_codex_limit(conn: sqlite3.Connection, jsonl: str) -> str | None:
     return until
 
 
+# ------------------------------------------------------------------ Claude self-check
+
+def claude_selfcheck(conn: sqlite3.Connection, timeout: int = 90) -> dict:
+    """Ask the local Claude CLI for a one-word answer with the configured model.
+    If it fails (not logged in, a CLI too old for the model), Claude is marked
+    unavailable for 6 hours with the reason, so the fallback is not relied on
+    blindly; the System page shows it. Only where workers use this machine's
+    CLI (POS_CLAUDE_SELFCHECK=1, e.g. the server)."""
+    import subprocess
+
+    from .runner import claude_bin
+
+    model = default_model("claude")
+    binary = claude_bin()
+    if binary is None:
+        ok, why = False, "claude CLI not installed"
+    else:
+        try:
+            p = subprocess.run([binary, "-p", "--model", model, "--output-format", "json", "Reply with: ok"],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+            out = (p.stdout or "") + (p.stderr or "")
+            ok = p.returncode == 0 and '"is_error":false' in out.replace(" ", "")
+            why = "ok" if ok else out.strip()[-300:] or f"exit {p.returncode}"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            ok, why = False, str(e)[:300]
+    if ok:
+        conn.execute("UPDATE engine_limits SET paused_until = NULL, reason = NULL WHERE engine = 'claude' "
+                     "AND reason LIKE 'self-check failed%'")
+    else:
+        pause(conn, "claude", (_utcnow() + timedelta(hours=6)).isoformat(timespec="seconds"),
+              f"self-check failed ({model}): {why}")
+    conn.commit()
+    return {"ok": ok, "model": model, "detail": why[:300]}
+
+
 # ------------------------------------------------------------------ Claude accounting
 
 LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|out of extra usage)", re.IGNORECASE)

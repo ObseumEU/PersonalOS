@@ -314,3 +314,19 @@ def test_codex_reset_time_is_read_in_prague_time(tmp_path):
     migrate(c)
     at = engines.codex_reset(c, "You've hit your usage limit. Try again at Sep 29th, 2099 8:47 AM.")
     assert at.isoformat() == "2099-09-29T06:47:00+00:00"  # 08:47 CEST
+
+
+def test_claude_selfcheck_marks_claude_unavailable_when_the_cli_fails(tmp_path, monkeypatch):
+    from pos import engines, runner
+    from pos.db import connect, migrate
+
+    c = connect(tmp_path / "s.db")
+    migrate(c)
+    bad = _wrap(tmp_path, "claude_old", "import sys\nprint('claude-opus-5-5 is not in this version\'s model catalog; update Claude Code')\nsys.exit(1)\n")
+    monkeypatch.setattr(runner, "claude_bin", lambda: bad)
+    res = engines.claude_selfcheck(c)
+    assert not res["ok"] and "update Claude Code" in res["detail"]
+    assert engines.paused_until(c, "claude")
+    good = _wrap(tmp_path, "claude_ok", "import json\nprint(json.dumps({'type':'result','is_error':False,'result':'ok'}))\n")
+    monkeypatch.setattr(runner, "claude_bin", lambda: good)
+    assert engines.claude_selfcheck(c)["ok"] and engines.paused_until(c, "claude") is None

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -43,6 +44,16 @@ class MCPAuth:
         await self.app(scope, receive, send)
 
 
+def _claude_selfcheck(db_path) -> None:
+    from . import engines
+
+    conn = connect(db_path)
+    try:
+        engines.claude_selfcheck(conn)
+    finally:
+        conn.close()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     if settings.password and settings.session_secret == "dev-only-change-me":
@@ -77,6 +88,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hr_task = (asyncio.create_task(integrations.hr_loop(settings.db_path))
                    if hr_schedule.HRSettings().scheduler else None)
         sched_task = asyncio.create_task(scheduler.loop(settings.db_path)) if settings.scheduler else None
+        if settings.scheduler and os.environ.get("POS_CLAUDE_SELFCHECK") == "1":
+            asyncio.get_running_loop().run_in_executor(None, _claude_selfcheck, settings.db_path)
         try:
             async with mcp.session_manager.run():
                 yield

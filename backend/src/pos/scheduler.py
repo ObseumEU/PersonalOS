@@ -165,6 +165,16 @@ def reap_runs(conn: sqlite3.Connection, silent_minutes: int = 20) -> dict:
     return {"released": released}
 
 
+def claude_selfcheck(conn: sqlite3.Connection) -> dict:
+    import os
+
+    from . import engines
+
+    if os.environ.get("POS_CLAUDE_SELFCHECK") != "1":
+        return {"skipped": "POS_CLAUDE_SELFCHECK is off (workers use their own CLI)"}
+    return engines.claude_selfcheck(conn)
+
+
 def member_schedules(conn: sqlite3.Connection) -> dict:
     from . import schedules
 
@@ -186,6 +196,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "a2a_sync": a2a_sync,
     "reap_runs": reap_runs,
     "member_schedules": member_schedules,
+    "claude_selfcheck": claude_selfcheck,
 }
 
 DEFAULT_JOBS = [
@@ -197,6 +208,7 @@ DEFAULT_JOBS = [
     ("A2A: hand tasks to remote agents and collect results", "every 1m", "a2a_sync"),
     ("Release runs of workers that went silent", "every 5m", "reap_runs"),
     ("Schedules of people and agents", "every 1m", "member_schedules"),
+    ("Check that the Claude CLI answers with its model", "every 6h", "claude_selfcheck"),
 ]
 
 
