@@ -160,9 +160,10 @@ def test_permission_checks(conn, tmp_path):
     own = tasks.create(conn, owner, {"title": "Code fix", "assignee": "Dev agent"})
     assert org.handoff(conn, Ctx(dev), own["id"], "Mail agent")["to"] == "Mail agent"
     assert org.handoff(conn, Ctx(org.pm_id(conn)), theirs["id"], "Dev agent")["to"] == "Dev agent"
-    # Only the owner changes the org chart; no loops.
+    # The owner and a member's lead change where it sits (the PM leads new agents); a peer does not; no loops.
     with pytest.raises(Forbidden):
-        org.set_org(conn, Ctx(org.pm_id(conn)), dev, {"role": "boss"})
+        org.set_org(conn, Ctx(mail), dev, {"role": "boss"})
+    assert org.set_org(conn, Ctx(org.pm_id(conn)), dev, {"role": "developer"})["role"] == "developer"
     with pytest.raises(tasks.Invalid, match="reports to"):
         org.set_org(conn, owner, org.pm_id(conn), {"reports_to": dev})
     # The kill switch stops handoffs.

@@ -222,7 +222,11 @@ def test_message_priorities_and_trust(conn, me, assistant, tmp_path):
     st = agents.status(conn, worker)
     assert st["run"]["id"] == rid and st["unread_messages"] == 0
 
-    agents.send_message(conn, assistant, worker, "stop, wrong customer", priority="stop")
+    from pos.core import Forbidden
+
+    with pytest.raises(Forbidden):  # a stop comes from a person or the worker's lead, not a peer
+        agents.send_message(conn, assistant, worker, "stop, wrong customer", priority="stop")
+    agents.send_message(conn, me, worker, "stop, wrong customer", priority="stop")
     assert conn.execute("SELECT status FROM runs WHERE id = ?", (rid,)).fetchone()[0] == "cancelled"
     assert actors.get(conn, worker)["paused_at"] is not None
     assert actors.get(conn, worker)["archived_at"] is None
