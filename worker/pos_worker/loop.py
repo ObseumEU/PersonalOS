@@ -42,6 +42,14 @@ class Worker:
 
     def step(self) -> str:
         """One iteration; returns what happened (for tests and logs)."""
+        try:
+            return self._step()
+        except Exception:  # noqa: BLE001 - a bad run must never kill the worker
+            log.exception("step failed; carrying on")
+            self.sleep(10)
+            return "crashed"
+
+    def _step(self) -> str:
         work = self.client.next_work(self.poll_wait)
         state = work.get("state", {})
         if state.get("frozen") or state.get("paused") or state.get("archived"):
@@ -77,7 +85,19 @@ class Worker:
             return "skipped"
 
         engine = started.get("engine") or "codex"
-        session = self.new_session(engine, started.get("model"), self.me)
+        try:
+            return self._run_task(ref, task, run_id, engine, started.get("model"))
+        except Exception as e:  # noqa: BLE001 - report it, hand the task back, keep the worker alive
+            log.exception("run %s for %s failed", run_id, ref)
+            try:
+                self.client.finish_run(run_id, "error", "", f"worker error: {e}"[:2000])
+                self.client.handback(ref, f"worker error: {e}"[:400])
+            except Exception:  # noqa: BLE001
+                log.exception("could not report the failure")
+            return "error"
+
+    def _run_task(self, ref: str, task: dict, run_id: int, engine: str, model: str | None) -> str:
+        session = self.new_session(engine, model, self.me)
         # Claude takes the constitution as a system prompt; Codex gets it at the top of the prompt.
         prompt = build_task_prompt(self.me, task, self.context, include_guardrails=engine != "claude")
         self.context = []

@@ -300,6 +300,10 @@ MIGRATIONS: list[str] = [
         updated_at   TEXT NOT NULL
     );
     """,
+    # 9: run heartbeats, so runs of a worker that died are released.
+    """
+    ALTER TABLE runs ADD COLUMN heartbeat_at TEXT;
+    """,
 ]
 
 

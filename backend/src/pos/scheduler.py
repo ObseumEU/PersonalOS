@@ -140,6 +140,28 @@ def budget_check(conn: sqlite3.Connection) -> dict:
     return {"level": getattr(report, "level", None)}
 
 
+def reap_runs(conn: sqlite3.Connection, silent_minutes: int = 20) -> dict:
+    """Release runs whose worker went silent (crashed, PC restarted): the run is
+    marked as an error and its task goes back to the queue."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=silent_minutes)).isoformat(timespec="seconds")
+    stale = conn.execute(
+        """SELECT * FROM runs WHERE status = 'running' AND engine IS NOT NULL
+           AND COALESCE(heartbeat_at, started_at) < ?""", (cutoff,)
+    ).fetchall()
+    released = []
+    for r in stale:
+        conn.execute("UPDATE runs SET status = 'error', ended_at = ?, detail = ? WHERE id = ?",
+                     (now_iso(), f"worker went silent for {silent_minutes} min", r["id"]))
+        if r["task_id"]:
+            t = conn.execute("SELECT status, assignee_id FROM tasks WHERE id = ?", (r["task_id"],)).fetchone()
+            if t and t["status"] == "working" and t["assignee_id"] == r["actor_id"]:
+                tasks.update(conn, Ctx(r["actor_id"], via="scheduler"), r["task_id"],
+                             {"status": "next", "progress_note": "The previous run stopped unexpectedly; retrying."})
+        released.append(r["id"])
+    conn.commit()
+    return {"released": released}
+
+
 def a2a_sync(conn: sqlite3.Connection) -> dict:
     from . import a2a
 
@@ -153,6 +175,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "nightly_retrospective": nightly_retrospective,
     "budget_check": budget_check,
     "a2a_sync": a2a_sync,
+    "reap_runs": reap_runs,
 }
 
 DEFAULT_JOBS = [
@@ -162,6 +185,7 @@ DEFAULT_JOBS = [
     ("Nightly retrospective", "daily 23:00", "nightly_retrospective"),
     ("Budget check", "every 60m", "budget_check"),
     ("A2A: hand tasks to remote agents and collect results", "every 1m", "a2a_sync"),
+    ("Release runs of workers that went silent", "every 5m", "reap_runs"),
 ]
 
 
@@ -222,7 +246,8 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
         (now.isoformat(timespec="seconds"), json.dumps(result, ensure_ascii=False, default=str),
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
-    if job["action"] != "a2a_sync" or result.get("sent") or result.get("finished"):
+    if job["action"] not in ("a2a_sync", "reap_runs") or result.get("sent") or result.get("finished") \
+            or result.get("released"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result
