@@ -14,8 +14,10 @@ to it, so `versioning.rollback_run` can undo a whole run.
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -44,7 +46,7 @@ class RunRequest:
 @dataclass
 class RunResult:
     run_id: int
-    status: str  # ok | error | blocked
+    status: str  # ok | error | blocked | cancelled
     output: str = ""
     data: dict | None = None
     input_tokens: int | None = None
@@ -87,6 +89,45 @@ def _usage(jsonl: str) -> tuple[int | None, int | None]:
             tin = (tin or 0) + int(usage.get("input_tokens") or 0)
             tout = (tout or 0) + int(usage.get("output_tokens") or 0)
     return tin, tout
+
+
+def _new_group() -> dict:
+    """Start codex in its own process group so the whole tree can be stopped."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def kill_process_tree(pid: int) -> None:
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+        else:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _status(conn, run_id: int) -> str:
+    return conn.execute("SELECT status FROM runs WHERE id = ?", (run_id,)).fetchone()["status"]
+
+
+def cancel(conn: sqlite3.Connection, run_id: int, reason: str) -> bool:
+    """Stop a running run (kill switch, owner's Stop button). Nothing is deleted."""
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None or row["status"] != "running":
+        return False
+    if row["pid"]:
+        kill_process_tree(row["pid"])
+    conn.execute("UPDATE runs SET status = 'cancelled', ended_at = ?, detail = ? WHERE id = ?",
+                 (now_iso(), reason[:4000], run_id))
+    return True
+
+
+def cancel_all(conn: sqlite3.Connection, reason: str, actor_id: int | None = None) -> list[int]:
+    sql = "SELECT id FROM runs WHERE status = 'running'" + (" AND actor_id = ?" if actor_id else "")
+    ids = [r["id"] for r in conn.execute(sql, (actor_id,) if actor_id else ())]
+    return [i for i in ids if cancel(conn, i, reason)]
 
 
 def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "", jsonl: str = "") -> sqlite3.Row:
@@ -132,12 +173,20 @@ def run(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
             schema.write_text(json.dumps(req.output_schema), encoding="utf-8")
             args += ["--output-schema", str(schema)]
         args.append("-")  # prompt from stdin
+        proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, encoding="utf-8", **_new_group())
+        conn.execute("UPDATE runs SET pid = ? WHERE id = ?", (proc.pid, run_id))
+        conn.commit()
         try:
-            proc = subprocess.run(args, input=req.prompt, capture_output=True, text=True,
-                                  encoding="utf-8", timeout=req.timeout_s)
+            stdout, stderr = proc.communicate(req.prompt, timeout=req.timeout_s)
         except subprocess.TimeoutExpired:
+            kill_process_tree(proc.pid)
+            proc.communicate()
             _finish(conn, run_id, "error", detail=f"timeout after {req.timeout_s}s")
             return RunResult(run_id, "error", error="timeout")
+        if _status(conn, run_id) == "cancelled":  # stopped by the kill switch or the owner
+            return RunResult(run_id, "cancelled", error="cancelled")
+        proc = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
         tin, tout = _usage(proc.stdout)
         jsonl = proc.stdout
         output = last.read_text(encoding="utf-8").strip() if last.exists() else ""

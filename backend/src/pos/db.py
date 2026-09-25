@@ -164,6 +164,34 @@ MIGRATIONS: list[str] = [
         archived_at TEXT
     );
     """,
+    # 3: agents as users (AGENTS-SPEC 3.1), the kill switch (5.3) and messages
+    #    to agents. Purpose, lifetime and expiry live in pos.hr's profile table.
+    """
+    ALTER TABLE actors ADD COLUMN created_by INTEGER REFERENCES actors(id);
+    ALTER TABLE actors ADD COLUMN runtime TEXT NOT NULL DEFAULT 'builtin';
+    ALTER TABLE actors ADD COLUMN a2a_url TEXT;
+    ALTER TABLE actors ADD COLUMN instructions_path TEXT;
+    ALTER TABLE actors ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE actors ADD COLUMN paused_at TEXT;
+    ALTER TABLE actors ADD COLUMN updated_at TEXT;
+    ALTER TABLE runs ADD COLUMN pid INTEGER;
+    CREATE TABLE system_state (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        updated_by INTEGER REFERENCES actors(id)
+    );
+    CREATE TABLE messages (
+        id         INTEGER PRIMARY KEY,
+        to_actor   INTEGER NOT NULL REFERENCES actors(id),
+        from_actor INTEGER NOT NULL REFERENCES actors(id),
+        task_id    INTEGER REFERENCES tasks(id),
+        body       TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        read_at    TEXT
+    );
+    CREATE INDEX messages_to ON messages (to_actor, read_at);
+    """,
 ]
 
 

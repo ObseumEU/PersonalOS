@@ -295,7 +295,12 @@ def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None 
     if note:
         changes["progress_note"] = note
     changes["status"] = "done" if kind == "human" else "review"
-    return update(conn, ctx, task_id, changes)
+    out = update(conn, ctx, task_id, changes)
+    if out["status"] == "done":
+        from .agents import retire_if_done
+
+        retire_if_done(conn, ctx, out["assignee_id"])
+    return out
 
 
 def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comment: str | None = None) -> dict:
@@ -305,7 +310,11 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
     if actors.get(conn, ctx.actor_id)["kind"] != "human":
         raise Forbidden("only people review AI and agent results")
     if accept:
-        return update(conn, ctx, task_id, {"status": "done"})
+        out = update(conn, ctx, task_id, {"status": "done"})
+        from .agents import retire_if_done
+
+        retire_if_done(conn, ctx, out["assignee_id"])
+        return out
     versioning.update(conn, ctx, ENTITY, task_id, {
         "status": "next", "progress": 0, "completed_at": None,
         "returned_count": row["returned_count"] + 1,
@@ -342,6 +351,9 @@ def assign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, assignee) -> dict:
 
 def claim(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
     """An agent takes a task from its queue and starts working."""
+    from .killswitch import check_agent_may_act
+
+    check_agent_may_act(conn, ctx)
     row = _row(conn, ctx, task_id)
     if row["assignee_id"] not in (None, ctx.actor_id):
         raise Forbidden(f"{display_id(task_id)} is assigned to someone else")

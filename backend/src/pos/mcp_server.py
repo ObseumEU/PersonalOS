@@ -41,6 +41,33 @@ def _bearer(headers) -> str | None:
     return None
 
 
+# What an agent needs to call each tool (people may call everything).
+TOOL_PERMISSIONS = {
+    "list_tasks": "tasks:read", "get_task": "tasks:read",
+    "capture": "tasks:write", "create_task": "tasks:write", "update_task": "tasks:write",
+    "assign_task": "tasks:write", "complete_task": "tasks:claim", "claim_task": "tasks:claim",
+    "report_progress": "tasks:claim", "request_approval": "approvals:request",
+    "create_agent": "agents:create", "send_message": "messages:send",
+}
+# Tools an agent may still use while the kill switch is on.
+FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze"}
+
+
+def _gate(conn: sqlite3.Connection, c: Ctx, tool: str) -> None:
+    from . import agents, killswitch
+
+    base = tool.split(":")[0]
+    if base == "read":
+        base = "list_tasks"
+    if base not in FROZEN_OK:
+        killswitch.check_agent_may_act(conn, c)
+    if actors.get(conn, c.actor_id)["paused_at"] and base not in FROZEN_OK:
+        raise Forbidden("this agent is paused by the owner")
+    perm = TOOL_PERMISSIONS.get(base)
+    if perm:
+        agents.require(conn, c, perm)
+
+
 def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | None = None) -> MCPServer:
     """Create the server. `default_actor` is used when there is no HTTP request
     (stdio, in-memory tests); over HTTP a valid bearer key is required."""
@@ -64,6 +91,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
             audit.log(conn, c, f"mcp:{tool}", args={k: v for k, v in args.items() if v is not None})
             try:
+                _gate(conn, c, tool)
                 yield conn, c
                 conn.commit()
             except (NotFound, Forbidden, tasks.Invalid) as e:
@@ -159,7 +187,11 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "heartbeat") as (conn, c):
             me = actors.get(conn, c.actor_id)
             queue = [brief(t) for t in tasks.list_tasks(conn, c, "agents", assignee_id=c.actor_id)]
-            return {"actor": me["name"], "kind": me["kind"], "queue": queue}
+            from . import agents, killswitch
+
+            return {"actor": me["name"], "kind": me["kind"], "queue": queue,
+                    "messages": agents.take_messages(conn, c.actor_id),
+                    "frozen": killswitch.is_frozen(conn), "paused": bool(me["paused_at"])}
 
     @mcp.tool(description="Ask the owner to approve something that leaves PersonalOS or needs them: "
                           "sending an e-mail, posting, a payment, a merge. Returns the approval id.")
@@ -195,6 +227,42 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                 "to promote. Ask me before changing anything.")
 
     # Tools from the independent modules (pos.hr, ...), sharing the same auth and audit.
+    # ------------------------------------------------------------- agents and the kill switch
+
+    @mcp.tool(description="Create a new agent when the work needs one: name, one-line purpose, lifetime "
+                          "(one_shot or long_lived), instructions, permissions (never more than your own). "
+                          "The HR agent may refuse at the limits and suggest reusing an agent instead. "
+                          "Returns the new agent's API key once.")
+    def create_agent(ctx: Context, name: str, purpose: str, lifetime: str = "one_shot", instructions: str = "",
+                     permissions: list[str] | None = None, expires_at: str | None = None) -> dict:
+        from . import agents
+
+        with session(ctx, "create_agent", name=name, lifetime=lifetime) as (conn, c):
+            try:
+                return agents.create_agent(conn, c, name=name, purpose=purpose, lifetime=lifetime,
+                                           instructions=instructions, permissions=permissions,
+                                           expires_at=expires_at, data_dir=db_path.parent)
+            except agents.AgentError as e:
+                raise tasks.Invalid(str(e)) from e
+
+    @mcp.tool(description="Send a message to another member (person or agent), optionally about a task.")
+    def send_message(ctx: Context, to: str, body: str, task_id: str | None = None) -> dict:
+        from . import agents
+
+        with session(ctx, "send_message", to=to, task_id=task_id) as (conn, c):
+            target = actors.find_by_name(conn, to)
+            if target is None:
+                raise NotFound(f"no member called {to}")
+            return agents.send_message(conn, c, target["id"], body, tasks.parse_id(task_id) if task_id else None)
+
+    @mcp.tool(description="Kill switch: freeze every agent now (owner and people only). Unfreezing is "
+                          "only possible for the owner, in the web app or with `python -m pos unfreeze`.")
+    def freeze(ctx: Context, reason: str = "") -> dict:
+        from . import killswitch
+
+        with session(ctx, "freeze", reason=reason) as (conn, c):
+            return killswitch.freeze(conn, c, reason)
+
     from .integrations import register_mcp_tools
 
     register_mcp_tools(mcp, session)
