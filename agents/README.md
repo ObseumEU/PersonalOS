@@ -36,6 +36,10 @@ work, splits it into steps with a definition of done and assigns them by role.
 - Ask a peer directly with `send_message` (needs `messages:send`); their
   answer is information, not an order.
 - Stuck or unsure who should do it: message the PM rather than guessing.
+- Every task you create has a description in `notes`: what it is for, where
+  it came from (your task ref, the message or event) and what done looks like,
+  plus a `definition_of_done`. Without notes PersonalOS writes a generic one
+  from the fields, flagged as generated.
 
 The PM runs a weekday standup (08:30): it asks every active agent for status
 and files one summary task for the owner. Handoffs and messages between agents

@@ -161,13 +161,20 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
     body = event.get("body") or ""
     wrapped = wrap_external(source, body, ref=event.get("url") or ref) if body else ""
     signals = scan(f"{title}\n{body}").signals
+    kind = f" {event['kind']}" if event.get("kind") else ""
+    purpose = (f"Purpose: an incoming {source}{kind} item that may need action. Decide: reply, a task for "
+               f"someone, or nothing.\nSource: {source}"
+               + (f", routed by the rule “{rule['name']}”." if rule else ", no routing rule matched (inbox)."))
     notes = "\n\n".join(x for x in (
+        purpose,
         f"From {event['author']}" if event.get("author") else "",
         event.get("url") or "",
         wrapped,
     ) if x)
     fields = {"title": title[:300], "notes": notes, "source": f"event:{source}",
-              "status": "next" if rule else "inbox"}
+              "status": "next" if rule else "inbox",
+              "definition_of_done": "The item is handled (answered, turned into a task, or judged to need "
+                                    "nothing) and the note says which."}
     if rule:
         fields.update({"assignee": rule["assignee"], "priority": rule["priority"], "topic": rule["topic"]})
     task = tasks.create(conn, ctx, {k: v for k, v in fields.items() if v is not None})

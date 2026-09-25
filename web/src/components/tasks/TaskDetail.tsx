@@ -1,6 +1,7 @@
-import { Archive, Check, History, RotateCcw, X } from "lucide-react";
+import { Archive, Check, History, Pencil, RotateCcw, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
-import { type Actor, type Task, type Version, tasksApi } from "../../tasksApi";
+import { type Actor, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
+import Markdown from "../Markdown";
 import { Panel } from "../ui";
 import { AssigneeChip, StatePill } from "./bits";
 
@@ -38,6 +39,86 @@ export function AssigneeSelect({ task, actors, onChange }: { task: Task; actors:
       ))}
       <option value="__external">{task.assignee_type === "external" ? task.assignee_name : "Someone outside…"}</option>
     </select>
+  );
+}
+
+/** The task's description: what it is for, where it came from, what done looks like. */
+export function Description({ task, onSave }: { task: Task; onSave: (notes: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(task.notes ?? "");
+  useEffect(() => {
+    setEditing(false);
+    setDraft(task.notes ?? "");
+  }, [task.ref, task.updated_at]);
+  const empty = !(task.notes ?? "").trim();
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="flex items-baseline gap-2">
+        <span className="cap">DESCRIPTION</span>
+        {!empty && task.description_generated ? (
+          <span className="cap" title="PersonalOS wrote it from the task's fields; edit it to add the real context">
+            · generated
+          </span>
+        ) : null}
+        {!editing && (
+          <button
+            type="button"
+            className="cap ml-auto inline-flex items-center gap-1 text-accent! hover:underline"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil size={11} /> {empty ? "Add description" : "Edit"}
+          </button>
+        )}
+      </span>
+      {editing ? (
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSave(draft);
+            setEditing(false);
+          }}
+        >
+          <textarea
+            autoFocus
+            rows={6}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="What is this task for, where did it come from, and what does done look like?"
+            aria-label="Description"
+            className="rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent"
+          />
+          <div className="flex gap-2">
+            <button type="submit" className="btn-accent">
+              <Check size={14} /> Save
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setDraft(task.notes ?? "");
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : empty ? (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="rounded border border-dashed border-line p-3 text-left text-[13px] text-ink-3 italic hover:border-accent"
+        >
+          {NO_DESCRIPTION} · add what the task is for and what done looks like
+        </button>
+      ) : (
+        <div className="rounded border border-line p-3 text-[13px] break-words">
+          <Markdown text={task.notes} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -109,6 +190,8 @@ export default function TaskDetail({
           <StatePill task={task} />
           {task.progress_note && <span className="cap">{task.progress_note}</span>}
         </div>
+
+        <Description task={task} onSave={(notes) => notes !== task.notes && save({ notes })} />
 
         {task.status === "review" && (
           <div className="flex flex-col gap-2 rounded border border-amber-400/60 p-3">

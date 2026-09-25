@@ -4,7 +4,17 @@ import { Link, useSearchParams } from "react-router-dom";
 import { AssigneeChip, Energy, StatePill, fmtMinutes } from "../components/tasks/bits";
 import TaskDetail from "../components/tasks/TaskDetail";
 import { MockDot, PageHeader, Panel } from "../components/ui";
-import { type Actor, type Counts, PRIORITY_LABEL, type Task, type View, dueLabel, tasksApi } from "../tasksApi";
+import {
+  type Actor,
+  type Counts,
+  NO_DESCRIPTION,
+  PRIORITY_LABEL,
+  type Task,
+  type View,
+  descriptionPreview,
+  dueLabel,
+  tasksApi,
+} from "../tasksApi";
 
 const VIEWS: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "inbox", label: "Inbox", icon: Inbox },
@@ -73,6 +83,7 @@ function Row({
 }) {
   const due = dueLabel(task);
   const done = task.status === "done";
+  const preview = descriptionPreview(task.notes);
   return (
     <div
       className={`grid grid-cols-[18px_44px_minmax(0,1fr)_auto_40px_18px_64px] items-center gap-2.5 border-b border-line px-3.5 py-2 ${
@@ -87,15 +98,27 @@ function Row({
         className="h-[15px] w-[15px] accent-accent"
       />
       <span className="cap">{task.ref}</span>
-      <button type="button" onClick={onSelect} className="flex min-w-0 items-center gap-2 text-left">
-        <span className={`truncate text-sm ${done ? "text-ink-3 line-through" : ""}`}>{task.title}</span>
-        {task.steps_total ? (
-          <span className="cap shrink-0">
-            {task.steps_done}/{task.steps_total}
+      <button type="button" onClick={onSelect} className="flex min-w-0 flex-col gap-0.5 text-left">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={`truncate text-sm ${done ? "text-ink-3 line-through" : ""}`}>{task.title}</span>
+          {task.steps_total ? (
+            <span className="cap shrink-0">
+              {task.steps_done}/{task.steps_total}
+            </span>
+          ) : null}
+          <StatePill task={task} />
+          {task.topic && !hideTopic && <span className="cap hidden shrink-0 xl:inline">#{task.topic}</span>}
+        </span>
+        {preview ? (
+          <span
+            className="line-clamp-2 text-[12px] leading-snug text-ink-3"
+            title={task.description_generated ? "Generated from the task's fields" : undefined}
+          >
+            {preview}
           </span>
-        ) : null}
-        <StatePill task={task} />
-        {task.topic && !hideTopic && <span className="cap hidden shrink-0 xl:inline">#{task.topic}</span>}
+        ) : (
+          <span className="text-[12px] text-ink-3 italic">{NO_DESCRIPTION}</span>
+        )}
       </button>
       <AssigneeChip type={task.assignee_type} name={task.assignee_name} />
       <span className="cap text-ink-2!">{task.assignee_type === "human" || !task.assignee_type ? fmtMinutes(task.estimate_min) : "—"}</span>

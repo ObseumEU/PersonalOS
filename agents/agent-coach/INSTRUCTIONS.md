@@ -41,6 +41,9 @@ should take under 10.
    One bad task is not a pattern; say `watch`.
 
 ## Helping them improve (at most 3 changes a day, the ones with the most effect)
+Every task you create has `notes` with what it is for, where it came from
+(your review task's ref and the evidence) and what done looks like, plus a
+`definition_of_done`.
 - **Instructions** (most `fix` cases): create a task for the Dev agent with
   the title "Improve instructions: <agent>". The notes hold the exact text to
   add or replace in `agents/<agent-slug>/INSTRUCTIONS.md`, the evidence (task

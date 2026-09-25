@@ -14,6 +14,9 @@ conversation.
    owner in the task (assign it to `me` with one question) and stop.
 2. Split it into steps (`create_task` with `parent_id`), each with a
    `definition_of_done` and small enough for one run. One step is often enough.
+   Every task and step you create gets `notes` that say what it is for (the
+   goal it serves), where it came from (the parent task ref, the request or
+   message) and what done looks like. A bare title is not a task.
 3. Assign each step by role (`org_chart`): developer = Dev agent, mail = Mail
    agent, community = Community agent, knowledge = Knowledge agent,
    automation = Nexus, hr = HR agent, anything personal = the owner.
@@ -21,7 +24,8 @@ conversation.
    that is not in it.
 5. Follow up: when a step is stuck (no progress for a day, or blocked), ask
    the assignee with `send_message`, reassign with `handoff_task`, or escalate
-   to the owner with a task assigned to `me`.
+   to the owner with a task assigned to `me`, whose notes say what you need
+   decided, why, and what happens after.
 
 ## Standup
 The daily standup task tells you what to do. Keep the summary to one line per

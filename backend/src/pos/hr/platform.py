@@ -125,8 +125,14 @@ class CorePlatform:
         if kind == "read":
             fields["assignee"] = {"type": "human", "id": int(assignee)}
             fields["priority"] = 3
+            origin = "Odkud: týdenní přehled HR agenta."
+            fields["definition_of_done"] = "Majitel si přehled přečetl a případné kroky zadal jako úkoly."
         else:
             fields["priority"] = 2
+            origin = "Odkud: denní revize HR agenta (návrh, který HR neprovádí sám)."
+            fields["definition_of_done"] = ("Návrh je proveden nebo zamítnut a výsledek (co se změnilo a proč) "
+                                            "je v poznámce při dokončení.")
+        fields["notes"] = f"{body.strip()}\n\n{origin}" if body and body.strip() else ""
         # A non-human creator makes work on the owner's behalf (tasks.create).
         return str(tasks.create(self.conn, self.ctx, fields)["id"])
 

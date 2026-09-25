@@ -217,7 +217,12 @@ def fire(conn: sqlite3.Connection, schedule_id: int, *, manual_by: Ctx | None = 
                 nxt = (now + timedelta(minutes=DEFER_MINUTES)).isoformat(timespec="seconds")
             else:
                 ctx = Ctx(creator["id"], via="schedule")
-                t = tasks.create(conn, ctx, {**s["template"], "status": "next",
+                template = dict(s["template"])
+                if (template.get("notes") or "").strip():
+                    # Where it came from; without notes the generated description says it (task_descriptions).
+                    template["notes"] = (f"{template['notes'].rstrip()}\n\nSource: the schedule "
+                                         f"“{s['name']}” ({s['schedule']}), created by {creator['name']}.")
+                t = tasks.create(conn, ctx, {**template, "status": "next",
                                              "source": f"schedule:{s['id']}",
                                              "assignee": {"type": "human" if assignee["kind"] == "human" else "agent",
                                                           "id": assignee["id"]}})

@@ -121,7 +121,12 @@ def budget_check(conn: sqlite3.Connection) -> dict:
             audit.log(conn, ctx, "budget_level", None, None, **{"from": action["from"], "to": action["to"]})
         elif action["type"] == "notify_owner":
             tasks.create(conn, ctx, {
-                "title": action["title"], "notes": action["body"], "priority": 1,
+                "title": action["title"],
+                "notes": f"{action['body']}\n\nSource: the hourly budget check; the budget keeper needs "
+                         "the owner's decision.",
+                "definition_of_done": "The owner decided (raise the limit, pause work or accept) and the "
+                                      "budget level is back where it should be.",
+                "priority": 1,
                 "topic": "rozpocet", "assignee": "me",
             })
     conn.commit()
