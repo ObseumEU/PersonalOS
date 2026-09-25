@@ -162,3 +162,14 @@ def test_views_and_counts(conn, me):
     tasks.create(conn, me, {"title": "Maybe", "status": "someday"})
     c = tasks.counts(conn, me)
     assert (c["inbox"], c["next"], c["upcoming"], c["someday"], c["today"]) == (1, 1, 1, 1, 0)
+
+
+def test_nobody_gets_around_review(conn, me, ai):
+    t = tasks.create(conn, me, {"title": "Draft the offer", "assignee": "ai", "status": "next"})
+    tasks.claim(conn, ai, t["id"])
+    # an agent setting done hands the work in instead
+    assert tasks.update(conn, ai, t["id"], {"status": "done"})["status"] == "review"
+    # the owner's checkbox (complete) on a task under review is an accept
+    out = tasks.complete(conn, me, t["id"])
+    assert out["status"] == "done" and out["completed_at"]
+    assert versioning.history(conn, "task", t["id"])[-1]["action"] == "accept"

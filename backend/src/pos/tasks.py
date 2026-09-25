@@ -289,19 +289,35 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
             extra["description_generated"] = 1
         else:
             extra["description_generated"] = 0
+    accepted = False
+    if changes.get("status") == "done" and row["status"] != "done":
+        # Nobody gets around review: AI and agents hand work in, and a person
+        # marking a task under review done accepts it.
+        if actors.get(conn, ctx.actor_id)["kind"] != "human":
+            changes["status"] = "review"
+        else:
+            accepted = row["status"] == "review"
     if "status" in changes:
         if changes["status"] == "done" and row["status"] != "done":
             extra["completed_at"] = now_iso()
         elif changes["status"] != "done":
             extra["completed_at"] = None
-    versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra})
-    return get(conn, ctx, task_id)
+    versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra}, action="accept" if accepted else "update")
+    out = get(conn, ctx, task_id)
+    if accepted:
+        from .agents import retire_if_done
+
+        retire_if_done(conn, ctx, out["assignee_id"])
+    return out
 
 
 def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None = None) -> dict:
-    """People finish tasks; AI and agents hand results in for review."""
-    _row(conn, ctx, task_id)
+    """People finish tasks; AI and agents hand results in for review. A person
+    completing a task that waits for review accepts it."""
+    row = _row(conn, ctx, task_id)
     kind = actors.get(conn, ctx.actor_id)["kind"]
+    if row["status"] == "review" and kind == "human":
+        return review(conn, ctx, task_id, True, note)
     changes: dict = {"progress": 100}
     if note:
         changes["progress_note"] = note
@@ -320,12 +336,8 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
         raise Invalid(f"{display_id(task_id)} is not waiting for review")
     if actors.get(conn, ctx.actor_id)["kind"] != "human":
         raise Forbidden("only people review AI and agent results")
-    if accept:
-        out = update(conn, ctx, task_id, {"status": "done"})
-        from .agents import retire_if_done
-
-        retire_if_done(conn, ctx, out["assignee_id"])
-        return out
+    if accept:  # update() records the accept and retires a one-shot agent
+        return update(conn, ctx, task_id, {"status": "done", **({"progress_note": comment} if comment else {})})
     versioning.update(conn, ctx, ENTITY, task_id, {
         "status": "next", "progress": 0, "completed_at": None,
         "returned_count": row["returned_count"] + 1,
