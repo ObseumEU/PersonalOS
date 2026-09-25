@@ -5,7 +5,8 @@ Three kinds of traffic, each with one owner:
 | Direction | Who does it | How |
 |---|---|---|
 | **Incoming events** → tasks | PersonalOS core (`pos.routing`) | Connector agents call MCP `emit_event`; GitHub calls `/api/hooks/github`; you can post a test event on the Connectors screen. |
-| **Knowledge** (e-mails, threads, repos into the knowledge base) | knowlage-agent | Agents push with their own KB key to knowlage `/ingest/mcp` (`add_documents`); knowlage also syncs GitHub daily. PersonalOS does not copy data. See `apps/knowlage-agent/docs/INGEST.md`. |
+| **Knowledge** (e-mails, threads, repos into the knowledge base) | knowlage-agent | knowlage ingests e-mail with its own Gmail connector and syncs GitHub itself. Agents may still push other material with their own KB key (`/ingest/mcp`), but the Mail agent does not. PersonalOS does not copy data. See `apps/knowlage-agent/docs/INGEST.md`. |
+| **New mail → the Mail agent** | PersonalOS core (`pos.routing`, `pos.mailfilter`) | One `gmail` event per new message or thread (`POST /api/events`, or `emit_event`). A rule-based prefilter (no model) drops mailing lists (List-Unsubscribe, List-Id), Precedence bulk/list, no-reply/notification senders, Gmail's Promotions/Social/Updates/Forums and auto-submitted mail; they are stored and counted (Connectors), never run. Rules: `POS_MAIL_PREFILTER` (a JSON file, or `off`). The rest becomes a task for the Mail agent, which only reacts; replies go through the approval queue. |
 | **Outbound actions** (e-mail, GitHub comment, Discord post) | PersonalOS core (`pos.outbound`) | Agents call MCP `request_outbound`; it runs only after you approve it in Approvals (constitution U1). |
 
 ## Routing rules
@@ -46,10 +47,6 @@ A worker gets extra MCP servers through `WORKER_CODEX_CONFIG` (entries
 separated by `||`), with tokens in its own environment:
 
 ```bash
-# .env — Mail agent: Gmail MCP to read, knowlage ingest to store what it read
-MAIL_AGENT_CODEX_CONFIG=mcp_servers.knowlage.url="https://knowlage.example/ingest/mcp"||mcp_servers.knowlage.bearer_token_env_var="KB_AGENT_KEY"
-MAIL_KB_AGENT_KEY=<key from KB_AGENT_KEYS on the knowlage server>
-
 # Dev agent: GitHub MCP
 DEV_AGENT_CODEX_CONFIG=mcp_servers.github.url="https://api.githubcopilot.com/mcp/"||mcp_servers.github.bearer_token_env_var="GITHUB_TOKEN"
 DEV_GITHUB_TOKEN=<fine-grained token for the ObseumEU repos>

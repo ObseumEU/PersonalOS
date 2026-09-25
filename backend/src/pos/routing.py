@@ -145,6 +145,18 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
         if dup:
             return _reroute(conn, ctx, dup, event)
 
+    from . import mailfilter
+
+    skipped = mailfilter.skip_reason(event)
+    if skipped:  # bulk or automatic mail: stored and counted, no task, no run
+        cur = conn.execute(
+            """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
+               VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)""",
+            (source, event.get("kind"), ref, title[:300], json.dumps(event, ensure_ascii=False, default=str),
+             ctx.actor_id, now_iso(), f"skipped:{skipped}"[:300]),
+        )
+        return {"event_id": cur.lastrowid, "task_id": None, "skipped": skipped}
+
     rule = next((r for r in list_rules(conn) if matches(r, event)), None)
     body = event.get("body") or ""
     wrapped = wrap_external(source, body, ref=event.get("url") or ref) if body else ""
@@ -194,6 +206,18 @@ def _reroute(conn: sqlite3.Connection, ctx: Ctx, dup: sqlite3.Row, event: dict) 
     t = tasks.get(conn, ctx, dup["task_id"])
     audit.log(conn, ctx, "event_rerouted", "task", t["id"], source=event.get("source"), rule=rule["name"])
     return {**out, "rerouted": True, "task_ref": t["ref"], "rule": rule["name"], "assignee": t["assignee_name"]}
+
+
+def skipped_mail(conn: sqlite3.Connection, days: int = 7) -> dict:
+    """How many new-mail events the prefilter dropped, by reason."""
+    from datetime import datetime, timedelta, timezone
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT substr(signals, 9) AS reason, COUNT(*) AS n FROM events
+           WHERE signals LIKE 'skipped:%' AND received_at >= ? GROUP BY reason ORDER BY n DESC""", (since,)
+    ).fetchall()
+    return {"days": days, "total": sum(r["n"] for r in rows), "by_reason": {r["reason"]: r["n"] for r in rows}}
 
 
 def list_events(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:

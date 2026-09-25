@@ -103,9 +103,9 @@ services:
       POS_URL: http://api:8000
       POS_AGENT_KEY: ${MAIL_AGENT_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
+      # The Mail agent only reacts to routed new-mail tasks; knowlage ingests
+      # e-mail itself, so this agent gets no knowlage ingest key or server.
       WORKER_CODEX_CONFIG: ${MAIL_AGENT_CODEX_CONFIG:-}
-      KB_AGENT_KEY: ${MAIL_KB_AGENT_KEY:-}
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - mail-agent-work:/work

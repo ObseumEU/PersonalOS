@@ -39,13 +39,14 @@ class EventIn(BaseModel):
 
 
 @router.get("/connectors")
-def connectors():
+def connectors(conn=Depends(get_db)):
     """What is set up. Secrets are never returned, only whether they exist."""
     out = outbound.configured()
     return {
         "outbound": out,
         "github_webhook": bool(os.environ.get("POS_GITHUB_WEBHOOK_SECRET")),
-        "knowlage_ingest": "agents push with their own KB key (worker WORKER_CODEX_CONFIG)",
+        "knowlage_ingest": "knowlage ingests e-mail and GitHub itself (its own connectors)",
+        "mail_prefilter": routing.skipped_mail(conn),
     }
 
 
