@@ -25,7 +25,9 @@ def ensure_builtin(conn: sqlite3.Connection) -> dict[str, int]:
     # The two subsystems from docs/PLAN.md are members from the start, so tasks
     # can be assigned to them before their A2A bridges exist.
     builtin = ((OWNER_NAME, "human", 1), (ASSISTANT_NAME, "ai", 0),
-               ("Knowledge agent", "agent", 0), ("Nexus", "agent", 0))
+               ("Knowledge agent", "agent", 0), ("Nexus", "agent", 0),
+               # Runs the self-deploy pipeline (pos.selfdeploy) and reports deploys.
+               ("Deployer", "agent", 0))
     for name, kind, owner in builtin:
         row = conn.execute("SELECT id FROM actors WHERE name = ?", (name,)).fetchone()
         if row is None:

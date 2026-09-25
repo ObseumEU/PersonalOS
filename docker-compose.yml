@@ -6,8 +6,12 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      # Agent instructions from git override the first version (AGENTS-SPEC 6).
+      POS_AGENTS_REPO_DIR: /repo-agents
     volumes:
       - pos-data:/data
+      - ./agents:/repo-agents:ro
     restart: unless-stopped
 
   web:
@@ -16,6 +20,28 @@ services:
       - api
     ports:
       - "${POS_PORT:-8080}:80"
+    restart: unless-stopped
+
+  # --- Deployer (AGENTS-SPEC step 6): ships what agents merge to main, reverts
+  # it automatically when the constitution check, tests or health fail.
+  # Runs on the server's checkout:  docker compose --profile deploy up -d
+  deployer:
+    profiles: ["deploy"]
+    build:
+      context: .
+      dockerfile: ops/deployer.Dockerfile
+    depends_on: [api]
+    working_dir: /repo
+    command: ["python", "-m", "pos.selfdeploy", "--repo", "/repo", "--watch", "60"]
+    environment:
+      POS_URL: http://api:8000
+      POS_DEPLOYER_KEY: ${DEPLOYER_KEY:-}
+      DEPLOY_HEALTH_URL: http://web/api/health
+      DEPLOY_TEST_CMD: ${DEPLOY_TEST_CMD:-cd backend && pip install -q -e .[dev] && python -m pytest -q}
+      DEPLOY_UP_CMD: ${DEPLOY_UP_CMD:-docker compose up -d --build api web}
+    volumes:
+      - .:/repo
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
   # --- Agents: each one is its own Codex worker app (AGENTS-SPEC step 3).

@@ -12,6 +12,7 @@ Purpose, lifetime and expiry are kept by pos.hr (hr_agent_profiles).
 """
 
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -38,6 +39,7 @@ BUILTIN_PERMISSIONS = {
     "Knowledge agent": ["tasks:read", "tasks:claim", "approvals:request"],
     "Nexus": ["tasks:read", "tasks:write", "tasks:claim", "approvals:request"],
     "HR agent": ["tasks:read", "tasks:write", "approvals:request"],
+    "Deployer": ["tasks:read", "tasks:write"],
 }
 DEFAULT_AGENT_PERMISSIONS = ["tasks:read", "tasks:claim", "approvals:request"]
 LIFETIMES = ("one_shot", "long_lived")
@@ -81,9 +83,26 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "agent"
 
 
+def repo_instructions(name: str) -> Path | None:
+    """Instructions kept in git (agents/<name>/INSTRUCTIONS.md) win over the
+    copy written at creation: agents change them through commits, and the
+    deployer checks and ships those like any other change (AGENTS-SPEC 6)."""
+    root = os.environ.get("POS_AGENTS_REPO_DIR")
+    if not root:
+        return None
+    p = Path(root) / _slug(name) / "INSTRUCTIONS.md"
+    return p if p.exists() else None
+
+
+def instructions_of(row) -> str | None:
+    p = repo_instructions(row["name"])
+    if p is None and row["instructions_path"] and Path(row["instructions_path"]).exists():
+        p = Path(row["instructions_path"])
+    return p.read_text(encoding="utf-8") if p else None
+
+
 def _write_instructions(data_dir: Path, name: str, text: str) -> str:
-    # Kept under the data volume for now; step 6 moves agent instructions into
-    # git so agents can change them through commits.
+    # The first version lives with the data; a version in git overrides it.
     folder = data_dir / "agents" / _slug(name)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "INSTRUCTIONS.md"
@@ -437,9 +456,7 @@ def detail(conn: sqlite3.Connection, agent_id: int) -> dict:
     if base is None:
         raise NotFound(f"actor {agent_id}")
     row = actors.get(conn, agent_id)
-    instructions = None
-    if row["instructions_path"] and Path(row["instructions_path"]).exists():
-        instructions = Path(row["instructions_path"]).read_text(encoding="utf-8")
+    instructions = instructions_of(row)
     queue = conn.execute(
         """SELECT * FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
            AND (status != 'done' OR completed_at >= ?) ORDER BY
