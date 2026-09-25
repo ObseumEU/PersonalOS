@@ -121,8 +121,13 @@ class ClaudeSession:
                     continue
                 if ev.get("session_id"):
                     self.thread_id = ev["session_id"]
+                if not isinstance(ev, dict):
+                    continue
                 t = ev.get("type")
-                content = (ev.get("message") or {}).get("content") or []
+                msg = ev.get("message")
+                content = msg.get("content") if isinstance(msg, dict) else None
+                if not isinstance(content, list):
+                    content = []
                 if t == "assistant":
                     texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
                     if any(texts):

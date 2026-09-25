@@ -107,3 +107,16 @@ def test_a2a_bridge_loopback(app, tmp_path, monkeypatch):
     assert out["finished"] == [t["ref"]]
     back = tasks.get(conn, me, t["id"])
     assert back["status"] == "review" and "8 % higher" in back["progress_note"]
+
+
+def test_reaper_releases_runs_of_dead_workers(app):
+    client, conn, me = app
+    t = tasks.create(conn, me, {"title": "Stuck", "assignee": "ai"})
+    tasks.claim(conn, Ctx(actors.assistant_id(conn)), t["id"])
+    rid = conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) VALUES (?, ?, 'task', 'running', '2020-01-01T00:00:00+00:00', 'claude')",
+                       (actors.assistant_id(conn), t["id"])).lastrowid
+    conn.commit()
+    out = scheduler.reap_runs(conn)
+    assert out["released"] == [rid]
+    assert tasks.get(conn, me, t["id"])["status"] == "next"
+    assert conn.execute("SELECT status FROM runs WHERE id = ?", (rid,)).fetchone()[0] == "error"

@@ -170,6 +170,8 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
 
 @router.post("/runs/{run_id}/heartbeat")
 def heartbeat(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND actor_id = ?", (now_iso(), run_id, ctx.actor_id))
+    conn.commit()
     return _state(conn, ctx.actor_id, run_id)
 
 

@@ -2,10 +2,10 @@
 $root = Split-Path -Parent $PSScriptRoot
 $logs = Join-Path $root "data\agent-logs"
 Get-ChildItem $logs -Filter *.pid -ErrorAction SilentlyContinue | ForEach-Object {
-    $procId = Get-Content $_.FullName
-    try {
-        & taskkill /PID $procId /T /F | Out-Null
+    $procId = [int](Get-Content $_.FullName | Select-Object -First 1)
+    if (Get-Process -Id $procId -ErrorAction SilentlyContinue) {
+        & taskkill /PID $procId /T /F 2>$null | Out-Null
         Write-Output "stopped $($_.BaseName) (pid $procId)"
-    } catch { Write-Output "$($_.BaseName) was not running" }
+    } else { Write-Output "$($_.BaseName) was not running" }
     Remove-Item $_.FullName
 }
