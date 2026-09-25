@@ -1,4 +1,5 @@
 import re
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -333,6 +334,10 @@ def test_every_codex_run_gets_the_guardrails(tmp_path, monkeypatch):
         "open(args[args.index('-o') + 1], 'w').write(sys.stdin.read())\n"
     )
     fake.chmod(0o755)
+    if sys.platform == "win32":  # no shebangs on Windows: wrap the script
+        wrapper = tmp_path / "codex.cmd"
+        wrapper.write_text(f'@set PYTHONUTF8=1\r\n@"{sys.executable}" "{fake}" %*\r\n')
+        fake = wrapper
     monkeypatch.setenv("POS_CODEX_BIN", str(fake))
     monkeypatch.delenv("POS_CODEX_DISABLED", raising=False)
     conn = connect(tmp_path / "t.db")

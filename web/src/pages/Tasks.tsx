@@ -26,12 +26,14 @@ export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
   const [error, setError] = useState<string | null>(null);
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!text.trim()) return;
+    const value = text.trim();
+    if (!value) return;
+    setText(""); // clear at once so the next capture can be typed while this one saves
     try {
-      onCaptured(await tasksApi.capture(text));
-      setText("");
+      onCaptured(await tasksApi.capture(value));
       setError(null);
     } catch (err) {
+      setText((t) => t || value);
       setError(err instanceof Error ? err.message : String(err));
     }
   }

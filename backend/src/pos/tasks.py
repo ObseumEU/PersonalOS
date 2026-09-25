@@ -228,6 +228,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         fields.setdefault("visibility", parent["visibility"])
         fields.setdefault("status", "next")
     me = actors.get(conn, ctx.actor_id)
+    if assignee is None and me["kind"] == "human" and fields.get("status", "inbox") != "inbox":
+        # What a person writes down is theirs unless they hand it over.
+        assignee = {"type": "human", "id": me["id"]}
     if owner is None:
         # Agents create work on behalf of the owner unless they say otherwise.
         owner = ctx.actor_id if me["kind"] == "human" else actors.owner_id(conn)
