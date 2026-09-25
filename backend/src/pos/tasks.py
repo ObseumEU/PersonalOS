@@ -269,6 +269,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     if unknown:
         raise Invalid(f"unknown fields: {sorted(unknown)}")
     _validate(changes)
+    if "visibility" in changes and changes["visibility"] != row["visibility"]:
+        from .integrations import check_visibility_change
+
+        check_visibility_change(conn, ctx, row, changes["visibility"])
     if changes.get("topic"):
         changes["topic"] = changes["topic"].lower().lstrip("#")
     if "status" in changes:

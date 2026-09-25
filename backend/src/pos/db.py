@@ -21,6 +21,7 @@ MIGRATIONS: list[str] = [
         name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
         is_owner    INTEGER NOT NULL DEFAULT 0,
         created_at  TEXT NOT NULL,
+        last_seen_at TEXT,
         archived_at TEXT
     );
     CREATE TABLE api_keys (
@@ -114,6 +115,20 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX tasks_parent ON tasks (parent_id);
     CREATE INDEX tasks_status ON tasks (status);
+    -- Everything the constitution sends to the owner first (AGENTS-SPEC 6a).
+    CREATE TABLE approvals (
+        id           INTEGER PRIMARY KEY,
+        task_id      INTEGER REFERENCES tasks(id),
+        requested_by INTEGER NOT NULL REFERENCES actors(id),
+        run_id       INTEGER REFERENCES runs(id),
+        action       TEXT NOT NULL,
+        details      TEXT NOT NULL DEFAULT '{}',
+        status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        decided_by   INTEGER REFERENCES actors(id),
+        decided_at   TEXT,
+        comment      TEXT,
+        created_at   TEXT NOT NULL
+    );
     CREATE TABLE notes (
         id          INTEGER PRIMARY KEY,
         title       TEXT NOT NULL,

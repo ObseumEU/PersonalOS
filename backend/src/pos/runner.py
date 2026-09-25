@@ -4,8 +4,8 @@ Other modules plug in through hooks instead of editing this file:
 
 - `before_run(fn)`: fn(conn, request) may raise `RunBlocked` to stop a run
   (the kill switch, the token budget, the constitution checks);
-- `after_run(fn)`: fn(conn, run_row) sees every finished run, including its
-  token usage (the budget keeper, the HR agent).
+- `after_run(fn)`: fn(conn, run_row, jsonl) sees every finished run with the
+  raw `codex exec --json` output (the budget keeper, the HR agent).
 
 Every run gets a row in `runs`. Changes made with `Ctx(run_id=...)` are tied
 to it, so `versioning.rollback_run` can undo a whole run.
@@ -53,7 +53,7 @@ class RunResult:
 
 
 _before: list[Callable[[sqlite3.Connection, RunRequest], None]] = []
-_after: list[Callable[[sqlite3.Connection, sqlite3.Row], None]] = []
+_after: list[Callable[[sqlite3.Connection, sqlite3.Row, str], None]] = []
 
 
 def before_run(fn):
@@ -89,7 +89,7 @@ def _usage(jsonl: str) -> tuple[int | None, int | None]:
     return tin, tout
 
 
-def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "") -> sqlite3.Row:
+def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "", jsonl: str = "") -> sqlite3.Row:
     conn.execute(
         "UPDATE runs SET status = ?, ended_at = ?, input_tokens = ?, output_tokens = ?, detail = ? WHERE id = ?",
         (status, now_iso(), tin, tout, detail[:4000], run_id),
@@ -97,7 +97,7 @@ def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "
     conn.commit()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     for fn in _after:
-        fn(conn, row)
+        fn(conn, row, jsonl)
     return row
 
 
@@ -139,19 +139,20 @@ def run(conn: sqlite3.Connection, req: RunRequest) -> RunResult:
             _finish(conn, run_id, "error", detail=f"timeout after {req.timeout_s}s")
             return RunResult(run_id, "error", error="timeout")
         tin, tout = _usage(proc.stdout)
+        jsonl = proc.stdout
         output = last.read_text(encoding="utf-8").strip() if last.exists() else ""
         if proc.returncode != 0 or not output:
             err = (proc.stderr or proc.stdout)[-2000:]
-            _finish(conn, run_id, "error", tin, tout, err)
+            _finish(conn, run_id, "error", tin, tout, err, proc.stdout)
             return RunResult(run_id, "error", output, None, tin, tout, err)
     data = None
     if req.output_schema:
         try:
             data = json.loads(output)
         except ValueError:
-            _finish(conn, run_id, "error", tin, tout, "output was not JSON")
+            _finish(conn, run_id, "error", tin, tout, "output was not JSON", jsonl)
             return RunResult(run_id, "error", output, None, tin, tout, "output was not JSON")
-    _finish(conn, run_id, "ok", tin, tout)
+    _finish(conn, run_id, "ok", tin, tout, jsonl=jsonl)
     return RunResult(run_id, "ok", output, data, tin, tout)
 
 
