@@ -189,6 +189,38 @@ def reported_model(jsonl: str) -> str | None:
     return None
 
 
+def work_counts(jsonl: str) -> tuple[int | None, int | None]:
+    """(tool calls, model turns) of a run, from Claude's stream-json or Codex's
+    JSON events; (None, None) when the output says nothing."""
+    tools = turns = 0
+    claude_turns = None
+    seen = False
+    for line in jsonl.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("type")
+        if kind == "assistant" and isinstance(ev.get("message"), dict):  # Claude
+            seen = True
+            turns += 1
+            tools += sum(1 for c in ev["message"].get("content") or [] if isinstance(c, dict) and c.get("type") == "tool_use")
+        elif kind == "result" and ev.get("num_turns") is not None:  # Claude's own count
+            claude_turns = int(ev["num_turns"])
+        elif kind == "turn.completed":  # Codex
+            seen = True
+            turns += 1
+        elif kind == "item.completed" and isinstance(ev.get("item"), dict):
+            seen = True
+            if ev["item"].get("type") in ("command_execution", "mcp_tool_call", "file_change", "web_search"):
+                tools += 1
+    if not seen and claude_turns is None:
+        return None, None
+    return tools, claude_turns if claude_turns is not None else turns
+
+
 def _model_for(req: "RunRequest") -> str | None:
     from . import engines
 
@@ -198,8 +230,9 @@ def _model_for(req: "RunRequest") -> str | None:
 def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "", jsonl: str = "") -> sqlite3.Row:
     conn.execute(
         "UPDATE runs SET status = ?, ended_at = ?, input_tokens = ?, output_tokens = ?, detail = ?, "
-        "model = COALESCE(?, model) WHERE id = ?",
-        (status, now_iso(), tin, tout, detail[:4000], reported_model(jsonl) if jsonl else None, run_id),
+        "model = COALESCE(?, model), tool_calls = ?, turns = ? WHERE id = ?",
+        (status, now_iso(), tin, tout, detail[:4000], reported_model(jsonl) if jsonl else None,
+         *work_counts(jsonl or ""), run_id),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

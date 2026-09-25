@@ -81,7 +81,9 @@ def daily_review(conn: sqlite3.Connection, ctx: Ctx | None = None, *, apply: boo
         _may_run_hr(conn, ctx)
     platform = CorePlatform(conn, hr_ctx)
     now = now or utcnow()
-    result = run_daily_review(platform, platform, now, policy, hr_agent_id=str(hr_ctx.actor_id), apply=apply)
+    coach = conn.execute("SELECT id FROM actors WHERE name = 'Agent coach' AND archived_at IS NULL").fetchone()
+    result = run_daily_review(platform, platform, now, policy, hr_agent_id=str(hr_ctx.actor_id), apply=apply,
+                              coach_id=str(coach["id"]) if coach else None)
     names = {a.id: a.name for a in platform.list_agents()}
     report = _serialize(result, names)
     if apply:

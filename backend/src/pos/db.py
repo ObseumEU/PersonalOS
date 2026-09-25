@@ -531,6 +531,11 @@ MIGRATIONS: list[str] = [
         archived_at TEXT
     );
     """ + (_FTS_SQL if HAS_FTS5 else ""),
+    # 16: how much work a run was: tool calls and model turns (the Agent coach, the model badge).
+    """
+    ALTER TABLE runs ADD COLUMN tool_calls INTEGER;
+    ALTER TABLE runs ADD COLUMN turns INTEGER;
+    """,
 ]
 
 

@@ -217,6 +217,7 @@ def run_daily_review(
     policy: HRPolicy = HRPolicy(),
     hr_agent_id: str = "hr",
     apply: bool = True,
+    coach_id: str | None = None,
 ) -> ReviewResult:
     """Read the roster, decide, then archive/promote directly and file tasks for the rest."""
     agents = source.list_agents()
@@ -236,5 +237,8 @@ def run_daily_review(
             result.applied.append(proposal)
         else:
             title, body = _task_for(proposal, names)
-            result.task_ids.append(actions.create_task(title, body, assignee=hr_agent_id))
+            # Merging agents and revising instructions is the Agent coach's job when there is one.
+            coach_job = proposal.kind in (ProposalKind.MERGE, ProposalKind.REVISE_INSTRUCTIONS)
+            result.task_ids.append(actions.create_task(
+                title, body, assignee=coach_id if coach_job and coach_id else hr_agent_id))
     return result

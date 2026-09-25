@@ -356,3 +356,20 @@ def test_claude_session_passes_effort_budget_and_hidden_tools():
     assert args[args.index("--max-budget-usd") + 1] == "5.0"
     i = args.index("--disallowedTools")
     assert args[i + 1:i + 3] == ["mcp__pos__list_tasks", "mcp__pos__hr_overview"]
+
+
+def test_runs_count_tool_calls_and_turns():
+    from pos import runner
+
+    claude = chr(10).join([
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"x"},{"type":"tool_use","name":"Read"}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit"},{"type":"tool_use","name":"Bash"}]}}',
+        '{"type":"result","num_turns":4}'])
+    assert runner.work_counts(claude) == (3, 4)
+    codex = chr(10).join([
+        '{"type":"item.completed","item":{"type":"command_execution"}}',
+        '{"type":"item.completed","item":{"type":"agent_message"}}',
+        '{"type":"item.completed","item":{"type":"mcp_tool_call"}}',
+        '{"type":"turn.completed","usage":{}}'])
+    assert runner.work_counts(codex) == (2, 1)
+    assert runner.work_counts("") == (None, None)

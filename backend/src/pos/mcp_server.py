@@ -62,6 +62,8 @@ TOOL_PERMISSIONS = {
     "ask_agent": "messages:send", "emit_event": "events:emit", "request_outbound": "approvals:request", "list_routes": "tasks:read",
     # Schedules check the creator's own rights inside (tasks:claim for yourself, tasks:write for others).
     "schedule_list": "tasks:read",
+    # HR's roster and scores: the owner, the HR agent and the Agent coach.
+    "hr_overview": "hr:read",
     # Your own task needs tasks:claim, someone else's tasks:write (checked in pos.org).
     "handoff_task": "tasks:read", "org_chart": "tasks:read",
     # The tool library (pos.tools): reading needs tasks:read, publishing and counting use tasks:claim.

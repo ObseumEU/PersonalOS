@@ -32,6 +32,7 @@ PERMISSIONS = {
     "messages:send": "message other members",
     "events:emit": "report incoming events from a connector (e-mail, Discord, GitHub)",
     "routes:write": "change event routing rules",
+    "hr:read": "read HR's roster, scores and proposals (hr_overview)",
     "browser:use": "drive a web browser (paying, sending, deleting and account settings still need approval)",
 }
 BUILTIN_PERMISSIONS = {
@@ -39,7 +40,7 @@ BUILTIN_PERMISSIONS = {
                             "messages:send"],
     "Knowledge agent": ["tasks:read", "tasks:claim", "approvals:request"],
     "Nexus": ["tasks:read", "tasks:write", "tasks:claim", "approvals:request"],
-    "HR agent": ["tasks:read", "tasks:write", "approvals:request"],
+    "HR agent": ["tasks:read", "tasks:write", "approvals:request", "hr:read"],
     "Deployer": ["tasks:read", "tasks:write"],
     "Project manager": ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
 }
@@ -78,6 +79,12 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
     for name, perms in BUILTIN_PERMISSIONS.items():
         conn.execute("UPDATE actors SET permissions = ? WHERE name = ? AND permissions = '[]'",
                      (json.dumps(perms), name))
+    # Permissions added to a builtin agent later (platform code, not an agent's
+    # own change): hr:read for the HR agent, which hr_overview now requires.
+    row = conn.execute("SELECT id, permissions FROM actors WHERE name = 'HR agent'").fetchone()
+    if row and "hr:read" not in json.loads(row["permissions"] or "[]"):
+        conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",
+                     (json.dumps(sorted({*json.loads(row["permissions"] or "[]"), "hr:read"})), row["id"]))
     conn.commit()
 
 
