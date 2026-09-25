@@ -43,7 +43,8 @@ function layout(data: KGraph) {
   const links = data.edges
     .map((e) => [index.get(e.source), index.get(e.target)] as const)
     .filter((l): l is readonly [number, number] => l[0] !== undefined && l[1] !== undefined);
-  const rest: Record<string, number> = { workspace: 0.55, source: 0.42, collection: 0.22, document: 0.2 };
+  const rest: Record<string, number> = { workspace: 0.9, source: 0.7, collection: 0.45, document: 0.22 };
+  const repel = 0.02 * Math.sqrt(60 / Math.max(n, 1));
   const d = new THREE.Vector3();
   for (let it = 0; it < 220; it++) {
     const cool = 1 - it / 240;
@@ -52,7 +53,7 @@ function layout(data: KGraph) {
       for (let j = i + 1; j < n; j++) {
         d.subVectors(pos[i], pos[j]);
         const l2 = Math.max(d.lengthSq(), 0.0025);
-        d.multiplyScalar(0.0035 / l2);
+        d.multiplyScalar(repel / l2);
         force[i].add(d);
         force[j].sub(d);
       }
@@ -64,13 +65,16 @@ function layout(data: KGraph) {
       force[b].sub(d);
     }
     for (let i = 0; i < n; i++) {
-      force[i].addScaledVector(pos[i], -0.012); // gentle pull to the centre
+      force[i].addScaledVector(pos[i], -0.004); // gentle pull to the centre
       pos[i].addScaledVector(force[i].clampLength(0, 0.08), cool);
     }
   }
-  // Fit into a unit ball.
-  const r = Math.max(...pos.map((p) => p.length()), 1e-3);
-  pos.forEach((p) => p.multiplyScalar(0.95 / r));
+  // Centre and fit into a unit ball (by the 95th percentile, so one outlier does not shrink the rest).
+  const c = pos.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(Math.max(n, 1));
+  pos.forEach((p) => p.sub(c));
+  const radii = pos.map((p) => p.length()).sort((a, b) => a - b);
+  const r = radii[Math.floor(radii.length * 0.95)] || 1;
+  pos.forEach((p) => p.multiplyScalar(1.05 / r));
   return { pos, links };
 }
 
