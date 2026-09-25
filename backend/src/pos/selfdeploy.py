@@ -18,6 +18,14 @@ again, and reports to PersonalOS, which gives the author a task with the log.
     python -m pos.selfdeploy --repo /srv/personalos --once
     python -m pos.selfdeploy --repo /srv/personalos --watch 60
 
+Promote mode (a PC, or anywhere agents should not touch main directly):
+agents commit to a branch (agent/dev); the deployer merges it into the latest
+main in its own worktree, runs the constitution check, the tests and a
+staging stack with a health check, and only then pushes the merge to main.
+On failure nothing reaches main and the author gets a task with the log.
+
+    python -m pos.selfdeploy --repo <deploy worktree> --promote-from agent/dev --watch 60
+
 Environment: POS_URL, POS_DEPLOYER_KEY (the Deployer member's key),
 DEPLOY_TEST_CMD, DEPLOY_UP_CMD, DEPLOY_HEALTH_URL, DEPLOY_BRANCH (main),
 DEPLOY_REMOTE (origin).
@@ -182,18 +190,81 @@ def tick(repo: Path, reporter: Reporter, *, remote: str, branch: str, test_cmd: 
     return res
 
 
+def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, target: str, test_cmd: str,
+                 up_cmd: str, health_url: str | None) -> Result:
+    """One promotion attempt of `source` into `remote/target`, in the worktree `wt`."""
+    state = wt / ".pos-promote-state"
+    git(wt, "fetch", remote, target)
+    base = git(wt, "rev-parse", f"{remote}/{target}")
+    tip = git(wt, "rev-parse", source)
+    if subprocess.run(["git", "merge-base", "--is-ancestor", tip, base], cwd=wt).returncode == 0:
+        return Result(base, tip, "nothing")  # everything on the branch is already in main
+    if state.exists() and state.read_text(encoding="utf-8").strip() == tip:
+        return Result(base, tip, "nothing")  # already tried this commit; wait for a new one
+    commits = [c for c in git(wt, "rev-list", f"{base}..{tip}").splitlines() if c]
+    res = Result(base, tip, "ok", author=author_of(wt, base, tip), commits=commits)
+
+    def fail(stage: str, log: str) -> Result:
+        res.status, res.stage, res.log = "rejected", stage, log
+        state.write_text(tip, encoding="utf-8")
+        reporter.report(res)
+        return res
+
+    git(wt, "checkout", "--detach", "--force", base)
+    git(wt, "reset", "--hard", base)
+    git(wt, "clean", "-fd", "-e", ".pos-promote-state")  # keeps ignored files (venv, node_modules)
+
+    check = gitcheck.check_range(wt, base, tip)
+    if check.problems:
+        return fail("constitution", "; ".join(
+            f"{p.sha[:10]} touches {', '.join(p.paths)} without the owner's signature" for p in check.problems))
+    subject = git(wt, "log", "-1", "--format=%s", tip)
+    merge = subprocess.run(
+        ["git", "merge", "--no-ff", "--no-edit", "-m",
+         f"Merge {source}: {subject}\n\nPromoted by the PersonalOS deployer after checks.\n\nAgent: {res.author or 'unknown'}",
+         tip], cwd=wt, capture_output=True, text=True)
+    if merge.returncode != 0:
+        subprocess.run(["git", "merge", "--abort"], cwd=wt, capture_output=True)
+        return fail("merge", (merge.stdout + merge.stderr)[-4000:] + f"\n\nMerge {target} into {source} and resolve the conflicts.")
+    if test_cmd:
+        ok, log = sh(test_cmd, wt)
+        if not ok:
+            return fail("tests", log)
+    if up_cmd:
+        ok, log = sh(up_cmd, wt)
+        if not ok:
+            return fail("deploy", log)
+    if health_url:
+        ok, log = healthy(health_url)
+        if not ok:
+            return fail("health", log)
+    merged = git(wt, "rev-parse", "HEAD")
+    push = subprocess.run(["git", "push", remote, f"HEAD:{target}"], cwd=wt, capture_output=True, text=True)
+    if push.returncode != 0:  # main moved meanwhile: try again next tick, not the author's fault
+        return Result(base, tip, "nothing", stage="push", log=push.stderr[-2000:])
+    state.write_text(tip, encoding="utf-8")
+    res.new = merged
+    reporter.report(res)
+    return res
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=".")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--watch", type=int, default=0, help="seconds between checks")
+    ap.add_argument("--promote-from", default="", help="branch agents commit to (promote mode)")
     a = ap.parse_args()
     reporter = Reporter(os.environ.get("POS_URL", "http://localhost:8000"), os.environ["POS_DEPLOYER_KEY"])
     kw = dict(remote=os.environ.get("DEPLOY_REMOTE", "origin"), branch=os.environ.get("DEPLOY_BRANCH", "main"),
               test_cmd=os.environ.get("DEPLOY_TEST_CMD", DEFAULT_TEST), up_cmd=os.environ.get("DEPLOY_UP_CMD", DEFAULT_UP),
               health_url=os.environ.get("DEPLOY_HEALTH_URL", "http://localhost:8090/api/health"))
     while True:
-        res = tick(Path(a.repo), reporter, **kw)
+        if a.promote_from:
+            res = promote_tick(Path(a.repo), reporter, source=a.promote_from, remote=kw["remote"], target=kw["branch"],
+                               test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"], health_url=kw["health_url"])
+        else:
+            res = tick(Path(a.repo), reporter, **kw)
         if res.status != "nothing":
             print(f"{res.old[:10]}..{res.new[:10]}: {res.status} {res.stage}", flush=True)
         if a.once or not a.watch:

@@ -107,3 +107,35 @@ def test_deploy_api_needs_the_deployer_key(reporter):
     other = agents.create_agent(conn, Ctx(actors.owner_id(conn)), name="Sneaky", purpose="x",
                                 permissions=["tasks:read"], data_dir=Path("."))["api_key"]
     assert client.get("/api/deploys/last", headers={"Authorization": f"Bearer {other}"}).status_code == 401
+
+
+def test_promote_mode_merges_only_checked_work(tmp_path, reporter):
+    rep, client, conn = reporter
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "work"
+    git(tmp_path, "clone", str(origin), str(work))
+    (work / "check.py").write_text(CHECK)
+    commit(work, {"app.txt": "good v1"}, "initial")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-q", "-b", "agent/dev")
+    deploy = tmp_path / "deploy"
+    git(work, "worktree", "add", "--detach", str(deploy), "main")
+    kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
+              up_cmd="", health_url=None)
+
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # nothing new on the branch
+    commit(work, {"app.txt": "good v2"}, "Improve app\n\nAgent: Dev agent")
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok"
+    assert git(tmp_path, "--git-dir", str(origin), "show", "main:app.txt") == "good v2"
+    assert "Merge agent/dev" in git(tmp_path, "--git-dir", str(origin), "log", "-1", "--format=%s", "main")
+
+    commit(work, {"app.txt": "broken"}, "Refactor\n\nAgent: Dev agent")
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "rejected" and res.stage == "tests"
+    assert git(tmp_path, "--git-dir", str(origin), "show", "main:app.txt") == "good v2"  # main untouched
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # same commit is not retried
+    deploys = client.get("/api/deploys").json()
+    assert [d["status"] for d in deploys][:2] == ["rejected", "ok"]
+    assert tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])["assignee_name"] == "Dev agent"

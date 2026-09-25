@@ -58,6 +58,9 @@ class ClaudeSession:
     # --restricted: no command-running tools unless named, no user/project settings;
     # file tools stay inside the working directory.
     restricted: bool = True
+    # Built-in tools that exist at all (--tools); in restricted mode Bash only
+    # exists when named here, and then only the allow-listed commands run.
+    builtin_tools: list[str] = field(default_factory=list)
     env: dict[str, str] | None = None
     thread_id: str | None = None  # the Claude session id, for --resume
     lines: list[str] = field(default_factory=list)
@@ -84,6 +87,8 @@ class ClaudeSession:
             args += ["--append-system-prompt-file", prompt_file]
         if mcp_file:
             args += ["--mcp-config", mcp_file, "--strict-mcp-config"]
+        if self.builtin_tools:
+            args += ["--tools", ",".join(self.builtin_tools)]
         if self.allowed_tools:
             args += ["--allowedTools", *self.allowed_tools]
         if self.thread_id:
