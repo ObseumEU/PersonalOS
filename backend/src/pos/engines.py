@@ -126,8 +126,11 @@ def codex_reset(conn: sqlite3.Connection, message: str) -> datetime:
     if m := CODEX_AGAIN_RE.search(message):
         mon, day, year, hh, mm, ampm = m.groups()
         try:
+            from .core import TZ
+
             local = datetime.strptime(f"{mon} {day} {year} {hh}:{mm} {ampm}", "%b %d %Y %I:%M %p")
-            return local.astimezone().astimezone(timezone.utc)  # Codex names the reset in local time
+            # Codex names the reset in the local time of the machine it runs on (the owner's, Europe/Prague).
+            return local.replace(tzinfo=TZ).astimezone(timezone.utc)
         except ValueError:
             pass
     return _utcnow() + timedelta(hours=1)

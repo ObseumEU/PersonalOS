@@ -304,3 +304,13 @@ def test_run_records_the_model_the_cli_reports():
     assert runner.reported_model('{"type":"thread.started"}\n{"type":"turn_context","payload":{"model":"gpt-5.5-codex"}}') \
         == "gpt-5.5-codex"
     assert runner.reported_model('{"type":"thread.started"}') is None
+
+
+def test_codex_reset_time_is_read_in_prague_time(tmp_path):
+    from pos import engines
+    from pos.db import connect, migrate
+
+    c = connect(tmp_path / "r.db")
+    migrate(c)
+    at = engines.codex_reset(c, "You've hit your usage limit. Try again at Sep 29th, 2099 8:47 AM.")
+    assert at.isoformat() == "2099-09-29T06:47:00+00:00"  # 08:47 CEST
