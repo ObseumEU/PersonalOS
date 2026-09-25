@@ -23,11 +23,12 @@ log = logging.getLogger("pos_worker")
 
 class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
-                 max_resumes: int = 6, sleep: Callable[[float], None] = time.sleep):
+                 max_resumes: int = 6, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep):
         self.client = client
         self.new_session = new_session
         self.poll_wait = poll_wait
         self.max_resumes = max_resumes
+        self.max_steps = max_steps  # 0 = no cap; else a runaway run stops and the task goes back
         self.sleep = sleep
         self.context: list[dict] = []  # messages received while idle, used in the next task
         self.me: dict = {}
@@ -103,6 +104,7 @@ class Worker:
         self.context = []
         pending_fyi: list[dict] = []
         resumes = 0
+        steps = 0
         outcome = "ok"
         while True:
             interrupted = None
@@ -110,6 +112,11 @@ class Worker:
                 if ev.get("type") != "item.completed":
                     continue
                 # Safe point: the last step is complete.
+                steps += 1
+                if self.max_steps and steps > self.max_steps:
+                    session.stop()
+                    interrupted = "step_cap"
+                    break
                 state = self.client.heartbeat(run_id)
                 if state.get("run_cancelled") or state.get("frozen") or state.get("paused"):
                     session.stop()
@@ -130,6 +137,11 @@ class Worker:
                     break
             if interrupted == "cancelled":
                 outcome = "cancelled"
+                break
+            if interrupted == "step_cap":
+                outcome = "error"
+                session.failed = (f"step limit reached ({self.max_steps} steps); last note: "
+                                  f"{session.last_message[:300] or 'none'}")
                 break
             if interrupted == "inject":
                 resumes += 1

@@ -61,6 +61,11 @@ class ClaudeSession:
     # Built-in tools that exist at all (--tools); in restricted mode Bash only
     # exists when named here, and then only the allow-listed commands run.
     builtin_tools: list[str] = field(default_factory=list)
+    # Tools removed from the model's context altogether (e.g. pos MCP tools the
+    # agent never needs); every listed tool definition costs tokens on every turn.
+    disallowed_tools: list[str] = field(default_factory=list)
+    effort: str | None = None  # low | medium | high | xhigh | max (--effort)
+    max_budget_usd: float | None = None  # per-run cap (--max-budget-usd)
     env: dict[str, str] | None = None
     thread_id: str | None = None  # the Claude session id, for --resume
     lines: list[str] = field(default_factory=list)
@@ -83,6 +88,10 @@ class ClaudeSession:
             args.append("--restricted")
         if self.model:
             args += ["--model", self.model]
+        if self.effort:
+            args += ["--effort", self.effort]
+        if self.max_budget_usd:
+            args += ["--max-budget-usd", str(self.max_budget_usd)]
         if prompt_file:
             args += ["--append-system-prompt-file", prompt_file]
         if mcp_file:
@@ -91,6 +100,8 @@ class ClaudeSession:
             args += ["--tools", ",".join(self.builtin_tools)]
         if self.allowed_tools:
             args += ["--allowedTools", *self.allowed_tools]
+        if self.disallowed_tools:
+            args += ["--disallowedTools", *self.disallowed_tools]
         if self.thread_id:
             args += ["--resume", self.thread_id]
         return args

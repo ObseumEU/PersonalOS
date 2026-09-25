@@ -33,6 +33,9 @@ DEFAULT_RULES = [
     ("New e-mail → Mail agent triage", "gmail", {}, "Mail agent", 3, "mail"),
     ("Discord mention or question → Community agent", "discord", {"kind": "mention"}, "Community agent", 3, "community"),
 ]
+# Off until the Dev agent can act on it (GitHub write access, repositories other
+# than PersonalOS); until then every review request is a wasted run.
+OFF_BY_DEFAULT = {"GitHub review request → Dev agent"}
 
 
 # ------------------------------------------------------------------ rules
@@ -43,7 +46,8 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
     ctx = Ctx(actors.owner_id(conn), via="system")
     for i, (name, source, match, assignee, priority, topic) in enumerate(DEFAULT_RULES):
         create_rule(conn, ctx, {"name": name, "source": source, "match": match, "assignee": assignee,
-                                "priority": priority, "topic": topic, "position": i})
+                                "priority": priority, "topic": topic, "position": i,
+                                "enabled": name not in OFF_BY_DEFAULT})
     conn.commit()
 
 
@@ -85,11 +89,16 @@ def create_rule(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
 
 
 def update_rule(conn: sqlite3.Connection, ctx: Ctx, rule_id: int, changes: dict) -> dict:
+    changes = dict(changes)
+    reason = changes.pop("reason", None)  # why, for the audit log
     allowed = {"name", "source", "match", "assignee", "priority", "topic", "enabled", "position"}
     unknown = set(changes) - allowed
     if unknown:
         raise tasks.Invalid(f"unknown fields: {sorted(unknown)}")
-    return _rule_out(versioning.update(conn, ctx, "route", rule_id, _validate(changes)))
+    row = versioning.update(conn, ctx, "route", rule_id, _validate(changes))
+    if reason:
+        audit.log(conn, ctx, "route_reason", "route", rule_id, reason=str(reason)[:500])
+    return _rule_out(row)
 
 
 def archive_rule(conn: sqlite3.Connection, ctx: Ctx, rule_id: int) -> dict:
@@ -131,9 +140,10 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
         raise tasks.Invalid("an event needs a title")
     ref = event.get("ref")
     if ref:
-        dup = conn.execute("SELECT id, task_id FROM events WHERE source = ? AND ref = ?", (source, ref)).fetchone()
+        dup = conn.execute("SELECT id, task_id, rule_id FROM events WHERE source = ? AND ref = ?",
+                           (source, ref)).fetchone()
         if dup:
-            return {"event_id": dup["id"], "task_id": dup["task_id"], "duplicate": True}
+            return _reroute(conn, ctx, dup, event)
 
     rule = next((r for r in list_rules(conn) if matches(r, event)), None)
     body = event.get("body") or ""
@@ -161,6 +171,29 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
               suspicious=signals or None)
     return {"event_id": cur.lastrowid, "task_id": task["id"], "task_ref": task["ref"],
             "rule": rule["name"] if rule else None, "assignee": task["assignee_name"], "suspicious": signals}
+
+
+def _reroute(conn: sqlite3.Connection, ctx: Ctx, dup: sqlite3.Row, event: dict) -> dict:
+    """The same (source, ref) again, e.g. an issue opened without a label and
+    labelled `agent` later. If no rule caught it the first time and one matches
+    now, the existing task is routed by that rule (still open tasks only)."""
+    out = {"event_id": dup["id"], "task_id": dup["task_id"], "duplicate": True}
+    if dup["rule_id"] is not None or not dup["task_id"]:
+        return out
+    rule = next((r for r in list_rules(conn) if matches(r, event)), None)
+    task = conn.execute("SELECT status FROM tasks WHERE id = ?", (dup["task_id"],)).fetchone()
+    if rule is None or task is None or task["status"] not in ("inbox", "next"):
+        return out
+    tasks.update(conn, ctx, dup["task_id"], {k: v for k, v in {
+        "status": "next", "priority": rule["priority"], "topic": rule["topic"]}.items() if v is not None})
+    if rule["assignee"]:
+        tasks.assign(conn, ctx, dup["task_id"], rule["assignee"])
+    conn.execute("UPDATE events SET rule_id = ?, payload = ? WHERE id = ?",
+                 (rule["id"], json.dumps(event, ensure_ascii=False, default=str), dup["id"]))
+    conn.execute("UPDATE routing_rules SET hits = hits + 1 WHERE id = ?", (rule["id"],))
+    t = tasks.get(conn, ctx, dup["task_id"])
+    audit.log(conn, ctx, "event_rerouted", "task", t["id"], source=event.get("source"), rule=rule["name"])
+    return {**out, "rerouted": True, "task_ref": t["ref"], "rule": rule["name"], "assignee": t["assignee_name"]}
 
 
 def list_events(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:

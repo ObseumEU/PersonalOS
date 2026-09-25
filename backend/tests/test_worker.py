@@ -330,3 +330,28 @@ def test_claude_selfcheck_marks_claude_unavailable_when_the_cli_fails(tmp_path, 
     good = _wrap(tmp_path, "claude_ok", "import json\nprint(json.dumps({'type':'result','is_error':False,'result':'ok'}))\n")
     monkeypatch.setattr(runner, "claude_bin", lambda: good)
     assert engines.claude_selfcheck(c)["ok"] and engines.paused_until(c, "claude") is None
+
+
+def test_step_cap_stops_a_runaway_run_and_hands_the_task_back(setup, fake_codex, tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    client, conn, owner, agent_id, key = setup
+    from pos import tasks
+
+    t = tasks.create(conn, owner, {"title": "Refactor everything", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    worker = worker_for(client, key, fake_codex, tmp_path)
+    worker.max_steps = 2
+    assert worker.step() == "error"
+    run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
+    assert run["status"] == "error" and "step limit reached (2 steps)" in run["detail"]
+    assert tasks.get(conn, owner, t["id"])["status"] != "working"
+
+
+def test_claude_session_passes_effort_budget_and_hidden_tools():
+    s = ClaudeSession(binary="claude", effort="medium", max_budget_usd=5.0,
+                      disallowed_tools=["mcp__pos__list_tasks", "mcp__pos__hr_overview"])
+    args = s._args(None)
+    assert args[args.index("--effort") + 1] == "medium"
+    assert args[args.index("--max-budget-usd") + 1] == "5.0"
+    i = args.index("--disallowedTools")
+    assert args[i + 1:i + 3] == ["mcp__pos__list_tasks", "mcp__pos__hr_overview"]

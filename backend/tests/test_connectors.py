@@ -121,3 +121,28 @@ def test_github_webhook(tmp_path, monkeypatch):
         assert ok.status_code == 200 and ok.json()["events"][0]["assignee"] == "Dev agent"
         assert client.get("/api/events").json()[0]["source"] == "github"
         assert client.get("/api/connectors").json()["github_webhook"] is True
+
+
+def test_issue_labelled_agent_after_it_was_opened_reaches_the_dev_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_CODEX_DISABLED", "1")
+    with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
+        client.post("/api/agents", json={"name": "Dev agent", "purpose": "dev", "lifetime": "long_lived",
+                                         "permissions": ["tasks:read"]})
+        issue = {"number": 9, "title": "Flaky test", "body": "", "html_url": "https://gh/9", "user": {"login": "x"},
+                 "labels": []}
+        conn = connect(Settings(data_dir=tmp_path).db_path)
+        ctx = Ctx(actors.owner_id(conn))
+        repo = {"full_name": "ObseumEU/PersonalOS"}
+        opened = routing.ingest(conn, ctx, routing.github_events("issues", {"action": "opened", "repository": repo,
+                                                                           "issue": issue})[0])
+        assert opened["assignee"] is None
+        issue["labels"] = [{"name": "agent"}]
+        labelled = routing.ingest(conn, ctx, routing.github_events("issues", {"action": "labeled", "repository": repo,
+                                                                             "issue": issue})[0])
+        assert labelled["duplicate"] and labelled["rerouted"] and labelled["assignee"] == "Dev agent"
+        t = tasks.get(conn, ctx, opened["task_id"])
+        assert t["assignee_name"] == "Dev agent" and t["status"] == "next"
+        # Once routed, a third event does not route it again.
+        assert "rerouted" not in routing.ingest(conn, ctx, routing.github_events(
+            "issues", {"action": "labeled", "repository": repo, "issue": issue})[0])
+        conn.close()

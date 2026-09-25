@@ -14,6 +14,10 @@ Environment:
     WORKER_CLAUDE_TOOLS  tools a Claude agent may use (default: pos MCP, read, edit, web);
                      entries separated by '|' when they contain spaces
     WORKER_CLAUDE_BUILTIN  built-in tools that exist at all, comma-separated (e.g. Bash,Read,Edit)
+    WORKER_CLAUDE_DISALLOWED  tools hidden from a Claude agent (saves their definitions on every turn)
+    WORKER_CLAUDE_EFFORT     Claude effort level (low, medium, high, xhigh, max)
+    WORKER_CLAUDE_MAX_USD    Claude cost cap per run (--max-budget-usd)
+    WORKER_MAX_STEPS     stop a run after this many completed steps and hand the task back (0 = no cap)
     WORKER_CLAUDE_MCP    more MCP servers for Claude, as JSON
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
                      GitHub, Gmail, Discord) with their own tokens in env vars
@@ -77,6 +81,9 @@ def main() -> None:
                              **claude_extra_mcp()},
                 allowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS)),
                 builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
+                disallowed_tools=tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")),
+                effort=os.environ.get("WORKER_CLAUDE_EFFORT") or None,
+                max_budget_usd=float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None,
             )
         return CodexSession(
             binary=os.environ.get("CODEX_BIN", "codex"),
@@ -86,7 +93,8 @@ def main() -> None:
                     *([f'model="{model}"'] if model else []), *extra_config()],
         )
 
-    Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60"))).run_forever()
+    Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
+           max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0)).run_forever()
 
 
 if __name__ == "__main__":
