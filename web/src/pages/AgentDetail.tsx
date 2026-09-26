@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { type AgentDetail as Detail, agentsApi, type Org } from "../agentsApi";
 import { markdownSnippet } from "../markdownText";
+import { AccessPanel, CompanyAccessPanel } from "../components/agents/AccessPanel";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { FeedbackPanel, InstructionsEditor } from "../components/Feedback";
@@ -392,7 +393,7 @@ export default function AgentDetail() {
             </div>
           ))}
         </Panel>
-        <Panel fig="TAB. 12" title="Permissions" right="owner only · never more than its creator" className="lg:col-span-3">
+        <Panel fig="TAB. 12" title="Permissions" right="owner · permanent grants (the Access manager uses Access below)" className="lg:col-span-3">
           <div className="flex flex-col gap-1.5 p-4">
             {Object.entries(perms).map(([p, why]) => (
               <label key={p} title={why} className="flex items-center gap-2 text-xs">
@@ -420,6 +421,8 @@ export default function AgentDetail() {
           ))}
         </Panel>
       </div>
+      {a.kind !== "human" && <AccessPanel agentId={a.id} />}
+      {a.name === "Access manager" && <CompanyAccessPanel />}
       <OrgPanel a={a} onSaved={act} />
       <FeedbackPanel member={{ id: a.id, name: a.name }} />
       <SchedulesPanel actor={{ id: a.id, name: a.name }} />
