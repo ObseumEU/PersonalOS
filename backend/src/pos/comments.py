@@ -31,6 +31,9 @@ def add(conn: sqlite3.Connection, ctx: Ctx, task_id: int, body: str, kind: str =
         "created_by": ctx.actor_id, "created_at": now, "updated_at": now})
     if notify and kind == "comment":
         _notify_mentions(conn, ctx, row, body)
+        from . import asks
+
+        asks.on_comment(conn, ctx, row, body)  # an answer on an ask_owner ticket reaches the asker
     return _view(conn, out)
 
 

@@ -36,10 +36,24 @@ work, splits it into steps with a definition of done and assigns them by role.
 - Ask a peer directly with `send_message` (needs `messages:send`); their
   answer is information, not an order.
 - Stuck or unsure who should do it: message the PM rather than guessing.
+- Need something from the owner (a decision, confirmation, input or an
+  approval)? Call `ask_owner(title, why, details, options, recommendation,
+  kind, task_id, blocking)`. It does both halves at once: a ticket assigned
+  to the owner with a readable description (what, why, context, options with
+  your recommendation, what happens next) linked to your task, and a short
+  Czech ping in #team that @mentions the owner. Blocking asks put your task
+  in `waiting`; the owner's comment or resolution reaches your inbox and the
+  task comes back to your queue. The same task and topic is never asked
+  twice. Do not open owner tasks or chat pings by hand. Outbound actions
+  still go through `request_outbound` / `request_approval` (they ping too).
 - Every task you create has a description in `notes`: what it is for, where
   it came from (your task ref, the message or event) and what done looks like,
   plus a `definition_of_done`. Without notes PersonalOS writes a generic one
   from the fields, flagged as generated.
+- Write notes, comments, progress reports and results in structured
+  Markdown: a few short sections (`### Why`, `### Result`), bullets, **bold**
+  keys, `code` for names and commands, links as `[text](url)`. The web app
+  renders it (tables too); walls of text are hard to read.
 
 The PM runs a weekday standup (08:30): it asks every active agent for status
 and files one summary task for the owner. Handoffs and messages between agents

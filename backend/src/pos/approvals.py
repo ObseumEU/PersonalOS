@@ -21,14 +21,19 @@ def on_approved(fn) -> None:
 
 
 def request(conn: sqlite3.Connection, ctx: Ctx, action: str, details: dict | None = None,
-            task_id: int | None = None) -> dict:
+            task_id: int | None = None, ping: bool = True) -> dict:
     cur = conn.execute(
         """INSERT INTO approvals (task_id, requested_by, run_id, action, details, created_at)
            VALUES (?, ?, ?, ?, ?, ?)""",
         (task_id, ctx.actor_id, ctx.run_id, action, json.dumps(details or {}, ensure_ascii=False), now_iso()),
     )
     audit.log(conn, ctx, "request_approval", "approval", cur.lastrowid, requested=action, task_id=task_id)
-    return get(conn, cur.lastrowid)
+    out = get(conn, cur.lastrowid)
+    if ping:
+        from . import asks
+
+        asks.ping_approval(conn, ctx, out)  # the owner hears of it in #team, like any ask
+    return out
 
 
 def get(conn: sqlite3.Connection, approval_id: int) -> dict:
@@ -60,4 +65,8 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, approval_id: int, approve: bool, 
     if approve:
         for fn in _on_approved:
             fn(conn, get(conn, approval_id))
-    return get(conn, approval_id)
+    out = get(conn, approval_id)
+    from . import asks
+
+    asks.tell_decision(conn, ctx, out)  # the requester gets the decision in its inbox
+    return out

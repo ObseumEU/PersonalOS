@@ -1,6 +1,7 @@
 import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import Markdown from "../components/Markdown";
 import { AssigneeChip } from "../components/tasks/bits";
 import { PageHeader, Panel } from "../components/ui";
 import { type AssigneeType, type Step, type Suggestion, type Task, tasksApi } from "../tasksApi";
@@ -131,7 +132,7 @@ export default function InboxClarify() {
               <div className="flex flex-col gap-1.5">
                 <span className="cap">CAPTURED · {item.source.toUpperCase()}</span>
                 <span className="text-xl font-light">“{item.title}”</span>
-                {item.notes && <span className="text-sm text-ink-2">{item.notes}</span>}
+                {item.notes && <Markdown text={item.notes} compact className="md-muted" />}
               </div>
 
               {!draft ? (

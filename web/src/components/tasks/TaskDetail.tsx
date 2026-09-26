@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../../api";
 import { type Actor, type Comment, NO_DESCRIPTION, type Task, type Version, tasksApi } from "../../tasksApi";
 import { FeedbackForm } from "../Feedback";
+import { markdownSnippet } from "../../markdownText";
 import Markdown from "../Markdown";
 import { Panel } from "../ui";
 import AgentPicker from "./AgentPicker";
@@ -118,7 +119,7 @@ export function Description({ task, onSave }: { task: Task; onSave: (notes: stri
           {NO_DESCRIPTION} · add what the task is for and what done looks like
         </button>
       ) : (
-        <div className="rounded border border-line p-3 text-[13px] break-words">
+        <div className="rounded border border-line px-4 py-3">
           <Markdown text={task.notes} />
         </div>
       )}
@@ -168,7 +169,7 @@ function Activity({ taskRef, version }: { taskRef: string; version: string }) {
             {KIND_LABEL[c.kind] ? ` · ${KIND_LABEL[c.kind]}` : ""} ·{" "}
             {new Date(c.created_at).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}
           </span>
-          <span className={`text-[13px] whitespace-pre-wrap ${c.kind === "comment" ? "" : "text-ink-2"}`}>{c.body}</span>
+          <Markdown text={c.body} compact className={c.kind === "comment" ? "" : "md-muted"} />
         </div>
       ))}
       <div className="flex flex-col gap-1.5 border-t border-line pt-2">
@@ -304,6 +305,8 @@ export default function TaskDetail({
 
   if (!task) return <Panel title="Detail" className="w-full">{error && <p className="cap p-4 text-red-400!">{error}</p>}</Panel>;
   const agentWork = task.assignee_type === "ai" || task.assignee_type === "agent";
+  // What an agent handed in (complete_task's note) reads as a result, not a status line.
+  const showResult = !!task.progress_note?.trim() && (task.status === "review" || task.status === "done");
 
   return (
     <Panel
@@ -333,8 +336,17 @@ export default function TaskDetail({
         <div className="flex flex-wrap items-center gap-2">
           <AgentPicker task={task} align="left" onReassigned={() => run(Promise.resolve())} />
           <StatePill task={task} />
-          {task.progress_note && <span className="cap">{task.progress_note}</span>}
+          {task.progress_note && !showResult && <span className="cap">{markdownSnippet(task.progress_note, 160)}</span>}
         </div>
+
+        {showResult && (
+          <div className="flex flex-col gap-1.5">
+            <span className="cap">RESULT</span>
+            <div className="rounded border border-line px-4 py-3">
+              <Markdown text={task.progress_note!} />
+            </div>
+          </div>
+        )}
 
         <TaskLive taskRef={task.ref} version={task.updated_at} onChange={() => run(Promise.resolve())} />
 

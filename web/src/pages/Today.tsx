@@ -6,6 +6,7 @@ import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
 import { PageHeader, Panel } from "../components/ui";
 import { type FileItem, filesApi, fmtDate } from "../filesApi";
+import { markdownSnippet } from "../markdownText";
 import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
 import { type Agenda, agendaApi } from "./Calendar";
 
@@ -109,7 +110,7 @@ export default function Today() {
                     <AssigneeChip type={t.assignee_type} name={t.assignee_name} />
                   </span>
                 </span>
-                {t.progress_note && <span className="cap truncate">{t.progress_note}</span>}
+                {t.progress_note && <span className="cap truncate">{markdownSnippet(t.progress_note, 160)}</span>}
               </Link>
             ))}
           </Panel>

@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { markdownSnippet } from "./markdownText";
 
 export type AssigneeType = "human" | "ai" | "agent" | "external";
 export type Status = "inbox" | "next" | "working" | "review" | "waiting" | "someday" | "done";
@@ -206,13 +207,5 @@ export const NO_DESCRIPTION = "Bez popisu";
 
 /** A short plain-text preview of a task's description (markdown marks and wrappers stripped). */
 export function descriptionPreview(notes: string | null | undefined, max = 180): string {
-  const text = (notes ?? "")
-    .replace(/<\/?external[^>]*>/g, " ")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/^_Generated from the task's fields.*$/m, "")
-    .replace(/\*\*|__|`/g, "")
-    .replace(/^\s*(#{1,6}|>|[-+*]|\d+\.)\s+/gm, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+  return markdownSnippet((notes ?? "").replace(/^_Generated from the task's fields.*$/m, ""), max);
 }

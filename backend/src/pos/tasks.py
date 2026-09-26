@@ -367,6 +367,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
             extra["completed_at"] = None
     versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra}, action="accept" if accepted else "update")
     out = get(conn, ctx, task_id)
+    if out["status"] == "done" and row["status"] != "done":
+        from . import asks
+
+        asks.on_task_changed(conn, ctx, row, out)  # an answered ask_owner ticket reaches the asker
     if handed_in:
         _ask_reviewer(conn, ctx, out)
     if accepted:
