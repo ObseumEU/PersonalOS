@@ -209,6 +209,21 @@ def _store(conn: sqlite3.Connection, row: dict, task_id: int | None) -> None:
          row["incident_id"], task_id, now, now if row["status"] == "resolved" else None))
 
 
+def _same_episode(conn: sqlite3.Connection, alert: dict) -> dict:
+    """An episode is the open (firing) row of a fingerprint. Grafana's resolved
+    notification carries the time it went back to normal as startsAt, and a
+    repeat after a Grafana restart may carry a new one: both belong to the open
+    episode, so they get its start (and so its incident id and event ref)."""
+    fp = re.sub(r"[^A-Za-z0-9]", "", str(alert.get("fingerprint") or ""))[:40]
+    if not fp:
+        return alert
+    row = conn.execute("SELECT starts_at FROM grafana_alerts WHERE fingerprint = ? AND status = 'firing' "
+                       "ORDER BY received_at DESC LIMIT 1", (fp,)).fetchone()
+    if row is None or row["starts_at"] == alert.get("startsAt"):
+        return alert
+    return {**alert, "startsAt": row["starts_at"], "notifiedStartsAt": alert.get("startsAt")}
+
+
 def ingest_webhook(conn: sqlite3.Connection, ctx: Ctx, payload: dict) -> dict:
     """One Grafana notification (a group of up to maxAlerts alerts)."""
     from . import routing
@@ -222,6 +237,7 @@ def ingest_webhook(conn: sqlite3.Connection, ctx: Ctx, payload: dict) -> dict:
     for alert in alerts[:50]:
         if not isinstance(alert, dict):
             continue
+        alert = _same_episode(conn, alert)
         event = to_event(alert)
         row = event.pop("_row")
         res = routing.ingest(conn, ctx, event)

@@ -130,14 +130,6 @@ def test_repeated_notification_is_deduplicated(app):
     assert row["notifications"] == 2 and row["status"] == "firing"
 
 
-def test_a_new_episode_of_the_same_alert_is_a_new_incident(app):
-    first = _hook(app, _payload()).json()["alerts"][0]
-    later = copy.deepcopy(ALERT)
-    later["startsAt"] = "2026-09-26T12:00:00Z"
-    second = _hook(app, _payload(later)).json()["alerts"][0]
-    assert second["task_id"] != first["task_id"]
-
-
 def test_resolved_closes_the_untouched_task_and_clears_the_panel(app):
     conn = app["conn"]
     fired = _hook(app, _payload()).json()["alerts"][0]
@@ -150,6 +142,32 @@ def test_resolved_closes_the_untouched_task_and_clears_the_panel(app):
     assert late["duplicate"] is True
     st = app["client"].get("/api/observability/status").json()
     assert st["firing"] == [] and st["resolved"][0]["alertname"] == "Swap above 90%"
+
+
+def test_resolved_with_grafanas_new_start_time_closes_the_open_episode(app):
+    # Grafana sends a normal resolution with startsAt = when it went back to normal.
+    conn = app["conn"]
+    fired = _hook(app, _payload()).json()["alerts"][0]
+    moved = _resolved()
+    moved["startsAt"] = "2026-09-26T09:48:00Z"
+    res = _hook(app, _payload(moved, status="resolved")).json()["alerts"][0]
+    assert res["incident"] == fired["incident"] and res.get("closed_without_run") is True
+    assert tasks.get(conn, app["owner"], fired["task_id"])["status"] == "done"
+    assert conn.execute("SELECT COUNT(*) FROM grafana_alerts").fetchone()[0] == 1
+    # a repeat of the firing alert with a new start while it is still open is the same episode
+    again = _hook(app, _payload()).json()["alerts"][0]
+    assert again["duplicate"] is True
+    new = copy.deepcopy(ALERT)
+    new["startsAt"] = "2026-09-26T13:00:00Z"
+    assert _hook(app, _payload(new)).json()["alerts"][0]["task_id"] != fired["task_id"]  # after resolution: new
+
+
+def test_repeat_with_a_new_start_while_open_is_the_same_episode(app):
+    fired = _hook(app, _payload()).json()["alerts"][0]
+    later = copy.deepcopy(ALERT)
+    later["startsAt"] = "2026-09-26T09:41:00Z"  # e.g. after a Grafana restart
+    again = _hook(app, _payload(later)).json()["alerts"][0]
+    assert again["duplicate"] is True and again["task_id"] == fired["task_id"]
 
 
 def test_resolved_after_the_monitor_started_is_a_comment(app):
