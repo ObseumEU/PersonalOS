@@ -209,6 +209,16 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     engine, why, model = engines.choose(conn, ctx.actor_id)
     if engine is None:
         raise HTTPException(409, f"no runtime available: {why}")
+    if tid is not None:
+        # One live run per task: a second worker (or a retry) is refused here,
+        # before a run row exists, not later at claim. The write lock makes the
+        # check and the insert one step for concurrent requests.
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        live, cutoff = _live_run_sql()
+        if conn.execute(f"SELECT 1 FROM tasks WHERE id = ? AND {live}", (tid, cutoff, None)).fetchone():
+            conn.rollback()
+            raise HTTPException(409, f"{tasks.display_id(tid)} already has a live run")
     res = runner.start_external(conn, runner.RunRequest(ctx.actor_id, body.kind, "", task_id=tid, engine=engine,
                                                         model=model))
     if res.status == "blocked":

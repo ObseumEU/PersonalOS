@@ -238,11 +238,13 @@ def test_second_worker_of_the_same_agent_does_not_take_a_task_in_progress(setup,
     first = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
     assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={first}", headers=h).status_code == 200
 
-    # A duplicate worker process: the task is not offered, and a claim is refused.
+    # A duplicate worker process: the task is not offered, and a second run is refused
+    # before any run row exists.
     assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
-    second = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
-    assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={second}", headers=h).status_code == 409
-    client.post(f"/api/worker/runs/{second}/finish", json={"status": "cancelled", "jsonl": ""}, headers=h)
+    runs_before = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    r = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h)
+    assert r.status_code == 409 and "live run" in r.json()["detail"]
+    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == runs_before
 
     # Once the first run is gone (worker crashed), the task can be resumed.
     conn.execute("UPDATE runs SET status = 'error' WHERE id = ?", (first,))
