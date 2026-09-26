@@ -102,3 +102,79 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .fade-in, .sonar, .breathe { animation: none; }
 }
+
+/* Rendered Markdown (components/Markdown): task descriptions, comments,
+   progress and results. Theme tokens only, so it follows the palette. */
+.md {
+  max-width: 72ch;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table { margin: 0 0 0.75em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 1.2em 0 0.4em;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+}
+.md h1 { font-size: 1.35em; font-weight: 400; }
+.md h2 { font-size: 1.15em; font-weight: 500; }
+.md h3 { font-size: 1em; font-weight: 500; }
+.md h4, .md h5, .md h6 {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-ink-2);
+}
+.md strong { font-weight: 500; color: var(--color-ink); }
+.md em { font-style: italic; }
+.md del { color: var(--color-ink-3); }
+.md a { color: var(--color-accent); text-underline-offset: 2px; }
+.md a:hover { text-decoration: underline; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.2em 0; }
+.md li > ul, .md li > ol { margin: 0.2em 0 0; }
+.md li::marker { color: var(--color-ink-3); }
+.md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.3em; }
+.md input[type="checkbox"] { margin-right: 0.45em; accent-color: var(--color-accent); vertical-align: -1px; }
+.md blockquote {
+  border-left: 2px solid var(--color-accent);
+  padding-left: 0.8em;
+  color: var(--color-ink-2);
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--color-raised);
+  border: 1px solid var(--color-line);
+  border-radius: 3px;
+  padding: 0.05em 0.3em;
+}
+.md pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: 4px;
+  padding: 0.7em 0.9em;
+  overflow-x: auto;
+}
+.md pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.md hr { border: 0; border-top: 1px solid var(--color-line); margin: 1em 0; }
+.md .md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: 13px; }
+.md th, .md td { border: 1px solid var(--color-line); padding: 0.3em 0.6em; text-align: left; vertical-align: top; }
+.md th { background: var(--color-raised); font-weight: 500; }
+.md-compact { font-size: 13px; line-height: 1.5; }
+.md-compact p, .md-compact ul, .md-compact ol, .md-compact blockquote, .md-compact pre, .md-compact .md-table { margin-bottom: 0.4em; }
+.md-compact h1, .md-compact h2, .md-compact h3 { font-size: 13px; font-weight: 500; margin: 0.5em 0 0.2em; }
+.md-muted, .md-muted strong, .md-muted h1, .md-muted h2, .md-muted h3 { color: var(--color-ink-2); }

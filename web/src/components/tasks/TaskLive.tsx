@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { type TaskLive as Live, tasksApi } from "../../tasksApi";
+import Markdown from "../Markdown";
 import { EngineBadge } from "./AgentPicker";
 
 const STATE_TEXT: Record<string, string> = {
@@ -93,9 +94,12 @@ export default function TaskLive({ taskRef, version, onChange }: { taskRef: stri
           {live.notes.slice(0, 5).map((n, i) => (
             <li key={i} className="flex gap-2 text-[12px] leading-snug">
               <span className="cap w-14 shrink-0">{time(n.at)}</span>
-              <span className="min-w-0 break-words text-ink-2">
-                {n.progress != null && n.progress > 0 ? `${n.progress}% · ` : ""}
-                {n.note}
+              <span className="min-w-0 flex-1">
+                <Markdown
+                  compact
+                  className="md-muted text-[12px]!"
+                  text={`${n.progress != null && n.progress > 0 ? `**${n.progress}%** · ` : ""}${n.note ?? ""}`}
+                />
               </span>
             </li>
           ))}

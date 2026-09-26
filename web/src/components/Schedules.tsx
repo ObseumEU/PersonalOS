@@ -2,6 +2,7 @@ import { Archive, Pause, Play, Plus, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { markdownSnippet } from "../markdownText";
 import { ago } from "../pages/Agents";
 import { Panel } from "./ui";
 
@@ -62,7 +63,7 @@ function Rows({ items, onChange, onError }: { items: Schedule[]; onChange: () =>
         <div key={s.id} className={`grid grid-cols-1 gap-1.5 border-b border-line px-4 py-2.5 text-[13px] ${COLS} md:items-center md:gap-3 ${s.status === "paused" ? "opacity-50" : ""}`}>
           <span className="flex min-w-0 flex-col">
             <span className="truncate">{s.name}</span>
-            {s.template.notes && <span className="cap truncate">{s.template.notes}</span>}
+            {s.template.notes && <span className="cap truncate">{markdownSnippet(s.template.notes, 140)}</span>}
           </span>
           <span className="font-mono text-xs">{s.schedule}</span>
           <span className="cap truncate">

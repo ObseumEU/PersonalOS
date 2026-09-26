@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { type AgentDetail as Detail, agentsApi, type Org } from "../agentsApi";
+import { markdownSnippet } from "../markdownText";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { FeedbackPanel, InstructionsEditor } from "../components/Feedback";
@@ -263,7 +264,7 @@ export default function AgentDetail() {
                 <StatePill task={t} />
               </span>
               <span className="text-[13px]">{t.title}</span>
-              {t.progress_note && <span className="cap truncate">{t.progress_note}</span>}
+              {t.progress_note && <span className="cap truncate">{markdownSnippet(t.progress_note, 160)}</span>}
             </Link>
           ))}
         </Panel>

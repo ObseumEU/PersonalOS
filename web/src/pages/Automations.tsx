@@ -2,6 +2,7 @@ import { Archive, Pause, Play, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { markdownSnippet } from "../markdownText";
 import { NewSchedule, type Schedule, resultText, until } from "../components/Schedules";
 import { PageHeader, Panel } from "../components/ui";
 import { ago } from "./Agents";
@@ -64,7 +65,7 @@ export default function Automations() {
       setSchedule: (v: string) => patch(`/api/jobs/${j.id}`, { schedule: v }), archive: null,
     })),
     ...schedules.map((x) => ({
-      key: `sch-${x.id}`, name: x.name, sub: x.template.notes ?? "",
+      key: `sch-${x.id}`, name: x.name, sub: markdownSnippet(x.template.notes, 140),
       owner: x.assignee_id === x.created_by ? x.created_by_name : `${x.created_by_name} → ${x.assignee_name}`,
       ownerId: x.assignee_id, schedule: x.schedule, active: x.status === "active", next: x.next_run_at,
       last: x.last_run_at, lastText: resultText(x.last_result), lastRef: x.last_task_ref, error: Boolean(x.last_result?.error),
