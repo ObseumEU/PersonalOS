@@ -30,7 +30,8 @@ approvals); `actors.permissions` stays as a mirror of the active grants.
 ## The Access manager's hard limits
 It decides alone (any capability, any budget, permanent or temporary) except:
 nothing for itself, never the company cap, and never owner-only items
-(`guard:*`, `constitution:*`, `secrets:*`, `credentials:*`, `access:manage`,
+(`guard:*`, `constitution:*`, `secrets:*`, `credentials:*`, `cred:*` (one
+1Password credential, [CREDENTIALS.md](CREDENTIALS.md)), `access:manage`,
 `tool:access_*`). Every decision is audit-logged with its reason and posted in
 #team.
 
