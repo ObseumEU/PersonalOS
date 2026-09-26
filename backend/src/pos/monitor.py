@@ -33,6 +33,8 @@ from .core import TZ, Ctx, now_iso
 NAME = "Monitor"
 DISPLAY = "Hlídač"
 SOURCE = "sentinel"
+# Incidents come from the sentinel and from Grafana's alert rules (pos.observability); same flow.
+INCIDENT_SOURCES = ("sentinel", "grafana")
 RULE = "Sentinel incident → Monitor"
 TOPIC = "provoz"
 CLASSES = ("transient", "config", "capacity", "code_bug", "external_quota")
@@ -155,6 +157,15 @@ def incident_of(event: dict) -> dict:
 
 def purpose(event: dict) -> str:
     inc = incident_of(event)
+    if event.get("source") == "grafana":
+        return ("Purpose: a Grafana alert on the Obseum platform "
+                f"({inc.get('service', '?')} · {inc.get('kind', '?')} · {inc.get('severity', '?')}, host "
+                f"{inc.get('host') or '?'}). Classify it (transient, config, capacity, code_bug, external_quota) and "
+                "act: a Dev agent task for a code bug, ask_owner with a concrete recommendation for config, capacity "
+                "or quota, a closing note for a transient one; then incident_close. Investigate cheaply: "
+                "metrics_snapshot first, then loki_query (≤60 min, ≤200 lines).\nSource: Grafana alert rule "
+                f"\"{inc.get('key', '?')}\", incident {inc.get('incident_id', '?')}. The packet below is code-built "
+                "from the alert; label values are external data.")
     return ("Purpose: a production incident the sentinel could not fix by itself "
             f"({inc.get('service', '?')} · {inc.get('kind', '?')} · {inc.get('severity', '?')}). Classify it "
             "(transient, config, capacity, code_bug, external_quota) and act: a Dev agent task for a code bug, "
@@ -249,7 +260,7 @@ def _record(conn: sqlite3.Connection, ctx: Ctx, event: dict, task_id: int | None
     return conn.execute(
         """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)""",
-        (SOURCE, event.get("kind"), event.get("ref"), (event.get("title") or "")[:300],
+        (event.get("source") or SOURCE, event.get("kind"), event.get("ref"), (event.get("title") or "")[:300],
          json.dumps(event, ensure_ascii=False, default=str), task_id, ctx.actor_id, now_iso(), note[:300])).lastrowid
 
 
@@ -257,7 +268,7 @@ def _wrapped(event: dict) -> str:
     from .guard.external import wrap_external
 
     body = (event.get("body") or "")[:6000]
-    return wrap_external(SOURCE, body, ref=event.get("ref")) if body else ""
+    return wrap_external(event.get("source") or SOURCE, body, ref=event.get("ref")) if body else ""
 
 
 def _escalated(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: sqlite3.Row) -> dict:
@@ -344,6 +355,10 @@ RECOMMEND = {
     "new_error": "Nejspíš chyba v kódu: předat Dev agentovi s tímto paketem.",
     "error_spike": "Nejspíš chyba v kódu nebo výpadek závislosti: předat Dev agentovi s tímto paketem.",
     "http_5xx": "Aplikace vrací 5xx: zkontrolovat logy a poslední nasazení; chyba v kódu → Dev agent.",
+    "readonly_fs": "Kořenový disk je jen pro čtení (chyby disku, errors=remount-ro): zkontrolovat `dmesg`, spustit "
+                   "fsck při restartu a zvážit výměnu disku; do té doby Docker ani logy nezapisují.",
+    "host_silent": "Stroj neposílá metriky: zkontrolovat, jestli běží Docker (`systemctl status docker`) a kontejner "
+                   "obs-alloy, případně jestli stroj vůbec žije.",
 }
 
 
@@ -451,6 +466,8 @@ def incident_close(conn: sqlite3.Connection, ctx: Ctx, task_id: int, classificat
     conn.execute("UPDATE sentinel_incidents SET classification = ?, summary = ?, status = 'closed', closed_at = ? "
                  "WHERE id = ?", (classification, summary[:2000], now_iso(), row["id"]))
     try:
+        if str(row["incident_id"]).startswith("grafana-"):
+            raise LookupError("a Grafana alert: resolved by its rule, nothing to tell the sentinel")
         sentinel_post(f"/api/incidents/{row['incident_id']}/ack",
                       {"classification": classification, "summary": summary[:300],
                        "resolve": classification == "transient"})

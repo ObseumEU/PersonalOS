@@ -37,6 +37,7 @@ PERMISSIONS = {
     "browser:use": "drive a web browser (paying, sending, deleting and account settings still need approval)",
     "access:manage": "decide other agents' grants and budgets (the Access manager; only the owner grants it)",
     "ops:monitor": "read the sentinel's incident logs and close incidents (the Monitor agent)",
+    "ops:observe": "query Loki logs (<=1 h, <=200 lines, redacted) and a Prometheus metrics snapshot (the Monitor agent)",
 }
 BUILTIN_PERMISSIONS = {
     actors.ASSISTANT_NAME: ["tasks:read", "tasks:write", "tasks:claim", "approvals:request", "agents:create",

@@ -268,7 +268,14 @@ def sentinel_digest(conn: sqlite3.Connection) -> dict:
     return monitor.digest(conn)
 
 
+def grafana_watch(conn: sqlite3.Connection) -> dict:
+    from . import observability
+
+    return observability.watch(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "grafana_watch": grafana_watch,
     "sentinel_watch": sentinel_watch,
     "sentinel_digest": sentinel_digest,
     "access_expire": access_expire,
@@ -316,6 +323,8 @@ DEFAULT_JOBS = [
     # The sentinel (pos.monitor): its heartbeat must not stop; a daily health digest (quiet days: nothing).
     ("Sentinel: alert when its heartbeat stops", "every 2m", "sentinel_watch"),
     ("Sentinel: daily health digest in #team", "daily 08:00", "sentinel_digest"),
+    # Grafana on .186 (pos.observability): when it stops answering, no alert can reach anyone.
+    ("Grafana: alert when it stops answering", "every 5m", "grafana_watch"),
 ]
 
 
@@ -377,7 +386,7 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
     if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "knowlage_files", "access_expire",
-                             "access_watch", "sentinel_watch", "sentinel_digest") or result.get("sent") \
+                             "access_watch", "sentinel_watch", "sentinel_digest", "grafana_watch") or result.get("sent") \
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
             or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
             or result.get("alerted"):

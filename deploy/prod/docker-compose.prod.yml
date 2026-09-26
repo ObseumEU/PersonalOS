@@ -20,6 +20,12 @@ services:
       POS_KNOWLAGE_PUBLIC_URL: ${POS_KNOWLAGE_PUBLIC_URL:-http://knowlage.obseum.cz}
       POS_KNOWLAGE_A2A_URL: ${POS_KNOWLAGE_A2A_URL:-http://knowlage:8080/a2a/default}
       POS_NEXUS_A2A_URL: ${POS_NEXUS_A2A_URL:-}
+      # Observability on 192.168.1.186 (deploy/observability): Grafana alerts arrive at
+      # /api/hooks/grafana with POS_GRAFANA_TOKEN (in .env); the Monitor reads Loki and Prometheus.
+      POS_GRAFANA_URL: ${POS_GRAFANA_URL:-https://grafana.obseum.cloud}
+      POS_GRAFANA_HEALTH_URL: ${POS_GRAFANA_HEALTH_URL:-http://192.168.1.186:3000/api/health}
+      POS_LOKI_URL: ${POS_LOKI_URL:-http://192.168.1.186:3100}
+      POS_PROMETHEUS_URL: ${POS_PROMETHEUS_URL:-http://192.168.1.186:9090}
     networks:
       default:
       proxy:

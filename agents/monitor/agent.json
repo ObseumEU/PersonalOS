@@ -1,7 +1,7 @@
 {
   "name": "Monitor",
   "display_name": "Hlídač",
-  "purpose": "Hlídač: třídí incidenty ze sentinelu (přechodné, konfigurace, kapacita, chyba v kódu, kvóta) a předá je Dev agentovi nebo majiteli; hlídá zdraví PersonalOS, knowlage, Nexu, LiteLLM a Langfuse.",
+  "purpose": "Hlídač: třídí incidenty ze sentinelu a alerty z Grafany (přechodné, konfigurace, kapacita, chyba v kódu, kvóta) a předá je Dev agentovi nebo majiteli; hlídá zdraví PersonalOS, knowlage, Nexu, LiteLLM a Langfuse.",
   "role": "monitor",
   "team": "operations",
   "reports_to": "Project manager",
@@ -11,7 +11,8 @@
     "tasks:write",
     "messages:send",
     "approvals:request",
-    "ops:monitor"
+    "ops:monitor",
+    "ops:observe"
   ],
   "budget_class": "low",
   "lifetime": "long_lived",

@@ -163,6 +163,44 @@ async def github_webhook(request: Request, conn=Depends(get_db)):
     return {"events": results}
 
 
+@hooks.post("/grafana")
+async def grafana_webhook(request: Request, conn=Depends(get_db)):
+    """Grafana alerting (org "Obseum", contact point "PersonalOS"; deploy/observability):
+    each alert becomes an idempotent incident event for the Monitor agent
+    (pos.observability). Bearer POS_GRAFANA_TOKEN; off while it is not set."""
+    import json
+
+    from . import observability
+    from .tasks import Invalid
+
+    expected = observability.token()
+    if len(expected) < 16:
+        raise HTTPException(404, "the Grafana webhook is not set up")
+    auth = request.headers.get("authorization", "")
+    given = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not hmac.compare_digest(given.encode(), expected.encode()):
+        raise HTTPException(401, "bad Grafana token")
+    raw = await request.body()
+    if len(raw) > 1_000_000:
+        raise HTTPException(413, "too large")
+    try:
+        payload = json.loads(raw)
+    except ValueError as e:
+        raise HTTPException(400, "not JSON") from e
+    try:
+        return observability.ingest_webhook(conn, Ctx(actors.owner_id(conn), via="grafana"), payload)
+    except Invalid as e:
+        raise HTTPException(422, str(e)) from e
+
+
+@router.get("/observability/status")
+def observability_status(conn=Depends(get_db)):
+    """Firing Grafana alerts and dashboard links, from stored alert events (no call to Grafana)."""
+    from . import observability
+
+    return observability.status(conn)
+
+
 @router.get("/jobs")
 def list_jobs(conn=Depends(get_db)):
     return scheduler.list_jobs(conn)

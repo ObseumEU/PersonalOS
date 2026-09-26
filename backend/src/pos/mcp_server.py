@@ -105,6 +105,8 @@ TOOL_PERMISSIONS = {
     "note_create": "tasks:write", "note_update": "tasks:write",
     # The sentinel's incidents (pos.monitor): the Monitor agent's narrow log read and its verdict.
     "incident_logs": "ops:monitor", "incident_close": "ops:monitor",
+    # Observability (pos.observability): a narrow Loki read and a fixed metrics snapshot.
+    "loki_query": "ops:observe", "metrics_snapshot": "ops:observe",
     # Access (pos.access): request_access and my_access are for everyone; deciding is the Access manager's.
     **{t: "access:manage" for t in ("access_review_requests", "access_decide", "access_grant", "access_revoke",
                                      "access_set_budget", "access_usage", "access_audit", "access_resume_agent",

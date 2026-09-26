@@ -270,7 +270,7 @@ services:
       POS_AGENT_KEY: ${MONITOR_AGENT_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
-      WORKER_POS_TOOLS: 'get_task list_tasks incident_logs incident_close create_task task_comment ask_owner report_progress complete_task'
+      WORKER_POS_TOOLS: 'get_task list_tasks incident_logs incident_close metrics_snapshot loki_query create_task task_comment ask_owner report_progress complete_task'
       WORKER_CLAUDE_TOOLS: ' '
       WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
       WORKER_CLAUDE_EFFORT: low

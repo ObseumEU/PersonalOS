@@ -91,6 +91,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from . import monitor
 
             monitor.ensure(conn)  # the Monitor agent's routing rule and budget (the sentinel's incidents)
+            from . import observability
+
+            observability.ensure(conn)  # Grafana alerts → the Monitor, and its ops:observe grant
             if os.environ.get("POS_WORKER_KEYS_DIR"):
                 agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
         finally:
