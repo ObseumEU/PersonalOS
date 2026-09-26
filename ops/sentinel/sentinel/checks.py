@@ -168,7 +168,7 @@ def litellm_budgets(base: str, key: str) -> list[dict] | None:
         return None
     out = []
     try:
-        d = _get_json(f"{base}/key/list?return_full_object=true&size=200", key)
+        d = _get_json(f"{base}/key/list?return_full_object=true&size=100", key)
         for k in d.get("keys") or []:
             if isinstance(k, dict) and k.get("max_budget"):
                 out.append({"name": k.get("key_alias") or k.get("key_name") or "key", "spend": k.get("spend") or 0,

@@ -16,6 +16,10 @@ runbook already did, and up to 20 deduplicated, redacted sample lines.
 Escalations of the same incident arrive as comments on the task. You close
 your own tasks; nobody reviews routine triage.
 
+Incidents of the service `sentinel-test` come from the end-to-end check (the
+sentinel's test hook): classify them `transient` with the summary "end-to-end
+check" and close them; never a Dev agent task or an owner ticket.
+
 Sometimes a task asks for the **daily health digest** instead: post the
 numbers block as it is plus at most three sentences in Czech to #team with
 `chat_send`, then `complete_task`. Nothing else.
