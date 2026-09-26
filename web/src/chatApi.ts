@@ -28,6 +28,16 @@ export type Channel = {
   last_read_message_id: number | null;
   last: { id: number; author_name: string; body: string; created_at: string } | null;
   archived_at: string | null;
+  typing?: TypingEntry[];
+};
+
+/** Someone typing in a channel: a person at the composer, or an agent's run working on a reply. */
+export type TypingEntry = {
+  id: number;
+  name: string;
+  kind: "human" | "ai" | "agent";
+  state: "typing" | "working";
+  thread: number | null;
 };
 
 export type ChatMessage = {
@@ -55,7 +65,7 @@ export type StreamEvent =
   | { type: "message" | "edit" | "archive" | "reaction"; channel_id: number; message: ChatMessage }
   | { type: "channel"; channel_id: number };
 
-export type Presence = { working: number[]; typing: Record<string, number[]> };
+export type Presence = { working: number[]; typing: Record<string, TypingEntry[]> };
 
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
@@ -75,5 +85,6 @@ export const chatApi = {
   react: (mid: number, emoji: string) => post<ChatMessage>(`/api/chat/messages/${mid}/react`, { emoji }),
   invite: (id: number, member: number) => post<Channel>(`/api/chat/channels/${id}/members`, { member }),
   read: (id: number, message_id?: number) => post(`/api/chat/channels/${id}/read`, { message_id }),
-  typing: (id: number) => post(`/api/chat/channels/${id}/typing`),
+  typing: (id: number, thread?: number | null) => post(`/api/chat/channels/${id}/typing`, { thread: thread ?? null }),
+  typingNow: () => api<Record<string, TypingEntry[]>>("/api/chat/typing"),
 };

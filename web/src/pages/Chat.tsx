@@ -1,7 +1,7 @@
 import { Archive, ArrowLeft, AtSign, Eye, Hash, MessageSquare, Pencil, Plus, Send, SmilePlus, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, chatApi } from "../chatApi";
+import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, type TypingEntry, chatApi } from "../chatApi";
 import { PageHeader, Panel } from "../components/ui";
 
 const EMOJI = ["👍", "✅", "👀", "🎉", "❤️", "🙏"];
@@ -61,6 +61,49 @@ function KindTag({ m }: { m: ChatMessage }) {
 
 function WorkingDot({ on }: { on: boolean }) {
   return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${on ? "sonar bg-accent" : "bg-dim"}`} />;
+}
+
+function TypingDots({ soft = false }: { soft?: boolean }) {
+  return (
+    <span className={`typing-dots ${soft ? "soft" : ""}`} aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
+/** Czech: "Hlídač píše", "Hlídač a Asistent vedení píšou", "3 lidé píšou", "5 lidí píše". */
+function who(list: TypingEntry[], one: string, few: string, many: string) {
+  const n = list.length;
+  if (n === 1) return `${list[0].name} ${one}`;
+  if (n === 2) return `${list[0].name} a ${list[1].name} ${few}`;
+  return n <= 4 ? `${n} lidé ${few}` : `${n} lidí ${many}`;
+}
+
+function typingLabel(entries: TypingEntry[]) {
+  const typing = entries.filter((e) => e.state === "typing");
+  const working = entries.filter((e) => e.state === "working");
+  return [
+    typing.length ? `${who(typing, "píše", "píšou", "píše")}…` : "",
+    working.length ? `${who(working, "pracuje na tom", "pracují na tom", "pracuje na tom")}…` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+/** Under a message list: who is typing (or working on a reply). Always takes its line, so the list does not jump. */
+function TypingLine({ entries }: { entries: TypingEntry[] }) {
+  const label = typingLabel(entries);
+  const soft = entries.length > 0 && entries.every((e) => e.state === "working");
+  return (
+    <div className="flex h-5 items-center gap-2 px-4 text-[12px] text-ink-3" aria-live="polite" role="status">
+      {label && (
+        <>
+          <span className="text-accent"><TypingDots soft={soft} /></span>
+          <span className="truncate">{label}</span>
+        </>
+      )}
+    </div>
+  );
 }
 
 function MessageItem({
@@ -186,7 +229,7 @@ function Composer({
     setPick(0);
     if (Date.now() - lastTyping.current > 3000) {
       lastTyping.current = Date.now();
-      chatApi.typing(channel.id).catch(() => undefined);
+      chatApi.typing(channel.id, replyTo?.id ?? null).catch(() => undefined);
     }
   };
   const complete = (m: ChatMember) => {
@@ -332,7 +375,7 @@ function NewChannel({ members, me, onCreated, onClose }: { members: ChatMember[]
   );
 }
 
-function RailItem({ c, active, working, onClick }: { c: Channel; active: boolean; working: Set<number>; onClick: () => void }) {
+function RailItem({ c, active, working, typing, onClick }: { c: Channel; active: boolean; working: Set<number>; typing?: TypingEntry[]; onClick: () => void }) {
   const others = c.members.filter((m) => !m.is_owner);
   const busy = c.kind === "dm" && others.some((m) => working.has(m.id));
   return (
@@ -344,6 +387,9 @@ function RailItem({ c, active, working, onClick }: { c: Channel; active: boolean
     >
       {c.kind === "group" ? <Hash size={14} className="shrink-0 text-ink-3" /> : <WorkingDot on={busy} />}
       <span className={`truncate ${c.unread ? "font-medium" : ""}`}>{c.kind === "group" ? c.name : c.title}</span>
+      {typing && typing.length > 0 && (
+        <span className="shrink-0 text-accent" title={typingLabel(typing)} aria-label={typingLabel(typing)}><TypingDots /></span>
+      )}
       {c.mentions > 0 && <AtSign size={12} className="shrink-0 text-accent" />}
       {c.unread > 0 && <span className="cap ml-auto rounded-sm bg-accent/15 px-1.5 text-accent!">{c.unread}</span>}
     </button>
@@ -471,8 +517,9 @@ export default function Chat() {
   const groups = channels.filter((c) => c.kind === "group");
   const dms = channels.filter((c) => c.kind === "dm" && c.member);
   const oversight = channels.filter((c) => c.kind === "dm" && !c.member);
-  const typingHere = (presence.typing[String(current)] ?? []).filter((id) => id !== me);
-  const workingHere = channel?.members.filter((m) => m.kind !== "human" && working.has(m.id)) ?? [];
+  const typingHere = (presence.typing[String(current)] ?? []).filter((e) => e.id !== me);
+  const typingIds = new Set(typingHere.map((e) => e.id));
+  const workingHere = channel?.members.filter((m) => m.kind !== "human" && working.has(m.id) && !typingIds.has(m.id)) ?? [];
   const rootMsg = thread ? byId.get(thread) : undefined;
   const threadReplies = thread ? messages.filter((m) => m.reply_to === thread) : [];
   const dmWith = members.filter((m) => m.id !== me && !dms.some((c) => c.members.some((x) => x.id === m.id)));
@@ -519,9 +566,9 @@ export default function Chat() {
               GROUPS
               <button aria-label="New channel" title="New channel" onClick={() => setCreating(true)} className="ml-auto text-ink-3 hover:text-accent"><Plus size={13} /></button>
             </span>
-            {groups.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} onClick={() => setParams({ c: String(c.id) })} />)}
+            {groups.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} typing={presence.typing[String(c.id)]} onClick={() => setParams({ c: String(c.id) })} />)}
             <span className="cap px-2.5 pt-3 pb-1">DIRECT MESSAGES</span>
-            {dms.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} onClick={() => setParams({ c: String(c.id) })} />)}
+            {dms.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} typing={presence.typing[String(c.id)]} onClick={() => setParams({ c: String(c.id) })} />)}
             {dmWith.length > 0 && (
               <select
                 value=""
@@ -536,7 +583,7 @@ export default function Chat() {
             <button onClick={() => setShowAll((s) => !s)} className="cap flex items-center gap-1.5 px-2.5 pt-3 pb-1 hover:text-ink-2!" title="Read-only view of DMs between other members">
               <Eye size={12} /> {showAll ? "HIDE" : "SHOW"} AGENTS' DMS
             </button>
-            {showAll && oversight.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} onClick={() => setParams({ c: String(c.id) })} />)}
+            {showAll && oversight.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} typing={presence.typing[String(c.id)]} onClick={() => setParams({ c: String(c.id) })} />)}
           </div>
         </Panel>
 
@@ -570,13 +617,11 @@ export default function Chat() {
                   {messages.length === 0 && <p className="cap px-4 py-6">No messages yet. Say hello, or @mention an agent to bring it in.</p>}
                   {messages.map((m) => item(m))}
                 </div>
-                {(workingHere.length > 0 || typingHere.length > 0) && (
-                  <div className="cap flex items-center gap-2 px-4 pb-1">
+                <TypingLine entries={typingHere} />
+                {workingHere.length > 0 && (
+                  <div className="cap flex items-center gap-2 px-4 pb-1" title="Has a running run (not necessarily about this chat)">
                     <WorkingDot on />
-                    {[
-                      typingHere.length ? `${typingHere.map((id) => members.find((m) => m.id === id)?.name ?? "someone").join(", ")} typing…` : "",
-                      workingHere.length ? `${workingHere.map((m) => m.name).join(", ")} working…` : "",
-                    ].filter(Boolean).join(" · ")}
+                    {`${workingHere.map((m) => m.name).join(", ")} working…`}
                   </div>
                 )}
                 {channel.member || channel.kind === "group" ? (
@@ -601,6 +646,7 @@ export default function Chat() {
                 <div className="mx-4 my-1 border-t border-line" />
                 {threadReplies.map((m) => item(m, true))}
               </div>
+              <TypingLine entries={typingHere.filter((e) => e.thread === rootMsg.id)} />
               <Composer
                 channel={channel}
                 members={members}

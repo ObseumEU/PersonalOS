@@ -63,6 +63,13 @@ class PosClient:
     def heartbeat(self, run_id: int) -> dict:
         return self._post(f"/api/worker/runs/{run_id}/heartbeat")
 
+    def alive(self, run_id: int) -> None:
+        """The tick between steps: keeps a chat run's "working" indicator (never raises)."""
+        try:
+            self.http.post(f"/api/worker/runs/{run_id}/alive", json={})
+        except Exception:  # noqa: BLE001 - an older PersonalOS, or a blip: only the indicator suffers
+            pass
+
     def finish_run(self, run_id: int, status: str, jsonl: str, detail: str = "") -> dict:
         return self._post(f"/api/worker/runs/{run_id}/finish", {"status": status, "jsonl": jsonl, "detail": detail})
 

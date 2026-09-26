@@ -12,6 +12,7 @@ inbox after every completed step (a safe point):
 """
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +22,34 @@ from .prompt import build_task_prompt, injection, stable_prompt
 from .tools import fetch as fetch_tools
 
 log = logging.getLogger("pos_worker")
+
+
+ALIVE_S = 10  # the alive tick while a run is going (PersonalOS clears the indicator 30 s after the last one)
+
+
+class _AliveTicker:
+    """Tells PersonalOS every ALIVE_S seconds that the run's worker is still there,
+    also inside a long tool step. It only keeps the chat "working" indicator; no
+    tokens, no database writes. It stops with the run, so a crashed worker's
+    indicator expires by itself."""
+
+    def __init__(self, client, run_id: int, every: float = ALIVE_S):
+        self.client, self.run_id, self.every = client, run_id, every
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name=f"alive-{run_id}", daemon=True)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.every):
+            alive = getattr(self.client, "alive", None)
+            if alive:
+                alive(self.run_id)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
 
 
 class Worker:
@@ -143,6 +172,11 @@ class Worker:
         # across runs); Codex gets both at the top of the prompt.
         prompt = build_task_prompt(me, task, self.context, include_guardrails=not claude, include_stable=not claude)
         self.context = []
+        with _AliveTicker(self.client, run_id):
+            outcome = self._session_loop(session, prompt, run_id, ref)
+        return self._after_run(ref, run_id, engine, session, check, outcome)
+
+    def _session_loop(self, session, prompt: str, run_id: int, ref: str) -> str:
         pending_fyi: list[dict] = []
         resumes = 0
         steps = 0
@@ -199,7 +233,9 @@ class Worker:
                 resumes += 1
                 continue
             break
+        return outcome
 
+    def _after_run(self, ref: str, run_id: int, engine: str, session, check: dict | None, outcome: str) -> str:
         # The check's usage line first, so PersonalOS counts its cost with the run's.
         jsonl = "\n".join(x for x in ((check or {}).get("jsonl", ""), session.jsonl) if x)
         done = self.client.finish_run(run_id, outcome, jsonl,

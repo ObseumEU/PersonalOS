@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -381,6 +382,7 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
             if not target["paused_at"]:
                 versioning.update(conn, ctx, "actor", aid, {"paused_at": now_iso()}, action="pause")
     conn.commit()
+    typing_clear(channel_id, ctx.actor_id)  # posted: no longer typing here
     from . import wake
 
     for aid in inbox:  # a waiting worker reads it now, not at its next poll
@@ -558,6 +560,8 @@ def check_inbox(conn: sqlite3.Connection, actor_id: int, mark_read: bool = True,
                     "from_kind": r["from_kind"], "task_id": _task_of(r["attachments"]), "reason": r["reason"],
                     "channel_id": r["channel_id"], "reply_to": r["reply_to"],
                     "channel": f"#{r['channel_name']}" if r["channel_kind"] == "group" else "dm"})
+    if run_id and mark_read:
+        typing_on_delivery(conn, actor_id, run_id, out)
     return out
 
 
@@ -697,6 +701,7 @@ def channel_view(conn: sqlite3.Connection, channel_id: int, viewer: int, names=N
         "visibility": ch["visibility"], "created_by": ch["created_by"], "created_at": ch["created_at"],
         "archived_at": ch["archived_at"], "member": mine is not None, "members": members,
         "unread": unread, "mentions": mentions, "last_read_message_id": last_read,
+        "typing": typing_view(conn, viewer, channel_id).get(str(channel_id), []),
         "last": {"id": last["id"], "author_name": names[last["author_id"]]["name"], "body": last["body"][:140],
                  "created_at": last["created_at"]} if last else None,
     }
@@ -737,21 +742,149 @@ def conversation(conn: sqlite3.Connection, actor_id: int, limit: int = 50) -> li
     return [dict(r) for r in rows]
 
 
-# ------------------------------------------------------------------ live stream (SSE)
+# ------------------------------------------------------------------ typing indicator
+#
+# In memory only, never in the message history. People: the composer pings
+# /typing at most every 3 s and the entry lives HUMAN_TYPING_S. Agents: the
+# platform marks them itself, no tool call and no tokens: a worker run that
+# starts on a chat task, or gets a DM, mention or thread reply mid-run, types
+# in that channel (and thread). The run's step heartbeat keeps it "typing";
+# the worker's alive tick keeps a softer "working" (long tool work); it clears
+# when the agent posts there, when the run ends, or AGENT_TYPING_S after the
+# last sign of life, so a crashed run never leaves a stuck indicator.
 
-_typing: dict[int, dict[int, float]] = {}
-TYPING_S = 6
+HUMAN_TYPING_S = 6
+AGENT_TYPING_S = 30
+TYPING_S = HUMAN_TYPING_S  # kept for older callers
+_typing: dict[int, dict[int, dict]] = {}  # channel -> actor -> entry
+_typing_lock = threading.Lock()
+_CHAT_ORIGIN = re.compile(r"Source: chat channel (\d+) \(.*?\), message (\d+)\.")
 
 
-def typing(channel_id: int, actor_id: int) -> None:
-    _typing.setdefault(channel_id, {})[actor_id] = time.monotonic()
+def _thread_of(conn: sqlite3.Connection, message_id: int | None) -> int | None:
+    """The thread a reply to this message lands in (threads are one level deep)."""
+    if not message_id:
+        return None
+    row = conn.execute("SELECT reply_to FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    return (row["reply_to"] or message_id) if row else None
+
+
+def typing(channel_id: int, actor_id: int, thread: int | None = None) -> None:
+    """A person is typing (the composer's throttled ping)."""
+    with _typing_lock:
+        _typing.setdefault(channel_id, {})[actor_id] = {"kind": "human", "at": time.monotonic(), "thread": thread}
+
+
+def agent_typing(channel_id: int, actor_id: int, run_id: int | None, thread: int | None = None) -> None:
+    """An agent's run is working on a reply here."""
+    now = time.monotonic()
+    with _typing_lock:
+        _typing.setdefault(channel_id, {})[actor_id] = {"kind": "agent", "at": now, "alive": now,
+                                                        "run_id": run_id, "thread": thread}
+
+
+def typing_run_step(run_id: int) -> None:
+    """The run completed a step (worker heartbeat): its agent is typing."""
+    now = time.monotonic()
+    with _typing_lock:
+        for who in _typing.values():
+            for e in who.values():
+                if e.get("run_id") == run_id:
+                    e["at"] = e["alive"] = now
+
+
+def typing_run_alive(run_id: int) -> None:
+    """The run's worker is alive but between steps (long tool work)."""
+    now = time.monotonic()
+    with _typing_lock:
+        for who in _typing.values():
+            for e in who.values():
+                if e.get("run_id") == run_id:
+                    e["alive"] = now
+
+
+def typing_clear(channel_id: int | None = None, actor_id: int | None = None, run_id: int | None = None) -> None:
+    """Drop entries: an actor in a channel (it posted), or all of a run (it ended)."""
+    with _typing_lock:
+        for cid in list(_typing):
+            who = _typing[cid]
+            for aid in list(who):
+                e = who[aid]
+                if (run_id is not None and e.get("run_id") == run_id) or (
+                        run_id is None and aid == actor_id and cid == channel_id):
+                    del who[aid]
+            if not who:
+                del _typing[cid]
+
+
+def _state(e: dict, now: float) -> str | None:
+    if e["kind"] == "human":
+        return "typing" if now - e["at"] < HUMAN_TYPING_S else None
+    if now - e["at"] < AGENT_TYPING_S:
+        return "typing"
+    return "working" if now - e["alive"] < AGENT_TYPING_S else None
 
 
 def typing_now() -> dict[str, list[int]]:
-    cutoff = time.monotonic() - TYPING_S
-    return {str(c): sorted(a for a, t in who.items() if t >= cutoff)
-            for c, who in _typing.items() if any(t >= cutoff for t in who.values())}
+    """{channel id: [actor ids]} typing or working now (no visibility filter)."""
+    now = time.monotonic()
+    with _typing_lock:
+        return {str(c): sorted(a for a, e in who.items() if _state(e, now))
+                for c, who in _typing.items() if any(_state(e, now) for e in who.values())}
 
+
+def typing_view(conn: sqlite3.Connection, viewer: int, channel_id: int | None = None) -> dict[str, list[dict]]:
+    """Who is typing, per channel the viewer may read (never the viewer itself).
+    Each entry: id, name, kind, state ("typing" or "working"), thread (root message id or null)."""
+    now = time.monotonic()
+    with _typing_lock:
+        for cid in list(_typing):  # expire as we go: the store never grows
+            who = _typing[cid]
+            for aid in [a for a, e in who.items() if not _state(e, now)]:
+                del who[aid]
+            if not who:
+                del _typing[cid]
+        snap = {c: {a: (_state(e, now), e.get("thread")) for a, e in who.items()} for c, who in _typing.items()
+                if channel_id is None or c == channel_id}
+    if not snap:
+        return {}
+    names = _names(conn)
+    out: dict[str, list[dict]] = {}
+    for cid, who in snap.items():
+        try:
+            if not can_read(conn, _channel(conn, cid), viewer):
+                continue
+        except NotFound:
+            continue
+        rows = [{"id": a, "name": names[a]["name"], "kind": names[a]["kind"], "state": st, "thread": th}
+                for a, (st, th) in sorted(who.items()) if a != viewer and a in names]
+        if rows:
+            out[str(cid)] = rows
+    return out
+
+
+def chat_origin(conn: sqlite3.Connection, task_id: int) -> tuple[int, int] | None:
+    """(channel id, message id) when the task is a chat answer (`_ask_to_answer`)."""
+    row = conn.execute("SELECT notes FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    m = _CHAT_ORIGIN.search(row["notes"] or "") if row else None
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def typing_on_run_start(conn: sqlite3.Connection, actor_id: int, run_id: int, task_id: int | None) -> None:
+    """A run on a chat task starts: its agent types in that channel and thread."""
+    origin = chat_origin(conn, task_id) if task_id else None
+    if origin:
+        agent_typing(origin[0], actor_id, run_id, _thread_of(conn, origin[1]))
+
+
+def typing_on_delivery(conn: sqlite3.Connection, actor_id: int, run_id: int, items: list[dict]) -> None:
+    """A running run gets a DM, mention or thread reply: it will answer, so it types there."""
+    for m in items:
+        if m.get("reason") in ("dm", "mention", "reply") and m.get("channel_id"):
+            agent_typing(m["channel_id"], actor_id, run_id, m.get("reply_to"))
+
+
+# ------------------------------------------------------------------ live stream (SSE)
 
 _STREAM_ACTIONS = {("chat_message", "create"): "message", ("chat_message", "edit"): "edit",
                    ("chat_message", "archive"): "archive", ("chat_message", "chat_react"): "reaction",
@@ -810,7 +943,7 @@ async def stream(db_path: Path, viewer: int, cursor: int | None = None, *, poll:
             if cursor is None:
                 cursor = cursor_now(conn)
             events, cursor = changes(conn, viewer, cursor)
-            presence = {"working": working_ids(conn), "typing": typing_now()}
+            presence = {"working": working_ids(conn), "typing": typing_view(conn, viewer)}
         finally:
             conn.close()
         for ev in events:

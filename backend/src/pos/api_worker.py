@@ -302,6 +302,8 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
                                                         model=model))
     if res.status == "blocked":
         raise HTTPException(409, res.error)
+    # A run on a chat answer: the agent shows as typing there (no tool call, no tokens).
+    chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)
     from .access import service as access
 
     # The agent's max USD per run (pos.access): the worker hands it to the engine as its cost cap.
@@ -313,7 +315,20 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
 def heartbeat(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND actor_id = ?", (now_iso(), run_id, ctx.actor_id))
     conn.commit()
+    chat.typing_run_step(run_id)
     return _state(conn, ctx.actor_id, run_id)
+
+
+@router.post("/runs/{run_id}/alive")
+def alive(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """The worker's tick between steps (long tool work): keeps a chat run's softer
+    "working" indicator, nothing else. Memory only."""
+    r = conn.execute("SELECT status FROM runs WHERE id = ? AND actor_id = ?", (run_id, ctx.actor_id)).fetchone()
+    if r and r["status"] == "running":
+        chat.typing_run_alive(run_id)
+    else:
+        chat.typing_clear(run_id=run_id)
+    return {"ok": True}
 
 
 @router.post("/runs/{run_id}/finish")
@@ -324,6 +339,7 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
         row = runner.finish_external(conn, run_id, ctx.actor_id, body.status, body.jsonl, body.detail)
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
+    chat.typing_clear(run_id=run_id)
     out = dict(row)
     # The run failed because its engine hit the subscription limit: not the task's
     # fault. It goes straight back to the queue; the next run uses the other engine.

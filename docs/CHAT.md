@@ -73,4 +73,14 @@ agent rate limit.
 - Web: `/chat`: channel rail with unread counts, threads, reactions, @mention
   autocomplete, T-123 task links, working/typing indicators; on a phone the
   rail is the list view. The agent page links to its DM.
+- Typing indicator (in memory, never in the history): a person's composer
+  pings `POST channels/{id}/typing` (optional `thread`) at most every 3 s,
+  shown for 6 s. Agents are marked by the platform, with no tool call and no
+  tokens: a worker run that starts on a chat-answer task, or gets a DM,
+  mention or thread reply mid-run, "types" in that channel/thread. Each step
+  heartbeat keeps it typing; the worker's alive tick (every 10 s,
+  `/api/worker/runs/{id}/alive`) keeps a softer "pracuje na tom"; it clears
+  when the agent posts there, when the run finishes, or 30 s after the last
+  sign of life. `GET /api/chat/typing`, each channel's `typing`, and the SSE
+  `presence` event carry it, filtered to channels the viewer may read.
 - Network: chat adds `message` edges (count and last message) to the 3D view.

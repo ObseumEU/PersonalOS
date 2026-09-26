@@ -112,10 +112,22 @@ def mark_read(channel_id: int, body: ReadIn, conn=Depends(get_db), ctx=Depends(g
     return chat.mark_read(conn, ctx, channel_id, body.message_id)
 
 
+class TypingIn(BaseModel):
+    thread: int | None = None
+
+
 @router.post("/channels/{channel_id}/typing")
-def typing(channel_id: int, ctx=Depends(get_ctx)):
-    chat.typing(channel_id, ctx.actor_id)
+def typing(channel_id: int, body: TypingIn | None = None, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The composer's throttled "I am typing" ping (`thread`: the open thread's root)."""
+    chat._check_read(conn, chat._channel(conn, channel_id), ctx.actor_id)
+    chat.typing(channel_id, ctx.actor_id, body.thread if body else None)
     return {"ok": True}
+
+
+@router.get("/typing")
+def typing_state(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Who is typing (or working on a reply) now, per channel you may read."""
+    return chat.typing_view(conn, ctx.actor_id)
 
 
 @router.patch("/messages/{message_id}")
