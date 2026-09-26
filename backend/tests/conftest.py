@@ -5,6 +5,16 @@ import pytest
 def isolated_codex_home(tmp_path, monkeypatch):
     """Tests never read the machine's real Codex sessions (~/.codex) and never
     call a real AI engine; tests that need one bring a fake binary."""
+    # Nor the machine's configuration: no POS_* variable from the shell and no
+    # .env from the working directory (pytest run from the repo root would read
+    # the real one), so the suite behaves the same wherever it is started.
+    import os
+
+    from pos.config import Settings
+
+    for name in [n for n in os.environ if n.upper().startswith("POS_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.setenv("POS_CODEX_DISABLED", "1")
     monkeypatch.setenv("POS_CLAUDE_DISABLED", "1")
