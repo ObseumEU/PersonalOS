@@ -701,6 +701,13 @@ MIGRATIONS: list[str] = [
     ALTER TABLE topics ADD COLUMN visibility TEXT NOT NULL DEFAULT 'team';
     ALTER TABLE topics ADD COLUMN owner_id INTEGER REFERENCES actors(id);
     """,
+    # 27: what a run really cost: prompt-cache reads and writes (Claude), and the run's cost.
+    """
+    ALTER TABLE engine_usage ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE engine_usage ADD COLUMN cache_creation_tokens INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER;
+    ALTER TABLE runs ADD COLUMN cost_usd REAL;
+    """,
 ]
 
 

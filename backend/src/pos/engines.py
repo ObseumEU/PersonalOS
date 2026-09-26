@@ -192,9 +192,12 @@ LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|out of extra usage
 
 
 def parse_claude(jsonl: str) -> dict:
-    """Totals from `claude -p --output-format stream-json` output."""
-    out = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "session_id": None, "limit": None,
-           "rate_limit": None}
+    """Totals from `claude -p --output-format stream-json` output (one or more
+    `result` events: a triage call and the run, or a resumed session).
+    input_tokens counts uncached input plus cache writes; cache reads are
+    counted apart (they cost a tenth of an input token)."""
+    out = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0,
+           "cost_usd": 0.0, "session_id": None, "limit": None, "rate_limit": None}
     for line in jsonl.splitlines():
         try:
             ev = json.loads(line)
@@ -208,6 +211,8 @@ def parse_claude(jsonl: str) -> dict:
             u = ev.get("usage") or {}
             out["input_tokens"] += int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
             out["output_tokens"] += int(u.get("output_tokens") or 0)
+            out["cache_read_tokens"] += int(u.get("cache_read_input_tokens") or 0)
+            out["cache_creation_tokens"] += int(u.get("cache_creation_input_tokens") or 0)
             out["cost_usd"] += float(ev.get("total_cost_usd") or 0)
             text = str(ev.get("result") or "")
             if ev.get("is_error") and LIMIT_RE.search(text):
@@ -225,13 +230,15 @@ def reset_time(message: str) -> datetime:
 def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -> dict:
     u = parse_claude(jsonl)
     conn.execute(
-        """INSERT INTO engine_usage (at, engine, actor_id, task_id, run_id, input_tokens, output_tokens, cost_usd)
-           VALUES (?, 'claude', ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO engine_usage (at, engine, actor_id, task_id, run_id, input_tokens, output_tokens, cost_usd,
+                                   cache_read_tokens, cache_creation_tokens)
+           VALUES (?, 'claude', ?, ?, ?, ?, ?, ?, ?, ?)""",
         (now_iso(), run_row["actor_id"], run_row["task_id"], run_row["id"], u["input_tokens"], u["output_tokens"],
-         u["cost_usd"]),
+         u["cost_usd"], u["cache_read_tokens"], u["cache_creation_tokens"]),
     )
-    conn.execute("UPDATE runs SET input_tokens = ?, output_tokens = ? WHERE id = ?",
-                 (u["input_tokens"], u["output_tokens"], run_row["id"]))
+    conn.execute("UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cost_usd = ? WHERE id = ?",
+                 (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"], round(u["cost_usd"], 6),
+                  run_row["id"]))
     rl = u["rate_limit"] or {}
     resets = (datetime.fromtimestamp(int(rl["resetsAt"]), timezone.utc).isoformat(timespec="seconds")
               if rl.get("resetsAt") else None)

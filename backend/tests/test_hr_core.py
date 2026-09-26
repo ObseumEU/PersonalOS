@@ -251,3 +251,30 @@ def test_weekly_report_says_which_shared_tools_help(conn):
     assert report["tool_usage"][0] == {"tool": "shared/pdf-to-text", "uses": 3, "failed": 1, "by": ["Dev agent"]}
     notes = [a["body"] for a in comments.list_for(conn, owner, int(report["report_task_id"]))]
     assert any("shared/pdf-to-text: 3× (1 failed)" in n for n in notes)
+
+
+def test_claude_usage_counts_for_hr_with_cache_reads_and_cost_per_task(conn):
+    """A Dev agent on Claude: engine usage (not budget runs) is what HR and the task show."""
+    from pos import engines
+    from pos.hr.metrics import rate_agent
+
+    owner = Ctx(actors.owner_id(conn))
+    dev = new_agent(conn, "Dev agent", "Improves PersonalOS")
+    t = tasks.create(conn, owner, {"title": "Fix the flaky test", "assignee": "Dev agent"})
+    for cost in (0.5, 1.5):  # two runs on the same task (one handed back, one done)
+        run_id = conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) "
+                              "VALUES (?, ?, 'task', 'ok', ?, 'claude')", (dev, t["id"], now_iso())).lastrowid
+        row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        engines.record_claude(conn, row, json.dumps({
+            "type": "result", "is_error": False, "result": "ok", "total_cost_usd": cost,
+            "usage": {"input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 1000,
+                      "cache_read_input_tokens": 20000}}))
+
+    now = service.utcnow() + timedelta(minutes=1)
+    s = CorePlatform(conn, owner).agent_stats(str(dev), now - timedelta(days=7), now)
+    assert (s.tokens_used, s.cost_usd, s.tasks_worked) == (2300, 2.0, 1)
+    r = rate_agent(s)
+    assert (r.tokens_used, r.tokens_per_task, r.cost_per_task) == (2300, 2300, 2.0)
+
+    usage = tasks.get(conn, owner, t["id"])["usage"]
+    assert usage == {"runs": 2, "tokens": 2300, "cache_read_tokens": 40000, "cost_usd": 2.0}

@@ -503,18 +503,30 @@ def _default_engine() -> str:
     return default_engine()
 
 
-def tokens_used(conn: sqlite3.Connection, actor_id: int | str, start: datetime, end: datetime) -> int:
-    """Tokens a member used in [start, end): Codex (budget runs) + Claude (engine
-    usage). The one number the Agents screen, Network and HR all show."""
+def usage(conn: sqlite3.Connection, actor_id: int | str, start: datetime, end: datetime) -> dict:
+    """What a member's runs used in [start, end): tokens from Codex (budget runs)
+    and Claude (engine usage: uncached input, cache writes and output; cache
+    reads apart), Claude's cost in USD and how many tasks the runs were for."""
     from .budget import store as budget_store
 
     budget_store.ensure_schema(conn)
+    s, e = budget_store.iso(start), budget_store.iso(end)
     codex = budget_store.tokens_between(conn, start, end, str(actor_id))
     claude = conn.execute(
-        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM engine_usage WHERE engine = 'claude' "
-        "AND actor_id = ? AND at >= ? AND at < ?",
-        (int(actor_id), start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds"))).fetchone()[0]
-    return codex + claude
+        """SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens, COALESCE(SUM(cache_read_tokens), 0) AS cached,
+                  COALESCE(SUM(cost_usd), 0) AS cost FROM engine_usage
+           WHERE engine = 'claude' AND actor_id = ? AND at >= ? AND at < ?""", (int(actor_id), s, e)).fetchone()
+    worked = conn.execute(
+        "SELECT COUNT(DISTINCT task_id) FROM runs WHERE actor_id = ? AND task_id IS NOT NULL AND started_at >= ? "
+        "AND started_at < ? AND status != 'blocked'", (int(actor_id), s, e)).fetchone()[0]
+    return {"tokens": codex + claude["tokens"], "cache_read_tokens": claude["cached"],
+            "cost_usd": round(claude["cost"], 4), "tasks": worked}
+
+
+def tokens_used(conn: sqlite3.Connection, actor_id: int | str, start: datetime, end: datetime) -> int:
+    """Tokens a member used in [start, end): Codex (budget runs) + Claude (engine
+    usage). The one number the Agents screen, Network and HR all show."""
+    return usage(conn, actor_id, start, end)["tokens"]
 
 
 def overview(conn: sqlite3.Connection) -> list[dict]:
