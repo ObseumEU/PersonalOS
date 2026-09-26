@@ -136,6 +136,22 @@ def test_fast_lane_answers_in_the_thread_after_30s_once(db, tmp_path, monkeypatc
     assert chat.typing_now() == {}  # the reply cleared the typing it showed
 
 
+def test_fast_lane_stays_quiet_when_the_run_answered_meanwhile(db, tmp_path, monkeypatch):
+    owner, aid, t, run = _busy_agent(db, tmp_path)
+    msg = chat.send_dm(db, owner, aid, "Hotovo?")
+    _age(db, msg["id"])
+    monkeypatch.setattr(fastlane, "_llm_blocked", lambda conn, a: None)
+
+    def slow_model(conn, a, p):  # the main run answers while the fast model thinks
+        chat.send(conn, Ctx(aid), msg["channel_id"], "Ještě ne, dělám build.", reply_to=msg["id"])
+        return "Pracuju na tom."
+
+    monkeypatch.setattr(fastlane, "ask_model", slow_model)
+    assert fastlane.respond(db, aid, msg["id"]) is None
+    assert db.execute("SELECT COUNT(*) FROM chat_messages WHERE author_id = ?", (aid,)).fetchone()[0] == 1
+    assert chat.typing_now() == {}
+
+
 def test_fast_lane_falls_back_to_a_code_reply(db, tmp_path, monkeypatch):
     owner, aid, t, run = _busy_agent(db, tmp_path)
     monkeypatch.setattr(fastlane, "_llm_blocked", lambda conn, a: None)

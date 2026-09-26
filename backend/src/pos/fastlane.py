@@ -173,8 +173,9 @@ def _llm_blocked(conn: sqlite3.Connection, actor_id: int) -> str | None:
 
 def ask_model(conn: sqlite3.Connection, actor_id: int, prompt: str) -> str:
     """One tool-less call, recorded as a run of the agent (usage and budget). Raises on failure."""
-    from . import runner
+    from . import integrations, runner
 
+    integrations.install()  # the budget gate and usage record (idempotent; already on in the API)
     res = runner.run(conn, runner.RunRequest(actor_id, "chat_fastlane", prompt, engine="claude",
                                              model=FASTLANE_MODEL, timeout_s=60))
     if res.status != "ok" or not res.output.strip():
@@ -212,6 +213,10 @@ def respond(conn: sqlite3.Connection, actor_id: int, message_id: int) -> dict | 
         except Exception as e:  # noqa: BLE001 - never silence: the code-built status goes out instead
             log.info("fast lane model failed for %s: %s", actor_id, e)
             body = code_reply(snap, "rychlý model teď neodpovídá")
+    if conn.execute("SELECT 1 FROM chat_messages WHERE channel_id = ? AND author_id = ? AND id > ? "
+                    "AND reply_to = ? AND archived_at IS NULL", (m["channel_id"], actor_id, m["id"], thread)).fetchone():
+        chat.typing_clear(m["channel_id"], actor_id)  # the run answered meanwhile: no second answer
+        return None
     try:
         chat._add_member(conn, m["channel_id"], actor_id)
         out = chat.send(conn, ctx, m["channel_id"], body[:2000], reply_to=thread, system=True)
