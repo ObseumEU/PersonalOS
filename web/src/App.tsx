@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { getMe, logout, type Me } from "./api";
 import Shell, { Mark } from "./components/Shell";
@@ -22,6 +22,9 @@ import Tasks from "./pages/Tasks";
 import Today from "./pages/Today";
 import Tools from "./pages/Tools";
 import Topics from "./pages/Topics";
+
+// Reports carry the chart library: loaded when opened, not with every page.
+const Reports = lazy(() => import("./pages/Reports"));
 
 
 export default function App() {
@@ -74,6 +77,8 @@ export default function App() {
         <Route path="/topics" element={<Topics />} />
         <Route path="/topics/:slug" element={<Topics />} />
         <Route path="/notes" element={<Notes />} />
+        <Route path="/reports" element={<Suspense fallback={null}><Reports /></Suspense>} />
+        <Route path="/reports/:week" element={<Suspense fallback={null}><Reports /></Suspense>} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />
         <Route path="*" element={<Navigate to="/today" replace />} />

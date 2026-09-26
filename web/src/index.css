@@ -178,3 +178,68 @@ body {
 .md-compact p, .md-compact ul, .md-compact ol, .md-compact blockquote, .md-compact pre, .md-compact .md-table { margin-bottom: 0.4em; }
 .md-compact h1, .md-compact h2, .md-compact h3 { font-size: 13px; font-weight: 500; margin: 0.5em 0 0.2em; }
 .md-muted, .md-muted strong, .md-muted h1, .md-muted h2, .md-muted h3 { color: var(--color-ink-2); }
+
+/* Weekly report (pages/Reports): chart roles as tokens. Dark is the app's theme;
+   light is the same hues stepped for a light surface (a light theme, and print). */
+.report {
+  --viz-surface: var(--color-surface);
+  --viz-grid: #232830;
+  --viz-axis: #7d848f;
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-series-3: #199e70;
+  --viz-prev: #4a515b;
+  --viz-good: #3fb37f;
+  --viz-bad: #e66767;
+  --viz-warn: #d9a441;
+}
+:root[data-theme="light"] .report {
+  --viz-surface: #fcfcfb;
+  --viz-grid: #e4e4e0;
+  --viz-axis: #52514e;
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-series-3: #1baf7a;
+  --viz-prev: #b9b8b2;
+  --viz-good: #0f8a57;
+  --viz-bad: #c93636;
+  --viz-warn: #a86b00;
+}
+.report .recharts-cartesian-grid line { stroke: var(--viz-grid); }
+.report .recharts-text { fill: var(--viz-axis); font-family: var(--font-mono); font-size: 11px; }
+.report .recharts-tooltip-cursor { fill: rgb(255 255 255 / 0.04); }
+
+@media print {
+  @page { margin: 14mm; }
+  html, body {
+    background: #fff !important;
+    color: #111 !important;
+    color-scheme: light;
+  }
+  aside, nav, header.sticky, .no-print { display: none !important; }
+  main { padding: 0 !important; margin: 0 !important; }
+  .report {
+    --color-bg: #fff;
+    --color-surface: #fff;
+    --color-raised: #f3f3f1;
+    --color-line: #d8d8d4;
+    --color-ink: #111;
+    --color-ink-2: #3a3a38;
+    --color-ink-3: #5c5b57;
+    --color-accent: #1d6fb8;
+    --viz-surface: #fff;
+    --viz-grid: #e4e4e0;
+    --viz-axis: #3a3a38;
+    --viz-series-1: #2a78d6;
+    --viz-series-2: #eb6834;
+    --viz-series-3: #1baf7a;
+    --viz-prev: #b9b8b2;
+    --viz-good: #0f8a57;
+    --viz-bad: #c93636;
+    --viz-warn: #a86b00;
+    color: #111;
+  }
+  .report .panel { break-inside: avoid; background: #fff; }
+  .report .panel::before, .report .panel::after { display: none; }
+  .report .fade-in { animation: none; }
+}

@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Bot,
   Workflow,
   Wrench,
@@ -62,6 +63,11 @@ export const SECTIONS: Section[] = [
     path: "notes", label: "Notes", icon: FileText, phase: 2,
     blurb: "Markdown notes that belong to your topics.",
     features: ["Markdown editor", "Linked to topics", "Searchable"],
+  },
+  {
+    path: "reports", label: "Reports", icon: BarChart3, phase: 5,
+    blurb: "The weekly company report and the Friday meeting with the Chief of Staff.",
+    features: [],
   },
   { path: "assistant", label: "Assistant", icon: Orbit, phase: 3, blurb: "", features: [] },
   { path: "chat", label: "Chat", icon: MessagesSquare, phase: 2, mobile: true, blurb: "", features: [] },
