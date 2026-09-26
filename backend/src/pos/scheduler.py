@@ -11,6 +11,7 @@ Times are Europe/Prague.
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from collections.abc import Callable
@@ -243,11 +244,25 @@ def access_weekly(conn: sqlite3.Connection) -> dict:
     return service.weekly(conn)
 
 
+def weekly_report(conn: sqlite3.Connection) -> dict:
+    from . import weekly
+
+    return weekly.weekly_job(conn)
+
+
+def weekly_meeting_timeouts(conn: sqlite3.Connection) -> dict:
+    from . import weekly
+
+    return weekly.meeting_timeouts(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "access_expire": access_expire,
     "access_watch": access_watch,
     "access_digest": access_digest,
     "access_weekly": access_weekly,
+    "weekly_report": weekly_report,
+    "weekly_meeting_timeouts": weekly_meeting_timeouts,
     "knowlage_files": knowlage_files,
     "feedback_digest": feedback_digest,
     "probation_review": probation_review,
@@ -280,6 +295,10 @@ DEFAULT_JOBS = [
     ("Access: spend spikes and the company cap", "every 15m", "access_watch"),
     ("Access: daily digest for the owner", "daily 18:00", "access_digest"),
     ("Access: weekly budget review (Access manager)", "weekly mon 07:30", "access_weekly"),
+    # The Chief of Staff's weekly report and meeting (pos.weekly); the time is editable on Automations.
+    ("Weekly company report and meeting (Asistent vedení)",
+     os.environ.get("POS_WEEKLY_REPORT_SCHEDULE") or "weekly fri 14:00", "weekly_report"),
+    ("Weekly meeting: close it after 24 h without an answer", "every 30m", "weekly_meeting_timeouts"),
 ]
 
 

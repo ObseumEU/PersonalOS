@@ -125,6 +125,9 @@ def register_mcp_tools(mcp, session) -> None:
     from .access import mcp as access_mcp
 
     access_mcp.register(mcp, session)
+    from . import weekly
+
+    weekly.register_mcp(mcp, session)  # the weekly report, the meeting and goals (Asistent vedení)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:
