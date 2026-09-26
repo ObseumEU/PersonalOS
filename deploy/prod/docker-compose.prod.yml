@@ -87,6 +87,8 @@ services:
     logging: *logging
   agent-coach:
     logging: *logging
+  access-manager:
+    logging: *logging
   project-manager:
     logging: *logging
 

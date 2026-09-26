@@ -1,0 +1,21 @@
+{
+  "name": "Access manager",
+  "display_name": "Správce přístupů",
+  "role": "access_manager",
+  "team": "operations",
+  "reports_to": "Owner",
+  "permissions": [
+    "tasks:read",
+    "tasks:claim",
+    "messages:send",
+    "approvals:request"
+  ],
+  "budget_class": "system",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "access-manager",
+  "engine": "claude",
+  "model": "claude-opus-5-5",
+  "effort": "low",
+  "note": "A platform agent created by pos.access (like the HR agent); access:manage and its own budget come from there, never from this file. Owner only: its tools, its budget, the company cap."
+}

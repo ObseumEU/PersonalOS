@@ -92,6 +92,8 @@ class Worker:
             return "skipped"
 
         engine = started.get("engine") or "codex"
+        # The agent's max USD per run from PersonalOS (pos.access); None when it has none.
+        self.run_cap_usd = started.get("max_budget_usd")
         check = self._triage(ref, task, run_id)
         if check and check.get("action") in ("parked", "handed_back"):
             self.client.finish_run(run_id, "ok", check.get("jsonl", ""),
@@ -128,7 +130,7 @@ class Worker:
                   check: dict | None = None) -> str:
         # The agent's tools (personal and shared); none if PersonalOS cannot say.
         me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir), "task_ref": ref,
-              "feedback": self.client.feedback()}
+              "feedback": self.client.feedback(), "max_budget_usd": getattr(self, "run_cap_usd", None)}
         if check and check.get("size"):
             me["size"] = check["size"]  # effort and cost cap follow it (new_session)
             me["size_hint"] = f"A first check sized this task {check['size']}; keep to that size's budget."

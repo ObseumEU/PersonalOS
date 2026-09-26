@@ -148,6 +148,32 @@ services:
       - ./data/worker-keys/agent-coach:/run/pos-key:ro
     restart: unless-stopped
 
+  # The Access manager (Správce přístupů) decides other agents' grants and budgets
+  # (agents/access-manager/INSTRUCTIONS.md, pos.access): access tools and numbers only,
+  # no shell, repository, web or content tools; Claude at low effort with a small cap.
+  access-manager:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${ACCESS_AGENT_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
+      WORKER_POS_TOOLS: 'access_review_requests access_decide access_grant access_revoke access_set_budget access_usage access_audit access_resume_agent access_report my_access org_chart ask_owner send_message report_progress complete_task'
+      WORKER_CLAUDE_TOOLS: ' '
+      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
+      WORKER_CLAUDE_EFFORT: low
+      WORKER_CLAUDE_MAX_USD: "0.5"
+      WORKER_MAX_STEPS: "30"
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - access-manager-work:/work
+      - ./data/worker-keys/access-manager:/run/pos-key:ro
+    restart: unless-stopped
+
   mail-agent:
     profiles: ["agents"]
     build: ./worker
@@ -207,6 +233,7 @@ services:
 
 volumes:
   pos-data:
+  access-manager-work:
   agent-coach-work:
   assistant-work:
   dev-agent-work:

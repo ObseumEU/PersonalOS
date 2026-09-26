@@ -28,6 +28,7 @@ $devRepo = Join-Path $root "data\agent-work\dev-agent\PersonalOS"
 # narrows what the agent's permissions allow; the inbox and team chat tools stay.
 $devPos = "get_task report_progress complete_task request_approval create_task handoff_task"
 $coachPos = "hr_overview list_tasks get_task get_agent_status create_task send_message report_progress complete_task schedule_create schedule_list"
+$accessPos = "access_review_requests access_decide access_grant access_revoke access_set_budget access_usage access_audit access_resume_agent access_report my_access org_chart ask_owner send_message report_progress complete_task"
 $devTools = (@(
     "Read", "Glob", "Grep", "Write", "Edit",
     "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git add:*)",
@@ -56,6 +57,16 @@ $agents = @(
            WORKER_CLAUDE_EFFORT = "medium"
            WORKER_CLAUDE_MAX_USD = "2"
            WORKER_MAX_STEPS = "40"
+       } },
+    # Access manager (agents/access-manager/INSTRUCTIONS.md): access tools and numbers only, Claude at low effort.
+    @{ Name = "access-manager"; Key = "ACCESS_AGENT_KEY"; Tools = " "
+       Env = @{
+           WORKER_CODEX_CONFIG = 'model_reasoning_effort="low"'
+           WORKER_POS_TOOLS = $accessPos
+           WORKER_CLAUDE_DISALLOWED = "Read Glob Grep Write Edit Bash WebSearch WebFetch"
+           WORKER_CLAUDE_EFFORT = "low"
+           WORKER_CLAUDE_MAX_USD = "0.5"
+           WORKER_MAX_STEPS = "30"
        } },
     @{ Name = "community-agent"; Key = "COMMUNITY_AGENT_KEY" }
 )

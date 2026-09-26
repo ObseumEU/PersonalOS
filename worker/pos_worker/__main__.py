@@ -65,6 +65,12 @@ def claude_extra_mcp() -> dict:
     return json.loads(raw) if raw else {}
 
 
+def run_cap(worker_cap: float | None, agent_cap: float | None) -> float | None:
+    """The tighter of the worker's WORKER_CLAUDE_MAX_USD and the agent's grant; None when neither is set."""
+    caps = [c for c in (worker_cap, agent_cap) if c]
+    return min(caps) if caps else None
+
+
 def agent_key(wait_s: float = 120) -> str:
     """POS_AGENT_KEY, else the key file the core writes (it may appear a moment
     after the API starts)."""
@@ -133,8 +139,10 @@ def main() -> None:
                 disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
                 + [t for t in tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")) if not t.startswith("mcp__pos__")],
                 # By the task's size when the check gave one (S: low effort, a smaller cap).
+                # The cap is the lower of this worker's and the agent's max USD per run (pos.access).
                 **triage.size_settings(me.get("size"), os.environ.get("WORKER_CLAUDE_EFFORT") or None,
-                                       float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None),
+                                       run_cap(float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None,
+                                               me.get("max_budget_usd"))),
             )
         return CodexSession(
             binary=os.environ.get("CODEX_BIN", "codex"),
