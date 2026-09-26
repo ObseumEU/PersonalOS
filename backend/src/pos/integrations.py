@@ -86,9 +86,11 @@ def install() -> None:
     runner.before_run(_guardrails)
     runner.after_run(_budget_record)
     from . import killswitch, outbound
+    from .access import service as access
 
     killswitch.install()
     outbound.install()
+    runner.before_run(access.budget_gate)  # the company cap and each agent's own limits
     _installed = True
 
 
@@ -107,6 +109,11 @@ def register_builtin_agents(conn: sqlite3.Connection) -> None:
 
     # The Project manager, everyone's place in the org chart, the daily standup.
     org.ensure(conn)
+    from .access import service as access
+
+    # The Access manager, and every agent's permissions as grants (nothing changes on day one).
+    access.ensure_access_manager(conn)
+    access.seed(conn)
 
 
 def register_mcp_tools(mcp, session) -> None:
@@ -115,6 +122,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import tools
 
     tools.register_mcp(mcp, session)
+    from .access import mcp as access_mcp
+
+    access_mcp.register(mcp, session)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:

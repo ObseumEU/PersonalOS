@@ -25,7 +25,8 @@ from . import actors, audit, versioning
 from .core import Ctx
 
 log = logging.getLogger(__name__)
-NEVER_FROM_FILE = {"agents:create", "browser:use"}
+# The owner grants these (access:manage: the Access manager's own, created by pos.access).
+NEVER_FROM_FILE = {"agents:create", "browser:use", "access:manage"}
 
 
 def repo_dir() -> Path | None:

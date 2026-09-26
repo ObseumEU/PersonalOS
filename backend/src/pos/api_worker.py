@@ -302,7 +302,11 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
                                                         model=model))
     if res.status == "blocked":
         raise HTTPException(409, res.error)
-    return {"run_id": res.run_id, "engine": engine, "model": model}
+    from .access import service as access
+
+    # The agent's max USD per run (pos.access): the worker hands it to the engine as its cost cap.
+    return {"run_id": res.run_id, "engine": engine, "model": model,
+            "max_budget_usd": access.run_cap_usd(conn, ctx.actor_id)}
 
 
 @router.post("/runs/{run_id}/heartbeat")

@@ -71,7 +71,8 @@ def test_pm_exists_within_hr_limits(conn):
     pm = org.pm_id(conn)
     row = actors.get(conn, pm)
     assert row["kind"] == "agent" and row["created_by"] == actors.owner_id(conn)
-    assert sorted(agents.permissions_of(conn, pm)) == sorted(org.PM_PERMISSIONS)
+    # its grants (pos.access) also hold outbound:*, which is not a permission group
+    assert sorted(p for p in agents.permissions_of(conn, pm) if p in agents.PERMISSIONS) == sorted(org.PM_PERMISSIONS)
     assert not agents.has_permission(conn, pm, "agents:create")  # it routes work, it does not hire
     # A platform agent: HR tracks it but it takes no slot of the active-agent limit.
     from pos.hr import store as hr_store

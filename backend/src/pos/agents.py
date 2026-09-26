@@ -35,6 +35,7 @@ PERMISSIONS = {
     "routes:write": "change event routing rules",
     "hr:read": "read HR's roster, scores and proposals (hr_overview)",
     "browser:use": "drive a web browser (paying, sending, deleting and account settings still need approval)",
+    "access:manage": "decide other agents' grants and budgets (the Access manager; only the owner grants it)",
 }
 BUILTIN_PERMISSIONS = {
     actors.ASSISTANT_NAME: ["tasks:read", "tasks:write", "tasks:claim", "approvals:request", "agents:create",
@@ -57,9 +58,17 @@ class AgentError(ValueError):
 
 
 def permissions_of(conn: sqlite3.Connection, actor_id: int) -> set[str]:
+    """The owner has everything; an agent has its active grants (pos.access),
+    or actors.permissions while it is not managed there yet."""
     row = actors.get(conn, actor_id)
     if row["is_owner"]:
         return {"*"}
+    if row["kind"] != "human":
+        from .access import service as access
+
+        granted = access.effective(conn, actor_id)
+        if granted is not None:
+            return granted
     return set(json.loads(row["permissions"] or "[]"))
 
 
@@ -73,7 +82,7 @@ def has_permission(conn: sqlite3.Connection, actor_id: int, perm: str) -> bool:
 
 def require(conn: sqlite3.Connection, ctx: Ctx, perm: str) -> None:
     if not has_permission(conn, ctx.actor_id, perm):
-        raise _Forbidden(f"missing permission {perm}")
+        raise _Forbidden(f"missing permission {perm} (not granted; ask the Access manager with request_access)")
 
 
 def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
@@ -91,6 +100,11 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
             conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",
                          (json.dumps(sorted({*json.loads(row["permissions"] or "[]"), perm})), row["id"]))
     conn.commit()
+    from .access import service as access
+    from .access import store as access_store
+
+    if access_store.ready(conn):
+        access.seed(conn)  # the grants follow (never re-granting one that was revoked)
 
 
 def _slug(name: str) -> str:
@@ -209,6 +223,9 @@ def _insert_agent(conn: sqlite3.Connection, ctx: Ctx, creator: sqlite3.Row, deci
     from . import org
 
     org.place_new(conn, row["id"])  # reports to the Project manager
+    from .access import service as access
+
+    access.seed_agent(conn, row["id"], ctx.actor_id)  # its permissions become grants right away
     key = actors.create_key(conn, row["id"], label=f"created by {creator['name']}")
     audit.log(conn, ctx, "create_agent", "actor", row["id"], name=name, lifetime=lifetime, permissions=requested)
     if decision.get("replace_id"):
@@ -229,6 +246,9 @@ def set_permissions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, permissio
     _agent_row(conn, agent_id)
     versioning.update(conn, ctx, "actor", agent_id, {"permissions": json.dumps(sorted(set(permissions)))},
                       action="set_permissions")
+    from .access import service as access
+
+    access.sync_owner_permissions(conn, ctx, agent_id, sorted(set(permissions)))
     conn.commit()
     return detail(conn, agent_id)
 
@@ -566,7 +586,9 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "runtime": "web + phone" if row["kind"] == "human" else row["runtime"],
             "a2a_url": row["a2a_url"], "purpose": p["purpose"] if p else None,
             "lifetime": p["lifetime"] if p else None, "system": bool(p and p["system"]),
-            "permissions": ["*"] if row["is_owner"] else json.loads(row["permissions"] or "[]"),
+            "permissions": ["*"] if row["is_owner"] else (
+                json.loads(row["permissions"] or "[]") if row["kind"] == "human"
+                else sorted(p for p in permissions_of(conn, row["id"]) if p in PERMISSIONS)),
             "budget_class": c["budget_class"] if c else None,
             "status": "online" if row["kind"] == "human" and not row["archived_at"] else _status(row, q["working"] or 0, waiting),
             "last_seen_at": row["last_seen_at"], "paused": bool(row["paused_at"]),

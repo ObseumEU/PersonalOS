@@ -85,6 +85,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
             projects.migrate_step_projects(conn)  # once: tasks with steps become projects
             agents_code.ensure_from_repo(conn, settings.data_dir)  # role agents from agents/*/agent.json
+            from .access import service as access
+
+            access.seed(conn)  # their permissions as grants too
             if os.environ.get("POS_WORKER_KEYS_DIR"):
                 agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
         finally:
@@ -116,6 +119,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(auth_router)
     app.include_router(budget_router)
+    from .access.api import router as access_router
+
+    app.include_router(access_router)
     app.include_router(hr_router)
     app.include_router(guard_api.router)
     guard_api.install_error_handler(app)

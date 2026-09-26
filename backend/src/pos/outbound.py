@@ -61,6 +61,10 @@ def request(conn: sqlite3.Connection, ctx: Ctx, action: str, payload: dict, task
     missing = [k for k in REQUIRED[action] if not payload.get(k)]
     if missing:
         raise tasks.Invalid(f"{action} needs {missing}")
+    from .access import service as access
+
+    # The capability is the Access manager's to grant; each action still waits for the owner's approval.
+    access.require_outbound(conn, ctx, action)
     return approvals.request(conn, ctx, action, {"payload": payload, **({"why": why} if why else {})}, task_id)
 
 

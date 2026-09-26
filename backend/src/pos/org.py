@@ -23,7 +23,7 @@ PM_PURPOSE = ("Takes incoming team work, splits it into steps with a definition 
 PM_PERMISSIONS = ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:review", "tasks:write"]
 
 ROLES = ("owner", "project_manager", "assistant", "developer", "mail", "community", "knowledge",
-         "automation", "hr", "deployer", "specialist")
+         "automation", "hr", "deployer", "access_manager", "specialist")
 # name -> (role, team) for the members PersonalOS knows by name.
 DEFAULTS = {
     actors.OWNER_NAME: ("owner", "leadership"),
@@ -36,6 +36,7 @@ DEFAULTS = {
     "Community agent": ("community", "communication"),
     "Knowledge agent": ("knowledge", "knowledge"),
     "Nexus": ("automation", "platform"),
+    "Access manager": ("access_manager", "operations"),
 }
 
 STANDUP_NAME = "Daily standup"

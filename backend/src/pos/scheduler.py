@@ -219,7 +219,35 @@ def knowlage_files(conn: sqlite3.Connection) -> dict:
     return kb_files.sync_pending(conn)
 
 
+def access_expire(conn: sqlite3.Connection) -> dict:
+    from .access import service
+
+    return service.expire(conn)
+
+
+def access_watch(conn: sqlite3.Connection) -> dict:
+    from .access import service
+
+    return service.watch(conn)
+
+
+def access_digest(conn: sqlite3.Connection) -> dict:
+    from .access import service
+
+    return service.digest(conn)
+
+
+def access_weekly(conn: sqlite3.Connection) -> dict:
+    from .access import service
+
+    return service.weekly(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "access_expire": access_expire,
+    "access_watch": access_watch,
+    "access_digest": access_digest,
+    "access_weekly": access_weekly,
     "knowlage_files": knowlage_files,
     "feedback_digest": feedback_digest,
     "probation_review": probation_review,
@@ -247,6 +275,11 @@ DEFAULT_JOBS = [
     ("Push files into knowlage (retry what failed)", "every 15m", "knowlage_files"),
     ("Repeated critique of an agent → the Agent coach", "daily 06:30", "feedback_digest"),
     ("Probation ended → the lead decides", "daily 07:15", "probation_review"),
+    # The Access manager (pos.access): temporary grants end, spikes pause, the owner's digest, the weekly review.
+    ("Access: end temporary grants and raises", "every 5m", "access_expire"),
+    ("Access: spend spikes and the company cap", "every 15m", "access_watch"),
+    ("Access: daily digest for the owner", "daily 18:00", "access_digest"),
+    ("Access: weekly budget review (Access manager)", "weekly mon 07:30", "access_weekly"),
 ]
 
 
@@ -307,9 +340,10 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
         (now.isoformat(timespec="seconds"), json.dumps(result, ensure_ascii=False, default=str),
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
-    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "knowlage_files") or result.get("sent") \
+    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "knowlage_files", "access_expire",
+                             "access_watch") or result.get("sent") \
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
-            or result.get("failed"):
+            or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result
