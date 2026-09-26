@@ -32,7 +32,7 @@ def _call(fn):
 def register(mcp, session) -> None:
     @mcp.tool(description="Ask the Access manager for a capability or a budget. what: 'capability' (a permission "
                           "like tasks:write, one pos tool as tool:<name>, outbound:<action>, scope:repo:<owner/name>, "
-                          "scope:connector:<name>) or 'budget' (metric usd_day, usd_month, tokens_day, tokens_month, "
+                          "scope:connector:<name>, cred:<name> for a credential: the owner decides those) or 'budget' (metric usd_day, usd_month, tokens_day, tokens_month, "
                           "usd_run, runs_day; amount). hours: how long (empty = permanent). why: what for, in a "
                           "sentence or two. task_id: your task (T-12); blocking parks it in waiting until the "
                           "decision, which comes to your inbox. Outbound actions still need approval each time.")

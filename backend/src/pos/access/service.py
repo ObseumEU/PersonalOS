@@ -43,7 +43,8 @@ METRICS = {
 }
 # Checked before each run (usd_run is a cap the worker applies inside the run).
 GATED = ("usd_day", "usd_month", "tokens_day", "tokens_month", "runs_day")
-OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials")
+# cred:<name> is one 1Password credential (pos.credentials): the owner grants it, never the Access manager.
+OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials", "cred")
 SCOPES = ("repo", "connector")
 
 SETTINGS_KEY = "access.settings"
@@ -484,6 +485,10 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
         raise AccessError("say why you need it (one or two sentences, with the task)")
     if what == "capability":
         kind = kind_of(capability or "")
+        if (capability or "").startswith("cred:"):
+            from ..credentials import service as credentials
+
+            credentials.validate_request(conn, capability)
         metric, amount = None, None
     elif what == "budget":
         if metric not in METRICS:
@@ -510,7 +515,12 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
     audit.log(conn, ctx, "access_request", "actor", ctx.actor_id, request=rid, what=what, capability=capability,
               metric=metric, amount=amount, hours=hours, task=task_id)
     label = capability if what == "capability" else f"{METRICS[metric]} {_fmt(metric, amount)}"
-    if needs_owner:
+    if what == "capability" and capability.startswith("cred:"):
+        from ..credentials import service as credentials
+
+        # A credential: the owner's ask_owner ticket (with the reason), approved with one click.
+        credentials.on_access_request(conn, ctx, rid, capability, why, task_id if source else None, hours)
+    elif needs_owner:
         _dm_owner(conn, f"Žádost o přístup #{rid} od {me['name']}: `{label}`. Tohle smí rozhodnout jen majitel "
                         f"(stránka agenta → Přístupy). Důvod: {why[:300]}")
     else:

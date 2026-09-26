@@ -131,6 +131,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import monitor
 
     monitor.register_mcp(mcp, session)  # the Monitor agent: incident_logs, incident_close
+    from .credentials import mcp as credentials_mcp
+
+    credentials_mcp.register(mcp, session)  # credentials_list, credential_http (values never shown)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:

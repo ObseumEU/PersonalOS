@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-c
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
-RUN pip install --no-cache-dir .
+# onepassword-sdk: agents' credentials from 1Password (pos.credentials; needs glibc >= 2.32, OpenSSL 3).
+RUN pip install --no-cache-dir ".[onepassword]"
 
 ENV POS_DATA_DIR=/data
 VOLUME /data
