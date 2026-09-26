@@ -1,0 +1,254 @@
+from sentinel import api, detect, runbook
+from sentinel.incidents import Incidents, Obs
+from sentinel.store import Store
+
+
+def _err(sen, container, text, n, at):
+    sen.docker.lines.setdefault(container, []).extend((at + i * 0.001, text) for i in range(n))
+
+
+# ------------------------------------------------------------------ dedupe and escalation
+
+def test_one_open_incident_absorbs_and_escalates_only_on_severity_or_tenfold(cfg, clock):
+    s = Store(":memory:")
+    inc = Incidents(s, cfg["thresholds"], clock)
+    o = Obs("nexus", "new_error", "fp1", "medium", "boom", 5)
+    iid, what = inc.observe(o)
+    assert what == "opened"
+    assert [k for k, _ in inc.due()] == ["incident"]
+    inc.mark_notified(iid)
+    assert inc.due() == []
+    for _ in range(3):
+        assert inc.observe(Obs("nexus", "new_error", "fp1", "medium", "boom", 5)) == (iid, "absorbed")
+    assert inc.get(iid)["count"] == 20 and inc.due() == []           # 4× the notified count: quiet
+    inc.observe(Obs("nexus", "new_error", "fp1", "medium", "boom", 40))
+    assert [k for k, _ in inc.due()] == ["incident_escalated"]      # 60 ≥ 10 × 5
+    inc.mark_notified(iid)
+    inc.observe(Obs("nexus", "new_error", "fp1", "high", "boom worse", 1))
+    assert [k for k, _ in inc.due()] == ["incident_escalated"]      # severity up
+    inc.mark_notified(iid)
+    assert inc.get(iid)["notified_level"] == 2
+    # another key is another incident
+    assert inc.observe(Obs("nexus", "new_error", "fp2", "medium", "other", 5))[1] == "opened"
+
+
+def test_auto_resolve_after_quiet_period(cfg, clock):
+    s = Store(":memory:")
+    inc = Incidents(s, cfg["thresholds"], clock)
+    iid, _ = inc.observe(Obs("host", "swap", "swap", "high", "swap 99%"))
+    hid, _ = inc.observe(Obs("personalos", "health", "personalos-api", "high", "down"))
+    clock.advance(11 * 60)
+    assert [r["id"] for r in inc.resolve_quiet()] == [hid]           # health: 10 min
+    clock.advance(20 * 60)
+    assert [r["id"] for r in inc.resolve_quiet()] == [iid]           # others: 30 min
+    # the same problem again is a new incident that knows it recurred
+    nid, what = inc.observe(Obs("host", "swap", "swap", "high", "swap 99%"))
+    assert what == "opened" and nid != iid and '"recurrences_24h": 1' in inc.get(nid)["detail"]
+
+
+# ------------------------------------------------------------------ thresholds
+
+def test_health_needs_three_failures_in_a_row(cfg, clock):
+    s, t = Store(":memory:"), cfg["thresholds"]
+    check = {"name": "nexus-api", "service": "nexus", "url": "http://nexus-api:3001/readyz",
+             "restart": "nexus-process-pilot-api-1"}
+    bad, good = {"ok": False, "detail": "ConnectionRefusedError"}, {"ok": True, "status": 200}
+    assert detect.health(s, t, check, bad, clock()) == []
+    assert detect.health(s, t, check, bad, clock()) == []
+    assert detect.health(s, t, check, good, clock()) == []          # the streak resets
+    detect.health(s, t, check, bad, clock())
+    detect.health(s, t, check, bad, clock())
+    obs = detect.health(s, t, check, bad, clock())
+    assert len(obs) == 1 and obs[0].kind == "health" and obs[0].container == "nexus-process-pilot-api-1"
+
+
+def test_tls_and_host_thresholds(cfg, clock):
+    s, t = Store(":memory:"), cfg["thresholds"]
+    check = {"name": "personalos-web", "service": "personalos", "url": "https://personalos.obseum.cz/"}
+    assert detect.health(s, t, check, {"ok": True, "tls_days": 40}, clock()) == []
+    assert [o.severity for o in detect.health(s, t, check, {"ok": True, "tls_days": 10}, clock())] == ["medium"]
+    assert [o.severity for o in detect.health(s, t, check, {"ok": True, "tls_days": 3}, clock())] == ["high"]
+    obs = detect.host(t, {"swap_pct": 99.7, "mem_avail_pct": 45, "load5": 3.3, "cpus": 4, "disk_pct": {"/": 63}})
+    assert [o.kind for o in obs] == ["swap"] and obs[0].severity == "high"
+    obs = detect.host(t, {"swap_pct": 89.9, "mem_avail_pct": 3, "load5": 13, "cpus": 4, "disk_pct": {"/": 97}})
+    assert sorted(o.kind for o in obs) == ["disk", "load", "memory"]
+
+
+def test_run_failure_ratio_needs_enough_runs_and_more_than_half(cfg):
+    t = cfg["thresholds"]
+    assert detect.runs(t, "nexus", {"total": 4, "failed": 4}) == []          # too few runs
+    assert detect.runs(t, "nexus", {"total": 10, "failed": 5}) == []         # exactly half: not above
+    obs = detect.runs(t, "nexus", {"total": 15, "failed": 12, "detail": {"last_reasons": ["usage limit"]}})
+    assert obs[0].kind == "run_failures" and obs[0].severity == "high" and obs[0].detail["ratio"] == 0.8
+    assert detect.runs(t, "nexus", {"total": 59, "failed": 59})[0].severity == "critical"
+
+
+def test_new_fingerprint_needs_a_meaningful_rate_and_spike_needs_baseline(cfg, clock):
+    s, t = Store(":memory:"), cfg["thresholds"]
+    now = clock()
+    line = "ERROR worker crashed: KeyError 'x'"
+    assert detect.ingest_logs(s, t, "nexus", "c", [(now, line)] * 3, now) == []      # 3 < 5
+    obs = detect.ingest_logs(s, t, "nexus", "c", [(now, line)] * 2, now)
+    assert [o.kind for o in obs] == ["new_error"] and obs[0].count == 5
+    # a known fingerprint with a steady baseline of ~1/min
+    other = "ERROR slow query took 1200 ms"
+    for m in range(180, 0, -1):
+        detect.ingest_logs(s, t, "nexus", "c", [(now - 60 * m, other)], now - 60 * m, learning=True)
+    assert detect.ingest_logs(s, t, "nexus", "c", [(now, other)] * 4, now) == []      # 4/5 min: normal
+    obs = detect.ingest_logs(s, t, "nexus", "c", [(now, other)] * 60, now)
+    assert [o.kind for o in obs] == ["error_spike"] and obs[0].detail["baseline_per_min"] <= 1.1
+
+
+def test_status_code_rules(cfg, clock):
+    s, t = Store(":memory:"), cfg["thresholds"]
+    now = clock()
+    ok = 'INFO: 1.2.3.4:1 - "POST /chat/completions HTTP/1.1" 200 OK'
+    e429 = '{"message": "1.2.3.4:1 - \\"POST /chat/completions HTTP/1.1\\" 429", "level": "INFO"}'
+    quota = "litellm.RateLimitError: You've hit your usage limit"
+    e401 = 'INFO: 1.2.3.4:1 - "GET /mcp HTTP/1.1" 401 Unauthorized'
+    lines = [(now, ok)] * 50 + [(now, e429)] * 25 + [(now, quota)] * 3 + [(now, e401)] * 120
+    kinds = sorted(o.kind for o in detect.ingest_logs(s, t, "litellm", "litellm", lines, now))
+    assert kinds == ["auth_flood", "quota", "rate_limited"]
+
+
+def test_learning_counts_but_opens_nothing(sen, clock):
+    sen.s.set_meta("created_at", clock())
+    sen.docker.add("nexus-process-pilot-api-1")
+    _err(sen, "nexus-process-pilot-api-1", "ERROR boom 1", 50, clock() - 10)
+    sen.tick()
+    assert sen.s.one("SELECT COUNT(*) AS n FROM incidents")["n"] == 0
+    assert sen.s.one("SELECT total FROM fp")["total"] == 50
+
+
+# ------------------------------------------------------------------ runbook
+
+def test_runbook_restarts_allowlisted_once_per_cooldown(sen, cfg, clock):
+    s, inc = sen.s, sen.inc
+    iid, _ = inc.observe(Obs("nexus", "health", "nexus-api", "high", "down", container="nexus-process-pilot-api-1"))
+    assert runbook.maybe_restart(s, inc, cfg, iid, sen.docker) == "restarted"
+    assert sen.docker.restarted == ["nexus-process-pilot-api-1"]
+    assert inc.due() == []                                     # held for the grace period
+    inc.resolve(iid, "test")
+    jid, _ = inc.observe(Obs("nexus", "health", "nexus-api", "high", "down", container="nexus-process-pilot-api-1"))
+    assert runbook.maybe_restart(s, inc, cfg, jid, sen.docker) == "cooldown"
+    assert [k for k, _ in inc.due()] == ["incident"]           # no second restart: escalate now
+    clock.advance(31 * 60)
+    inc.resolve(jid, "test")
+    kid, _ = inc.observe(Obs("nexus", "health", "nexus-api", "high", "down", container="nexus-process-pilot-api-1"))
+    assert runbook.maybe_restart(s, inc, cfg, kid, sen.docker) == "restarted"
+    # databases are never on the list, other kinds are not remediable
+    pid, _ = inc.observe(Obs("nexus", "health", "pg", "high", "down", container="nexus-process-pilot-postgres-1"))
+    assert runbook.maybe_restart(s, inc, cfg, pid, sen.docker) == "not_allowed"
+    qid, _ = inc.observe(Obs("host", "swap", "swap", "high", "swap"))
+    assert runbook.maybe_restart(s, inc, cfg, qid, sen.docker) == "not_remediable"
+    assert len(sen.docker.restarted) == 2
+
+
+def test_restart_that_fixes_it_never_reaches_personalos(sen, clock):
+    check = {"name": "nexus-api", "service": "nexus", "url": "http://x", "restart": "nexus-process-pilot-api-1"}
+    for _ in range(3):
+        sen.process(detect.health(sen.s, sen.t, check, {"ok": False, "detail": "refused"}, clock()), clock())
+    assert sen.docker.restarted == ["nexus-process-pilot-api-1"] and sen.pos.events == []
+    clock.advance(60)
+    sen.process(detect.health(sen.s, sen.t, check, {"ok": True, "status": 200}, clock()), clock())
+    clock.advance(11 * 60)
+    out = sen.process([], clock())
+    assert out["resolved"] and sen.pos.events == []
+    row = sen.s.one("SELECT * FROM incidents")
+    assert row["status"] == "resolved" and "restarted" in row["notes"]
+
+
+def test_restart_that_does_not_fix_it_escalates_after_the_grace(sen, clock):
+    check = {"name": "nexus-api", "service": "nexus", "url": "http://x", "restart": "nexus-process-pilot-api-1"}
+    for _ in range(3):
+        sen.process(detect.health(sen.s, sen.t, check, {"ok": False, "detail": "refused"}, clock()), clock())
+        clock.advance(60)
+    assert sen.pos.events == []
+    for _ in range(3):  # the grace (150 s) ends; it still fails
+        sen.process(detect.health(sen.s, sen.t, check, {"ok": False, "detail": "refused"}, clock()), clock())
+        clock.advance(60)
+    assert [e["kind"] for e in sen.pos.events] == ["incident"]
+    assert "runbook: restarted nexus-process-pilot-api-1" in sen.pos.events[0]["body"]
+
+
+# ------------------------------------------------------------------ the whole tick
+
+def test_tick_turns_an_error_flood_into_one_event_with_a_compact_packet(sen, clock):
+    sen.docker.add("nexus-process-pilot-runtime-1")
+    secret_line = ("ERROR run 991 failed for jana@firma.cz: litellm.RateLimitError key sk-live-ABCDEFGH12345678 "
+                   "(request 3f9c1e2a-1b2c-4d5e-8f90-123456789abc)")
+    for i in range(10_000):
+        sen.docker.lines.setdefault("nexus-process-pilot-runtime-1", []).append(
+            (clock() - 30 + i * 0.001, secret_line.replace("991", str(i))))
+    out = sen.tick()
+    assert len(out["opened"]) == 1 and len(sen.pos.events) == 1
+    ev = sen.pos.events[0]
+    assert ev["source"] == "sentinel" and ev["kind"] == "incident"
+    assert ev["ref"] == f"sentinel:{sen.instance}-{out['opened'][0]}#0"
+    inc = ev["data"]["incident"]
+    assert inc["count"] == 10_000 and inc["service"] == "nexus" and inc["kind"] == "new_error"
+    body = ev["body"]
+    assert "jana@firma.cz" not in body and "sk-live-ABCDEFGH" not in body and "<email>" in body
+    assert body.count("RateLimitError") <= 20 and len(body) < 6500           # compact, never raw logs
+    # the same flood next minute is absorbed, not a second event
+    for i in range(500):
+        sen.docker.lines["nexus-process-pilot-runtime-1"].append((clock() + 30 + i * 0.001, secret_line))
+    clock.advance(60)
+    sen.tick()
+    assert len(sen.pos.events) == 1
+    assert sen.s.one("SELECT count FROM incidents")["count"] == 10_500
+    # quiet for 30 min: resolved, and PersonalOS hears it
+    clock.advance(31 * 60)
+    sen.tick()
+    assert [e["kind"] for e in sen.pos.events] == ["incident", "incident_resolved"]
+    assert sen.pos.events[1]["ref"].endswith("#resolved")
+
+
+def test_personalos_down_keeps_events_and_raises_the_fallback(sen, clock, tmp_path):
+    sen.pos.up = False
+    sen.docker.add("personalos-api-1")
+    _err(sen, "personalos-api-1", "ERROR sqlite3.OperationalError: database is locked", 20, clock() - 5)
+    for _ in range(3):
+        sen.tick()
+        clock.advance(60)
+    assert sen.pos.pending() == 1 and sen.pos_down_since
+    alert = (tmp_path / "ALERT-personalos-down.md").read_text(encoding="utf-8")
+    assert "PersonalOS is down" in alert and "database is locked" in alert
+    sen.pos.up = True
+    sen.tick()
+    assert len(sen.pos.events) == 1 and sen.pos_down_since is None
+    assert not (tmp_path / "ALERT-personalos-down.md").exists()
+
+
+def test_container_rules(sen, clock):
+    sen.docker.add("kb-kb-1", restarts=0)
+    sen.docker.add("litellm-postgres", status="exited", exit_code=137)
+    sen.docker.add("nexus-process-pilot-clamav-1", status="exited", exit_code=0)  # a clean exit is not an outage
+    for i in range(4):
+        sen.docker.items["kb-kb-1"]["restarts"] = i
+        sen.docker.items["kb-kb-1"]["started"] = f"2026-09-26T08:0{i}:00Z"
+        sen.tick()
+        clock.advance(60)
+    kinds = {(r["kind"], r["key"]) for r in sen.s.q("SELECT kind, key FROM incidents")}
+    assert kinds == {("restart_loop", "kb-kb-1"), ("container_down", "litellm-postgres")}
+
+
+def test_inject_hook_and_log_reads(sen, clock):
+    out = api.inject(sen, {"line": "ERROR SyntheticTestError: e2e check 42", "count": 30})
+    assert out["incident"] and len(sen.pos.events) == 1
+    assert sen.pos.events[0]["data"]["incident"]["service"] == "sentinel-test"
+    got = api.read_logs(sen, "sentinel-test-app", clock(), 10, fingerprint=out["fingerprint"])
+    assert got["source"] == "samples" and got["lines"]
+    # a real container: filtered, deduplicated, redacted and capped
+    sen.docker.add("kb-kb-1")
+    sen.tick()
+    now = clock()
+    sen.docker.lines["kb-kb-1"] = ([(now - 100 + i, "ERROR ingest failed for petr@acme.cz: Timeout") for i in range(50)]
+                                   + [(now - 40, 'INFO: 1.2.3.4:1 - "GET /api/health HTTP/1.1" 200 OK')]
+                                   + [(now - 30 + i, f"ERROR other {i} token=abcd1234") for i in range(200)])
+    r = api.read_logs(sen, "kb-kb-1", now, 10, limit=500)
+    assert r["lines"][0].endswith("(×50)") and "petr@acme.cz" not in r["lines"][0]
+    assert "abcd1234" not in " ".join(r["lines"]) and len(r["lines"]) <= api.MAX_LIMIT
+    assert all("/api/health" not in x for x in r["lines"])
+    g = api.read_logs(sen, "kb-kb-1", now, 60, grep="health", errors_only=True)
+    assert len(g["lines"]) == 1
