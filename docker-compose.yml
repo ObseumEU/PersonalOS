@@ -257,8 +257,66 @@ services:
       - ./data/worker-keys/asistent-vedeni:/run/pos-key:ro
     restart: unless-stopped
 
+  # The Monitor agent (Hlídač) triages the sentinel's incidents (agents/monitor/INSTRUCTIONS.md, pos.monitor):
+  # pos tools only, Claude Haiku at low effort, a small cap per run; code caps runs per incident and per day.
+  monitor:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${MONITOR_AGENT_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
+      WORKER_POS_TOOLS: 'get_task list_tasks incident_logs incident_close create_task task_comment ask_owner report_progress complete_task'
+      WORKER_CLAUDE_TOOLS: ' '
+      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
+      WORKER_CLAUDE_EFFORT: low
+      WORKER_CLAUDE_MAX_USD: "0.3"
+      WORKER_MAX_STEPS: "20"
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - monitor-work:/work
+      - ./data/worker-keys/monitor:/run/pos-key:ro
+    restart: unless-stopped
+
+  # --- The sentinel (ops/sentinel, docs/SENTINEL.md): code watches the apps every minute and wakes the
+  # Monitor agent only for a real incident. Start with:  docker compose --profile sentinel up -d --build
+  # Docker access goes through a proxy that allows reads and restarts only (no exec, create, delete, volumes).
+  docker-proxy:
+    profiles: ["sentinel"]
+    image: tecnativa/docker-socket-proxy:${DOCKER_PROXY_TAG:-v0.5.0}
+    environment:
+      CONTAINERS: 1
+      ALLOW_RESTARTS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  sentinel:
+    profiles: ["sentinel"]
+    build: ./ops/sentinel
+    depends_on:
+      - docker-proxy
+    environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
+      SENTINEL_TOKEN: ${POS_SENTINEL_TOKEN:-}
+      SENTINEL_POS_URL: ${SENTINEL_POS_URL:-http://api:8000}
+      SENTINEL_NEXUS_DSN: ${SENTINEL_NEXUS_DSN:-}
+      SENTINEL_LITELLM_KEY: ${SENTINEL_LITELLM_KEY:-}
+      SENTINEL_TEST_HOOK: ${SENTINEL_TEST_HOOK:-0}
+    volumes:
+      - sentinel-state:/state
+      - ./.git:/repos/personalos:ro
+    restart: unless-stopped
+
 volumes:
   pos-data:
+  sentinel-state:
+  monitor-work:
   access-manager-work:
   agent-coach-work:
   assistant-work:
