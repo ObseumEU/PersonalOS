@@ -1,0 +1,16 @@
+# Obseum platform: one new datasource in org "Obseum" (orgId 2). Logs use the existing Loki-Obseum
+# (tenant "Obseum"), unchanged; nothing here touches the other orgs' datasources.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus-Platform
+    uid: obs-prometheus
+    type: prometheus
+    access: proxy
+    url: http://obs-prometheus:9090
+    orgId: 2
+    isDefault: false
+    editable: false
+    jsonData:
+      timeInterval: 30s
+      httpMethod: POST

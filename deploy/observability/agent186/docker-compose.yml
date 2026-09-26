@@ -1,0 +1,120 @@
+# 192.168.1.186 ("agent"): the Obseum platform add-on next to the existing Grafana + Loki
+# (/opt/observability/grafana, shared with the innogy project: never changed from here).
+# Lives in /opt/observability/platform; see deploy/observability/README.md.
+#
+#   docker compose up -d
+#
+# What it adds:
+#   prometheus : metrics store (14 days), remote-write receiver for svr03's Alloy, blackbox probes
+#   blackbox   : synthetic health checks of the apps on svr03 (through their public names, LAN path)
+#   alloy      : this host's metrics and logs (Loki tenant "Obseum", host="agent")
+#   hook       : relays Grafana's webhook to PersonalOS and adds its bearer token, so no secret
+#                lives in Grafana; reachable only on Grafana's own network
+name: obs-platform
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.5
+    container_name: obs-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=14d
+      - --storage.tsdb.retention.size=6GB
+      - --web.enable-remote-write-receiver
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      # LAN only: svr03's Alloy writes here, PersonalOS's Monitor tools read here.
+      - "192.168.1.186:9090:9090"
+    networks: [default, grafana]
+    mem_limit: 768m
+    logging: &logging
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.27.0
+    container_name: obs-blackbox
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    # The public names resolve to the VPS (which the front proxy answers with 403); the LAN path
+    # goes straight to svr03's front proxy, like a browser on the LAN with the hosts entries.
+    extra_hosts:
+      - "personalos.obseum.cz:192.168.1.108"
+      - "knowlage.obseum.cz:192.168.1.108"
+      - "nexus.obseum.cloud:192.168.1.108"
+      - "nexus-api.obseum.cloud:192.168.1.108"
+      - "litellm.obseum.cloud:192.168.1.108"
+      - "langfuse.obseum.cloud:192.168.1.108"
+      - "grafana.obseum.cloud:192.168.1.108"
+    networks: [default, grafana]
+    mem_limit: 64m
+    logging: *logging
+
+  alloy:
+    image: grafana/alloy:v1.20.0
+    container_name: obs-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    environment:
+      GOMEMLIMIT: 200MiB
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - alloy-data:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    ports:
+      - "127.0.0.1:12345:12345"
+    networks: [default, grafana]
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+  hook:
+    image: caddy:2.10-alpine
+    container_name: obs-hook
+    restart: unless-stopped
+    environment:
+      POS_GRAFANA_TOKEN: ${POS_GRAFANA_TOKEN:?set in .env}
+    volumes:
+      - ./hook.Caddyfile:/etc/caddy/Caddyfile:ro
+    extra_hosts:
+      - "personalos.obseum.cz:192.168.1.108"
+    networks:
+      grafana:
+        aliases: [obs-hook]
+    mem_limit: 48m
+    logging: *logging
+
+volumes:
+  prometheus-data:
+  alloy-data:
+
+networks:
+  # The existing Grafana's network: Grafana reaches obs-prometheus and obs-hook by name.
+  grafana:
+    external: true
+    name: grafana_default

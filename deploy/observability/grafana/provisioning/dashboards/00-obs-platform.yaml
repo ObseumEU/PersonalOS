@@ -1,0 +1,16 @@
+# Obseum platform dashboards (org "Obseum", folder "Obseum platform"). A separate provider next to
+# the existing Main/Obseum/Innogy providers, which stay as they are.
+# Named 00-* so it loads before dashboards.yaml, whose "Main Dashboards" provider (folder
+# "General") fails on Grafana 12 and stops the providers after it (pre-existing, not ours to fix).
+apiVersion: 1
+
+providers:
+  - name: Obseum platform
+    orgId: 2
+    folder: Obseum platform
+    type: file
+    disableDeletion: false
+    editable: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards/files/platform

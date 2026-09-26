@@ -1,0 +1,26 @@
+# Custom queries for Alloy's postgres exporter (Nexus, role obs_ro: SELECT on runs, workflow_runs).
+# Grafana alerts on the failure ratio: nexus_runs_failed / nexus_runs_finished over the last hour.
+nexus_runs:
+  query: >-
+    SELECT count(*) FILTER (WHERE status = 'failed') AS failed,
+           count(*) FILTER (WHERE status IN ('completed', 'failed', 'stopped')) AS finished
+    FROM runs WHERE created_at > now() - interval '1 hour'
+  metrics:
+    - failed:
+        usage: GAUGE
+        description: Nexus agent runs that failed in the last hour
+    - finished:
+        usage: GAUGE
+        description: Nexus agent runs that finished in the last hour
+nexus_workflow_runs:
+  query: >-
+    SELECT count(*) FILTER (WHERE status = 'failed') AS failed,
+           count(*) FILTER (WHERE status IN ('completed', 'failed', 'cancelled')) AS finished
+    FROM workflow_runs WHERE started_at > now() - interval '1 hour'
+  metrics:
+    - failed:
+        usage: GAUGE
+        description: Nexus workflow runs that failed in the last hour
+    - finished:
+        usage: GAUGE
+        description: Nexus workflow runs that finished in the last hour

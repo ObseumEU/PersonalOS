@@ -1,0 +1,21 @@
+# Grafana (org Obseum, contact point "PersonalOS") -> PersonalOS event ingestion.
+# Only this one path; the bearer token is added here, so Grafana holds no secret.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	handle /api/hooks/grafana {
+		reverse_proxy https://personalos.obseum.cz {
+			header_up Host personalos.obseum.cz
+			header_up Authorization "Bearer {$POS_GRAFANA_TOKEN}"
+			transport http {
+				tls_server_name personalos.obseum.cz
+			}
+		}
+	}
+	handle {
+		respond "not found" 404
+	}
+}

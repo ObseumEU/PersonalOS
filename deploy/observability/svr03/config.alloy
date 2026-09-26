@@ -1,0 +1,375 @@
+// Grafana Alloy on svr03: the only observability process on this host.
+//   logs    : every container (labels host, stack, service, container, level, http) and the host journal
+//             -> Loki on 192.168.1.186, tenant "Obseum" (the Grafana org "Obseum" reads it as Loki-Obseum)
+//   metrics : host (embedded node exporter), containers (embedded cAdvisor), LiteLLM /metrics,
+//             Nexus run counts (read-only SQL) -> Prometheus on 192.168.1.186 (remote write, disk WAL)
+// Versioned in PersonalOS: deploy/observability/svr03/config.alloy
+
+logging {
+  level = "warn"
+}
+
+// ------------------------------------------------------------------ logs: containers
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "30s"
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "stack"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  // Containers started without compose: stack and service fall back to the container name.
+  rule {
+    source_labels = ["stack", "container"]
+    separator     = ";"
+    regex         = ";(.+)"
+    target_label  = "stack"
+  }
+  rule {
+    source_labels = ["service", "container"]
+    separator     = ";"
+    regex         = ";(.+)"
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.docker.containers.targets
+  relabel_rules    = discovery.relabel.containers.rules
+  labels           = {host = "svr03", source = "docker"}
+  refresh_interval = "30s"
+  forward_to       = [loki.process.apps.receiver]
+}
+
+// Level and HTTP class from JSON logs (pino, LiteLLM, Caddy, structlog) or plain text
+// (uvicorn "INFO:", .NET "fail:", "level=error"). Only two low-cardinality labels come out:
+// level (error|warn|info|debug) and http="5xx" on server errors. The rest stays in the line
+// and is parsed at query time (| json).
+loki.process "apps" {
+  forward_to = [loki.write.obs.receiver]
+
+  stage.json {
+    expressions = {j_level = "level", j_sev = "severity", j_lvl = "lvl", j_code = "res.statusCode", j_status = "status", j_status2 = "status_code"}
+  }
+  stage.regex {
+    expression = "^(?:\\S+\\s+){0,2}\\[?(?P<p_level>(?i:info|warn|warning|error|err|fail|crit|critical|fatal|panic|debug|dbug|trce|trace))\\]?[:\\s]"
+  }
+  stage.regex {
+    expression = "(?i)\\blevel[=:]\\s*\"?(?P<kv_level>[a-z]+)"
+  }
+  stage.regex {
+    expression = "HTTP/\\d(?:\\.\\d)?\\\\?\"\\s(?P<p_code>\\d{3})\\b"
+  }
+  stage.template {
+    source   = "level"
+    template = "{{ $l := \"\" }}{{ if .j_level }}{{ $l = .j_level }}{{ else if .j_sev }}{{ $l = .j_sev }}{{ else if .j_lvl }}{{ $l = .j_lvl }}{{ else if .kv_level }}{{ $l = .kv_level }}{{ else if .p_level }}{{ $l = .p_level }}{{ end }}{{ $l = ToLower (print $l) }}{{ if or (eq $l \"50\") (eq $l \"60\") (eq $l \"error\") (eq $l \"err\") (eq $l \"fail\") (eq $l \"crit\") (eq $l \"critical\") (eq $l \"fatal\") (eq $l \"panic\") }}error{{ else if or (eq $l \"40\") (eq $l \"warn\") (eq $l \"warning\") }}warn{{ else if or (eq $l \"30\") (eq $l \"info\") (eq $l \"information\") (eq $l \"notice\") }}info{{ else if or (eq $l \"20\") (eq $l \"10\") (eq $l \"debug\") (eq $l \"dbug\") (eq $l \"trace\") (eq $l \"trce\") }}debug{{ end }}"
+  }
+  stage.template {
+    source   = "http"
+    template = "{{ $c := \"\" }}{{ if .j_code }}{{ $c = print .j_code }}{{ else if .p_code }}{{ $c = .p_code }}{{ else if .j_status }}{{ $c = print .j_status }}{{ else if .j_status2 }}{{ $c = print .j_status2 }}{{ end }}{{ if and (eq (len $c) 3) (hasPrefix \"5\" $c) }}5xx{{ end }}"
+  }
+  stage.labels {
+    values = {level = "", http = ""}
+  }
+  // A container that floods (a crash loop printing stack traces) cannot crowd out the rest.
+  stage.limit {
+    rate                = 50
+    burst               = 400
+    by_label_name       = "container"
+    max_distinct_labels = 10000
+    drop                = true
+  }
+}
+
+// ------------------------------------------------------------------ logs: host journal
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "identifier"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "priority"
+  }
+}
+
+loki.source.journal "host" {
+  path          = "/var/log/journal"
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = {host = "svr03", source = "journal", stack = "host"}
+  forward_to    = [loki.process.journal.receiver]
+}
+
+loki.process "journal" {
+  forward_to = [loki.write.obs.receiver]
+
+  stage.template {
+    source   = "level"
+    template = "{{ $p := print .priority }}{{ if or (eq $p \"emerg\") (eq $p \"alert\") (eq $p \"crit\") (eq $p \"err\") }}error{{ else if eq $p \"warning\" }}warn{{ else if or (eq $p \"notice\") (eq $p \"info\") }}info{{ else if eq $p \"debug\" }}debug{{ end }}"
+  }
+  stage.labels {
+    values = {level = ""}
+  }
+  stage.label_drop {
+    values = ["priority"]
+  }
+  stage.limit {
+    rate  = 100
+    burst = 500
+    drop  = true
+  }
+}
+
+loki.write "obs" {
+  endpoint {
+    url                 = sys.env("OBS_LOKI_URL")
+    tenant_id           = "Obseum"
+    batch_size          = "512KiB"
+    max_backoff_period  = "5m"
+    max_backoff_retries = 20
+  }
+}
+
+// ------------------------------------------------------------------ metrics
+
+prometheus.exporter.unix "host" {
+  procfs_path         = "/host/proc"
+  sysfs_path          = "/host/sys"
+  rootfs_path         = "/host/root"
+  disable_collectors  = ["arp", "bcache", "bonding", "btrfs", "fibrechannel", "hwmon", "infiniband", "ipvs", "mdadm", "nfs", "nfsd", "powersupplyclass", "rapl", "tapestats", "thermal_zone", "xfs", "zfs", "softnet", "selinux", "timex"]
+
+  filesystem {
+    mount_points_exclude = "^/(dev|proc|run|sys|host|etc|var/lib/docker/.+|var/lib/containers/.+|snap/.+)($|/)"
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs|nsfs|fuse.*)$"
+  }
+  netdev {
+    device_exclude = "^(veth.*|br-.*|docker.*|lo|wg.*)$"
+  }
+  netclass {
+    ignored_devices = "^(veth.*|br-.*|docker.*|lo)$"
+  }
+}
+
+prometheus.exporter.cadvisor "containers" {
+  // Docker 29 here uses the containerd image store, which cAdvisor's docker factory cannot read:
+  // containers come through containerd (namespace "moby"), named and labelled below.
+  docker_host            = "unix:///var/run/docker.sock"
+  containerd_host        = "/run/containerd/containerd.sock"
+  containerd_namespace   = "moby"
+  docker_only            = true
+  storage_duration       = "1m"
+  store_container_labels = false
+  enabled_metrics        = ["cpu", "memory", "network", "diskIO", "oom_event"]
+}
+
+prometheus.exporter.self "alloy" { }
+
+// Nexus: agent and workflow runs finished in the last hour (role obs_ro: SELECT on two tables).
+prometheus.exporter.postgres "nexus" {
+  data_source_names          = [local.file.nexus_dsn.content]
+  disable_default_metrics    = true
+  disable_settings_metrics   = true
+  custom_queries_config_path = "/etc/alloy/postgres-queries.yaml"
+}
+
+local.file "nexus_dsn" {
+  filename  = "/run/secrets/nexus_dsn"
+  is_secret = true
+}
+
+local.file "litellm_key" {
+  filename  = "/run/secrets/litellm_metrics_key"
+  is_secret = true
+}
+
+prometheus.scrape "host" {
+  targets         = array.concat(prometheus.exporter.unix.host.targets, prometheus.exporter.self.alloy.targets)
+  scrape_interval = "30s"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.scrape "containers" {
+  targets         = prometheus.exporter.cadvisor.containers.targets
+  scrape_interval = "30s"
+  forward_to      = [prometheus.relabel.containers.receiver]
+}
+
+prometheus.relabel "containers" {
+  forward_to = [prometheus.remote_write.obs.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_rss|memory_swap|spec_memory_limit_bytes|start_time_seconds|last_seen|network_receive_bytes_total|network_transmit_bytes_total|oom_events_total|fs_reads_bytes_total|fs_writes_bytes_total)"
+    action        = "keep"
+  }
+  // Only Docker containers (cgroup v2, systemd driver); the id joins docker_meta below.
+  rule {
+    source_labels = ["id"]
+    regex         = "/system.slice/docker-([0-9a-f]{64})\\.scope"
+    target_label  = "container_id"
+  }
+  rule {
+    source_labels = ["container_id"]
+    regex         = ""
+    action        = "drop"
+  }
+  rule {
+    regex  = "id|image|name|container_label_.*"
+    action = "labeldrop"
+  }
+}
+
+// cAdvisor names containers by id only (containerd factory), so an info series per container
+// carries the names: up{job="docker_meta", container_id, container, stack, service}. Each target
+// scrapes an exporter with no collectors (an empty page), so it costs almost nothing.
+// Prometheus on .186 joins it (recording rules container:*).
+prometheus.exporter.unix "empty" {
+  set_collectors = ["textfile"]
+
+  textfile {
+    directory = "/etc/alloy"  // no *.prom files here: an empty page
+  }
+}
+
+discovery.relabel "container_meta" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_id"]
+    target_label  = "container_id"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "stack"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+  rule {
+    source_labels = ["stack", "container"]
+    separator     = ";"
+    regex         = ";(.+)"
+    target_label  = "stack"
+  }
+  rule {
+    source_labels = ["service", "container"]
+    separator     = ";"
+    regex         = ";(.+)"
+    target_label  = "service"
+  }
+  rule {
+    target_label = "__address__"
+    replacement  = "127.0.0.1:12345"
+  }
+  rule {
+    target_label = "__metrics_path__"
+    replacement  = "/api/v0/component/prometheus.exporter.unix.empty/metrics"
+  }
+  rule {
+    target_label = "job"
+    replacement  = "docker_meta"
+  }
+  rule {
+    target_label = "instance"
+    replacement  = "svr03"
+  }
+}
+
+prometheus.scrape "container_meta" {
+  targets         = discovery.relabel.container_meta.output
+  scrape_interval = "60s"
+  forward_to      = [prometheus.relabel.container_meta.receiver]
+}
+
+prometheus.relabel "container_meta" {
+  forward_to = [prometheus.remote_write.obs.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "up"
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "litellm" {
+  targets         = [{"__address__" = "litellm:4000", "job" = "litellm"}]
+  metrics_path    = "/metrics/"
+  scrape_interval = "60s"
+  scrape_timeout  = "15s"
+  bearer_token    = local.file.litellm_key.content
+  forward_to      = [prometheus.relabel.litellm.receiver]
+}
+
+// Keep LiteLLM's spend, request, failure and budget series; drop the per-key hash and the
+// histogram buckets (cardinality).
+prometheus.relabel "litellm" {
+  forward_to = [prometheus.remote_write.obs.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "litellm_(spend_metric_total|requests_metric_total|proxy_total_requests_metric_total|proxy_failed_requests_metric_total|llm_api_failed_requests_metric_total|total_tokens_metric_total|input_tokens_metric_total|output_tokens_metric_total|remaining_api_key_budget_metric|api_key_max_budget_metric|remaining_team_budget_metric|team_max_budget_metric|deployment_state|request_total_latency_metric_sum|request_total_latency_metric_count)|up"
+    action        = "keep"
+  }
+  rule {
+    regex  = "hashed_api_key|client_ip|user_agent|end_user|user_email|org_id|org_alias|model_id"
+    action = "labeldrop"
+  }
+}
+
+prometheus.scrape "nexus" {
+  targets         = prometheus.exporter.postgres.nexus.targets
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
+prometheus.remote_write "obs" {
+  external_labels = {host = "svr03"}
+
+  endpoint {
+    url = sys.env("OBS_PROM_URL")
+
+    queue_config {
+      max_shards           = 2
+      capacity             = 2000
+      max_samples_per_send = 1000
+    }
+  }
+
+  wal {
+    truncate_frequency = "15m"
+    max_keepalive_time = "4h"
+  }
+}

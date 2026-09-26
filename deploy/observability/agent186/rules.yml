@@ -1,0 +1,64 @@
+# Recording rules: cAdvisor series carry only container_id (see config.alloy, docker_meta), so
+# the per-container series with names (container, stack, service) are built here once a minute.
+# Dashboards and alerts use the container:* series.
+groups:
+  - name: containers
+    interval: 60s
+    rules:
+      - record: docker:container_meta
+        expr: group by (host, container_id, container, stack, service) (up{job="docker_meta"})
+
+      - record: container:memory_working_set_bytes
+        expr: >-
+          max by (host, container_id) (container_memory_working_set_bytes)
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+      - record: container:memory_limit_bytes
+        expr: >-
+          max by (host, container_id) (container_spec_memory_limit_bytes)
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+      - record: container:cpu_cores:rate5m
+        expr: >-
+          sum by (host, container_id) (rate(container_cpu_usage_seconds_total[5m]))
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+      - record: container:network_bytes:rate5m
+        expr: >-
+          sum by (host, container_id) (rate(container_network_receive_bytes_total[5m]) + rate(container_network_transmit_bytes_total[5m]))
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+      # Starts in the last 15 minutes / hour: a container that restarts keeps its id, and cAdvisor's
+      # start time moves on each start.
+      - record: container:restarts:15m
+        expr: >-
+          max by (host, container_id) (changes(container_start_time_seconds[15m]))
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+      - record: container:restarts:1h
+        expr: >-
+          max by (host, container_id) (changes(container_start_time_seconds[1h]))
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+      - record: container:oom_events:1h
+        expr: >-
+          max by (host, container_id) (increase(container_oom_events_total[1h]))
+          * on (host, container_id) group_left (container, stack, service) docker:container_meta
+
+  - name: hosts
+    interval: 60s
+    rules:
+      - record: host:cpu_used:ratio
+        expr: 1 - avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))
+      - record: host:memory_used:ratio
+        expr: 1 - max by (host) (node_memory_MemAvailable_bytes) / max by (host) (node_memory_MemTotal_bytes)
+      - record: host:swap_used:ratio
+        expr: >-
+          1 - max by (host) (node_memory_SwapFree_bytes) / (max by (host) (node_memory_SwapTotal_bytes) > 0)
+      - record: host:disk_used:ratio
+        expr: >-
+          1 - max by (host, mountpoint) (node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs|vfat"})
+            / max by (host, mountpoint) (node_filesystem_size_bytes{fstype=~"ext4|xfs|btrfs|vfat"})
+      - record: host:load1:per_cpu
+        expr: >-
+          max by (host) (node_load1) / count by (host) (node_cpu_seconds_total{mode="idle"})

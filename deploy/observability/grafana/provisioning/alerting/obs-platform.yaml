@@ -1,0 +1,335 @@
+# Obseum platform alerting, org "Obseum" (orgId 2) only. Innogy (org 3) and Main (org 1) are not
+# touched. Every rule carries team=platform; the policy below sends team=platform to PersonalOS
+# (contact point "PersonalOS") and leaves anything else in this org on the default receiver.
+#
+# PersonalOS turns each alert (by fingerprint and start) into one event and routes it to the
+# Monitor agent (Hlídač) as an incident; a resolved notification closes it (pos.observability).
+# Labels the Monitor reads: kind (its runbook key), severity, host, and container/app/service.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 2
+    name: PersonalOS
+    receivers:
+      - uid: obs-personalos-webhook
+        type: webhook
+        # obs-hook (obs-platform on .186) adds PersonalOS's bearer token: no secret in Grafana.
+        settings:
+          url: http://obs-hook:8080/api/hooks/grafana
+          httpMethod: POST
+          maxAlerts: 25
+        disableResolveMessage: false
+
+policies:
+  - orgId: 2
+    receiver: grafana-default-email
+    group_by: ["grafana_folder", "alertname"]
+    routes:
+      - receiver: PersonalOS
+        object_matchers:
+          - ["team", "=", "platform"]
+        group_by: ["alertname", "host"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 12h
+        continue: false
+
+groups:
+  # ---------------------------------------------------------------- hosts
+  - orgId: 2
+    name: platform-hosts
+    folder: Obseum platform
+    interval: 1m
+    rules:
+      - uid: obs-swap-high
+        title: Swap above 90%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: "host:swap_used:ratio", instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.9]}}]}
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: swap, severity: high}
+        annotations:
+          summary: "{{ $labels.host }}: swap {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} used for 10 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
+
+      - uid: obs-disk-high
+        title: Disk above 85%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: 'host:disk_used:ratio{mountpoint!~"/boot.*"}', instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.85]}}]}
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: disk, severity: high}
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.mountpoint }}: disk {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} full"
+          dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
+
+      - uid: obs-rootfs-readonly
+        title: Root filesystem read-only
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: 'max by (host) (node_filesystem_readonly{mountpoint="/"})', instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0]}}]}
+        for: 2m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: readonly_fs, severity: critical}
+        annotations:
+          summary: "{{ $labels.host }}: / is mounted read-only (errors=remount-ro after disk errors?)"
+          dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
+
+      # Alloy runs in Docker on each host: when Docker (or the host) stops, its series stop.
+      # (Docker down on .186 takes Grafana with it; PersonalOS watches that one itself.)
+      - uid: obs-host-silent
+        title: Host metrics stopped (Docker or host down)
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 7200, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                count by (host) (last_over_time(node_boot_time_seconds[2h]))
+                unless count by (host) (node_boot_time_seconds)
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0]}}]}
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: host_silent, severity: critical}
+        annotations:
+          summary: "{{ $labels.host }}: no metrics for 5+ minutes: Docker, the Alloy collector or the host is down"
+
+  # ---------------------------------------------------------------- containers and apps
+  - orgId: 2
+    name: platform-apps
+    folder: Obseum platform
+    interval: 1m
+    rules:
+      - uid: obs-restart-loop
+        title: Container restart loop
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: "container:restarts:15m", instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [2]}}]}
+        for: 3m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: restart_loop, severity: high}
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.container }}: {{ with $values.A }}{{ .Value }}{{ end }} starts in 15 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
+
+      - uid: obs-oom
+        title: Container OOM killed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 3600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: "container:oom_events:1h", instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0]}}]}
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: oom, severity: medium}
+        annotations:
+          summary: "{{ $labels.host }} {{ $labels.container }}: OOM kill in the last hour"
+
+      - uid: obs-health-down
+        title: Health check failing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: "max by (app, host, instance) (probe_success)", instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: lt, params: [1]}}]}
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: health, severity: high}
+        annotations:
+          summary: "{{ $labels.app }} health check failing for 5 minutes ({{ $labels.instance }})"
+          dashboard: https://grafana.obseum.cloud/d/obs-apps
+
+      - uid: obs-error-spike
+        title: App error-rate spike
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: P148A5550C732AD4B
+            model:
+              refId: A
+              queryType: instant
+              expr: >-
+                sum by (stack, service) (count_over_time({host="svr03",
+                stack=~"personalos|kb|nexus-process-pilot|litellm|langfuse", level="error"} [10m]))
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [50]}}]}
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: error_spike, severity: medium}
+        annotations:
+          summary: "{{ $labels.stack }}/{{ $labels.service }}: {{ with $values.A }}{{ .Value }}{{ end }} error lines in 10 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-apps
+
+      - uid: obs-http-5xx
+        title: App 5xx responses
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: P148A5550C732AD4B
+            model:
+              refId: A
+              queryType: instant
+              expr: >-
+                sum by (stack, service) (count_over_time({host="svr03",
+                stack=~"personalos|kb|nexus-process-pilot|litellm|langfuse", http="5xx"} [10m]))
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [20]}}]}
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: http_5xx, severity: medium}
+        annotations:
+          summary: "{{ $labels.stack }}/{{ $labels.service }}: {{ with $values.A }}{{ .Value }}{{ end }} 5xx responses in 10 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-apps
+
+      - uid: obs-nexus-run-failures
+        title: Nexus run failure ratio
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                (sum(nexus_runs_failed) + sum(nexus_workflow_runs_failed))
+                / ((sum(nexus_runs_finished) + sum(nexus_workflow_runs_finished)) >= 5)
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.5]}}]}
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: run_failures, severity: medium, service: nexus}
+        annotations:
+          summary: "Nexus: {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} of the runs finished in the last hour failed"
+          dashboard: https://grafana.obseum.cloud/d/obs-apps
+
+  # ---------------------------------------------------------------- LLM gateway
+  - orgId: 2
+    name: platform-llm
+    folder: Obseum platform
+    interval: 1m
+    rules:
+      - uid: obs-litellm-5xx
+        title: LiteLLM 5xx errors
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'sum(increase(litellm_proxy_failed_requests_metric_total{exception_status=~"5.."}[15m]))'
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [10]}}]}
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: http_5xx, severity: medium, service: litellm}
+        annotations:
+          summary: "LiteLLM: {{ with $values.A }}{{ .Value }}{{ end }} requests failed with 5xx in 15 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-llm
+
+      - uid: obs-litellm-limits
+        title: LiteLLM usage limit or rate limit
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                sum(increase(litellm_proxy_failed_requests_metric_total{exception_status="429"}[15m]))
+                + sum(increase(litellm_proxy_failed_requests_metric_total{exception_status!="429",
+                exception_class=~"(?i).*(budget|ratelimit|quota|limit).*"}[15m]))
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [3]}}]}
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: quota, severity: medium, service: litellm}
+        annotations:
+          summary: "LiteLLM: {{ with $values.A }}{{ .Value }}{{ end }} requests hit a budget, quota or rate limit in 15 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-llm
+
+      - uid: obs-litellm-budget
+        title: LiteLLM key budget almost used up
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                max by (api_key_alias) (litellm_remaining_api_key_budget_metric)
+                / (max by (api_key_alias) (litellm_api_key_max_budget_metric) > 0)
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: lt, params: [0.1]}}]}
+        for: 30m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: budget, severity: low, service: litellm}
+        annotations:
+          summary: "LiteLLM key {{ $labels.api_key_alias }}: {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} of its budget left"
+          dashboard: https://grafana.obseum.cloud/d/obs-llm

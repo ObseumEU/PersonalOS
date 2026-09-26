@@ -1,0 +1,70 @@
+# svr03: the collector only (Grafana, Loki and Prometheus run on 192.168.1.186).
+# /opt/server/observability on svr03; see deploy/observability/README.md.
+#
+#   docker compose up -d
+#
+# Memory: svr03 is tight (swap), so one process with a hard limit.
+name: observability
+
+services:
+  alloy:
+    image: grafana/alloy:v1.20.0
+    container_name: obs-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - --disable-reporting
+      - /etc/alloy/config.alloy
+    environment:
+      OBS_LOKI_URL: ${OBS_LOKI_URL:-http://192.168.1.186:3100/loki/api/v1/push}
+      OBS_PROM_URL: ${OBS_PROM_URL:-http://192.168.1.186:9090/api/v1/write}
+      GOMEMLIMIT: 200MiB
+      GOGC: "50"
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - ./postgres-queries.yaml:/etc/alloy/postgres-queries.yaml:ro
+      - ./secrets/litellm_metrics_key:/run/secrets/litellm_metrics_key:ro
+      - ./secrets/nexus_dsn:/run/secrets/nexus_dsn:ro
+      - alloy-data:/var/lib/alloy/data
+      # logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      # host metrics (node exporter) and cAdvisor
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+      - /run/udev/data:/run/udev/data:ro
+    ports:
+      - "127.0.0.1:12345:12345"  # Alloy's own UI and /metrics, loopback only
+    networks:
+      default:
+      proxy:     # LiteLLM /metrics (litellm:4000)
+      nexus:     # Nexus Postgres, read-only role obs_ro
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  alloy-data:
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:-my-app-network}
+  nexus:
+    external: true
+    name: ${NEXUS_NETWORK:-nexus-process-pilot_default}

@@ -1,0 +1,23 @@
+# Grafana on 192.168.1.186 (org "Obseum": Obseum platform dashboards). LAN and VPN only, like
+# nexus/litellm/knowlage; 403 for everyone else. Added to svr03's front proxy
+# (/opt/server/docker-migration/caddy/Caddyfile) next to the litellm block.
+grafana.obseum.cloud {
+    header {
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    # VPN/LAN only — see nexus.obseum.cloud for the 10.66.66.1 explanation.
+    @internet_via_vps remote_ip 10.66.66.1
+    handle @internet_via_vps {
+        respond "Forbidden" 403
+    }
+    @trusted remote_ip 192.168.0.0/16 10.66.66.0/24 172.16.0.0/12 127.0.0.1/8 ::1
+    handle @trusted {
+        reverse_proxy 192.168.1.186:3000
+    }
+    handle {
+        respond "Forbidden" 403
+    }
+}
