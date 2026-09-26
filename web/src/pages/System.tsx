@@ -4,6 +4,7 @@ import { api } from "../api";
 import { type Engines, agentsApi } from "../agentsApi";
 import BudgetPanel from "../components/BudgetPanel";
 import KnowledgePanel from "../components/KnowledgePanel";
+import ObservabilityPanel from "../components/ObservabilityPanel";
 import SentinelPanel from "../components/SentinelPanel";
 import { PageHeader, Panel } from "../components/ui";
 import { useSubsystems } from "../knowledgeApi";
@@ -105,6 +106,7 @@ export default function System() {
           </div>
         </Panel>
       )}
+      <ObservabilityPanel />
       <SentinelPanel />
       <BudgetPanel />
       <Panel fig="TAB. 17" title="Deploys" right="agents merge to main · the deployer checks, ships or reverts">
