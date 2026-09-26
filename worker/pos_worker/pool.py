@@ -15,7 +15,9 @@ effects; it also keeps the agent's last-seen time, so the core knows its
 worker is alive); only when the agent has a task does it start the worker,
 which ends itself after WORKER_EXIT_IDLE_S (default 120) without a task. The
 supervisor itself is one small process; memory grows only with the agents
-that are working right now. POOL_LAZY=0 keeps one worker per agent running
+that are working right now, and POOL_MAX_RUNNING (default 4) caps how many
+work at once (a run's CLI takes ~200 MB; the others wait for the next scan).
+POOL_LAZY=0 keeps one worker per agent running
 (a crash restarts it with a growing pause, at most 5 min).
 
 Every other setting (engines, caps, the pos MCP) is the pool container's
@@ -66,8 +68,10 @@ def has_work(url: str, key: str) -> bool:
 
 
 class Pool:
-    def __init__(self, root: Path, work: Path, spawn=None, clock=time.monotonic, lazy: bool = False, probe=None):
+    def __init__(self, root: Path, work: Path, spawn=None, clock=time.monotonic, lazy: bool = False, probe=None,
+                 max_running: int = 0):
         self.root, self.work = root, work
+        self.max_running = max_running  # 0 = no cap
         self.spawn = spawn or self._spawn
         self.clock = clock
         self.lazy = lazy
@@ -114,6 +118,8 @@ class Pool:
         for slug, key in want.items():
             if slug in self.children or self.not_before.get(slug, 0) > self.clock():
                 continue
+            if self.max_running and len(self.children) >= self.max_running:
+                break  # memory: the rest start when a running one ends
             if self.lazy and not self.probe(slug, key):
                 continue
             self.children[slug] = (self.spawn(slug, key), key)
@@ -129,8 +135,9 @@ class Pool:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # a probe per agent every 15 s: not a log line each
     pool = Pool(Path(os.environ.get("POOL_KEYS_DIR", "/run/pos-keys")), Path(os.environ.get("WORKER_WORKDIR", "/work")),
-                lazy=os.environ.get("POOL_LAZY", "1") != "0")
+                lazy=os.environ.get("POOL_LAZY", "1") != "0", max_running=int(os.environ.get("POOL_MAX_RUNNING", "4")))
     every = float(os.environ.get("POOL_SCAN_S", "15"))
 
     def bye(*_):

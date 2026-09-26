@@ -273,7 +273,7 @@ services:
       POS_AGENT_KEY: ${HR_AGENT_KEY:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
-      WORKER_POS_TOOLS: 'hr_overview hr_review hr_admit_agent hr_weekly_report hire_request hire_list hire_decide propose_instructions org_chart get_agent_status list_tasks get_task create_task update_task task_comment handoff_task ask_owner send_message report_progress complete_task'
+      WORKER_POS_TOOLS: 'hr_overview hr_review hr_admit_agent hr_weekly_report hire_agent hire_request hire_list hire_decide schedule_create schedule_list propose_instructions org_chart get_agent_status list_tasks get_task create_task update_task task_comment handoff_task ask_owner send_message report_progress complete_task'
       WORKER_CLAUDE_TOOLS: ' '
       WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
       WORKER_CLAUDE_EFFORT: low

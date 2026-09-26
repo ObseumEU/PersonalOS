@@ -261,6 +261,12 @@ def test_the_lazy_pool_starts_a_worker_only_when_its_agent_has_work(tmp_path):
     pool.children["a"][0].returncode = 0                              # it ended itself after idling
     work["a"] = False
     assert pool.tick() == {"started": [], "stopped": [], "running": []} and pool.failures == {}
+    # at most max_running work at once
+    capped = Pool(tmp_path, tmp_path / "work", spawn=lambda slug, key: Proc(), lazy=True,
+                  probe=lambda slug, key: True, max_running=1)
+    (tmp_path / "b").mkdir()
+    (tmp_path / "b" / "key").write_text("k2")
+    assert capped.tick()["started"] == ["a"] and capped.tick()["started"] == []
 
 
 def test_a_worker_ends_itself_after_idling(tmp_path):

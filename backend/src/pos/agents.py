@@ -49,6 +49,8 @@ BUILTIN_PERMISSIONS = {
     "Project manager": ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
 }
 DEFAULT_AGENT_PERMISSIONS = ["tasks:read", "tasks:claim", "approvals:request"]
+# HR edits anyone's instructions except these (and the owner-only areas).
+HR_HANDS_OFF = ("CEO", "Access manager")
 LIFETIMES = ("one_shot", "long_lived")
 BUDGET_CLASSES = ("system", "normal", "low")
 
@@ -367,12 +369,19 @@ def propose_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, text
 
     row = _agent_row(conn, agent_id)
     me = actors.get(conn, ctx.actor_id)
-    if not (me["is_owner"] or me["name"] == "Agent coach" or manages(conn, ctx.actor_id, agent_id)):
-        raise _Forbidden("the owner, the agent's lead or the Agent coach proposes its instructions")
+    hr_may = me["name"] == "HR agent" and row["name"] not in HR_HANDS_OFF and not row["is_owner"]
+    if not (me["is_owner"] or me["name"] == "Agent coach" or hr_may or manages(conn, ctx.actor_id, agent_id)):
+        raise _Forbidden("the owner, the agent's lead, HR (not the CEO or the Access manager) or the Agent coach "
+                         "proposes its instructions")
     text = (text or "").strip()
     if len(text) < 40:
         raise AgentError("the instructions are too short")
     path = f"agents/{_slug(row['name'])}/INSTRUCTIONS.md"
+    applied = False
+    if repo_instructions(row["name"]) is None and row["instructions_path"]:
+        # An agent created at runtime (no file in git yet): its copy changes now, git follows.
+        Path(row["instructions_path"]).write_text(text + "\n", encoding="utf-8")
+        applied = True
     dev = actors.find_by_name(conn, "Dev agent")
     t = tasks.create(conn, ctx, {
         "title": f"Instrukce {row['name']}: {(reason or 'nová verze').strip()[:80]}",
@@ -385,9 +394,10 @@ def propose_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, text
                  f"a nasadí):\n\n````markdown\n{text}\n````",
         "definition_of_done": f"`{path}` má tento obsah v main (commit prošel deployerem).",
     })
-    audit.log(conn, ctx, "propose_instructions", "actor", agent_id, task=t["ref"], reason=reason[:300] or None)
+    audit.log(conn, ctx, "propose_instructions", "actor", agent_id, task=t["ref"], reason=reason[:300] or None,
+              applied=applied or None)
     conn.commit()
-    return {"task": t["ref"], "path": path, "assignee": t["assignee_name"]}
+    return {"task": t["ref"], "path": path, "assignee": t["assignee_name"], "applied_now": applied}
 
 
 def set_engine(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, engine: str | None,

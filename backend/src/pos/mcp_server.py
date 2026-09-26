@@ -91,6 +91,8 @@ TOOL_PERMISSIONS = {
     "project_add_member": "tasks:read",
     # Hiring: asking needs agents:create or tasks:write, deciding is the decider's (pos.hiring).
     "hire_request": "tasks:read", "hire_decide": "tasks:read", "hire_list": "tasks:read",
+    # Hiring directly: the owner, the HR agent and leads (checked in pos.hiring.hire).
+    "hire_agent": "tasks:write",
     # Home Assistant's WebSocket API (pos.homeassistant); the cred:home-assistant grant is checked inside.
     "ha_ws": "tasks:claim",
     "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
@@ -293,6 +295,25 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             return hiring.request(conn, c, name=name, purpose=purpose, role=role, lead=lead,
                                   permissions=permissions, budget_class=budget_class, lifetime=lifetime,
                                   instructions=instructions, reason=reason)
+
+    @mcp.tool(description="Hire a new agent now (the HR agent and leads; no owner approval within the limits): "
+                          "name, purpose (one line), job_description (what it does, for its instructions), "
+                          "instructions (optional full text), role, team, lead (who it reports to: you or someone "
+                          "below you; HR: anyone), permissions (never more than yours; default tasks:read, "
+                          "tasks:claim, approvals:request), budget_class low | normal, model (optional: "
+                          "claude-haiku-4-5, claude-sonnet-5, claude-opus-5-5). Its worker starts in the agent pool "
+                          "at once, it is on probation 7 days, #team hears about it. Over HR's limits it becomes a "
+                          "hire request for the owner instead.")
+    def hire_agent(ctx: Context, name: str, purpose: str, job_description: str = "", instructions: str = "",
+                   role: str | None = None, team: str | None = None, lead: str | None = None,
+                   permissions: list[str] | None = None, budget_class: str = "low",
+                   model: str | None = None) -> dict:
+        from . import hiring
+
+        with session(ctx, "hire_agent", name=name, lead=lead) as (conn, c):
+            return hiring.hire(conn, c, name=name, purpose=purpose, job_description=job_description,
+                               instructions=instructions, role=role, team=team, lead=lead, permissions=permissions,
+                               budget_class=budget_class, model=model, data_dir=db_path.parent)
 
     @mcp.tool(description="Decide a hire request you are the decider of: approve (the agent is created, "
                           "reports to its lead, 7 days on probation) or reject with a note.")

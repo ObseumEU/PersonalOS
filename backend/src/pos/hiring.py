@@ -208,3 +208,162 @@ def probation_review(conn: sqlite3.Connection) -> dict:
         made.append(t["ref"])
     conn.commit()
     return {"ended": len(made), "tasks": made}
+
+
+# ------------------------------------------------------------------ hiring without the owner (HR and leads)
+
+HR_NAME = "HR agent"
+# Only the owner grants these; no hire hands them out.
+OWNER_ONLY_PERMISSIONS = {"agents:create", "browser:use", "access:manage"}
+# A new agent's own limits by its budget class (the Access manager changes them later).
+DEFAULT_BUDGETS = {
+    "low": {"usd_day": 1.0, "usd_month": 15.0, "usd_run": 0.5, "runs_day": 30},
+    "normal": {"usd_day": 3.0, "usd_month": 45.0, "usd_run": 1.5, "runs_day": 60},
+}
+MODELS = {"claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5-5"}
+
+
+def may_hire(conn: sqlite3.Connection, actor_id: int) -> bool:
+    """The owner, the HR agent and any lead (someone reports to it) hire directly."""
+    me = actors.get(conn, actor_id)
+    if me["is_owner"] or me["name"] == HR_NAME:
+        return True
+    return conn.execute("SELECT 1 FROM actors WHERE reports_to = ? AND archived_at IS NULL AND id != ?",
+                        (actor_id, actor_id)).fetchone() is not None
+
+
+def hire(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, job_description: str = "",
+         instructions: str = "", role: str | None = None, team: str | None = None, lead: str | int | None = None,
+         permissions: list[str] | None = None, budget_class: str = "low", model: str | None = None,
+         data_dir=None) -> dict:
+    """Create a colleague end to end, without the owner, within the limits in code:
+    HR or a lead asks; a lead hires only into its own part of the chart; never
+    more permissions than the one who hires has (and never the owner-only ones);
+    HR's headcount limits run first (over them it becomes a hire request the
+    owner decides). The agent gets its worker in the agent pool at once, its
+    grants and a budget by class, 7 days of probation under its lead; its
+    instructions go to git through the Dev agent; #team hears about it."""
+    from . import agents, chat, org, workers
+    from .access import service as access
+    from .access import store as access_store
+    from .guard import policy
+    from .hr import service as hr
+    from .integrations import guard_actor
+
+    me = actors.get(conn, ctx.actor_id)
+    if not may_hire(conn, ctx.actor_id):
+        raise Forbidden("only the owner, the HR agent and leads (members with reports) hire agents")
+    name, purpose = (name or "").strip(), (purpose or "").strip()
+    if not name or not purpose:
+        raise tasks.Invalid("a new colleague needs a name and a purpose")
+    if conn.execute("SELECT 1 FROM actors WHERE name = ?", (name,)).fetchone():
+        raise tasks.Invalid(f"an actor called {name} already exists")
+    if budget_class not in DEFAULT_BUDGETS:
+        raise tasks.Invalid(f"budget_class must be one of {sorted(DEFAULT_BUDGETS)}")
+    if model is not None and model not in MODELS:
+        raise tasks.Invalid(f"model must be one of {sorted(MODELS)}")
+    if lead in (None, ""):
+        lead_row = me if not me["is_owner"] and me["name"] != HR_NAME else actors.get(
+            conn, org.pm_id(conn) or actors.owner_id(conn))
+    else:
+        lead_row = org._member(conn, lead)
+    if lead_row["archived_at"]:
+        raise tasks.Invalid(f"{lead_row['name']} is archived")
+    if not me["is_owner"] and me["name"] != HR_NAME and lead_row["id"] != me["id"] \
+            and not org.manages(conn, me["id"], lead_row["id"]):
+        raise Forbidden(f"{me['name']} hires only into its own part of the chart; {lead_row['name']} is not in it")
+    perms = sorted(set(permissions if permissions is not None else agents.DEFAULT_AGENT_PERMISSIONS))
+    unknown = set(perms) - set(agents.PERMISSIONS)
+    if unknown:
+        raise tasks.Invalid(f"unknown permissions: {sorted(unknown)}")
+    if set(perms) & OWNER_ONLY_PERMISSIONS and not me["is_owner"]:
+        raise Forbidden(f"only the owner grants {sorted(set(perms) & OWNER_ONLY_PERMISSIONS)}")
+    if not me["is_owner"]:
+        mine = agents.permissions_of(conn, me["id"])
+        more = [p for p in perms if p not in mine and "*" not in mine]
+        if more:
+            raise Forbidden(f"no permission escalation: {me['name']} does not have {more}")
+        policy.check_permission_grant(guard_actor(conn, me["id"]), sorted(mine), perms).raise_if_not_allowed()
+
+    text = (instructions or "").strip()
+    if job_description.strip():
+        text = (text + "\n\n" if text else f"# {name}\n\n{purpose}\n\n") + "## Náplň práce\n\n" + job_description.strip()
+    verdict = hr.admit_agent(conn, ctx, name=name, purpose=purpose, lifetime="long_lived", defer_replace=True)
+    if not verdict.get("allowed"):  # over HR's limits: the owner decides after all
+        req = request(conn, ctx, name=name, purpose=purpose, role=role, lead=lead_row["id"], permissions=perms,
+                      budget_class="normal" if budget_class == "normal" else "low", instructions=text,
+                      reason=f"HR limit: {verdict.get('decision')} ({verdict.get('reason') or verdict.get('limit')})")
+        return {"created": False, "hire_request": req["id"], "decider": req["decider_name"],
+                "why": verdict.get("reason") or verdict.get("decision")}
+
+    owner = Ctx(actors.owner_id(conn), via=f"hire:{me['name']}", run_id=ctx.run_id)
+    made = agents.create_agent(conn, owner, name=name, purpose=purpose, lifetime="long_lived",
+                               instructions=text, permissions=perms, budget_class=budget_class,
+                               data_dir=data_dir or _data_dir())
+    if not made.get("created"):
+        raise tasks.Invalid(f"HR stopped it: {made.get('decision')} ({made.get('reason')})")
+    aid = made["agent"]["id"]
+    until = (datetime.now(timezone.utc) + timedelta(days=PROBATION_DAYS)).isoformat(timespec="seconds")
+    sets = {"reports_to": lead_row["id"], "probation_until": until}
+    if role:
+        sets["role"] = role.strip().lower().replace(" ", "_")
+    if team:
+        sets["team"] = team.strip().lower()
+    if model:
+        sets.update({"engine": "claude", "model": model})
+    versioning.update(conn, owner, "actor", aid, sets, action="hired")
+    if access_store.ready(conn) and not conn.execute(
+            "SELECT 1 FROM access_budgets WHERE agent_id = ?", (aid,)).fetchone():
+        for metric, amount in DEFAULT_BUDGETS[budget_class].items():
+            access._insert_budget(conn, aid, metric, amount, owner.actor_id, "platform",
+                                  f"výchozí rozpočet nového agenta ({budget_class}); mění Správce přístupů")
+    now = now_iso()
+    hire_row = versioning.insert(conn, ctx, ENTITY, {
+        "requested_by": ctx.actor_id, "name": name, "purpose": purpose, "role": sets.get("role"),
+        "lead_id": lead_row["id"], "permissions": json.dumps(perms), "budget_class": budget_class,
+        "lifetime": "long_lived", "instructions": text or None, "reason": "přímé přijetí (HR / vedoucí)",
+        "hr_verdict": json.dumps(verdict, ensure_ascii=False, default=str), "needs_owner": None,
+        "decider_id": ctx.actor_id, "status": "approved", "decided_by": ctx.actor_id, "decided_at": now,
+        "agent_id": aid, "created_by": ctx.actor_id, "created_at": now, "updated_at": now})
+    commit_task = _commit_agent_files(conn, ctx, aid, name, purpose, sets, lead_row, perms, budget_class, text)
+    pool = workers.reply_path(conn, actors.get(conn, aid))
+    audit.log(conn, ctx, "hire_direct", "actor", aid, name=name, lead=lead_row["id"], permissions=perms,
+              budget_class=budget_class, worker=pool["name"] if pool else None, hire=hire_row["id"])
+    conn.commit()
+    try:
+        chat.post_to_team(conn, ctx.actor_id,
+                          f"Nový kolega: **{name}** ({purpose[:160]}). Vede ho {lead_row['name']}, přijal "
+                          f"{me['name']}; zkušební doba do {until[:10]}. Worker běží v agent poolu.")
+    except Exception:  # noqa: BLE001 - the hire stands either way
+        pass
+    return {"created": True, "agent": {"id": aid, "name": name}, "lead": lead_row["name"],
+            "worker": pool["name"] if pool else None, "probation_until": until, "hire_id": hire_row["id"],
+            "files_task": commit_task}
+
+
+def _commit_agent_files(conn: sqlite3.Connection, ctx: Ctx, aid: int, name: str, purpose: str, sets: dict,
+                        lead_row, perms: list[str], budget_class: str, text: str) -> str | None:
+    """The new agent's files in git (agents as code): a task for the Dev agent,
+    like every instruction change; the deployer checks and ships it."""
+    from . import agents
+
+    dev = actors.find_by_name(conn, "Dev agent")
+    if dev is None or dev["archived_at"]:
+        return None
+    slug = agents._slug(name)
+    spec = {"name": name, "purpose": purpose, "role": sets.get("role"), "team": sets.get("team"),
+            "reports_to": lead_row["name"], "permissions": perms, "budget_class": budget_class,
+            "lifetime": "long_lived", "runtime": "codex_worker", "worker": "pool",
+            **({"engine": "claude", "model": sets["model"]} if sets.get("model") else {})}
+    spec = {k: v for k, v in spec.items() if v is not None}
+    t = tasks.create(conn, ctx, {
+        "title": f"Soubory nového agenta {name} do gitu",
+        "assignee": {"type": "agent", "id": dev["id"]}, "priority": 2, "topic": "agents",
+        "notes": f"Účel: {name} byl přijat (HR / vedoucí) a už běží v agent poolu; jeho definice patří do gitu "
+                 "(agents as code).\n\n"
+                 f"Vytvoř `agents/{slug}/agent.json`:\n\n```json\n{json.dumps(spec, ensure_ascii=False, indent=2)}\n```\n\n"
+                 f"a `agents/{slug}/INSTRUCTIONS.md`:\n\n````markdown\n{text or f'# {name}'}\n````\n\n"
+                 "Commitni na agent/dev (deployer to zkontroluje a nasadí).",
+        "definition_of_done": f"`agents/{slug}/` je v main (commit prošel deployerem).",
+    })
+    return t["ref"]
