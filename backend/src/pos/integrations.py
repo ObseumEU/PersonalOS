@@ -66,6 +66,11 @@ def _budget_record(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -
     if jsonl:
         from . import engines
 
+        # The worker's cheap check before the run is a Claude call even when Codex runs the task.
+        checks = [line for line in jsonl.splitlines() if '"subtype": "triage"' in line]
+        if checks:
+            engines.record_claude(conn, run_row, "\n".join(checks), update_run=False)
+            jsonl = "\n".join(line for line in jsonl.splitlines() if line not in checks)
         budget.record_exec(conn, jsonl.splitlines(), agent_id=str(run_row["actor_id"]),
                            task_id=str(run_row["task_id"]) if run_row["task_id"] else None)
         conn.commit()
@@ -97,6 +102,7 @@ def register_builtin_agents(conn: sqlite3.Connection) -> None:
 
     agents.seed_builtin_permissions(conn)
     routing.seed_defaults(conn)
+    routing.sync_dev_repos(conn)
     from . import org
 
     # The Project manager, everyone's place in the org chart, the daily standup.

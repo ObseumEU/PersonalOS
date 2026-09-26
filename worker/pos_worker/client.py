@@ -52,6 +52,10 @@ class PosClient:
     def handback(self, ref: str, note: str) -> dict:
         return self._post(f"/api/worker/tasks/{ref}/handback", {"note": note})
 
+    def triage(self, ref: str, verdict: dict) -> dict:
+        """What the cheap check said; PersonalOS parks or hands back the task, or lets it run."""
+        return self._post(f"/api/worker/tasks/{ref}/triage", verdict)
+
     def start_run(self, ref: str | None, kind: str = "task") -> dict:
         """{"run_id", "engine", "model"}: PersonalOS picks the runtime (Claude or Codex)."""
         return self._post("/api/worker/runs", {"task_id": ref, "kind": kind})

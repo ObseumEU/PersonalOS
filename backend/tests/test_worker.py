@@ -238,11 +238,13 @@ def test_second_worker_of_the_same_agent_does_not_take_a_task_in_progress(setup,
     first = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
     assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={first}", headers=h).status_code == 200
 
-    # A duplicate worker process: the task is not offered, and a claim is refused.
+    # A duplicate worker process: the task is not offered, and a second run is refused
+    # before any run row exists.
     assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
-    second = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h).json()["run_id"]
-    assert client.post(f"/api/worker/tasks/{ref}/claim?run_id={second}", headers=h).status_code == 409
-    client.post(f"/api/worker/runs/{second}/finish", json={"status": "cancelled", "jsonl": ""}, headers=h)
+    runs_before = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    r = client.post("/api/worker/runs", json={"task_id": ref, "kind": "task"}, headers=h)
+    assert r.status_code == 409 and "live run" in r.json()["detail"]
+    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == runs_before
 
     # Once the first run is gone (worker crashed), the task can be resumed.
     conn.execute("UPDATE runs SET status = 'error' WHERE id = ?", (first,))
@@ -451,3 +453,206 @@ def test_claude_bash_goes_through_the_command_guard(setup, tmp_path):
     assert hooks["matcher"] == "Bash" and "pos_worker.command_hook" in hooks["hooks"][0]["command"]
     assert "--settings" in s._args(None, None, path)
     assert ClaudeSession(builtin_tools=["Read"])._settings_file() is None
+
+
+def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkeypatch):
+    from pathlib import Path
+
+    from pos_worker.prompt import build_task_prompt, stable_prompt
+
+    monkeypatch.setenv("WORKER_POS_TOOLS", "get_task report_progress complete_task request_approval create_task "
+                                           "handoff_task")
+    root = Path(__file__).resolve().parents[2]
+    me = {"name": "Dev agent", "instructions": (root / "agents/dev-agent/INSTRUCTIONS.md").read_text(encoding="utf-8"),
+          "pos_tools": ["get_task", "report_progress", "complete_task", "request_approval", "create_task",
+                        "handoff_task", "schedule_create", "check_inbox", "chat_send", "chat_read"],
+          "guardrails": "RULES", "feedback": [{"kind": "praise", "body": "quick"}]}
+    stable = stable_prompt(me)
+    # Its instructions say how to report, chat and hand off; it sees no schedule tool.
+    assert "schedule_create" not in stable and "team chat" not in stable and "you need not call" not in stable
+    assert "request_approval first" in stable and "definition_of_done" in stable
+    a = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [], include_guardrails=False, include_stable=False)
+    b = build_task_prompt({**me, "feedback": []}, {"ref": "T-002", "title": "Two"}, [], include_guardrails=False,
+                          include_stable=False)
+    assert "RULES" not in a and "# You are" not in a and a.startswith("# Your task T-001")
+    assert "praise" in a and "praise" not in b
+    assert stable_prompt({**me, "task_ref": "T-002", "feedback": []}) == stable  # byte-stable across runs
+    codex = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [])
+    assert codex.startswith("RULES\n\n---\n\n# You are Dev agent") and "# Your task T-001" in codex
+    # An agent without its own guidance keeps the generic lines it has tools for.
+    monkeypatch.delenv("WORKER_POS_TOOLS")
+    plain = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["chat_send", "schedule_create"]})
+    assert "team chat" in plain and "schedule_create" in plain and "handoff_task" not in plain
+
+
+# ------------------------------------------------------------------ triage, size and back-off
+
+TRIAGE_LINE = '{"type": "result", "subtype": "triage", "is_error": false, "total_cost_usd": 0.002, "usage": {"input_tokens": 900, "output_tokens": 40}}'
+
+
+def _issue(conn, owner, number=5, repo="ObseumEU/PersonalOS"):
+    from pos import routing
+
+    ev = routing.github_events("issues", {"action": "labeled", "repository": {"full_name": repo}, "issue": {
+        "number": number, "title": "Make it better", "body": "It is slow", "html_url": f"https://gh/{number}",
+        "user": {"login": "eva"}, "labels": [{"name": "agent"}]}})[0]
+    out = routing.ingest(conn, owner, ev)
+    conn.commit()
+    return out
+
+
+def _fake_triage(verdict, size="M", question=""):
+    calls = []
+
+    def check(me, task):
+        calls.append(task["ref"])
+        return {"verdict": verdict, "size": size, "question": question, "jsonl": TRIAGE_LINE}
+
+    return check, calls
+
+
+def test_triage_parks_an_unclear_issue_with_one_question_and_a_comment_requeues_it(setup, fake_claude, tmp_path,
+                                                                                   monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    client, conn, owner, agent_id, key = setup
+    from pos import routing, tasks
+
+    ref = _issue(conn, owner)["task_ref"]
+    sessions = []
+    worker = worker_for(client, key, fake_claude, tmp_path)
+    worker.new_session = lambda *a: sessions.append(a) or None
+    worker.triage, calls = _fake_triage("unclear", question="Which page is slow?")
+    assert worker.step() == "triaged" and calls == [ref] and sessions == []  # no full run
+    t = tasks.get(conn, owner, tasks.parse_id(ref))
+    assert t["status"] == "waiting" and t["retry_after"] and "Which page is slow?" in t["progress_note"]
+    a = conn.execute("SELECT * FROM approvals WHERE task_id = ?", (t["id"],)).fetchone()
+    assert a["action"] == "github.comment" and a["status"] == "pending"
+    assert '"repo": "ObseumEU/PersonalOS"' in a["details"] and '"number": 5' in a["details"]
+    run = conn.execute("SELECT * FROM runs WHERE task_id = ?", (t["id"],)).fetchone()
+    assert run["status"] == "ok" and "triage: unclear" in run["detail"] and run["cost_usd"] == 0.002
+    assert "task" not in client.get("/api/worker/next?wait=0", headers={"Authorization": f"Bearer {key}"}).json()
+
+    def comment(cid, body):
+        return routing.ingest(conn, owner, routing.github_events("issue_comment", {
+            "action": "created", "repository": {"full_name": "ObseumEU/PersonalOS"},
+            "issue": {"number": 5, "title": "Make it better", "labels": [{"name": "agent"}]},
+            "comment": {"id": cid, "body": body, "html_url": "https://gh/5#c", "user": {"login": "eva"}}})[0])
+
+    own = comment(1, "Which page is slow?")  # our own question, once the owner approved it
+    assert own["own_comment"] and tasks.get(conn, owner, t["id"])["status"] == "waiting"
+    answer = comment(2, "The agenda page, since v0.4")
+    assert answer["requeued"] and answer["task_id"] == t["id"]
+    t = tasks.get(conn, owner, t["id"])
+    assert (t["status"], t["assignee_name"], t["retry_after"]) == ("next", "Dev agent", None)
+    assert "The agenda page" in t["notes"] and 'trust="untrusted"' in t["notes"]
+
+
+def test_triage_hands_back_the_wrong_repo_and_backs_off_for_a_day(setup, fake_claude, tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    client, conn, owner, agent_id, key = setup
+    from pos import actors as actors_mod, routing, tasks
+
+    t = tasks.create(conn, owner, {"title": "Fix the logo on acme.com", "assignee": {"type": "agent", "id": agent_id},
+                                   "source": "event:github"})
+    conn.commit()
+    worker = worker_for(client, key, fake_claude, tmp_path)
+    worker.triage, _ = _fake_triage("wrong_repo")
+    assert worker.step() == "triaged"
+    t = tasks.get(conn, owner, t["id"])
+    assert t["assignee_id"] == actors_mod.owner_id(conn) and "not about a repository" in t["progress_note"]
+    assert t["retry_after"]
+
+    # Put back by an agent (e.g. the PM): still backed off. By a person: offered again.
+    h = {"Authorization": f"Bearer {key}"}
+    pm = Ctx(actors_mod.find_by_name(conn, "Project manager")["id"], via="mcp")
+    tasks.assign(conn, pm, t["id"], {"type": "agent", "id": agent_id})
+    conn.commit()
+    assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
+    tasks.assign(conn, owner, t["id"], {"type": "agent", "id": agent_id})
+    conn.commit()
+    assert client.get("/api/worker/next?wait=0", headers=h).json()["task"]["id"] == t["id"]
+
+    # A new label on a backed-off issue task requeues it as well.
+    issue = _issue(conn, owner, number=6)
+    tid = issue["task_id"]
+    worker.triage, _ = _fake_triage("too_big")
+    worker.step()  # the earlier task comes first: triaged too
+    worker.step()
+    assert tasks.get(conn, owner, tid)["retry_after"]
+    again = _issue(conn, owner, number=6)
+    assert again["requeued"] and tasks.get(conn, owner, tid)["assignee_name"] == "Dev agent"
+
+
+def test_a_failed_run_is_not_retried_at_once(setup, monkeypatch):
+    client, conn, owner, agent_id, key = setup
+    from pos import tasks
+
+    t = tasks.create(conn, owner, {"title": "Flaky", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    h = {"Authorization": f"Bearer {key}"}
+    run = client.post("/api/worker/runs", json={"task_id": t["ref"]}, headers=h).json()["run_id"]
+    client.post(f"/api/worker/tasks/{t['ref']}/claim?run_id={run}", headers=h)
+    client.post(f"/api/worker/runs/{run}/finish", json={"status": "error", "jsonl": "", "detail": "boom"}, headers=h)
+    # The worker's hand-back failed, so the task is still "working" with no live run: not offered for a day.
+    assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
+
+
+def test_a_clear_small_task_runs_at_low_effort_and_the_check_is_paid_for(setup, fake_claude, tmp_path, monkeypatch):
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    client, conn, owner, agent_id, key = setup
+    from pos_worker import triage
+
+    ref = _issue(conn, owner)["task_ref"]
+    seen = {}
+    worker = worker_for(client, key, fake_claude, tmp_path)
+    make = worker.new_session
+
+    def new_session(engine, model, me):
+        seen.update(triage.size_settings(me.get("size"), "medium", 6.0), hint=me.get("size_hint"))
+        return make(engine, model, me)
+
+    worker.new_session = new_session
+    worker.triage, _ = _fake_triage("clear", size="S")
+    assert worker.step() == "ok"
+    assert seen["effort"] == "low" and seen["max_budget_usd"] == 2.0 and "sized this task S" in seen["hint"]
+    run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
+    assert abs(run["cost_usd"] - 0.022) < 1e-9 and run["turns"] is not None  # the check plus the run
+    assert triage.size_settings("L", "medium", 6.0) == {"effort": "medium", "max_budget_usd": 6.0}
+    assert triage.size_settings(None, "high", None) == {"effort": "high", "max_budget_usd": None}
+
+    # Fail-open: a check that breaks never costs the task its run.
+    _issue(conn, owner, number=8)
+
+    def broken(me, task):
+        raise RuntimeError("no claude")
+
+    worker.triage = broken
+    assert worker.step() == "ok"
+
+
+FAKE_HAIKU = r'''
+import json, sys
+args = sys.argv[1:]
+assert args[args.index("--model") + 1] == "claude-haiku-4-5" and args[args.index("--tools") + 1] == ""
+assert "Make it better" in sys.stdin.read()
+print(json.dumps({"type": "result", "is_error": False, "total_cost_usd": 0.001, "usage": {"input_tokens": 700},
+                  "result": 'Sure: {"verdict": "unclear", "size": "m", "question": "Which page?"}'}))
+'''
+
+
+def test_triage_check_calls_haiku_without_tools_and_reads_its_json(tmp_path, monkeypatch):
+    from pos_worker import triage
+
+    task = {"ref": "T-009", "title": "Make it better", "source": "event:github"}
+    out = triage.check({"name": "Dev agent"}, task, binary=_wrap(tmp_path, "haiku", FAKE_HAIKU))
+    assert (out["verdict"], out["size"], out["question"]) == ("unclear", "M", "Which page?")
+    assert '"subtype": "triage"' in out["jsonl"] and '"total_cost_usd": 0.001' in out["jsonl"]
+    assert triage.parse('{"type": "result", "is_error": false, "result": "no json"}') is None
+    assert triage.parse('{"type": "result", "is_error": false, "result": "{\\"verdict\\": \\"maybe\\"}"}') is None
+    assert triage.check({}, task, binary=str(tmp_path / "missing")) is None  # fail-open
+    monkeypatch.delenv("WORKER_TRIAGE", raising=False)
+    assert triage.enabled_for(task) and not triage.enabled_for({"source": "manual"})
+    monkeypatch.setenv("WORKER_TRIAGE", "0")
+    assert not triage.enabled_for(task)
+    monkeypatch.setenv("WORKER_TRIAGE", "all")
+    assert triage.enabled_for({"source": "manual"})

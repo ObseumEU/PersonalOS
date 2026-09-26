@@ -128,6 +128,13 @@ def get(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
     ).fetchall()
     task["steps"] = [to_dict(s) for s in steps]
     task["steps_done"] = sum(1 for s in steps if s["status"] == "done")
+    # What the runs on it cost so far (Claude in USD; Codex only in tokens).
+    u = conn.execute(
+        """SELECT COUNT(*) AS runs, COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS tokens,
+                  COALESCE(SUM(cache_read_tokens), 0) AS cached, COALESCE(SUM(cost_usd), 0) AS cost
+           FROM runs WHERE task_id = ? AND status != 'blocked'""", (task_id,)).fetchone()
+    task["usage"] = {"runs": u["runs"], "tokens": u["tokens"], "cache_read_tokens": u["cached"],
+                     "cost_usd": round(u["cost"], 4)}
     if row["parent_id"]:
         p = conn.execute("SELECT id, title FROM tasks WHERE id = ?", (row["parent_id"],)).fetchone()
         task["parent"] = {"id": p["id"], "ref": display_id(p["id"]), "title": p["title"]}
@@ -560,6 +567,8 @@ def assign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, assignee) -> dict:
             changes["follow_up"] = (today() + timedelta(days=3)).isoformat()
     elif row["status"] in ("inbox", "waiting"):
         changes["status"] = "next"
+    if row["retry_after"] and actors.get(conn, ctx.actor_id)["kind"] == "human":
+        changes["retry_after"] = None  # a person hands it out again: no back-off
     versioning.update(conn, ctx, ENTITY, task_id, {**cols, **changes}, action="assign")
     return get(conn, ctx, task_id)
 

@@ -56,6 +56,10 @@ class AgentStats:
     # "I had to babysit it" interventions by the owner.
     owner_interventions: int = 0
     tokens_used: int = 0
+    # Claude's cost in USD (Codex runs on a flat subscription: no cost here).
+    cost_usd: float = 0.0
+    # Distinct tasks the agent's runs were for (finished or not): the "per task" base.
+    tasks_worked: int = 0
 
 
 @dataclass(frozen=True)

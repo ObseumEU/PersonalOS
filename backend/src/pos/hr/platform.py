@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from .. import actors, audit, tasks
-from ..agents import is_seeded, tokens_used
+from ..agents import is_seeded, usage
 from ..budget import store as budget_store
 from ..core import Ctx
 from . import store
@@ -98,7 +98,7 @@ class CorePlatform:
                AND status NOT IN ('done', 'review', 'someday')""",
             (aid,),
         ).fetchone()[0]
-        tokens = tokens_used(self.conn, agent_id, since, until)
+        used = usage(self.conn, agent_id, since, until)
         return AgentStats(
             agent_id=agent_id,
             # A returned hand-in was still finished work, just badly done.
@@ -108,7 +108,9 @@ class CorePlatform:
             tasks_failed=failed,
             tasks_open=open_,
             owner_interventions=events("intervene"),
-            tokens_used=tokens,
+            tokens_used=used["tokens"],
+            cost_usd=used["cost_usd"],
+            tasks_worked=used["tasks"],
         )
 
     # ------------------------------------------------------------ HRActions

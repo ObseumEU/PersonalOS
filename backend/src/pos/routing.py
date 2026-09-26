@@ -26,10 +26,20 @@ versioning.register("route", "routing_rules")
 
 SOURCES = ("gmail", "github", "discord", "calendar", "nexus", "web", "manual", "any")
 
+
+def dev_repos() -> list[str]:
+    """Repositories the Dev agent works on (its worktree has only these):
+    POS_DEV_REPOS, comma-separated `owner/name` as GitHub's full_name."""
+    raw = os.environ.get("POS_DEV_REPOS", "ObseumEU/PersonalOS")
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+DEV_RULES = ("GitHub issue labelled agent → Dev agent", "GitHub review request → Dev agent")
+
 DEFAULT_RULES = [
     # name, source, match, assignee, priority, topic
-    ("GitHub issue labelled agent → Dev agent", "github", {"kind": "issue", "label": "agent"}, "Dev agent", 2, "dev"),
-    ("GitHub review request → Dev agent", "github", {"kind": "review_requested"}, "Dev agent", 2, "dev"),
+    (DEV_RULES[0], "github", {"kind": "issue", "label": "agent"}, "Dev agent", 2, "dev"),
+    (DEV_RULES[1], "github", {"kind": "review_requested"}, "Dev agent", 2, "dev"),
     ("Invoice e-mail → payment task for Nexus", "gmail", {"text_regex": r"faktur|invoice|rechnung"}, "Nexus", 1, "finance"),
     ("New e-mail → Mail agent triage", "gmail", {}, "Mail agent", 3, "mail"),
     ("Discord mention or question → Community agent", "discord", {"kind": "mention"}, "Community agent", 3, "community"),
@@ -48,6 +58,8 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         return
     ctx = Ctx(actors.owner_id(conn), via="system")
     for i, (name, source, match, assignee, priority, topic) in enumerate(DEFAULT_RULES):
+        if name in DEV_RULES:
+            match = {**match, "repo": dev_repos()}
         create_rule(conn, ctx, {"name": name, "source": source, "match": match, "assignee": assignee,
                                 "priority": priority, "topic": topic, "position": i,
                                 "enabled": name not in OFF_BY_DEFAULT
@@ -72,6 +84,27 @@ def sync_nexus_rule(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def sync_dev_repos(conn: sqlite3.Connection) -> None:
+    """Give the default Dev agent rules the repo allowlist (POS_DEV_REPOS) when
+    they have none yet, unless a person changed the rule by hand."""
+    for name in DEV_RULES:
+        row = conn.execute("SELECT id, match FROM routing_rules WHERE name = ? AND archived_at IS NULL",
+                           (name,)).fetchone()
+        if row is None:
+            continue
+        match = json.loads(row["match"] or "{}")
+        actions = {h["action"] for h in versioning.history(conn, "route", row["id"])}
+        if "repo" in match or actions - {"create", "auto_nexus", "auto_repo"}:
+            continue
+        versioning.update(conn, Ctx(actors.owner_id(conn), via="system"), "route", row["id"],
+                          _validate({"match": {**match, "repo": dev_repos()}}), action="auto_repo")
+    conn.commit()
+
+
+def _repos(value) -> list[str]:
+    return [value] if isinstance(value, str) else [str(x) for x in (value or [])]
+
+
 def _rule_out(row) -> dict:
     return {**dict(row), "match": json.loads(row["match"] or "{}"), "enabled": bool(row["enabled"])}
 
@@ -89,6 +122,8 @@ def _validate(fields: dict) -> dict:
         m = out["match"] or {}
         if not isinstance(m, dict):
             raise tasks.Invalid("match must be an object")
+        if "repo" in m and not all(isinstance(x, str) and "/" in x for x in _repos(m["repo"])):
+            raise tasks.Invalid("match.repo must be owner/name or a list of them")
         if m.get("text_regex"):
             try:
                 re.compile(m["text_regex"])
@@ -137,6 +172,10 @@ def matches(rule: dict, event: dict) -> bool:
     labels = [str(x).lower() for x in (event.get("meta") or {}).get("labels", [])]
     if m.get("label") and m["label"].lower() not in labels:
         return False
+    if m.get("repo"):  # an allowlist: owner/name, one or several
+        repo = str((event.get("meta") or {}).get("repo") or "").lower()
+        if repo not in {r.lower() for r in _repos(m["repo"])}:
+            return False
     if m.get("from_contains") and m["from_contains"].lower() not in (event.get("author") or "").lower():
         return False
     if m.get("text_regex"):
@@ -165,6 +204,10 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
                            (source, ref)).fetchone()
         if dup:
             return _reroute(conn, ctx, dup, event)
+    if source == "github" and event.get("kind") == "comment" and ref and "/c" in ref:
+        answered = _comment_on_parked(conn, ctx, event, title)
+        if answered:
+            return answered
 
     from . import mailfilter
 
@@ -218,6 +261,12 @@ def _reroute(conn: sqlite3.Connection, ctx: Ctx, dup: sqlite3.Row, event: dict) 
     labelled `agent` later. If no rule caught it the first time and one matches
     now, the existing task is routed by that rule (still open tasks only)."""
     out = {"event_id": dup["id"], "task_id": dup["task_id"], "duplicate": True}
+    if dup["rule_id"] is not None and dup["task_id"]:
+        # A new label on an issue whose task was handed back or parked: back in the queue.
+        rule = next((r for r in list_rules(conn) if matches(r, event)), None)
+        if rule and _wake(conn, ctx, dup["task_id"], rule, "a new label on the issue"):
+            return {**out, "requeued": True}
+        return out
     if dup["rule_id"] is not None or not dup["task_id"]:
         return out
     rule = next((r for r in list_rules(conn) if matches(r, event)), None)
@@ -234,6 +283,61 @@ def _reroute(conn: sqlite3.Connection, ctx: Ctx, dup: sqlite3.Row, event: dict) 
     t = tasks.get(conn, ctx, dup["task_id"])
     audit.log(conn, ctx, "event_rerouted", "task", t["id"], source=event.get("source"), rule=rule["name"])
     return {**out, "rerouted": True, "task_ref": t["ref"], "rule": rule["name"], "assignee": t["assignee_name"]}
+
+
+def _wake(conn: sqlite3.Connection, ctx: Ctx, task_id: int, rule: dict, why: str) -> bool:
+    """Requeue a task that an agent handed back, failed or parked (it has a
+    back-off, pos.api_worker.back_off) because something new happened on it."""
+    t = conn.execute("SELECT status, retry_after FROM tasks WHERE id = ? AND archived_at IS NULL",
+                     (task_id,)).fetchone()
+    if t is None or not t["retry_after"] or t["status"] not in ("inbox", "next", "waiting") or not rule["enabled"]:
+        return False
+    conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (task_id,))
+    tasks.update(conn, ctx, task_id, {"status": "next", "progress_note": f"Back in the queue: {why}."})
+    if rule["assignee"]:
+        tasks.assign(conn, ctx, task_id, rule["assignee"])
+    audit.log(conn, ctx, "event_requeued", "task", task_id, rule=rule["name"], why=why)
+    return True
+
+
+def _comment_on_parked(conn: sqlite3.Connection, ctx: Ctx, event: dict, title: str) -> dict | None:
+    """A comment on an issue whose task is parked or handed back (e.g. the answer
+    to the agent's question): the comment goes into that task and it is queued
+    again, instead of becoming a task of its own. Our own posted question is
+    only recorded."""
+    from .guard.external import wrap_external
+
+    issue_ref = event["ref"].rsplit("/c", 1)[0]
+    parent = conn.execute("SELECT task_id, rule_id FROM events WHERE source = 'github' AND ref = ? "
+                          "AND task_id IS NOT NULL AND rule_id IS NOT NULL", (issue_ref,)).fetchone()
+    if parent is None:
+        return None
+    body = (event.get("body") or "").strip()
+    ours = any((json.loads(a["details"] or "{}").get("payload") or {}).get("body", "").strip() == body
+               for a in conn.execute("SELECT details FROM approvals WHERE task_id = ? AND action = 'github.comment'",
+                                     (parent["task_id"],)))
+    rule = get_rule(conn, parent["rule_id"])
+
+    def record(task_id):
+        return conn.execute(
+            """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
+               VALUES ('github', 'comment', ?, ?, ?, ?, ?, ?, ?, '')""",
+            (event["ref"], title[:300], json.dumps(event, ensure_ascii=False, default=str), rule["id"], task_id,
+             ctx.actor_id, now_iso())).lastrowid
+
+    if ours and body:
+        return {"event_id": record(parent["task_id"]), "task_id": parent["task_id"], "own_comment": True}
+    t = conn.execute("SELECT notes, retry_after FROM tasks WHERE id = ?", (parent["task_id"],)).fetchone()
+    if t is None or not t["retry_after"]:
+        return None
+    if not _wake(conn, ctx, parent["task_id"], rule, "a new comment on the issue"):
+        return None
+    who = f" from {event['author']}" if event.get("author") else ""
+    wrapped = wrap_external("github", body, ref=event.get("url") or event["ref"]) if body else ""
+    tasks.update(conn, ctx, parent["task_id"], {"notes": f"{t['notes'] or ''}\n\nNew comment{who}:\n{wrapped}".strip()})
+    tk = tasks.get(conn, ctx, parent["task_id"])
+    return {"event_id": record(parent["task_id"]), "task_id": tk["id"], "task_ref": tk["ref"], "rule": rule["name"],
+            "assignee": tk["assignee_name"], "requeued": True}
 
 
 def skipped_mail(conn: sqlite3.Connection, days: int = 7) -> dict:

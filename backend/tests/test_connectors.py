@@ -39,8 +39,9 @@ def me(conn):
 
 def test_default_rules_route_events(conn, me):
     assert len(routing.list_rules(conn)) == 5
-    gh = routing.ingest(conn, me, {"source": "github", "kind": "issue", "ref": "o/r#12", "title": "Fix TZ",
-                                   "body": "Events shift by 2 h", "meta": {"labels": ["bug", "agent"]}})
+    gh = routing.ingest(conn, me, {"source": "github", "kind": "issue", "ref": "ObseumEU/PersonalOS#12",
+                                   "title": "Fix TZ", "body": "Events shift by 2 h",
+                                   "meta": {"labels": ["bug", "agent"], "repo": "ObseumEU/PersonalOS"}})
     assert gh["assignee"] == "Dev agent" and gh["rule"].startswith("GitHub issue")
     inv = routing.ingest(conn, me, {"source": "gmail", "title": "Faktura 2026-09", "body": "Prosím o úhradu"})
     assert inv["assignee"] == "Nexus" and tasks.get(conn, me, inv["task_id"])["priority"] == 1
@@ -58,6 +59,29 @@ def test_duplicates_and_untrusted_content(conn, me):
     assert routing.ingest(conn, me, ev)["duplicate"] is True
     notes = tasks.get(conn, me, first["task_id"])["notes"]
     assert '<external source="discord" trust="untrusted"' in notes and "suspicious=" in notes
+
+
+def test_dev_agent_rule_takes_only_its_repositories(conn, me, monkeypatch):
+    rule = next(r for r in routing.list_rules(conn) if r["name"] == routing.DEV_RULES[0])
+    assert rule["match"]["repo"] == ["ObseumEU/PersonalOS"]
+    other = routing.ingest(conn, me, {"source": "github", "kind": "issue", "ref": "acme/site#3", "title": "Logo",
+                                      "meta": {"labels": ["agent"], "repo": "acme/site"}})
+    assert other["rule"] is None  # another repository: the owner's inbox, not a Dev agent run
+    ours = routing.ingest(conn, me, {"source": "github", "kind": "issue", "ref": "obseumeu/personalos#4",
+                                     "title": "Bug", "meta": {"labels": ["agent"], "repo": "obseumeu/personalos"}})
+    assert ours["assignee"] == "Dev agent"
+    with pytest.raises(tasks.Invalid):
+        routing.update_rule(conn, me, rule["id"], {"match": {"kind": "issue", "repo": "no-slash"}})
+
+    # An older database: the rule without an allowlist gets POS_DEV_REPOS once, unless edited by hand.
+    monkeypatch.setenv("POS_DEV_REPOS", "ObseumEU/PersonalOS, ObseumEU/knowlage-agent")
+    conn.execute("UPDATE routing_rules SET match = ? WHERE id = ?", (json.dumps({"kind": "issue", "label": "agent"}),
+                                                                     rule["id"]))
+    routing.sync_dev_repos(conn)
+    assert routing.get_rule(conn, rule["id"])["match"]["repo"] == ["ObseumEU/PersonalOS", "ObseumEU/knowlage-agent"]
+    routing.update_rule(conn, me, rule["id"], {"match": {"kind": "issue", "label": "agent"}})
+    routing.sync_dev_repos(conn)
+    assert "repo" not in routing.get_rule(conn, rule["id"])["match"]  # a person's choice stays
 
 
 def test_rules_are_versioned_data(conn, me):

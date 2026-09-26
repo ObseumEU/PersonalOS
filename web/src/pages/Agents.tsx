@@ -11,7 +11,7 @@ import { PageHeader, Panel } from "../components/ui";
 const AgentNetwork = lazy(() => import("../components/agents/AgentNetwork"));
 const input = "h-8 w-full rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
-type Rating = { score: number | null; finished: number; quality: number | null; autonomy: number | null; tokens_per_task: number | null };
+type Rating = { score: number | null; finished: number; quality: number | null; autonomy: number | null; tokens_per_task: number | null; cost_per_task?: number | null };
 type Overview = {
   agents: Agent[];
   permissions: Record<string, string>;
@@ -216,6 +216,7 @@ function Card({ a, rating, maxTokens }: { a: Agent; rating?: Rating; maxTokens: 
             <span className="cap">HR SCORE</span>
             <span className="text-ink-2">
               {rating.score == null ? "not enough work yet" : `${Math.round(rating.score * 100)} / 100 · ${rating.finished} finished`}
+              {rating.cost_per_task != null && ` · $${rating.cost_per_task.toFixed(2)} per task`}
             </span>
           </>
         )}
@@ -282,6 +283,7 @@ export default function Agents() {
               ["RETURNED", k.returned_rate == null ? "—" : `${Math.round(Number(k.returned_rate) * 100)} %`],
               ["YOUR INTERVENTIONS", String(k.owner_interventions ?? 0)],
               ["TOKENS", fmtTokens(Number(k.tokens_used ?? 0))],
+              ["CLAUDE COST", `$${Number(k.cost_usd ?? 0).toFixed(2)}`],
             ].map(([label, value]) => (
               <div key={label} className="flex flex-col gap-1 border-r border-b border-line px-4 py-3 [&:nth-child(2n)]:border-r-0">
                 <span className="cap">{label}</span>
