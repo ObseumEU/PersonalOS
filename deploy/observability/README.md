@@ -78,3 +78,6 @@ python deploy/observability/grafana/build_dashboards.py   # after editing dashbo
 ```
 
 The Caddy block for grafana.obseum.cloud is `caddy/grafana.Caddyfile` (in svr03's front proxy).
+`caddy/logi.Caddyfile`: the older `logi.obseum.cloud` (Loki) now answers reads only on the LAN/VPN;
+log pushes from outside (innogy) stay open. `log.obseum.cloud` still serves the Grafana login
+publicly (unchanged).

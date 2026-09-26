@@ -1,0 +1,21 @@
+# svr03 front proxy: the existing Loki name on .186 (shared with innogy). Reads LAN/VPN only since
+# 2026-09-26 (it served every tenant's logs to the internet); pushes unchanged.
+logi.obseum.cloud {
+    # Loki on .186 (shared with innogy). Pushes stay open (apps outside ship logs here);
+    # reading logs is LAN/VPN only, like the rest (2026-09-26, deploy/observability in PersonalOS).
+    @push path /loki/api/v1/push /api/prom/push /otlp/*
+    handle @push {
+        reverse_proxy 192.168.1.186:3100
+    }
+    @internet_via_vps remote_ip 10.66.66.1
+    handle @internet_via_vps {
+        respond "Forbidden" 403
+    }
+    @trusted remote_ip 192.168.0.0/16 10.66.66.0/24 172.16.0.0/12 127.0.0.1/8 ::1
+    handle @trusted {
+        reverse_proxy 192.168.1.186:3100
+    }
+    handle {
+        respond "Forbidden" 403
+    }
+}
