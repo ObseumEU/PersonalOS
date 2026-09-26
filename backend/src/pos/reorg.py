@@ -137,10 +137,11 @@ def step_org(conn, ctx, apply: bool) -> list[str]:
 
 
 def _new_rule_name(name: str) -> str:
+    name = name.replace("Mail agent triage", "Customer Success triage")
     for old, new in sorted(roles.LEGACY.items(), key=lambda kv: -len(kv[0])):
         if old in name:
             name = name.replace(old, new)
-    return name.replace("Mail agent triage", "Customer Success triage")
+    return name
 
 
 def step_routing(conn, ctx, apply: bool) -> list[str]:
@@ -198,12 +199,19 @@ def step_tasks(conn, ctx, apply: bool) -> list[str]:
                AND status NOT IN ('done', 'someday')""", (o["id"],))]
         for tid in open_ids:
             out.append(f"task {tasks.display_id(tid)}: {old} -> {new}")
-            if apply:
-                try:
-                    reassign.reassign(conn, ctx, tid, n["id"], f"Reorganizace: {old} je archivovaný, práci "
-                                                               f"převzal {new} (docs/REORG.md).", force=True)
-                except tasks.Invalid:
-                    tasks.assign(conn, ctx, tid, {"type": "agent", "id": n["id"]})
+            if not apply:
+                continue
+            status = conn.execute("SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()["status"]
+            try:
+                reassign.reassign(conn, ctx, tid, n["id"], f"Reorganizace: {old} je archivovaný, práci "
+                                                           f"převzal {new} (docs/REORG.md).", force=True)
+            except tasks.Invalid:
+                tasks.assign(conn, ctx, tid, {"type": "agent", "id": n["id"]})
+            # Only queued work stays queued: a result waiting for review (or a task waiting for someone)
+            # keeps its state; the successor must not redo it (2026-09-26, the first run re-queued them).
+            if status not in ("next", "working") and conn.execute(
+                    "SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()["status"] != status:
+                versioning.update(conn, ctx, "task", tid, {"status": status}, action="reorg")
         rev = conn.execute("SELECT COUNT(*) FROM tasks WHERE reviewer_id = ? AND archived_at IS NULL "
                            "AND status NOT IN ('done', 'someday')", (o["id"],)).fetchone()[0]
         if rev:

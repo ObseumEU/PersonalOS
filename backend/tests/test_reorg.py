@@ -152,6 +152,9 @@ def _legacy(conn, data_dir):
     pm = conn.execute("SELECT id FROM actors WHERE name = 'Project manager'").fetchone()["id"]
     t = tasks.create(conn, owner, {"title": "Fix TZ", "assignee": {"type": "agent", "id": old["Dev agent"]},
                                    "notes": "x", "definition_of_done": "y", "status": "next"})
+    done = tasks.create(conn, owner, {"title": "Done, waits for review", "notes": "x", "definition_of_done": "y",
+                                      "assignee": {"type": "agent", "id": old["Dev agent"]}, "status": "next"})
+    conn.execute("UPDATE tasks SET status = 'review' WHERE id = ?", (done["id"],))
     schedules.create(conn, owner, {"name": "Daily standup", "schedule": "weekdays 08:30", "visibility": "team",
                                    "assignee": {"type": "agent", "id": pm}})
     rid = next(r["id"] for r in routing.list_rules(conn) if r["assignee"] == roles.ENGINEER
@@ -161,7 +164,7 @@ def _legacy(conn, data_dir):
                                       "match": {"text_regex": "faktur"}, "assignee": "Nexus", "priority": 1,
                                       "enabled": False})
     conn.commit()
-    return old, t
+    return old, t, done
 
 
 def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
@@ -169,7 +172,7 @@ def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
     client = TestClient(create_app(settings))  # POS_AGENTS_AS_CODE=0: only the platform's own members
     client.__enter__()
     conn = connect(settings.db_path)
-    old, t = _legacy(conn, tmp_path)
+    old, t, done = _legacy(conn, tmp_path)
     monkeypatch.setenv("POS_AGENTS_AS_CODE", "1")
 
     dry = reorg.run(conn, tmp_path, apply=False)
@@ -186,6 +189,8 @@ def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
     assert conn.execute("SELECT archived_at FROM actors WHERE name = 'Project manager'").fetchone()[0]
     se = actors.find_by_name(conn, "Software Engineer")
     assert tasks.get(conn, Ctx(actors.owner_id(conn)), t["id"])["assignee_id"] == se["id"]  # work moved
+    moved = tasks.get(conn, Ctx(actors.owner_id(conn)), done["id"])
+    assert moved["assignee_id"] == se["id"] and moved["status"] == "review"      # not redone by the successor
     rules = routing.list_rules(conn)
     assert not [r for r in rules if r["assignee"] in roles.LEGACY]
     assert any(r["name"] == routing.INVOICE_RULE and r["assignee"] == "CFO" and r["enabled"] for r in rules)

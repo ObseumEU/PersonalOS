@@ -118,9 +118,11 @@ class Pool:
         for slug, key in want.items():
             if slug in self.children or self.not_before.get(slug, 0) > self.clock():
                 continue
-            if self.max_running and len(self.children) >= self.max_running:
-                break  # memory: the rest start when a running one ends
             if self.lazy and not self.probe(slug, key):
+                continue
+            if self.max_running and len(self.children) >= self.max_running:
+                # Memory: it starts when a running one ends. The probe above still ran, so the core
+                # sees the agent alive and does not tell the owner its worker is down (2026-09-26).
                 continue
             self.children[slug] = (self.spawn(slug, key), key)
             started.append(slug)
