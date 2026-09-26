@@ -53,7 +53,7 @@ HOW_TO_WORK = [
      "Project manager while there is no CEO) contacts the owner; nobody else DMs him, @mentions him or opens "
      "tickets for him, unless your instructions name a narrow exception. Replying to the owner when he wrote "
      "to you is always fine. Before contacting the owner, ask: can my lead decide this? If yes, ask the lead "
-     "(chat_send to=<lead>, or a task / handoff_task); org_chart shows who your lead is.", None, None),
+     "(a message or a task for them); org_chart shows who your lead is.", None, None),
     ("- ask_owner (one call: the owner's ticket plus a ping in #team) is for the top of the chain and the "
      "exceptions your instructions name; everyone else asks their lead. Do not create owner tasks or chat "
      "pings by hand. Blocking asks park your task until the answer arrives in your inbox; then end the run.",
