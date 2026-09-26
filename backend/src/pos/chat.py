@@ -366,7 +366,7 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
 
     if not system and author["kind"] == "human" and priority != "stop":
         for aid in targets:
-            _ask_to_answer(conn, ctx, ch, aid, mid, body)
+            _ask_to_answer(conn, ctx, ch, aid, mid, body, priority)
         if ch["kind"] == "group" and (ch["name"] or "").lower() == "weekly":
             from . import weekly
 
@@ -394,16 +394,25 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     return out
 
 
-def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int, message_id: int, body: str) -> None:
+def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int, message_id: int, body: str,
+                   priority: str | None = None) -> None:
     """A person wrote to an agent that answers chat (agent.json answers_chat, e.g.
-    the Assistant): its worker gets a task to reply in this channel. Messages
-    that arrive while that task is still open join it instead of a new one."""
-    from . import agents_code, comments, tasks
+    the Assistant), or the owner wrote to any agent with a worker here (the
+    owner is never left without an answer; a message with a priority steers
+    work already running and is not a question): its worker gets a task to reply in
+    this channel. Messages that arrive while that task is still open join it
+    instead of a new one. When the agent cannot run now (usage limit, budget,
+    pause), the platform answers at once with the reason (pos.availability)."""
+    from . import agents_code, availability, comments, tasks
 
     target = actors.get(conn, aid)
-    if target["kind"] == "human" or target["archived_at"] or not agents_code.answers_chat(target["name"]):
+    if target["kind"] == "human" or target["archived_at"]:
         return
-    author = actors.get(conn, ctx.actor_id)["name"]
+    author_row = actors.get(conn, ctx.actor_id)
+    if not (agents_code.answers_chat(target["name"])
+            or (author_row["is_owner"] and priority is None and agents_code.has_worker(target["name"]))):
+        return
+    author = author_row["name"]
     where = f"DM with {author}" if ch["kind"] == "dm" else f"#{ch['name']}"
     title = f"Chat: answer {author} ({where})"
     open_ = conn.execute("""SELECT id FROM tasks WHERE title = ? AND assignee_id = ? AND archived_at IS NULL
@@ -413,18 +422,24 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     said = wrap_external(f"chat:{author}", body, ref=f"message {message_id}")
     if open_:
         comments.log(conn, ctx, open_["id"], f"{author} added (message {message_id}): {body[:1500]}", "comment")
+        audit.log(conn, ctx, "chat_task", "task", open_["id"], channel=ch["id"], message=message_id)
+        availability.autoreply(conn, open_["id"], message_id)
         return
-    tasks.create(conn, ctx, {
-        "title": title, "assignee": {"type": target["kind"], "id": aid}, "status": "next", "priority": 2,
+    t = tasks.create(conn, ctx, {
+        "title": title, "assignee": {"type": target["kind"], "id": aid}, "status": "next",
+        "priority": 1 if author_row["is_owner"] else 2,
         "topic": "chat",
         "notes": f"Purpose: {author} wrote to you in chat and waits for an answer.\n"
                  f"Source: chat channel {ch['id']} ({where}), message {message_id}.\n\n{said}\n\n"
-                 f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}); read the thread with "
-                 f"chat_read if you need context. Use your tools (tasks, files, the knowledge base via "
-                 f"ask_agent 'Knowledge agent') to answer well; create tasks when asked to.",
+                 f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}), in the language they wrote "
+                 f"in (Czech unless they wrote otherwise); read the thread with chat_read if you need context. "
+                 f"Use your tools (tasks, files, the knowledge base via ask_agent 'Knowledge agent') to answer "
+                 f"well; create tasks when asked to, or delegate to the agent whose job it is.",
         "definition_of_done": "The answer is in the chat channel.",
         "reviewer": aid,  # a chat answer needs no review: it is already in front of the person
     })
+    audit.log(conn, ctx, "chat_task", "task", t["id"], channel=ch["id"], message=message_id)
+    availability.autoreply(conn, t["id"], message_id)
 
 
 def send_dm(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, **kw) -> dict:

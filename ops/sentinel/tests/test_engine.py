@@ -253,3 +253,70 @@ def test_inject_hook_and_log_reads(sen, clock):
     assert all("/api/health" not in x for x in r["lines"])
     g = api.read_logs(sen, "kb-kb-1", now, 60, grep="health", errors_only=True)
     assert len(g["lines"]) == 1
+
+
+# ------------------------------------------------------------------ quota with a reset time
+
+SHIM = "nexus-process-pilot-codex-shim-1"
+SHIM_LINE = ('{"level":50,"time":%d,"msg":"codex shim call failed","err":"Codex CLI usage limit: ERROR: You\'ve hit '
+             'your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at '
+             'Sep 29th, 2026 6:47 AM. (skipping Codex until 2026-09-29T06:48:00.000Z)"}')
+
+
+def test_quota_reset_is_read_from_the_lines():
+    from datetime import datetime, timezone
+
+    from sentinel import fingerprint as fp
+
+    now = datetime(2026, 9, 26, 10, 11, tzinfo=timezone.utc).timestamp()
+    at = fp.quota_reset(SHIM_LINE % 0, now)
+    assert datetime.fromtimestamp(at, timezone.utc) == datetime(2026, 9, 29, 6, 47, tzinfo=timezone.utc)  # earliest
+    worker = ("run for T-046 blocked: no runtime available: codex usage limit until 2026-09-29T06:47:00+00:00; "
+              "claude usage limit until 2026-09-26T11:20:00+00:00")
+    assert datetime.fromtimestamp(fp.quota_reset(worker, now), timezone.utc).hour == 11
+    assert datetime.fromtimestamp(fp.quota_reset("You've hit your session limit · resets 11:20am (UTC)", now),
+                                  timezone.utc) == datetime(2026, 9, 26, 11, 20, tzinfo=timezone.utc)
+    assert fp.quota_reset("You've hit your usage limit", now) is None
+    assert fp.quota_reset("usage limit until 2020-01-01T00:00:00Z", now) is None           # past: no reset
+
+
+def test_hourly_quota_retries_are_one_ongoing_incident_until_the_reset(sen, clock):
+    """2026-09-26: LiteLLM's hourly health check hit the exhausted Codex subscription through the
+    shim, 3 lines an hour; the quota incident resolved after 30 quiet minutes and reopened every
+    hour (T-051 … T-062). With the reset in the lines it stays one incident until the reset."""
+    from datetime import datetime, timezone
+
+    sen.docker.add(SHIM)
+    reset = clock() + 5 * 3600  # the line names 2026-09-29; keep the reset close for the test
+    iso = datetime.fromtimestamp(reset, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    line = SHIM_LINE.replace("2026-09-29T06:48:00.000Z", iso).replace("try again at Sep 29th, 2026 6:47 AM", "later")
+
+    def health_check():
+        for i in range(3):
+            sen.docker.lines.setdefault(SHIM, []).append((clock() - 20 + i, line % 0))
+        sen.tick()
+
+    health_check()
+    assert len(sen.pos.events) == 1
+    inc = sen.pos.events[0]["data"]["incident"]
+    assert inc["kind"] == "quota" and inc["detail"]["quota_until"].startswith(iso[:16])
+    assert "quota exhausted until" in sen.pos.events[0]["title"]
+    for _ in range(4):  # four more hourly checks, 12 more lines, no new event, no count escalation
+        clock.advance(3600)
+        health_check()
+    assert [e["kind"] for e in sen.pos.events] == ["incident"]
+    assert sen.s.one("SELECT COUNT(*) AS n FROM incidents")["n"] == 1
+    # past the reset with no new error: resolved by itself, PersonalOS hears it
+    clock.advance(reset - clock() + 400)
+    sen.tick()
+    assert [e["kind"] for e in sen.pos.events] == ["incident", "incident_resolved"]
+
+
+def test_quota_without_a_reset_keeps_the_quiet_rule(sen, clock):
+    sen.docker.add("litellm")
+    for i in range(3):
+        sen.docker.lines.setdefault("litellm", []).append((clock() - 5 + i, "litellm.RateLimitError: You've hit your usage limit"))
+    sen.tick()
+    clock.advance(31 * 60)
+    sen.tick()
+    assert [e["kind"] for e in sen.pos.events] == ["incident", "incident_resolved"]

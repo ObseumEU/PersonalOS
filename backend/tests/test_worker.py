@@ -335,6 +335,43 @@ def test_claude_selfcheck_marks_claude_unavailable_when_the_cli_fails(tmp_path, 
     assert engines.claude_selfcheck(c)["ok"] and engines.paused_until(c, "claude") is None
 
 
+def test_claude_limit_in_the_selfcheck_pauses_only_until_the_named_reset(tmp_path, monkeypatch):
+    """2026-09-26: the self-check hit "session limit · resets 11:20am (UTC)" at 10:11 and paused
+    Claude for a flat 6 hours; the workers stayed blocked until 16:11. Now: until the reset."""
+    from datetime import datetime, timedelta, timezone
+
+    from pos import engines, runner
+    from pos.db import connect, migrate
+
+    now = datetime(2026, 9, 26, 10, 11, tzinfo=timezone.utc)
+    utc = timezone.utc
+    assert engines.parse_claude_reset("You've hit your session limit · resets 11:20am (UTC)", now) == \
+        datetime(2026, 9, 26, 11, 20, tzinfo=utc)
+    assert engines.parse_claude_reset("limit reached · resets 9am (UTC)", now) == \
+        datetime(2026, 9, 27, 9, 0, tzinfo=utc)                              # past today: tomorrow
+    assert engines.parse_claude_reset("resets Sep 29, 6:47am (Europe/Prague)", now) == \
+        datetime(2026, 9, 29, 4, 47, tzinfo=utc)
+    assert engines.parse_claude_reset("Claude AI usage limit reached|1759161600", now).year == 2025
+    assert engines.parse_claude_reset("something else", now) is None
+
+    c = connect(tmp_path / "s.db")
+    migrate(c)
+    reset = (datetime.now(timezone.utc) + timedelta(minutes=70)).replace(second=0, microsecond=0)
+    text = f"You've hit your session limit - resets {reset.strftime('%I:%M%p').lstrip('0').lower()} (UTC)"
+    script = ("import json, sys\n"
+              f"print(json.dumps({{'type': 'result', 'is_error': True, 'api_error_status': 429, 'result': {text!r}}}))\n"
+              "sys.exit(1)\n")
+    limited = _wrap(tmp_path, "claude_lim", script)
+    monkeypatch.setattr(runner, "claude_bin", lambda: limited)
+    assert not engines.claude_selfcheck(c)["ok"]
+    until = datetime.fromisoformat(engines.paused_until(c, "claude"))
+    assert until == reset                                                   # not now + 6 h
+    # after the reset nothing holds the workers: Claude can run again without anyone acting
+    c.execute("UPDATE engine_limits SET paused_until = ? WHERE engine = 'claude'",
+              ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(timespec="seconds"),))
+    assert engines.paused_until(c, "claude") is None and engines.can_run(c, "claude", 1)[0]
+
+
 def test_step_cap_stops_a_runaway_run_and_hands_the_task_back(setup, fake_codex, tmp_path, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
     client, conn, owner, agent_id, key = setup

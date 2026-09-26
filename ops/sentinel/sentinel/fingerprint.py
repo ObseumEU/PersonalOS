@@ -114,3 +114,49 @@ def classify(line: str) -> dict:
 
 QUOTA = re.compile(r"usage limit|rate[ _-]?limit(?:ed| exceeded| reached)|insufficient_quota|quota exceeded|"
                    r"budget (?:has been )?exceeded|exceeded (?:your|the) (?:current )?quota|max_budget", re.I)
+
+# When an exhausted quota comes back, as the line names it:
+#   "(skipping Codex until 2026-09-29T06:48:00.000Z)", "usage limit until 2026-09-26T16:11:42+00:00"
+#   "try again at Sep 29th, 2026 6:47 AM" (no zone: the container's, UTC on svr03)
+#   "You've hit your session limit · resets 11:20am (UTC)", "usage limit reached|1759161600"
+_UNTIL_ISO = re.compile(r"\buntil (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)")
+_AGAIN_AT = re.compile(r"try again at ([A-Z][a-z]{2})[a-z]* (\d{1,2})(?:st|nd|rd|th)?,? (\d{4}),? (\d{1,2}):(\d{2}) ?([AP]M)",
+                       re.I)
+_RESETS = re.compile(r"resets (\d{1,2})(?::(\d{2}))? ?([ap]m)? ?\(UTC\)", re.I)
+_EPOCH = re.compile(r"limit reached\|(\d{10})\b", re.I)
+MAX_RESET_S = 14 * 86400
+
+
+def quota_reset(line: str, now: float) -> float | None:
+    """The earliest future reset time a quota line names (epoch seconds), or None."""
+    from datetime import datetime, timedelta, timezone
+
+    found: list[float] = []
+    for m in _UNTIL_ISO.finditer(line):
+        raw = m.group(1).replace("Z", "+00:00")
+        try:
+            t = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        found.append((t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp())
+    for m in _AGAIN_AT.finditer(line):
+        mon, day, year, hh, mm, ampm = m.groups()
+        try:
+            t = datetime.strptime(f"{mon[:3].title()} {day} {year} {hh}:{mm} {ampm.upper()}", "%b %d %Y %I:%M %p")
+        except ValueError:
+            continue
+        found.append(t.replace(tzinfo=timezone.utc).timestamp())
+    for m in _RESETS.finditer(line):
+        h, mi, ampm = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+        if ampm:
+            h = h % 12 + (12 if ampm == "pm" else 0)
+        if h > 23 or mi > 59:
+            continue
+        base = datetime.fromtimestamp(now, timezone.utc).replace(hour=h, minute=mi, second=0, microsecond=0)
+        if base.timestamp() <= now:
+            base += timedelta(days=1)
+        found.append(base.timestamp())
+    for m in _EPOCH.finditer(line):
+        found.append(float(m.group(1)))
+    future = [t for t in found if now < t <= now + MAX_RESET_S]
+    return min(future) if future else None

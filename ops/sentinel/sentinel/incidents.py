@@ -7,6 +7,12 @@ it once (level 0) and again only on escalation: a higher severity or ten
 times the count it was last told about. After a quiet period without
 observations it resolves itself; PersonalOS hears that too if it was told
 about the incident.
+
+A quota incident whose lines name the reset ("quota exhausted until X",
+detail.quota_until) is one ongoing incident: it does not resolve while the
+quota is exhausted (a caller retrying once an hour would otherwise reopen it
+every hour), it does not escalate on its count, and it resolves by itself
+once the reset has passed without a new error after it.
 """
 
 import json
@@ -16,6 +22,22 @@ from dataclasses import dataclass, field
 from .store import Store, sev_rank
 
 HEALTH_KINDS = ("health", "unhealthy", "container_down")
+RESET_GRACE_S = 300  # after a quota's reset, this long without a new error resolves it
+
+
+def quota_until(row) -> float | None:
+    """The reset time (epoch) of an ongoing quota incident, or None."""
+    if row["kind"] != "quota":
+        return None
+    raw = (json.loads(row["detail"] or "{}") or {}).get("quota_until")
+    if not raw:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 @dataclass
@@ -89,7 +111,7 @@ class Incidents:
                     continue  # the restart fixed it (so far)
                 out.append(("incident", dict(r)))
             elif sev_rank(r["severity"]) > sev_rank(r["notified_severity"]) or (
-                    r["notified_count"] and r["count"] >= 10 * r["notified_count"]):
+                    r["notified_count"] and r["count"] >= 10 * r["notified_count"] and quota_until(r) is None):
                 out.append(("incident_escalated", dict(r)))
         return out
 
@@ -110,6 +132,14 @@ class Incidents:
         now = now or self.clock()
         done = []
         for r in self.s.q("SELECT * FROM incidents WHERE status = 'open'"):
+            until = quota_until(r)
+            if until is not None:
+                if now < until + RESET_GRACE_S:
+                    continue  # still exhausted: the same ongoing incident
+                if r["last_seen"] <= until + RESET_GRACE_S:
+                    self.resolve(r["id"], "the quota reset has passed without a new error", now)
+                    done.append(dict(self.get(r["id"])))
+                    continue
             if now - r["last_seen"] >= self.quiet_s(r["kind"]):
                 self.resolve(r["id"], "quiet: no new observation", now)
                 done.append(dict(self.get(r["id"])))

@@ -179,7 +179,7 @@ def test_resolved_after_the_monitor_started_is_a_comment(app):
     _hook(app, _payload(_resolved(), status="resolved"))
     assert tasks.get(conn, app["owner"], fired["task_id"])["status"] != "done"
     notes = [r["body"] for r in conn.execute("SELECT body FROM task_comments WHERE task_id = ?", (fired["task_id"],))]
-    assert any("resolved" in b for b in notes)
+    assert any("vyřešený" in b for b in notes)
 
 
 def test_several_alerts_in_one_notification(app):
@@ -193,7 +193,7 @@ def test_several_alerts_in_one_notification(app):
 def test_without_the_monitor_the_owner_gets_it(bare):
     conn = bare["conn"]
     out = _hook(bare, _payload()).json()["alerts"][0]
-    assert out["fallback"] == "the Monitor agent does not exist" and out["assignee"] == "owner"
+    assert out["fallback"] == "agent Hlídač neexistuje" and out["assignee"] == "owner"
     t = tasks.get(conn, bare["owner"], out["task_id"])
     assert t["title"].startswith("Incident:")
     # and the owner still sees the resolution recorded

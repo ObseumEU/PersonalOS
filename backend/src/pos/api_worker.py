@@ -280,6 +280,18 @@ def triage(task_id: str, body: TriageIn, conn=Depends(get_db), ctx: Ctx = Depend
     return out
 
 
+def _tell_chat_waiting(conn: sqlite3.Connection, tid: int | None, refused: str = "") -> None:
+    """A chat task whose run was refused: the person hears why (pos.availability), once per message."""
+    if tid is None:
+        return
+    from . import availability
+
+    try:
+        availability.autoreply(conn, tid, refused=refused or None)
+    except Exception:  # noqa: BLE001 - the refusal stands either way
+        pass
+
+
 @router.post("/runs", status_code=201)
 def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     from . import engines
@@ -287,6 +299,7 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     tid = tasks.parse_id(body.task_id) if body.task_id else None
     engine, why, model = engines.choose(conn, ctx.actor_id)
     if engine is None:
+        _tell_chat_waiting(conn, tid, f"no runtime available: {why}")
         raise HTTPException(409, f"no runtime available: {why}")
     if tid is not None:
         # One live run per task: a second worker (or a retry) is refused here,
@@ -301,6 +314,7 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     res = runner.start_external(conn, runner.RunRequest(ctx.actor_id, body.kind, "", task_id=tid, engine=engine,
                                                         model=model))
     if res.status == "blocked":
+        _tell_chat_waiting(conn, tid, res.error or "")
         raise HTTPException(409, res.error)
     # A run on a chat answer: the agent shows as typing there (no tool call, no tokens).
     chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)

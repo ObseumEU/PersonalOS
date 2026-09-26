@@ -41,7 +41,7 @@ def test_ask_owner_opens_a_ticket_pings_in_czech_and_parks_the_task(conn):
     ticket = tasks.get(conn, me, out["ticket_id"])
     assert ticket["assignee_id"] == actors.owner_id(conn) and ticket["status"] == "next"
     assert ticket["priority"] == 1 and ticket["definition_of_done"]
-    for part in ("### Why", "### Options", "Minimal — *recommended*", "### After you answer", t["ref"],
+    for part in ("### Proč", "### Možnosti", "Minimal — *doporučuju*", "### Až odpovíš", t["ref"],
                  "https://example.com/templates"):
         assert part in ticket["notes"]
     # the ping: Czech, the ticket ref, the reason, an @mention of the owner

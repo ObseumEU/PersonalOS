@@ -31,11 +31,11 @@ from . import actors, audit
 from .core import Ctx, now_iso
 
 KINDS = {
-    # kind: (label in the ticket, what the chat asks the owner to do)
-    "decision": ("Decision", "rozhodni"),
-    "confirmation": ("Confirmation", "potvrď"),
-    "input": ("Input", "doplň, co potřebuju"),
-    "approval": ("Approval", "schval, nebo zamítni"),
+    # kind: (label in the ticket, what the chat asks the owner to do); the owner reads both: Czech
+    "decision": ("Rozhodnutí", "rozhodni"),
+    "confirmation": ("Potvrzení", "potvrď"),
+    "input": ("Podklady", "doplň, co potřebuju"),
+    "approval": ("Schválení", "schval, nebo zamítni"),
 }
 TEAM = "team"
 
@@ -106,37 +106,37 @@ def _notes(*, asker: str, kind: str, title: str, why: str, details: str, options
            recommendation: str, blocking: bool, source: dict | None, links: list[str], after: str,
            owner: str) -> str:
     label = KINDS[kind][0]
-    src = f"{source['ref']} “{source['title']}”" if source else "no task"
+    src = f"{source['ref']} “{source['title']}”" if source else "bez úkolu"
     lines = [
-        f"**Asked by:** {asker} · **For:** {src} · **Needed:** {label.lower()}"
-        + (" · **Blocking:** the agent waits for your answer" if blocking else " · not blocking"),
+        f"**Ptá se:** {asker} · **K úkolu:** {src} · **Potřebuje:** {label.lower()}"
+        + (" · **Blokuje:** agent čeká na tvou odpověď" if blocking else " · neblokuje"),
         "",
-        "### What I need",
+        "### Co potřebuju",
         title.strip(),
         "",
-        "### Why",
+        "### Proč",
         why.strip(),
     ]
     ctx_lines = [details.strip()] if details.strip() else []
     if source:
-        ctx_lines.append(f"- **Source task:** {source['ref']} — {source['title']}")
+        ctx_lines.append(f"- **Zdrojový úkol:** {source['ref']} — {source['title']}")
     for link in links:
         ctx_lines.append(f"- {link}")
     if ctx_lines:
-        lines += ["", "### Context", *ctx_lines]
+        lines += ["", "### Souvislosti", *ctx_lines]
     if options:
-        lines += ["", "### Options"]
+        lines += ["", "### Možnosti"]
         rec = topic_key(recommendation)
         for i, o in enumerate(options, 1):
-            mark = " — *recommended*" if rec and topic_key(o) == rec else ""
+            mark = " — *doporučuju*" if rec and topic_key(o) == rec else ""
             lines.append(f"{i}. {o.strip()}{mark}")
     if recommendation.strip():
-        lines += ["", "### My recommendation", recommendation.strip()]
-    lines += ["", "### After you answer",
+        lines += ["", "### Moje doporučení", recommendation.strip()]
+    lines += ["", "### Až odpovíš",
               after.strip() or (
-                  f"Comment here with your answer (or complete the ticket). {asker} gets it in its inbox"
-                  + (f" and continues {source['ref']}." if source else " and continues.")
-                  + (" Until then that task waits." if blocking and source else ""))]
+                  f"Odpověz komentářem (nebo ticket dokonči). {asker} to dostane do schránky"
+                  + (f" a pokračuje na {source['ref']}." if source else " a pokračuje.")
+                  + (" Do té doby ten úkol čeká." if blocking and source else ""))]
     return "\n".join(lines)
 
 
@@ -211,9 +211,9 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
         "title": title[:200], "notes": notes, "status": "next",
         "priority": priority if priority in (1, 2, 3) else (1 if blocking else 2),
         "assignee": {"type": "human", "id": owner["id"]},
-        "definition_of_done": (f"{owner['name']} answered ({KINDS[kind][0].lower()}) in a comment or by "
-                               f"completing this ticket; {me['name']} has it in its inbox"
-                               + (f" and {source['ref']} moves on." if source else ".")),
+        "definition_of_done": (f"{owner['name']} odpověděl ({KINDS[kind][0].lower()}) komentářem nebo "
+                               f"dokončením ticketu; {me['name']} to má ve schránce"
+                               + (f" a {source['ref']} pokračuje." if source else ".")),
         "source": "ask_owner",
     }
     if source:

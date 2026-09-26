@@ -12,6 +12,12 @@ Budget safety (in code, before any model runs): at most MAX_INCIDENTS_DAY
 incident tasks a day, at most MAX_RUNS_INCIDENT Monitor runs per incident, and
 the Monitor's own access budget (usd_day, runs_day). Above any of them the
 incident still reaches the owner, through ask_owner with code-built text.
+Duplicates do not count against the daily cap and make no new ticket: an
+incident of the same service, kind and key while the first one's task or
+ticket is still open (or while a quota is exhausted until its reset) is a
+comment on that one. The cap also leaves out an ongoing quota incident with a
+known reset ("quota exhausted until X"). A message from the owner in chat is
+not an incident and never goes through these caps (pos.chat, pos.availability).
 
 Also here: the sentinel's heartbeat (and the alert when it stops), the run
 numbers the sentinel reads, the daily digest, and the Monitor's two tools
@@ -71,6 +77,8 @@ CREATE TABLE IF NOT EXISTS sentinel_incidents (
     log_calls     INTEGER NOT NULL DEFAULT 0,
     first_seen    TEXT,
     last_seen     TEXT,
+    dup_of        TEXT,
+    quota_until   TEXT,
     opened_at     TEXT NOT NULL,
     resolved_at   TEXT,
     closed_at     TEXT
@@ -82,6 +90,10 @@ CREATE TABLE IF NOT EXISTS sentinel_state (key TEXT PRIMARY KEY, value TEXT NOT 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(sentinel_incidents)")}
+    for col in ("dup_of", "quota_until"):  # added 2026-09-26 (dedupe, ongoing quota)
+        if col not in have:
+            conn.execute(f"ALTER TABLE sentinel_incidents ADD COLUMN {col} TEXT")
 
 
 def _state(conn: sqlite3.Connection, key: str, default=None):
@@ -185,21 +197,74 @@ def over_cap(conn: sqlite3.Connection) -> str | None:
 
     mid = monitor_id(conn)
     if mid is None:
-        return "the Monitor agent does not exist"
+        return "agent Hlídač neexistuje"
     if actors.get(conn, mid)["paused_at"]:
-        return "the Monitor agent is paused"
+        return "Hlídač je pozastavený"
     if killswitch.is_frozen(conn):
-        return "the kill switch is on"
-    since = (_utcnow() - timedelta(days=1)).isoformat(timespec="seconds")
-    n = conn.execute("SELECT COUNT(*) FROM sentinel_incidents WHERE task_id IS NOT NULL AND opened_at >= ?",
-                     (since,)).fetchone()[0]
-    if n >= max_incidents_day():
-        return f"the Monitor's cap of {max_incidents_day()} incidents a day is reached"
+        return "je zapnutý nouzový vypínač (kill switch)"
+    if incidents_today(conn) >= max_incidents_day():
+        return f"Hlídač už dnes třídil {max_incidents_day()} incidentů (denní strop)"
     for metric in ("usd_day", "runs_day"):
         lim = access.limit(conn, mid, metric)
         if lim is not None and access.used(conn, mid, metric) >= lim:
-            return f"the Monitor's budget ({access.METRICS[metric]}) is used up"
+            return f"Hlídač vyčerpal svůj rozpočet ({access.METRICS[metric]})"
     return None
+
+
+def incidents_today(conn: sqlite3.Connection) -> int:
+    """Incidents the Monitor triaged in the last 24 h, for the daily cap: not the
+    duplicates, not an ongoing quota incident with a known reset."""
+    ensure_schema(conn)
+    since = (_utcnow() - timedelta(days=1)).isoformat(timespec="seconds")
+    return conn.execute("SELECT COUNT(*) FROM sentinel_incidents WHERE task_id IS NOT NULL AND opened_at >= ? "
+                        "AND dup_of IS NULL AND quota_until IS NULL", (since,)).fetchone()[0]
+
+
+def quota_until(inc: dict) -> str | None:
+    """The reset time an ongoing quota incident names (the sentinel's detail.quota_until, ISO UTC)."""
+    d = inc.get("detail") if isinstance(inc.get("detail"), dict) else {}
+    v = inc.get("quota_until") or d.get("quota_until")
+    return str(v) if v else None
+
+
+def _open_twin(conn: sqlite3.Connection, inc: dict) -> sqlite3.Row | None:
+    """An earlier incident of the same service, kind and key whose task or ticket
+    is still open, or a quota incident whose reset has not come yet."""
+    if not inc.get("kind") or inc.get("key") in (None, ""):
+        return None
+    return conn.execute(
+        """SELECT s.* FROM sentinel_incidents s LEFT JOIN tasks t ON t.id = COALESCE(s.ticket_id, s.task_id)
+           WHERE s.service = ? AND s.kind = ? AND s.key = ? AND s.incident_id != ? AND s.dup_of IS NULL
+             AND ((t.id IS NOT NULL AND t.status NOT IN ('done', 'cancelled') AND t.archived_at IS NULL)
+                  OR (s.quota_until IS NOT NULL AND s.quota_until > ?))
+           ORDER BY s.id DESC LIMIT 1""",
+        (str(inc.get("service") or "?"), str(inc["kind"]), str(inc["key"])[:200], inc.get("incident_id"),
+         _utcnow().isoformat(timespec="seconds"))).fetchone()
+
+
+def _duplicate(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, twin: sqlite3.Row) -> dict:
+    """The same incident again: a comment on the open task or ticket, no new one."""
+    from . import comments
+    from .tasks import display_id
+
+    target = twin["task_id"] or twin["ticket_id"]
+    until = quota_until(inc)
+    eid = _record(conn, ctx, event, target, f"duplicate of {twin['incident_id']}")
+    _insert(conn, inc, event, task_id=twin["task_id"], ticket_id=twin["ticket_id"], dup_of=twin["incident_id"])
+    if until:
+        conn.execute("UPDATE sentinel_incidents SET quota_until = MAX(COALESCE(quota_until, ''), ?) WHERE id = ?",
+                     (until, twin["id"]))
+    if target:
+        mid = monitor_id(conn)
+        comments.log(conn, Ctx(mid or ctx.actor_id, via="sentinel"), target,
+                     f"**Znovu** totéž ({inc.get('incident_id')}, počet {inc.get('count')}"
+                     + (f", kvóta vyčerpaná do {until}" if until else "")
+                     + "): žádný nový ticket, jen tato poznámka.", "system")
+    audit.log(conn, ctx, "sentinel_duplicate", "task", target, incident=inc.get("incident_id"),
+              twin=twin["incident_id"])
+    conn.commit()
+    return {"event_id": eid, "task_id": target, "task_ref": display_id(target) if target else None,
+            "duplicate_of": twin["incident_id"]}
 
 
 def _runs_on(conn: sqlite3.Connection, task_id: int | None) -> int:
@@ -224,6 +289,9 @@ def before_route(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict | None
     if row is not None:
         return _escalated(conn, ctx, event, inc, row)
     event["kind"] = "incident"  # an escalation of an incident we never heard of is a new one
+    twin = _open_twin(conn, inc)
+    if twin is not None:
+        return _duplicate(conn, ctx, event, inc, twin)
     reason = over_cap(conn)
     if reason:
         return _fallback(conn, ctx, event, inc, reason)
@@ -244,16 +312,18 @@ def after_route(conn: sqlite3.Connection, ctx: Ctx, event: dict, task: dict) -> 
 
 
 def _insert(conn: sqlite3.Connection, inc: dict, event: dict, *, task_id: int | None = None,
-            ticket_id: int | None = None, skipped: bool = False) -> None:
+            ticket_id: int | None = None, skipped: bool = False, dup_of: str | None = None) -> None:
     conn.execute(
         """INSERT INTO sentinel_incidents (incident_id, service, kind, severity, key, container, title, task_id,
-               ticket_id, llm_skipped, first_seen, last_seen, opened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ticket_id, llm_skipped, first_seen, last_seen, dup_of, quota_until, opened_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (incident_id) DO UPDATE SET task_id = COALESCE(excluded.task_id, task_id),
-               ticket_id = COALESCE(excluded.ticket_id, ticket_id), llm_skipped = MAX(llm_skipped, excluded.llm_skipped)""",
+               ticket_id = COALESCE(excluded.ticket_id, ticket_id), llm_skipped = MAX(llm_skipped, excluded.llm_skipped),
+               quota_until = COALESCE(excluded.quota_until, quota_until)""",
         (inc["incident_id"], str(inc.get("service") or "?"), str(inc.get("kind") or "?"),
          str(inc.get("severity") or "medium"), str(inc.get("key") or "")[:200], inc.get("container"),
          (event.get("title") or "")[:300], task_id, ticket_id, int(skipped), inc.get("first_seen"),
-         inc.get("last_seen"), now_iso()))
+         inc.get("last_seen"), dup_of, quota_until(inc), now_iso()))
 
 
 def _record(conn: sqlite3.Connection, ctx: Ctx, event: dict, task_id: int | None, note: str) -> int:
@@ -287,17 +357,17 @@ def _escalated(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: 
     if target:
         mid = monitor_id(conn)
         comments.log(conn, Ctx(mid or ctx.actor_id, via="sentinel"), target,
-                     f"**Escalated** by the sentinel: severity {sev}, count {count}.\n\n{_wrapped(event)}", "system")
+                     f"**Eskalace** od sentinelu: závažnost {sev}, počet {count}.\n\n{_wrapped(event)}", "system")
     task = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["task_id"],)).fetchone() if row["task_id"] else None
     reopen = task is not None and task["status"] == "done" and row["classification"] in (None, "transient")
     if reopen and _runs_on(conn, row["task_id"]) >= max_runs_incident():
-        return {**out, **_fallback(conn, ctx, event, inc, f"the Monitor already ran {max_runs_incident()}× on this "
-                                   "incident", record=False)}
+        return {**out, **_fallback(conn, ctx, event, inc, f"Hlídač už na tomto incidentu běžel "
+                                   f"{max_runs_incident()}×", record=False)}
     if reopen and over_cap(conn) is None:
         mid = monitor_id(conn)
         versioning.update(conn, Ctx(mid, via="sentinel"), tasks.ENTITY, row["task_id"],
-                          {"status": "next", "progress_note": f"Escalated by the sentinel ({sev}, ×{count}): "
-                                                             "it was not transient."[:500], "completed_at": None},
+                          {"status": "next", "progress_note": f"Sentinel eskaloval ({sev}, ×{count}): "
+                                                             "nebylo to přechodné."[:500], "completed_at": None},
                           action="reopen")
         conn.execute("UPDATE sentinel_incidents SET status = 'open', closed_at = NULL WHERE id = ?", (row["id"],))
         wake.wake(mid)
@@ -325,12 +395,12 @@ def _resolved(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: s
     t = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
     mctx = Ctx(mid or ctx.actor_id, via="sentinel")
     grafana = event.get("source") == "grafana"
-    who = "Grafana reports the alert" if grafana else "The sentinel reports the incident"
-    comments.log(conn, mctx, row["task_id"], f"{who} **resolved** (quiet since).", "system")
+    who = "Grafana hlásí alert jako" if grafana else "Sentinel hlásí incident jako"
+    comments.log(conn, mctx, row["task_id"], f"{who} **vyřešený** (od té doby klid).", "system")
     if t and t["status"] == "next" and _runs_on(conn, row["task_id"]) == 0 and mid:
-        seen = "Grafana resolved the alert" if grafana else "the sentinel saw it go quiet"
-        tasks.complete(conn, mctx, row["task_id"], f"### Result\nResolved by itself before triage ({seen}). "
-                                                   "**Class:** transient. No model run.")
+        seen = "Grafana alert zrušila" if grafana else "sentinel už ho nevidí"
+        tasks.complete(conn, mctx, row["task_id"], f"### Výsledek\nVyřešilo se samo před tříděním ({seen}). "
+                                                   "**Třída:** transient. Bez běhu modelu.")
         conn.execute("UPDATE sentinel_incidents SET status = 'closed', classification = 'transient', closed_at = ?, "
                      "summary = 'resolved before triage' WHERE id = ?", (now_iso(), row["id"]))
         out["closed_without_run"] = True
@@ -375,7 +445,7 @@ def _fallback(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, reason
     sev = str(inc.get("severity") or "medium")
     level = inc.get("level", 0)
     out = asks.ask(conn, asker, title=f"Incident: {(event.get('title') or '')[:150]}",
-                   why=f"sentinel hlásí incident a {reason}, takže ti ho posílám jako text bez AI třídění",
+                   why=f"sentinel hlásí incident a {reason}, takže ti ho posílám jako text bez třídění agentem",
                    details=_wrapped(event)[:5000], options=["Podívám se na to", "Ignorovat: přechodné"],
                    recommendation=rec, blocking=False, kind="decision",
                    topic=f"sentinel incident {inc.get('incident_id')} {level}",

@@ -179,6 +179,11 @@ def claude_selfcheck(conn: sqlite3.Connection, timeout: int = 90) -> dict:
     if ok:
         conn.execute("UPDATE engine_limits SET paused_until = NULL, reason = NULL WHERE engine = 'claude' "
                      "AND reason LIKE 'self-check failed%'")
+    elif LIMIT_RE.search(why) or re.search(r"session limit|api_error_status\W+429", why, re.IGNORECASE):
+        # A usage limit is not a broken CLI: pause until the reset it names (as a run would),
+        # never for the flat 6 hours, so the workers resume by themselves after the reset.
+        at = parse_claude_reset(why) or _utcnow() + timedelta(hours=1)
+        pause(conn, "claude", at.isoformat(timespec="seconds"), f"usage limit (self-check, {model}): {why[-200:]}")
     else:
         pause(conn, "claude", (_utcnow() + timedelta(hours=6)).isoformat(timespec="seconds"),
               f"self-check failed ({model}): {why}")
@@ -188,7 +193,8 @@ def claude_selfcheck(conn: sqlite3.Connection, timeout: int = 90) -> dict:
 
 # ------------------------------------------------------------------ Claude accounting
 
-LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|out of extra usage)", re.IGNORECASE)
+LIMIT_RE = re.compile(r"(usage limit|rate limit|limit reached|out of extra usage|hit your (?:session |weekly |)limit)",
+                      re.IGNORECASE)
 
 
 def parse_claude(jsonl: str) -> dict:
@@ -220,11 +226,50 @@ def parse_claude(jsonl: str) -> dict:
     return out
 
 
-def reset_time(message: str) -> datetime:
-    """Claude writes e.g. 'Claude AI usage limit reached|1759161600'; else wait an hour."""
-    if m := re.search(r"\|(\d{10})", message):
+CLAUDE_RESETS_RE = re.compile(
+    r"resets\s+(?:at\s+)?(?:(?P<mon>[A-Z][a-z]{2})[a-z]*\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?,?\s+(?:at\s+)?)?"
+    r"(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ampm>[ap]m)?\s*(?:\((?P<tz>[^)]+)\))?", re.IGNORECASE)
+
+
+def parse_claude_reset(message: str, now: datetime | None = None) -> datetime | None:
+    """The reset time a Claude limit message names, or None: 'Claude AI usage limit
+    reached|1759161600', "You've hit your session limit · resets 11:20am (UTC)",
+    'resets Sep 29, 6:47am (Europe/Prague)'. A clock time already past today is tomorrow."""
+    if m := re.search(r"\|(\d{10})", message or ""):
         return datetime.fromtimestamp(int(m[1]), timezone.utc)
-    return _utcnow() + timedelta(hours=1)
+    m = CLAUDE_RESETS_RE.search(message or "")
+    if not m:
+        return None
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        tz = ZoneInfo(m["tz"].strip()) if m["tz"] and m["tz"].strip().upper() != "UTC" else timezone.utc
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    now = (now or _utcnow()).astimezone(tz)
+    hour, minute = int(m["h"]), int(m["m"] or 0)
+    if m["ampm"]:
+        hour = hour % 12 + (12 if m["ampm"].lower() == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    if m["mon"]:
+        try:
+            month = datetime.strptime(m["mon"][:3].title(), "%b").month
+            at = now.replace(month=month, day=int(m["day"]), hour=hour, minute=minute, second=0, microsecond=0)
+        except ValueError:
+            return None
+        if at < now - timedelta(days=1):
+            at = at.replace(year=at.year + 1)
+    else:
+        at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if at <= now:
+            at += timedelta(days=1)
+    return at.astimezone(timezone.utc)
+
+
+def reset_time(message: str) -> datetime:
+    """When a Claude limit resets (parse_claude_reset); else wait an hour."""
+    return parse_claude_reset(message) or _utcnow() + timedelta(hours=1)
 
 
 def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str, update_run: bool = True) -> dict:

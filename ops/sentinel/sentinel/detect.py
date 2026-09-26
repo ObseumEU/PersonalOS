@@ -7,6 +7,7 @@ nothing here calls a model.
 import hashlib
 import json
 import time
+from datetime import datetime, timezone
 
 from . import fingerprint as fpmod
 from .incidents import Obs
@@ -42,6 +43,11 @@ def ingest_logs(s: Store, t: dict, service: str, container: str, lines: list[tup
         if fpmod.QUOTA.search(line):
             s.stat(container, "quota", m, 1)
             _quota_sample(s, container, line, at)
+            reset = fpmod.quota_reset(line, at)
+            if reset is not None:  # the newest line says when the quota comes back
+                prev = s.meta(f"quota_until:{container}") or {}
+                if at >= prev.get("seen", 0):
+                    s.set_meta(f"quota_until:{container}", {"until": reset, "seen": at})
         if not c["error"]:
             continue
         fp = fpmod.fp_of(service, c)
@@ -100,6 +106,12 @@ def judge_fp(s: Store, t: dict, fp: str, service: str, container: str, key: str,
     return []
 
 
+def quota_until(s: Store, container: str, now: float) -> float | None:
+    """When the container's exhausted quota comes back (from its log lines), if that is still ahead."""
+    q = s.meta(f"quota_until:{container}") or {}
+    return q["until"] if q.get("until", 0) > now else None
+
+
 def judge_status(s: Store, t: dict, service: str, container: str, now: float) -> list[Obs]:
     w = int(t["window_min"])
     end = _minute(now) + 1
@@ -112,8 +124,15 @@ def judge_status(s: Store, t: dict, service: str, container: str, now: float) ->
         out.append(Obs(service, "rate_limited", container, "medium", f"{container}: {n['429']}× HTTP 429 in {w} min",
                        n["429"], {"requests": n["req"], "429": n["429"]}, container))
     if n["quota"] >= t["quota_min"]:
-        out.append(Obs(service, "quota", container, "high", f"{container}: usage limit / quota errors "
-                       f"({n['quota']} in {w} min)", n["quota"], {"quota_lines": n["quota"]}, container))
+        until = quota_until(s, container, now)
+        if until:  # one ongoing incident until the reset, not a new one every time the caller retries
+            iso = datetime.fromtimestamp(until, timezone.utc)
+            out.append(Obs(service, "quota", container, "high", f"{container}: quota exhausted until "
+                           f"{iso.strftime('%Y-%m-%d %H:%M')} UTC", n["quota"],
+                           {"quota_lines": n["quota"], "quota_until": iso.isoformat(timespec="seconds")}, container))
+        else:
+            out.append(Obs(service, "quota", container, "high", f"{container}: usage limit / quota errors "
+                           f"({n['quota']} in {w} min)", n["quota"], {"quota_lines": n["quota"]}, container))
     if n["401"] >= t["auth_401_min"]:
         out.append(Obs(service, "auth_flood", container, "medium", f"{container}: {n['401']}× HTTP 401 in {w} min",
                        n["401"], {"401": n["401"], "requests": n["req"]}, container))

@@ -59,6 +59,13 @@ def answers_chat(name: str) -> bool:
     return any(s.get("answers_chat") and s["name"] == name for s in specs())
 
 
+def has_worker(name: str) -> bool:
+    """Does this agent run in a worker of its own here (agent.json runtime codex_worker, enabled)?
+    Such an agent always answers the owner in chat (pos.chat._ask_to_answer)."""
+    return any(s["name"] == name and s.get("runtime", "codex_worker") == "codex_worker"
+               and s.get("worker") not in (None, "none") and s.get("enabled") is not False for s in specs())
+
+
 def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None = None) -> dict:
     """Create the missing role agents from their agent.json and fill a missing
     place in the chart. Returns what changed."""
