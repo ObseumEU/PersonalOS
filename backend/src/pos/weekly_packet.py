@@ -385,7 +385,7 @@ def _communication(s: str, u: str, ps: str, pu: str) -> dict:
     prev = sum(1 for d in docs or [] if isinstance(d, dict) and ps <= when(d) < pu)
     origins = Counter(str(d.get("origin") or d.get("kind") or "other") for d in week)
     channels = Counter((str(d.get("origin") or "other"), str(d.get("channel") or d.get("workspace") or "—"))
-                       for d in week if d.get("origin") in ("mail", "email", "gmail", "discord", "slack"))
+                       for d in week if d.get("origin") in ("mail", "email", "gmail", "mailbox", "discord", "slack"))
     return {"available": True, "items": len(week), "prev_items": prev,
             "by_origin": dict(origins.most_common(8)),
             "top_channels": [{"origin": o, "channel": c, "items": n} for (o, c), n in channels.most_common(6)],
