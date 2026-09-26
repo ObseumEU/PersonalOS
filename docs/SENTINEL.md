@@ -115,7 +115,8 @@ sentinel_ro; GRANT SELECT ON runs, workflow_runs, run_events TO sentinel_ro;`
 ## Cost
 
 A quiet day: no model tokens (the digest is code-only and silent). An
-incident: one Haiku run at low effort, typically 15–40 k input tokens
-(mostly the cached system prompt and tool definitions) and 1–2 k output,
-about USD 0.02–0.06; at most 2 runs per incident and 12 incidents a day. A
-code bug adds the Dev agent's own run (Opus) under its own budget.
+incident: one Haiku run at low effort; measured on svr03 at rollout 7–21 k
+input and 1.5–3.6 k output tokens, 4–9 tool calls, USD 0.03–0.07 per incident;
+at most 2 runs per incident and 12 incidents a day (≤ USD 1/day by budget). A
+day with incidents adds one digest run (a few thousand tokens). A code bug
+adds the Dev agent's own run (Opus) under its own budget.
