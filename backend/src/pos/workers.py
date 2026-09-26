@@ -95,12 +95,22 @@ def _age_s(iso: str | None) -> float | None:
     return (datetime.now(timezone.utc) - t).total_seconds()
 
 
+def a2a_bridge_off(conn: sqlite3.Connection) -> bool:
+    """The scheduler job that hands tasks to remote agents is switched off (Automations)."""
+    job = conn.execute("SELECT enabled FROM jobs WHERE action = 'a2a_sync'").fetchone()
+    return job is not None and not job["enabled"]
+
+
 def worker_down(conn: sqlite3.Connection, row, stale_s: int = WORKER_STALE_S) -> str | None:
-    """Czech reason when the agent's own worker (dedicated or pool) is not
-    running now; None when it runs, or when there is nothing to check (A2A)."""
+    """Czech reason when the agent's worker is not running now (its container or
+    pool worker is silent, or the A2A bridge to its remote app is off); None
+    when it runs."""
     path = reply_path(conn, row)
-    if path is None or path["kind"] == "a2a":
+    if path is None:
         return None
+    if path["kind"] == "a2a":
+        return ("jeho spojení se vzdálenou aplikací je vypnuté (úloha „A2A: hand tasks to remote agents“ "
+                "na stránce Automatizace)") if a2a_bridge_off(conn) else None
     if conn.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (row["id"],)).fetchone():
         return None
     age = _age_s(row["last_seen_at"])

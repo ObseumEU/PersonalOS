@@ -140,8 +140,14 @@ def may_use(conn: sqlite3.Connection, actor_id: int, tool: str) -> bool:
     from . import agents
 
     perm = TOOL_PERMISSIONS.get(tool)
-    return perm is None or agents.has_permission(conn, actor_id, perm) or (
-        not tool.startswith("access_") and agents.has_permission(conn, actor_id, f"tool:{tool}"))
+    if perm is None or agents.has_permission(conn, actor_id, perm) or (
+            not tool.startswith("access_") and agents.has_permission(conn, actor_id, f"tool:{tool}")):
+        return True
+    if tool in ("chat_send", "chat_react"):  # every agent answers the person waiting for it (chat.may_answer)
+        from . import chat
+
+        return chat.may_answer(conn, actor_id)
+    return False
 
 
 def _gate(conn: sqlite3.Connection, c: Ctx, tool: str) -> None:

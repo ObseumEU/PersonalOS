@@ -93,14 +93,30 @@ def _add_member(conn: sqlite3.Connection, channel_id: int, actor_id: int, role: 
     return cur.rowcount > 0
 
 
-def _require_send(conn: sqlite3.Connection, ctx: Ctx) -> None:
-    """Agents need messages:send, may not act while frozen or paused."""
+def may_answer(conn: sqlite3.Connection, actor_id: int, channel_id: int | None = None) -> bool:
+    """Someone waits for this agent's answer: it has an open "Chat: answer" task
+    (for this channel, when given). Answering them needs no messages:send: every
+    agent answers the person who wrote to it (pos.workers)."""
+    for t in conn.execute("""SELECT id FROM tasks WHERE assignee_id = ? AND topic = 'chat' AND archived_at IS NULL
+                             AND status IN ('inbox', 'next', 'working')""", (actor_id,)).fetchall():
+        if channel_id is None:
+            return True
+        if conn.execute("""SELECT 1 FROM audit_log WHERE action = 'chat_task' AND entity = 'task' AND entity_id = ?
+                           AND json_extract(detail, '$.channel') = ?""", (t["id"], channel_id)).fetchone():
+            return True
+    return False
+
+
+def _require_send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int | None = None) -> None:
+    """Agents need messages:send (or someone waiting for their answer in this
+    channel, may_answer), may not act while frozen or paused."""
     from . import killswitch
 
     row = actors.get(conn, ctx.actor_id)
     if row["kind"] == "human":
         return
-    if not has_permission(conn, ctx.actor_id, "messages:send"):
+    if not has_permission(conn, ctx.actor_id, "messages:send") and not (
+            channel_id is not None and may_answer(conn, ctx.actor_id, channel_id)):
         raise Forbidden("missing permission messages:send")
     killswitch.check_agent_may_act(conn, ctx)
     if row["paused_at"]:
@@ -295,7 +311,7 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     if ch["archived_at"]:
         raise ChatError("this channel is archived")
     if not system:
-        _require_send(conn, ctx)
+        _require_send(conn, ctx, channel_id)
         if author["kind"] != "human":
             _check_rate(conn, ctx.actor_id)
             _check_budget(conn, ctx.actor_id)
@@ -420,6 +436,11 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     if path is None:  # a service, or an agent without a worker: never silent (pos.availability)
         if to_owner:
             availability.forward_unserved(conn, ctx, ch, target, message_id, body)
+        return
+    if path["kind"] == "a2a" and workers.a2a_bridge_off(conn):  # its remote worker is unreachable now
+        if to_owner:
+            availability.forward_unserved(conn, ctx, ch, target, message_id, body,
+                                          why=workers.worker_down(conn, target))
         return
     author = author_row["name"]
     where = f"DM with {author}" if ch["kind"] == "dm" else f"#{ch['name']}"

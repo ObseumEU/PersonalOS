@@ -285,3 +285,65 @@ def test_a_worker_silent_for_10_minutes_is_an_incident_until_it_is_back(watched)
     row = conn.execute("SELECT resolved_at FROM sentinel_incidents WHERE kind = 'worker_down'").fetchone()
     assert row["resolved_at"]
     assert tasks.get(conn, owner, inc[0]["id"])["status"] == "done"   # closed without a model run
+
+
+# ------------------------------------------------------------------ an agent always can and does answer
+
+def test_an_agent_without_messages_send_answers_the_person_waiting_for_it(db, tmp_path):
+    """2026-09-26 audit: the Mail agent and the Community agent closed their chat tasks
+    without a word: chat_send needs messages:send, which they do not have."""
+    from pos import mcp_server
+
+    conn = db
+    owner = _owner(conn)
+    aid = agents.create_agent(conn, owner, name="Pošťák", purpose="mail", lifetime="long_lived",
+                              permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
+    _seen_now(conn, aid)
+    assert not mcp_server.may_use(conn, aid, "chat_send")
+    msg = chat.send_dm(conn, owner, aid, "Vidíš mě?")
+    assert mcp_server.may_use(conn, aid, "chat_send")                 # someone waits for its answer
+    reply = chat.send(conn, Ctx(aid), msg["channel_id"], "Vidím.", reply_to=msg["id"])
+    assert reply["body"] == "Vidím."
+    team = chat.ensure_team_channel(conn)
+    with pytest.raises(Exception, match="messages:send"):             # but only there
+        chat.send(conn, Ctx(aid), team, "Ahoj všichni")
+
+
+def test_a_chat_task_closed_without_an_answer_posts_its_result(db, tmp_path):
+    conn = db
+    owner = _owner(conn)
+    aid = agents.create_agent(conn, owner, name="Mlčoch", purpose="x", lifetime="long_lived",
+                              permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
+    _seen_now(conn, aid)
+    msg = chat.send_dm(conn, owner, aid, "Kolik máme faktur?")
+    t = _chat_task(conn, aid)
+    tasks.complete(conn, Ctx(aid), t["id"], "Máme 3 nezaplacené faktury.")
+    reply = _replies(conn, msg["id"])
+    assert len(reply) == 1 and reply[0]["author_id"] == aid and reply[0]["body"].startswith("Máme 3 nezaplacené")
+    assert "Doručila platforma" in reply[0]["body"]
+    # an agent that answered itself gets no second message
+    msg2 = chat.send_dm(conn, owner, aid, "A kolik je po splatnosti?")
+    t2 = _chat_task(conn, aid)
+    chat.send(conn, Ctx(aid), msg2["channel_id"], "Jedna.", reply_to=msg2["id"])
+    tasks.complete(conn, Ctx(aid), t2["id"], "Odpověděno.")
+    assert [r["body"] for r in _replies(conn, msg2["id"])] == ["Jedna."]
+
+
+def test_a_remote_agent_whose_bridge_is_off_goes_to_the_project_manager(db):
+    """2026-09-26 audit: the owner had switched off the A2A job, so the Knowledge
+    agent's task sat in the queue and nobody answered."""
+    conn = db
+    owner = _owner(conn)
+    from pos import scheduler
+
+    scheduler.seed(conn)
+    conn.execute("UPDATE jobs SET enabled = 0 WHERE action = 'a2a_sync'")
+    conn.commit()
+    kb, pm = actors.find_by_name(conn, "Knowledge agent"), actors.find_by_name(conn, "Project manager")
+    _seen_now(conn, pm["id"])
+    msg = chat.send_dm(conn, owner, kb["id"], "Co víme o zákazníkovi X?")
+    reply = _replies(conn, msg["id"])
+    assert len(reply) == 1 and "Knowledge agent teď neběží, protože jeho spojení" in reply[0]["body"]
+    assert "Project managerovi" in reply[0]["body"] and _chat_task(conn, kb["id"]) is None
+    assert "za Knowledge agent" in _chat_task(conn, pm["id"])["title"]
+    assert "spojení se vzdálenou aplikací je vypnuté" in workers.worker_down(conn, kb)

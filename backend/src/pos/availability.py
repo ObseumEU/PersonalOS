@@ -110,7 +110,41 @@ def post_answer(conn: sqlite3.Connection, task_id: int, author_id: int, text: st
     return out
 
 
-def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id: int, body: str) -> dict | None:
+def answer_if_silent(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None) -> dict | None:
+    """An agent closed its "Chat: answer" task without posting in the chat (it
+    could not, or forgot): its result goes into the thread, marked as delivered
+    by the platform, so the person is never left without an answer."""
+    from . import chat
+
+    if ctx.via == "a2a":  # the A2A bridge posts the remote answer itself (post_answer)
+        return None
+    link = chat_link(conn, task_id)
+    t = conn.execute("SELECT assignee_id, created_at, progress_note FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not link or t is None or t["assignee_id"] != ctx.actor_id:
+        return None
+    a = actors.get(conn, ctx.actor_id)
+    if a["kind"] == "human":
+        return None
+    after = link.get("message") or 0
+    if conn.execute("""SELECT 1 FROM chat_messages WHERE channel_id = ? AND author_id = ? AND archived_at IS NULL
+                       AND (id > ? OR created_at >= ?)""", (link["channel"], a["id"], after, t["created_at"])).fetchone():
+        return None
+    text = (note or t["progress_note"] or "").strip()
+    body = (f"{text}\n\n_(Doručila platforma: {a['name']} úkol uzavřel bez odpovědi v chatu; toto je jeho výsledek.)_"
+            if text else f"{a['name']} úkol uzavřel bez odpovědi a bez výsledku. Napiš mu prosím znovu, "
+                         "nebo se podívej do jeho úkolů.")
+    try:
+        chat._add_member(conn, link["channel"], a["id"])
+        out = chat.send(conn, Ctx(a["id"], via="system"), link["channel"], body[:chat.MAX_BODY],
+                        reply_to=link.get("message"), system=True)
+    except Exception:  # noqa: BLE001
+        return None
+    audit.log(conn, Ctx(a["id"], via="system"), "chat_answer_from_result", "task", task_id, message=out["id"])
+    return out
+
+
+def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id: int, body: str,
+                     why: str | None = None) -> dict | None:
     """The owner wrote to a member that has no worker (a service such as the
     Deployer, or an agent whose worker is missing): the platform answers at once
     in the thread, in Czech and without a model, and hands the message to the
@@ -125,6 +159,8 @@ def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id:
     service = workers.is_service(target)
     what = (f"je služba platformy, ne agent ({workers.SERVICES.get(name, 'automatizace bez AI')})"
             if service else "nemá workera, který by mohl odpovědět")
+    if why:
+        what = f"teď neběží, protože {why}"
     author = actors.get(conn, ctx.actor_id)
     pm = actors.find_by_name(conn, "Project manager")
     if pm is None or pm["id"] == target["id"] or pm["archived_at"] or workers.reply_path(conn, pm) is None:
@@ -137,7 +173,7 @@ def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id:
         else:
             answer_ch, reply_to, where = ch, message_id, "tady ve vlákně"
         said = wrap_external(f"chat:{author['name']}", body, ref=f"message {message_id}")
-        kind = "is a platform service" if service else "has no worker"
+        kind = "is a platform service" if service else ("cannot run now" if why else "has no worker")
         how = f"chat_send(channel={answer_ch['id']}" + (f", reply_to={reply_to})" if reply_to else ")")
         task = tasks.create(conn, ctx, {
             "title": f"Chat: answer {author['name']} (za {name})",

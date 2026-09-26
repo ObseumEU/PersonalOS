@@ -522,6 +522,10 @@ def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None 
     if note:
         changes["progress_note"] = note
     out = update(conn, ctx, task_id, changes)
+    if row["topic"] == "chat":  # an answer task closed without an answer: the result goes into the thread
+        from . import availability
+
+        availability.answer_if_silent(conn, ctx, task_id, note)
     if out["status"] == "done":
         from .agents import retire_if_done
 
