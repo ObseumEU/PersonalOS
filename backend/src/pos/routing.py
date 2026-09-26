@@ -26,10 +26,20 @@ versioning.register("route", "routing_rules")
 
 SOURCES = ("gmail", "github", "discord", "calendar", "nexus", "web", "manual", "any")
 
+
+def dev_repos() -> list[str]:
+    """Repositories the Dev agent works on (its worktree has only these):
+    POS_DEV_REPOS, comma-separated `owner/name` as GitHub's full_name."""
+    raw = os.environ.get("POS_DEV_REPOS", "ObseumEU/PersonalOS")
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+DEV_RULES = ("GitHub issue labelled agent → Dev agent", "GitHub review request → Dev agent")
+
 DEFAULT_RULES = [
     # name, source, match, assignee, priority, topic
-    ("GitHub issue labelled agent → Dev agent", "github", {"kind": "issue", "label": "agent"}, "Dev agent", 2, "dev"),
-    ("GitHub review request → Dev agent", "github", {"kind": "review_requested"}, "Dev agent", 2, "dev"),
+    (DEV_RULES[0], "github", {"kind": "issue", "label": "agent"}, "Dev agent", 2, "dev"),
+    (DEV_RULES[1], "github", {"kind": "review_requested"}, "Dev agent", 2, "dev"),
     ("Invoice e-mail → payment task for Nexus", "gmail", {"text_regex": r"faktur|invoice|rechnung"}, "Nexus", 1, "finance"),
     ("New e-mail → Mail agent triage", "gmail", {}, "Mail agent", 3, "mail"),
     ("Discord mention or question → Community agent", "discord", {"kind": "mention"}, "Community agent", 3, "community"),
@@ -48,6 +58,8 @@ def seed_defaults(conn: sqlite3.Connection) -> None:
         return
     ctx = Ctx(actors.owner_id(conn), via="system")
     for i, (name, source, match, assignee, priority, topic) in enumerate(DEFAULT_RULES):
+        if name in DEV_RULES:
+            match = {**match, "repo": dev_repos()}
         create_rule(conn, ctx, {"name": name, "source": source, "match": match, "assignee": assignee,
                                 "priority": priority, "topic": topic, "position": i,
                                 "enabled": name not in OFF_BY_DEFAULT
@@ -72,6 +84,27 @@ def sync_nexus_rule(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def sync_dev_repos(conn: sqlite3.Connection) -> None:
+    """Give the default Dev agent rules the repo allowlist (POS_DEV_REPOS) when
+    they have none yet, unless a person changed the rule by hand."""
+    for name in DEV_RULES:
+        row = conn.execute("SELECT id, match FROM routing_rules WHERE name = ? AND archived_at IS NULL",
+                           (name,)).fetchone()
+        if row is None:
+            continue
+        match = json.loads(row["match"] or "{}")
+        actions = {h["action"] for h in versioning.history(conn, "route", row["id"])}
+        if "repo" in match or actions - {"create", "auto_nexus", "auto_repo"}:
+            continue
+        versioning.update(conn, Ctx(actors.owner_id(conn), via="system"), "route", row["id"],
+                          _validate({"match": {**match, "repo": dev_repos()}}), action="auto_repo")
+    conn.commit()
+
+
+def _repos(value) -> list[str]:
+    return [value] if isinstance(value, str) else [str(x) for x in (value or [])]
+
+
 def _rule_out(row) -> dict:
     return {**dict(row), "match": json.loads(row["match"] or "{}"), "enabled": bool(row["enabled"])}
 
@@ -89,6 +122,8 @@ def _validate(fields: dict) -> dict:
         m = out["match"] or {}
         if not isinstance(m, dict):
             raise tasks.Invalid("match must be an object")
+        if "repo" in m and not all(isinstance(x, str) and "/" in x for x in _repos(m["repo"])):
+            raise tasks.Invalid("match.repo must be owner/name or a list of them")
         if m.get("text_regex"):
             try:
                 re.compile(m["text_regex"])
@@ -137,6 +172,10 @@ def matches(rule: dict, event: dict) -> bool:
     labels = [str(x).lower() for x in (event.get("meta") or {}).get("labels", [])]
     if m.get("label") and m["label"].lower() not in labels:
         return False
+    if m.get("repo"):  # an allowlist: owner/name, one or several
+        repo = str((event.get("meta") or {}).get("repo") or "").lower()
+        if repo not in {r.lower() for r in _repos(m["repo"])}:
+            return False
     if m.get("from_contains") and m["from_contains"].lower() not in (event.get("author") or "").lower():
         return False
     if m.get("text_regex"):

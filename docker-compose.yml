@@ -19,6 +19,8 @@ services:
       POS_KNOWLAGE_URL: ${POS_KNOWLAGE_URL:-https://knowlage.obseum.cz}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       POS_WORKER_KEYS_DIR: /worker-keys
+      # GitHub repositories (owner/name, comma-separated) whose `agent` issues go to the Dev agent.
+      POS_DEV_REPOS: ${POS_DEV_REPOS:-ObseumEU/PersonalOS}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
       interval: 15s
