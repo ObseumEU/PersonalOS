@@ -309,12 +309,21 @@ def main() -> None:
                 break
             time.sleep(a.watch)
             continue
-        if a.promote_from:
-            res = promote_tick(Path(a.repo), reporter, source=a.promote_from, remote=kw["remote"], target=kw["branch"],
-                               test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"], health_url=kw["health_url"],
-                               source_remote=a.source_remote or None)
-        else:
-            res = tick(Path(a.repo), reporter, **kw)
+        try:
+            if a.promote_from:
+                res = promote_tick(Path(a.repo), reporter, source=a.promote_from, remote=kw["remote"],
+                                   target=kw["branch"], test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"],
+                                   health_url=kw["health_url"], source_remote=a.source_remote or None)
+            else:
+                res = tick(Path(a.repo), reporter, **kw)
+        except subprocess.CalledProcessError as e:
+            # e.g. no access to the remote yet (a missing deploy key): say so and try again, never crash-loop
+            err = (e.stderr or "").strip().splitlines()
+            print(f"git {' '.join(e.cmd[1:3])} failed: {err[-1] if err else e}", flush=True)
+            if a.once or not a.watch:
+                raise
+            time.sleep(max(a.watch, 300))
+            continue
         if res.status != "nothing":
             print(f"{res.old[:10]}..{res.new[:10]}: {res.status} {res.stage}", flush=True)
         if a.once or not a.watch:
