@@ -17,6 +17,28 @@ from pathlib import Path
 log = logging.getLogger("pos_worker")
 
 
+def tool_list(raw: str) -> list[str]:
+    """Split an allow-list on '|' when given (entries like "Bash(git commit:*)"
+    contain spaces), else on whitespace."""
+    parts = raw.split("|") if "|" in raw else raw.split()
+    return [p.strip() for p in parts if p.strip()]
+
+
+# Talking to colleagues is never narrowed away (standup answers, questions, handoffs).
+COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "heartbeat")
+
+
+def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:
+    """(shown, hidden) pos MCP tools: what the agent's permissions allow, narrowed
+    by WORKER_POS_TOOLS; the COMMS tools stay when permitted."""
+    permitted = list(me.get("pos_tools") or [])
+    raw = os.environ.get("WORKER_POS_TOOLS", "") if narrow is None else narrow
+    wanted = {t.removeprefix("mcp__pos__") for t in tool_list(raw)}
+    shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]
+    everything = set(me.get("all_pos_tools") or []) | set(permitted)
+    return shown, sorted(everything - set(shown))
+
+
 def tools_root(workdir: str) -> Path:
     return Path(os.environ.get("WORKER_TOOLS_DIR") or workdir)
 

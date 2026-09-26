@@ -17,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .client import Blocked, PosClient
-from .prompt import build_task_prompt, injection
+from .prompt import build_task_prompt, injection, stable_prompt
 from .tools import fetch as fetch_tools
 
 log = logging.getLogger("pos_worker")
@@ -105,9 +105,13 @@ class Worker:
         # The agent's tools (personal and shared); none if PersonalOS cannot say.
         me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir), "task_ref": ref,
               "feedback": self.client.feedback()}
+        claude = engine == "claude"
+        if claude:
+            me["stable_prompt"] = stable_prompt(me)
         session = self.new_session(engine, model, me)
-        # Claude takes the constitution as a system prompt; Codex gets it at the top of the prompt.
-        prompt = build_task_prompt(me, task, self.context, include_guardrails=engine != "claude")
+        # Claude takes the constitution and the stable part as its system prompt (cached
+        # across runs); Codex gets both at the top of the prompt.
+        prompt = build_task_prompt(me, task, self.context, include_guardrails=not claude, include_stable=not claude)
         self.context = []
         pending_fyi: list[dict] = []
         resumes = 0

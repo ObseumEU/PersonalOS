@@ -453,3 +453,33 @@ def test_claude_bash_goes_through_the_command_guard(setup, tmp_path):
     assert hooks["matcher"] == "Bash" and "pos_worker.command_hook" in hooks["hooks"][0]["command"]
     assert "--settings" in s._args(None, None, path)
     assert ClaudeSession(builtin_tools=["Read"])._settings_file() is None
+
+
+def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkeypatch):
+    from pathlib import Path
+
+    from pos_worker.prompt import build_task_prompt, stable_prompt
+
+    monkeypatch.setenv("WORKER_POS_TOOLS", "get_task report_progress complete_task request_approval create_task "
+                                           "handoff_task")
+    root = Path(__file__).resolve().parents[2]
+    me = {"name": "Dev agent", "instructions": (root / "agents/dev-agent/INSTRUCTIONS.md").read_text(encoding="utf-8"),
+          "pos_tools": ["get_task", "report_progress", "complete_task", "request_approval", "create_task",
+                        "handoff_task", "schedule_create", "check_inbox", "chat_send", "chat_read"],
+          "guardrails": "RULES", "feedback": [{"kind": "praise", "body": "quick"}]}
+    stable = stable_prompt(me)
+    # Its instructions say how to report, chat and hand off; it sees no schedule tool.
+    assert "schedule_create" not in stable and "team chat" not in stable and "you need not call" not in stable
+    assert "request_approval first" in stable and "definition_of_done" in stable
+    a = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [], include_guardrails=False, include_stable=False)
+    b = build_task_prompt({**me, "feedback": []}, {"ref": "T-002", "title": "Two"}, [], include_guardrails=False,
+                          include_stable=False)
+    assert "RULES" not in a and "# You are" not in a and a.startswith("# Your task T-001")
+    assert "praise" in a and "praise" not in b
+    assert stable_prompt({**me, "task_ref": "T-002", "feedback": []}) == stable  # byte-stable across runs
+    codex = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [])
+    assert codex.startswith("RULES\n\n---\n\n# You are Dev agent") and "# Your task T-001" in codex
+    # An agent without its own guidance keeps the generic lines it has tools for.
+    monkeypatch.delenv("WORKER_POS_TOOLS")
+    plain = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["chat_send", "schedule_create"]})
+    assert "team chat" in plain and "schedule_create" in plain and "handoff_task" not in plain

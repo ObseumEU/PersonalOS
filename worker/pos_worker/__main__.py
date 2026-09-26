@@ -40,6 +40,7 @@ from .client import PosClient
 from .codex import CodexSession
 from .loop import Worker
 from . import tools as tool_library
+from .tools import COMMS, pos_tools, tool_list  # noqa: F401 - COMMS and pos_tools are this module's API too
 
 
 def extra_config() -> list[str]:
@@ -51,28 +52,6 @@ def extra_config() -> list[str]:
     """
     raw = os.environ.get("WORKER_CODEX_CONFIG", "").replace("||", chr(10))
     return [line.strip() for line in raw.splitlines() if line.strip()]
-
-
-def tool_list(raw: str) -> list[str]:
-    """Split an allow-list on '|' when given (entries like "Bash(git commit:*)"
-    contain spaces), else on whitespace."""
-    parts = raw.split("|") if "|" in raw else raw.split()
-    return [p.strip() for p in parts if p.strip()]
-
-
-# Talking to colleagues is never narrowed away (standup answers, questions, handoffs).
-COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "heartbeat")
-
-
-def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:
-    """(shown, hidden) pos MCP tools: what the agent's permissions allow, narrowed
-    by WORKER_POS_TOOLS; the COMMS tools stay when permitted."""
-    permitted = list(me.get("pos_tools") or [])
-    raw = os.environ.get("WORKER_POS_TOOLS", "") if narrow is None else narrow
-    wanted = {t.removeprefix("mcp__pos__") for t in tool_list(raw)}
-    shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]
-    everything = set(me.get("all_pos_tools") or []) | set(permitted)
-    return shown, sorted(everything - set(shown))
 
 
 def claude_extra_mcp() -> dict:
@@ -139,7 +118,9 @@ def main() -> None:
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
                 workdir=workdir,
                 model=model,
-                system_prompt=me.get("guardrails", "") + (f"\n\n{skills}" if skills else ""),
+                # Byte-stable across runs (no task, no time), so the prompt cache reuses it.
+                system_prompt="\n\n".join(p for p in (me.get("guardrails", ""), me.get("stable_prompt", ""), skills)
+                                          if p),
                 # The agent reaches PersonalOS through the pos MCP server, as itself.
                 mcp_servers={"pos": {"type": "http", "url": mcp_url, "headers": {"Authorization": f"Bearer {key}"}},
                              **browser(me), **claude_extra_mcp(), **tool_library.claude_servers(tools)},
