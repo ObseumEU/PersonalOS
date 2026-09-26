@@ -40,8 +40,12 @@ export type Answer = {
 
 export const knowledgeApi = {
   graph: (docs = 3) => api<KGraph>(`/api/knowledge/graph?docs=${docs}`),
-  ask: (question: string, workspace?: string) =>
-    api<Answer>("/api/knowledge/ask", { method: "POST", body: JSON.stringify({ question, workspace }) }),
+  /** `effort`: knowlage's level 1–6 (or its name); none = 3 (Standard), right for a person's own question. */
+  ask: (question: string, workspace?: string, effort?: number | string) =>
+    api<Answer>("/api/knowledge/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, workspace, effort }),
+    }),
 };
 
 /** The knowledge graph, shared by every screen that shows it (fetched once per page load). */

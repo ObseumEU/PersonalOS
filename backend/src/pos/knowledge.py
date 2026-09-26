@@ -9,6 +9,10 @@ show that, instead of breaking.
 
 Settings: POS_KNOWLAGE_URL (default https://knowlage.obseum.cz),
 POS_KNOWLAGE_API_KEY when knowlage runs with KB_API_KEY.
+
+Effort (knowlage's levels 1–6, or their names): a person's explicit question
+keeps knowlage's default 3 (Standard); automatic lookups by agents use
+AGENT_LOOKUP_EFFORT (2, Rychle: one reranked search, seconds).
 """
 
 import json
@@ -20,6 +24,7 @@ from collections import Counter, defaultdict
 import httpx
 
 CACHE_S = 300
+AGENT_LOOKUP_EFFORT = 2  # knowlage "Rychle": what agents ask with unless they choose a level
 _cache: dict = {}
 _lock = threading.Lock()
 
@@ -185,10 +190,12 @@ def graph(*, docs_per_collection: int = 3, max_collections: int = 40, refresh: b
     return out
 
 
-def ask(question: str, workspace: str | None = None, timeout: float = 300) -> dict:
+def ask(question: str, workspace: str | None = None, timeout: float = 300, effort: int | str | None = None) -> dict:
     """Ask knowlage; it streams progress over SSE and ends with the answer
-    (markdown with [n] markers and verified citations)."""
-    body = {"question": question, **({"workspace": workspace} if workspace else {})}
+    (markdown with [n] markers and verified citations). `effort` is knowlage's
+    level 1–6 (or its name); None = knowlage's default, 3."""
+    body = {"question": question, **({"workspace": workspace} if workspace else {}),
+            **({"effort": effort} if effort not in (None, "") else {})}
     event, steps, thread = None, 0, None
     try:
         with httpx.stream("POST", base_url() + "/api/ask", json=body, headers=_headers(), timeout=timeout) as r:
@@ -210,7 +217,8 @@ def ask(question: str, workspace: str | None = None, timeout: float = 300) -> di
                         return {"ok": True, "thread_id": thread, "steps": steps, "url": public_url(),
                                 "answer": data.get("content", ""), "citations": data.get("citations", []),
                                 "verified": data.get("verified"), "problems": data.get("problems", []),
-                                "insufficient_evidence": data.get("insufficient_evidence", False)}
+                                "insufficient_evidence": data.get("insufficient_evidence", False),
+                                "effort": data.get("effort")}
                     elif event == "error":
                         return {"ok": False, "error": data.get("message", "error"), "limit": data.get("limit", False),
                                 "thread_id": thread}

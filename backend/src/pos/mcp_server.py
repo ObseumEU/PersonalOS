@@ -728,12 +728,16 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             return routing.list_rules(conn)
 
     @mcp.tool(description="Ask another agent over A2A (e.g. the Knowledge agent for research with citations) "
-                          "and wait up to wait_s seconds for the answer.")
-    def ask_agent(ctx: Context, name: str, question: str, wait_s: int = 60) -> dict:
+                          "and wait up to wait_s seconds for the answer. effort (Knowledge agent only): 1-6 or the "
+                          "name; default 2 'rychle' (one search, seconds) for lookups; 1 'blesk' for a quick fact; "
+                          "3 'standard' (minutes, full research and checks) when a person asked the question; "
+                          "4-6 only when explicitly asked for deep or exhaustive research (up to 45 min, use a "
+                          "task instead of waiting).")
+    def ask_agent(ctx: Context, name: str, question: str, wait_s: int = 60, effort: int | str | None = None) -> dict:
         from . import a2a
 
         with session(ctx, "ask_agent", name=name) as (conn, c):
-            return a2a.ask(conn, c, name, question, min(max(wait_s, 5), 300))
+            return a2a.ask(conn, c, name, question, min(max(wait_s, 5), 300), effort=effort)
 
     @mcp.tool(description="Kill switch: freeze every agent now (owner and people only). Unfreezing is "
                           "only possible for the owner, in the web app or with `python -m pos unfreeze`.")

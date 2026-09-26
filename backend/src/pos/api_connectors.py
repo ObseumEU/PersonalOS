@@ -295,6 +295,7 @@ def system_subsystems(conn=Depends(get_db)):
 class AskIn(BaseModel):
     question: str
     workspace: str | None = None
+    effort: int | str | None = None  # knowlage level 1–6 or its name; none = 3 (a person's question)
 
 
 @router.post("/knowledge/ask")
@@ -302,7 +303,7 @@ def knowledge_ask(body: AskIn):
     """Ask knowlage; the answer carries verified citations."""
     if not body.question.strip():
         raise HTTPException(422, "empty question")
-    return knowledge.ask(body.question.strip(), body.workspace)
+    return knowledge.ask(body.question.strip(), body.workspace, effort=body.effort)
 
 
 class FeedbackIn(BaseModel):

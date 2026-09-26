@@ -60,3 +60,68 @@ def test_one_pile_sizes_with_workspaces_as_labels():
     kinds = {(e["source"], e["target"]): e["type"] for e in g["edges"]}
     assert kinds[("ws:hormozi", "col:firma:AlexHormozi")] == "label"
     assert kinds[("ws:firma", "src:files")] == "contains"
+
+
+class _Stream:
+    """httpx.stream stand-in: records the request, answers with knowlage's SSE."""
+
+    def __init__(self, calls, effort_level):
+        self.calls, self.level = calls, effort_level
+
+    def __call__(self, method, url, json=None, headers=None, timeout=None):
+        self.calls.append(json)
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    status_code = 200
+    headers = {}
+
+    def iter_lines(self):
+        import json as _json
+
+        yield "event: thread"
+        yield 'data: {"thread": {"id": "t1"}}'
+        yield "event: answer"
+        yield "data: " + _json.dumps({"content": "ok", "verified": True, "effort": {"level": self.level}})
+
+
+def test_ask_passes_the_effort_level_and_returns_its_metadata(monkeypatch):
+    calls = []
+    monkeypatch.setattr(knowledge.httpx, "stream", _Stream(calls, 1))
+    out = knowledge.ask("Co s cenou?", effort="blesk")
+    assert calls[-1] == {"question": "Co s cenou?", "effort": "blesk"} and out["effort"] == {"level": 1}
+    knowledge.ask("Co s cenou?")  # a person's question: knowlage's default (3)
+    assert "effort" not in calls[-1]
+
+
+def test_agents_ask_the_knowledge_agent_cheaply(monkeypatch, tmp_path):
+    from pos import a2a, actors
+    from pos.core import Ctx
+    from pos.db import connect, migrate
+
+    sent = []
+
+    class Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def send(self, text, context_id=None, metadata=None):
+            sent.append(metadata)
+            return {"message": {"parts": [{"text": "answer"}]}}
+
+    conn = connect(tmp_path / "pos.db")
+    migrate(conn)
+    actors.ensure_builtin(conn)
+    conn.execute("UPDATE actors SET a2a_url = ? WHERE name = ?", ("http://kb/a2a", "Knowledge agent"))
+    conn.commit()
+    monkeypatch.setattr(a2a, "A2AClient", Client)
+    me = Ctx(actors.owner_id(conn))
+    assert a2a.ask(conn, me, "Knowledge agent", "Q?")["answer"] == "answer"
+    a2a.ask(conn, me, "Knowledge agent", "Q?", effort=4)
+    assert sent == [{"effort": 2}, {"effort": 4}]
+    conn.close()

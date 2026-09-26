@@ -304,15 +304,25 @@ def configure_builtin(conn: sqlite3.Connection) -> None:
 
 
 def ask(conn: sqlite3.Connection, ctx: Ctx, member_name: str, question: str, wait_s: int = 60,
-        http: httpx.Client | None = None) -> dict:
-    """Ask a remote member directly and wait a little for the answer (MCP ask_agent)."""
+        http: httpx.Client | None = None, effort: int | str | None = None) -> dict:
+    """Ask a remote member directly and wait a little for the answer (MCP ask_agent).
+
+    The Knowledge agent (knowlage) gets an effort level in `metadata.effort`:
+    `effort` when given, else 2 (Rychle): an agent's lookup should cost
+    seconds, not the minutes of a full research run."""
     import time
+
+    from .knowledge import AGENT_LOOKUP_EFFORT
 
     m = actors.find_by_name(conn, member_name)
     if m is None or not m["a2a_url"]:
         raise NotFound(f"{member_name} is not reachable over A2A")
     client = A2AClient(m["a2a_url"], _key_for(dict(m)), http)
-    res = client.send(question)
+    knowledge_agent = m["name"] == "Knowledge agent" or (
+        os.environ.get("POS_KNOWLAGE_A2A_URL") and m["a2a_url"] == os.environ.get("POS_KNOWLAGE_A2A_URL"))
+    if effort in (None, "") and knowledge_agent:
+        effort = AGENT_LOOKUP_EFFORT
+    res = client.send(question, metadata={"effort": effort} if effort not in (None, "") else None)
     audit.log(conn, ctx, "a2a_ask", "actor", m["id"])
     conn.commit()
     if res.get("message"):
