@@ -324,10 +324,13 @@ def _resolved(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: s
         return out
     t = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
     mctx = Ctx(mid or ctx.actor_id, via="sentinel")
-    comments.log(conn, mctx, row["task_id"], "The sentinel reports the incident **resolved** (quiet since).", "system")
+    grafana = event.get("source") == "grafana"
+    who = "Grafana reports the alert" if grafana else "The sentinel reports the incident"
+    comments.log(conn, mctx, row["task_id"], f"{who} **resolved** (quiet since).", "system")
     if t and t["status"] == "next" and _runs_on(conn, row["task_id"]) == 0 and mid:
-        tasks.complete(conn, mctx, row["task_id"], "### Result\nResolved by itself before triage (the sentinel saw it "
-                                                   "go quiet). **Class:** transient. No model run.")
+        seen = "Grafana resolved the alert" if grafana else "the sentinel saw it go quiet"
+        tasks.complete(conn, mctx, row["task_id"], f"### Result\nResolved by itself before triage ({seen}). "
+                                                   "**Class:** transient. No model run.")
         conn.execute("UPDATE sentinel_incidents SET status = 'closed', classification = 'transient', closed_at = ?, "
                      "summary = 'resolved before triage' WHERE id = ?", (now_iso(), row["id"]))
         out["closed_without_run"] = True
