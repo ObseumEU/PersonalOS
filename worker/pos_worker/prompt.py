@@ -49,9 +49,14 @@ HOW_TO_WORK = [
      "Keep it short; it is rate limited.", "chat_send", "chat_send"),
     ("- Anything that leaves PersonalOS (e-mail, posts, payments, merges) needs request_approval first.",
      None, "request_approval"),
-    ("- Need something from the owner (a decision, confirmation, input or approval)? ask_owner: one call "
-     "opens the owner's ticket and pings them in #team. Do not create owner tasks or chat pings by hand. "
-     "Blocking asks park your task until the answer arrives in your inbox; then end the run.",
+    ("- Chain of command: report to your lead, not the owner. Only the top of the chain (the CEO, or the "
+     "Project manager while there is no CEO) contacts the owner; nobody else DMs him, @mentions him or opens "
+     "tickets for him, unless your instructions name a narrow exception. Replying to the owner when he wrote "
+     "to you is always fine. Before contacting the owner, ask: can my lead decide this? If yes, ask the lead "
+     "(chat_send to=<lead>, or a task / handoff_task); org_chart shows who your lead is.", None, None),
+    ("- ask_owner (one call: the owner's ticket plus a ping in #team) is for the top of the chain and the "
+     "exceptions your instructions name; everyone else asks their lead. Do not create owner tasks or chat "
+     "pings by hand. Blocking asks park your task until the answer arrives in your inbox; then end the run.",
      "ask_owner", None),
     ("- Secrets: never ask for, print or store a password or token. Use a credential by name "
      "({{cred:<name>}} in run_with_credentials or credential_http); credentials_list shows yours, "
@@ -67,7 +72,7 @@ HOW_TO_WORK = [
      "plus definition_of_done. A bare title is not enough for whoever picks it up.", "create_task", None),
     ("- Not yours? handoff_task it to the right member (org_chart) with a note; ask peers or the Project "
      "manager in chat (chat_send to=<name>).", "handoff_task", "handoff_task"),
-    ("- When you are done, finish with a short summary of what you did and what the owner should check.",
+    ("- When you are done, finish with a short summary of what you did and what your reviewer should check.",
      None, "complete_task"),
 ]
 
