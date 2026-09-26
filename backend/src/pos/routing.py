@@ -24,7 +24,7 @@ from .core import Ctx, NotFound, now_iso
 
 versioning.register("route", "routing_rules")
 
-SOURCES = ("gmail", "github", "discord", "calendar", "nexus", "web", "manual", "any")
+SOURCES = ("gmail", "github", "discord", "calendar", "nexus", "web", "manual", "sentinel", "any")
 
 
 def dev_repos() -> list[str]:
@@ -204,6 +204,12 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
                            (source, ref)).fetchone()
         if dup:
             return _reroute(conn, ctx, dup, event)
+    if source == "sentinel":  # the sentinel's incidents: escalations, resolutions and the budget caps (pos.monitor)
+        from . import monitor
+
+        handled = monitor.before_route(conn, ctx, event)
+        if handled is not None:
+            return handled
     if source == "github" and event.get("kind") == "comment" and ref and "/c" in ref:
         answered = _comment_on_parked(conn, ctx, event, title)
         if answered:
@@ -229,6 +235,10 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
     purpose = (f"Purpose: an incoming {source}{kind} item that may need action. Decide: reply, a task for "
                f"someone, or nothing.\nSource: {source}"
                + (f", routed by the rule “{rule['name']}”." if rule else ", no routing rule matched (inbox)."))
+    if source == "sentinel":
+        from . import monitor
+
+        purpose = monitor.purpose(event)
     notes = "\n\n".join(x for x in (
         purpose,
         f"From {event['author']}" if event.get("author") else "",
@@ -252,6 +262,10 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
         conn.execute("UPDATE routing_rules SET hits = hits + 1 WHERE id = ?", (rule["id"],))
     audit.log(conn, ctx, "event", "task", task["id"], source=source, rule=rule["name"] if rule else None,
               suspicious=signals or None)
+    if source == "sentinel":
+        from . import monitor
+
+        monitor.after_route(conn, ctx, event, task)
     return {"event_id": cur.lastrowid, "task_id": task["id"], "task_ref": task["ref"],
             "rule": rule["name"] if rule else None, "assignee": task["assignee_name"], "suspicious": signals}
 

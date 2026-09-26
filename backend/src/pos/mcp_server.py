@@ -103,6 +103,8 @@ TOOL_PERMISSIONS = {
     # Files, notes and topics: reading needs tasks:read, writing notes tasks:write.
     "search": "tasks:read", "file_get": "tasks:read", "topic_get": "tasks:read",
     "note_create": "tasks:write", "note_update": "tasks:write",
+    # The sentinel's incidents (pos.monitor): the Monitor agent's narrow log read and its verdict.
+    "incident_logs": "ops:monitor", "incident_close": "ops:monitor",
     # Access (pos.access): request_access and my_access are for everyone; deciding is the Access manager's.
     **{t: "access:manage" for t in ("access_review_requests", "access_decide", "access_grant", "access_revoke",
                                      "access_set_budget", "access_usage", "access_audit", "access_resume_agent",

@@ -88,6 +88,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from .access import service as access
 
             access.seed(conn)  # their permissions as grants too
+            from . import monitor
+
+            monitor.ensure(conn)  # the Monitor agent's routing rule and budget (the sentinel's incidents)
             if os.environ.get("POS_WORKER_KEYS_DIR"):
                 agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
         finally:
@@ -133,6 +136,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_connectors.router)
     app.include_router(api_connectors.hooks)
     app.include_router(api_connectors.machine)
+    app.include_router(api_connectors.sentinel)
     app.include_router(a2a.router)
     app.include_router(api_deploys.router)
     app.include_router(api_tools.router)

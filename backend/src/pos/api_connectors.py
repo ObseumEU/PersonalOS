@@ -42,6 +42,8 @@ class EventIn(BaseModel):
     author: str | None = None
     labels: list[str] = []
     headers: dict[str, str] | list[dict] | None = None
+    # Structured facts from a machine sender (the sentinel's incident: id, service, kind, severity, count).
+    data: dict | None = None
 
 
 def event_tokens() -> dict[str, str]:
@@ -51,6 +53,9 @@ def event_tokens() -> dict[str, str]:
         name, _, token = item.strip().partition(":")
         if name and len(token) >= 16:
             out[token] = name
+    sentinel_token = os.environ.get("POS_SENTINEL_TOKEN", "").strip()
+    if len(sentinel_token) >= 16:  # the sentinel (ops/sentinel) shares one token both ways
+        out[sentinel_token] = "sentinel"
     return out
 
 
@@ -125,6 +130,9 @@ def post_event(body: EventIn, conn=Depends(get_db), ctx=Depends(get_ctx), sender
     headers = data.pop("headers")
     if headers:
         meta["headers"] = headers
+    extra = data.pop("data")
+    if extra:
+        meta["data"] = extra
     if sender:
         meta["sender"] = sender
     data["meta"] = meta
@@ -304,3 +312,37 @@ def resolve_feedback(feedback_id: int, body: ResolveIn, conn=Depends(get_db), ct
 def a2a_links(conn=Depends(get_db)):
     members = [{"id": m["id"], "name": m["name"], "a2a_url": m["a2a_url"]} for m in a2a.remote_members(conn).values()]
     return {"members": members, "links": a2a.links(conn)}
+
+
+# ------------------------------------------------------------------ the sentinel (pos.monitor, docs/SENTINEL.md)
+
+sentinel = APIRouter(prefix="/api/sentinel", tags=["sentinel"])
+
+
+def sentinel_only(sender=Depends(event_sender)) -> str:
+    if sender != "sentinel":
+        raise HTTPException(403, "only the sentinel's token")
+    return sender
+
+
+@sentinel.post("/heartbeat")
+def sentinel_heartbeat(body: dict, conn=Depends(get_db), _=Depends(sentinel_only)):
+    from . import monitor
+
+    return monitor.heartbeat(conn, body)
+
+
+@sentinel.get("/stats")
+def sentinel_stats(conn=Depends(get_db), _=Depends(sentinel_only)):
+    """PersonalOS's own runs in the last hour (the sentinel's run-failure rule)."""
+    from . import monitor
+
+    return monitor.run_stats(conn)
+
+
+@router.get("/sentinel/status")
+def sentinel_status(conn=Depends(get_db)):
+    """The last heartbeat (checks, open incidents, host numbers) and the recent incidents."""
+    from . import monitor
+
+    return monitor.status(conn)

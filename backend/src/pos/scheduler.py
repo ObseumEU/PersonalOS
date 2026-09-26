@@ -256,7 +256,21 @@ def weekly_meeting_timeouts(conn: sqlite3.Connection) -> dict:
     return weekly.meeting_timeouts(conn)
 
 
+def sentinel_watch(conn: sqlite3.Connection) -> dict:
+    from . import monitor
+
+    return monitor.watch(conn)
+
+
+def sentinel_digest(conn: sqlite3.Connection) -> dict:
+    from . import monitor
+
+    return monitor.digest(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "sentinel_watch": sentinel_watch,
+    "sentinel_digest": sentinel_digest,
     "access_expire": access_expire,
     "access_watch": access_watch,
     "access_digest": access_digest,
@@ -299,6 +313,9 @@ DEFAULT_JOBS = [
     ("Weekly company report and meeting (Asistent vedení)",
      os.environ.get("POS_WEEKLY_REPORT_SCHEDULE") or "weekly fri 14:00", "weekly_report"),
     ("Weekly meeting: close it after 24 h without an answer", "every 30m", "weekly_meeting_timeouts"),
+    # The sentinel (pos.monitor): its heartbeat must not stop; a daily health digest (quiet days: nothing).
+    ("Sentinel: alert when its heartbeat stops", "every 2m", "sentinel_watch"),
+    ("Sentinel: daily health digest in #team", "daily 08:00", "sentinel_digest"),
 ]
 
 
@@ -360,9 +377,10 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
     if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "knowlage_files", "access_expire",
-                             "access_watch") or result.get("sent") \
+                             "access_watch", "sentinel_watch", "sentinel_digest") or result.get("sent") \
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
-            or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts"):
+            or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
+            or result.get("alerted"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result

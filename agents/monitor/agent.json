@@ -1,0 +1,24 @@
+{
+  "name": "Monitor",
+  "display_name": "Hlídač",
+  "purpose": "Hlídač: třídí incidenty ze sentinelu (přechodné, konfigurace, kapacita, chyba v kódu, kvóta) a předá je Dev agentovi nebo majiteli; hlídá zdraví PersonalOS, knowlage, Nexu, LiteLLM a Langfuse.",
+  "role": "monitor",
+  "team": "operations",
+  "reports_to": "Project manager",
+  "permissions": [
+    "tasks:read",
+    "tasks:claim",
+    "tasks:write",
+    "messages:send",
+    "approvals:request",
+    "ops:monitor"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "monitor",
+  "engine": "claude",
+  "model": "claude-haiku-4-5",
+  "effort": "low",
+  "note": "Haiku at low effort with a small budget (pos.monitor.BUDGET); a code-level diagnosis goes to the Dev agent (Opus), never done here. Per-incident and per-day run caps are enforced in code; above them the owner gets the incident as text."
+}

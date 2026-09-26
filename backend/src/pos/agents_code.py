@@ -83,6 +83,10 @@ def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None
                 continue
             row = actors.get(conn, made["agent"]["id"])
             created.append(s["name"])
+            if s.get("engine") or s.get("model"):  # its runtime from the file, once (then the owner's)
+                versioning.update(conn, owner, "actor", row["id"], {"engine": s.get("engine"), "model": s.get("model")},
+                                  action="agents_as_code")
+                row = actors.get(conn, row["id"])
         sets = {}
         if not row["role"] and s.get("role"):
             sets["role"] = s["role"]

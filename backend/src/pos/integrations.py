@@ -128,6 +128,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import weekly
 
     weekly.register_mcp(mcp, session)  # the weekly report, the meeting and goals (Asistent vedení)
+    from . import monitor
+
+    monitor.register_mcp(mcp, session)  # the Monitor agent: incident_logs, incident_close
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:
