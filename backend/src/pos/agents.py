@@ -94,7 +94,11 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
 
 
 def _slug(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "agent"
+    # Accents fold to their letters ("Asistent vedení" -> asistent-vedeni), so a Czech name keeps its folder.
+    import unicodedata
+
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-") or "agent"
 
 
 def repo_instructions(name: str) -> Path | None:

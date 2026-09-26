@@ -11,6 +11,7 @@ Times are Europe/Prague.
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from collections.abc import Callable
@@ -219,7 +220,21 @@ def knowlage_files(conn: sqlite3.Connection) -> dict:
     return kb_files.sync_pending(conn)
 
 
+def weekly_report(conn: sqlite3.Connection) -> dict:
+    from . import weekly
+
+    return weekly.weekly_job(conn)
+
+
+def weekly_meeting_timeouts(conn: sqlite3.Connection) -> dict:
+    from . import weekly
+
+    return weekly.meeting_timeouts(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "weekly_report": weekly_report,
+    "weekly_meeting_timeouts": weekly_meeting_timeouts,
     "knowlage_files": knowlage_files,
     "feedback_digest": feedback_digest,
     "probation_review": probation_review,
@@ -247,6 +262,10 @@ DEFAULT_JOBS = [
     ("Push files into knowlage (retry what failed)", "every 15m", "knowlage_files"),
     ("Repeated critique of an agent → the Agent coach", "daily 06:30", "feedback_digest"),
     ("Probation ended → the lead decides", "daily 07:15", "probation_review"),
+    # The Chief of Staff's weekly report and meeting (pos.weekly); the time is editable on Automations.
+    ("Weekly company report and meeting (Asistent vedení)",
+     os.environ.get("POS_WEEKLY_REPORT_SCHEDULE") or "weekly fri 14:00", "weekly_report"),
+    ("Weekly meeting: close it after 24 h without an answer", "every 30m", "weekly_meeting_timeouts"),
 ]
 
 

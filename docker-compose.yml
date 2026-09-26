@@ -205,6 +205,32 @@ services:
       - ./data/worker-keys/project-manager:/run/pos-key:ro
     restart: unless-stopped
 
+  # Asistent vedení (Chief of Staff): the weekly report and the Friday meeting with the owner in #weekly
+  # (agents/asistent-vedeni/INSTRUCTIONS.md, pos.weekly). pos tools only; the numbers come from the core.
+  asistent-vedeni:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${COS_AGENT_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      WORKER_CODEX_CONFIG: 'model_reasoning_effort="medium"'
+      WORKER_POS_TOOLS: 'weekly_packet report_publish meeting_status meeting_reply meeting_close goal_list goal_upsert goal_link create_task get_task org_chart complete_task report_progress'
+      WORKER_CLAUDE_TOOLS: ' '
+      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit WebSearch WebFetch'
+      WORKER_CLAUDE_EFFORT: medium
+      # The report run is the big one (one narrative from the packet); meeting turns are short.
+      WORKER_CLAUDE_MAX_USD: "3"
+      WORKER_MAX_STEPS: "30"
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - asistent-vedeni-work:/work
+      - ./data/worker-keys/asistent-vedeni:/run/pos-key:ro
+    restart: unless-stopped
+
 volumes:
   pos-data:
   agent-coach-work:
@@ -213,4 +239,5 @@ volumes:
   mail-agent-work:
   community-agent-work:
   project-manager-work:
+  asistent-vedeni-work:
 

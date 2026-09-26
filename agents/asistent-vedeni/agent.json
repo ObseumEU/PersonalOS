@@ -1,0 +1,19 @@
+{
+  "name": "Asistent vedení",
+  "title_en": "Chief of Staff",
+  "role": "chief_of_staff",
+  "team": "leadership",
+  "reports_to": "Owner",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "asistent-vedeni",
+  "note": "Weekly company report and a short meeting with the owner in #weekly (pos.weekly). The job weekly_report gives it one task a week."
+}

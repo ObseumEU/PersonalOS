@@ -130,6 +130,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(a2a.router)
     app.include_router(api_deploys.router)
     app.include_router(api_tools.router)
+    from . import api_reports
+
+    app.include_router(api_reports.router)  # weekly reports and goals (pos.weekly, pos.goals)
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
 

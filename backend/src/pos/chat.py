@@ -366,6 +366,10 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     if not system and author["kind"] == "human" and priority != "stop":
         for aid in targets:
             _ask_to_answer(conn, ctx, ch, aid, mid, body)
+        if ch["kind"] == "group" and (ch["name"] or "").lower() == "weekly":
+            from . import weekly
+
+            weekly.on_owner_message(conn, ctx, ch, mid)  # the weekly meeting's task comes back to its agent
 
     if priority == "stop":
         for aid in targets:
