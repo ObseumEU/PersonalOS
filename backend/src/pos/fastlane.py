@@ -87,7 +87,15 @@ def snapshot(conn: sqlite3.Connection, actor_id: int, run: sqlite3.Row | None = 
     from . import tasks
 
     run = run or live_run(conn, actor_id)
-    out: dict = {"agent": actors.get(conn, actor_id)["name"], "busy": run is not None}
+    me = actors.get(conn, actor_id)
+    out: dict = {"agent": me["name"], "busy": run is not None}
+    # Who it is in the company, so a fast answer about itself is right (docs/REORG.md).
+    lead = None
+    if "reports_to" in me.keys() and me["reports_to"]:
+        lead = conn.execute("SELECT name FROM actors WHERE id = ?", (me["reports_to"],)).fetchone()
+    out["who"] = ", ".join(x for x in (f"role {me['role']}" if me["role"] else "",
+                                       f"tým {me['team']}" if me["team"] else "",
+                                       f"vedoucí {lead['name']}" if lead else "") if x)
     if run is None:
         return out
     out.update(run_id=run["id"], minutes=_minutes_since(run["started_at"]), **steps_of(run["id"]))
@@ -141,6 +149,7 @@ def _prompt(snap: dict, author: str, body: str) -> str:
         "to a že odpoví hlavní běh. Žádné nástroje, žádný úvod ani podpis.",
         "",
         "# Snímek práce",
+        f"- kdo jsem: {snap['agent']}" + (f" ({snap['who']})" if snap.get("who") else ""),
         f"- úkol: {t.get('ref', '-')} {t.get('title', '')}".rstrip(),
         f"- běží: {snap.get('minutes', 0)} min, hotových kroků: {snap.get('count', 0)}",
         f"- plán / poslední poznámka: {t.get('plan') or '-'}",
