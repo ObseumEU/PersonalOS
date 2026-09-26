@@ -12,6 +12,7 @@ import {
   FolderOpen,
   FolderKanban,
   Hash,
+  KeyRound,
   type LucideIcon,
   MessagesSquare,
   Orbit,
@@ -76,5 +77,6 @@ export const SECTIONS: Section[] = [
   { path: "automations", label: "Automations", icon: Workflow, phase: 5, blurb: "", features: [] },
   { path: "tools", label: "Tools", icon: Wrench, phase: 5, blurb: "", features: [] },
   { path: "connectors", label: "Connectors", icon: Plug, phase: 4, blurb: "", features: [] },
+  { path: "credentials", label: "Přístupy", icon: KeyRound, phase: 5, blurb: "", features: [] },
   { path: "system", label: "System", icon: Box, phase: 5, blurb: "", features: [] },
 ];

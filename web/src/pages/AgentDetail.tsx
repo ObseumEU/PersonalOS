@@ -5,6 +5,7 @@ import { api } from "../api";
 import { type AgentDetail as Detail, agentsApi, type Org } from "../agentsApi";
 import { markdownSnippet } from "../markdownText";
 import { AccessPanel, CompanyAccessPanel } from "../components/agents/AccessPanel";
+import { AgentCredentialsPanel } from "./Credentials";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { FeedbackPanel, InstructionsEditor } from "../components/Feedback";
@@ -422,6 +423,7 @@ export default function AgentDetail() {
         </Panel>
       </div>
       {a.kind !== "human" && <AccessPanel agentId={a.id} />}
+      {a.kind !== "human" && <AgentCredentialsPanel agentId={a.id} />}
       {a.name === "Access manager" && <CompanyAccessPanel />}
       <OrgPanel a={a} onSaved={act} />
       <FeedbackPanel member={{ id: a.id, name: a.name }} />

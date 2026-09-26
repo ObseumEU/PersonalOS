@@ -9,6 +9,7 @@ import Automations from "./pages/Automations";
 import Calendar from "./pages/Calendar";
 import Chat from "./pages/Chat";
 import Connectors from "./pages/Connectors";
+import Credentials from "./pages/Credentials";
 import Files from "./pages/Files";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="/board" element={<Navigate to="/team?tab=work" replace />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/connectors" element={<Connectors />} />
+        <Route path="/credentials" element={<Credentials />} />
         <Route path="/automations" element={<Automations />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/assistant" element={<AssistantChat />} />
