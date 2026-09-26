@@ -1,17 +1,30 @@
 {
   "name": "HR agent",
+  "display_name": "HR",
+  "purpose": "HR: drží tým malý a funkční: přehled agentů a jejich výkonu, žádosti o nové kolegy (hire_request) v limitech, návrhy na sloučení nebo archivaci, instrukce agentů; odpovídá majiteli v chatu.",
   "role": "hr",
   "team": "operations",
   "reports_to": "Owner",
   "permissions": [
     "tasks:read",
+    "tasks:claim",
     "tasks:write",
+    "messages:send",
     "approvals:request",
     "hr:read"
   ],
   "budget_class": "system",
   "lifetime": "long_lived",
-  "runtime": "builtin",
-  "worker": "none",
-  "note": "Runs inside the core (pos.hr)."
+  "runtime": "codex_worker",
+  "worker": "hr-agent",
+  "engine": "claude",
+  "model": "claude-haiku-4-5",
+  "effort": "low",
+  "budget": {
+    "usd_day": 1.0,
+    "usd_month": 15.0,
+    "usd_run": 0.3,
+    "runs_day": 30
+  },
+  "note": "The daily review, the limits and the weekly report stay code (pos.hr, in the core); the worker (Haiku, low effort, small budget) answers people in chat and does HR's tasks: hire requests, instruction proposals, merge and archive proposals."
 }

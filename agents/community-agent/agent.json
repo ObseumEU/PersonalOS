@@ -14,6 +14,5 @@
   "lifetime": "long_lived",
   "runtime": "codex_worker",
   "worker": "community-agent",
-  "enabled": false,
-  "note": "Off until a Discord MCP server is connected (REVIZE-FUNKCI #33)."
+  "note": "Runs in its own worker (every agent has one). Discord tools come once a Discord MCP server is connected (REVIZE-FUNKCI #33); until then it answers in chat and does tasks with the pos tools."
 }

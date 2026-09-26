@@ -44,7 +44,7 @@ BUILTIN_PERMISSIONS = {
                             "messages:send"],
     "Knowledge agent": ["tasks:read", "tasks:claim", "approvals:request"],
     "Nexus": ["tasks:read", "tasks:write", "tasks:claim", "approvals:request"],
-    "HR agent": ["tasks:read", "tasks:write", "approvals:request", "hr:read"],
+    "HR agent": ["tasks:read", "tasks:claim", "tasks:write", "messages:send", "approvals:request", "hr:read"],
     "Deployer": ["tasks:read", "tasks:write"],
     "Project manager": ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
 }
@@ -96,7 +96,9 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
     # for the role agents, so they can answer the standup and colleagues in chat.
     for name, perm in (("HR agent", "hr:read"), ("Dev agent", "messages:send"), ("Agent coach", "messages:send"),
                        ("Project manager", "tasks:review"), ("HR agent", "routes:write"),
-                       ("Agent coach", "routes:write"), ("Project manager", "routes:write")):
+                       ("Agent coach", "routes:write"), ("Project manager", "routes:write"),
+                       # the HR agent runs in its own worker (2026-09-26): it claims its tasks, answers in chat
+                       ("HR agent", "tasks:claim"), ("HR agent", "messages:send")):
         row = conn.execute("SELECT id, permissions FROM actors WHERE name = ?", (name,)).fetchone()
         if row and perm not in json.loads(row["permissions"] or "[]"):
             conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",
@@ -180,6 +182,13 @@ def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str,
         raise AgentError(f"an actor called {name} already exists")
     if expires_at:
         datetime.fromisoformat(expires_at)
+    # Every agent has a worker (pos.workers): its own container from agents/*/agent.json, the agent
+    # pool (provisioned below), or a remote app over A2A. Anything else is a service, not an agent.
+    if runtime not in ("codex_worker", "a2a"):
+        raise AgentError("an agent needs a worker: runtime codex_worker (the worker is provisioned "
+                         "automatically in the agent pool) or a2a with its a2a_url")
+    if runtime == "a2a" and not (a2a_url or "").strip():
+        raise AgentError("an A2A agent needs its a2a_url (the remote app is its worker)")
     requested = sorted(set(permissions if permissions is not None else DEFAULT_AGENT_PERMISSIONS))
     unknown = set(requested) - set(PERMISSIONS)
     if unknown:
@@ -238,6 +247,12 @@ def _insert_agent(conn: sqlite3.Connection, ctx: Ctx, creator: sqlite3.Row, deci
         archive_no_commit(conn, hr._hr_ctx(conn, ctx.via), decision["replace_id"],
                           f"HR: místo pro {name}: {decision.get('reason') or ''}".strip(), action="hr_archive_agent")
     conn.commit()
+    from . import workers
+
+    pool = workers.provision(conn, row["id"])  # its worker: a key in the agent pool (none without POS_WORKER_KEYS_DIR)
+    if pool:
+        audit.log(conn, ctx, "worker_provisioned", "actor", row["id"], worker=pool)
+        conn.commit()
     return {"created": True, "agent": detail(conn, row["id"]), "api_key": key}
 
 

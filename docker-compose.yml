@@ -193,8 +193,10 @@ services:
       - ./data/worker-keys/mail-agent:/run/pos-key:ro
     restart: unless-stopped
 
+  # Every agent has a worker (pos.workers). Its Discord tools come once a Discord MCP server is
+  # connected (COMMUNITY_AGENT_CODEX_CONFIG); until then it answers in chat and works with pos tools.
   community-agent:
-    profiles: ["community"]  # off until a Discord MCP server is connected
+    profiles: ["agents"]
     build: ./worker
     depends_on:
       api:
@@ -257,6 +259,57 @@ services:
       - ./data/worker-keys/asistent-vedeni:/run/pos-key:ro
     restart: unless-stopped
 
+  # The HR agent (agents/hr-agent/INSTRUCTIONS.md, pos.hr): the review, limits and reports stay code in the
+  # core; this worker answers people in chat and does HR's tasks (hire requests, instruction proposals).
+  # pos tools only, Claude Haiku at low effort, a small cap per run.
+  hr-agent:
+    profiles: ["agents"]
+    build: ./worker
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POS_URL: http://api:8000
+      POS_AGENT_KEY: ${HR_AGENT_KEY:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
+      WORKER_POS_TOOLS: 'hr_overview hr_review hr_admit_agent hr_weekly_report hire_request hire_list hire_decide propose_instructions org_chart get_agent_status list_tasks get_task create_task update_task task_comment handoff_task ask_owner send_message report_progress complete_task'
+      WORKER_CLAUDE_TOOLS: ' '
+      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
+      WORKER_CLAUDE_EFFORT: low
+      WORKER_CLAUDE_MAX_USD: "0.3"
+      WORKER_MAX_STEPS: "20"
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - hr-agent-work:/work
+      - ./data/worker-keys/hr-agent:/run/pos-key:ro
+    restart: unless-stopped
+
+  # The agent pool (pos.workers, pos_worker.pool): one worker process for every agent without a worker
+  # container of its own (agents hired or created at runtime). The core writes each one's key into
+  # data/worker-keys/pool/<slug>/key when the agent is created; the pool starts it within seconds and
+  # stops it when the agent is archived or paused.
+  agent-pool:
+    profiles: ["agents"]
+    build: ./worker
+    command: ["python", "-m", "pos_worker.pool"]
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      POS_URL: http://api:8000
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      POOL_KEYS_DIR: /run/pos-keys
+      WORKER_CODEX_CONFIG: 'model_reasoning_effort="medium"'
+      WORKER_CLAUDE_EFFORT: medium
+      WORKER_CLAUDE_MAX_USD: "1"
+      WORKER_MAX_STEPS: "40"
+    volumes:
+      - ${CODEX_HOME_HOST:-./data/codex}:/codex
+      - agent-pool-work:/work
+      - ./data/worker-keys/pool:/run/pos-keys:ro
+    restart: unless-stopped
+
   # The Monitor agent (Hlídač) triages the sentinel's incidents (agents/monitor/INSTRUCTIONS.md, pos.monitor):
   # pos tools only, Claude Haiku at low effort, a small cap per run; code caps runs per incident and per day.
   monitor:
@@ -317,6 +370,8 @@ volumes:
   pos-data:
   sentinel-state:
   monitor-work:
+  hr-agent-work:
+  agent-pool-work:
   access-manager-work:
   agent-coach-work:
   assistant-work:

@@ -34,10 +34,16 @@ def test_role_agents_come_from_their_files_and_workers_get_keys(tmp_path, monkey
     assert actors.find_by_name(c, "Discord bot") is None  # disabled
     assert agents_code.ensure_from_repo(c, tmp_path, base)["created"] == []  # idempotent
     keys = tmp_path / "keys"
-    assert agents_code.write_worker_keys(c, keys, base) == ["writer"]
+    # the Project manager has no file here: it gets its worker in the agent pool (pos.workers)
+    assert agents_code.write_worker_keys(c, keys, base) == ["writer", "pool/project-manager"]
     key = (keys / "writer" / "key").read_text().strip()
     assert actors.actor_for_key(c, key) == w["id"]
     assert agents_code.write_worker_keys(c, keys, base) == []  # a valid key stays
+    pm_key = (keys / "pool" / "project-manager" / "key").read_text().strip()
+    assert actors.actor_for_key(c, pm_key) == org.pm_id(c)
+    c.execute("UPDATE actors SET paused_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (org.pm_id(c),))
+    agents_code.write_worker_keys(c, keys, base)
+    assert not (keys / "pool" / "project-manager").exists()  # paused: the pool stops its worker
     c.close()
 
 

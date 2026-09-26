@@ -173,6 +173,8 @@ def test_fast_lane_without_budget_or_llm_never_calls_the_model(db, tmp_path, mon
     monkeypatch.setattr(availability, "why_not", lambda conn, a: {"reason": "jeho rozpočet je vyčerpaný",
                                                                   "retry": "zítra", "until": None})
     monkeypatch.setattr(fastlane, "ask_model", lambda *a: pytest.fail("the model must not be called"))
+    # (the chat task's own automatic reply would answer first; here only the fast lane is under test)
+    monkeypatch.setattr(availability, "autoreply", lambda *a, **k: None)
     msg = chat.send_dm(db, owner, aid, "Jak to jde?")
     _age(db, msg["id"])
     out = fastlane.respond(db, aid, msg["id"])

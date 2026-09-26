@@ -268,6 +268,12 @@ def sentinel_digest(conn: sqlite3.Connection) -> dict:
     return monitor.digest(conn)
 
 
+def agents_watch(conn: sqlite3.Connection) -> dict:
+    from . import workers
+
+    return workers.watch(conn)
+
+
 def grafana_watch(conn: sqlite3.Connection) -> dict:
     from . import observability
 
@@ -275,6 +281,7 @@ def grafana_watch(conn: sqlite3.Connection) -> dict:
 
 
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "agents_watch": agents_watch,
     "grafana_watch": grafana_watch,
     "sentinel_watch": sentinel_watch,
     "sentinel_digest": sentinel_digest,
@@ -325,6 +332,9 @@ DEFAULT_JOBS = [
     ("Sentinel: daily health digest in #team", "daily 08:00", "sentinel_digest"),
     # Grafana on .186 (pos.observability): when it stops answering, no alert can reach anyone.
     ("Grafana: alert when it stops answering", "every 5m", "grafana_watch"),
+    # Every agent has a worker and the owner is never left without an answer (pos.workers): the pool's
+    # keys, a worker silent for 10 min, an owner message unanswered for 10 min: an incident each.
+    ("Agents: workers running, the owner's messages answered", "every 2m", "agents_watch"),
 ]
 
 

@@ -106,15 +106,51 @@ def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None
         if sets:
             versioning.update(conn, owner, "actor", row["id"], sets, action="agents_as_code")
             placed.append(s["name"])
+        if _adopt_worker(conn, owner, row, s):
+            placed.append(f"{s['name']} (worker)")
+        _budget_from_file(conn, owner, row, s)
     if created or placed:
         audit.log(conn, owner, "agents_as_code", None, None, created=created or None, placed=placed or None)
     conn.commit()
     return {"created": created, "placed": placed}
 
 
+def _adopt_worker(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s: dict) -> bool:
+    """A member that ran inside the core (runtime builtin) and now has a worker in
+    its file (the HR agent, 2026-09-26): its runtime follows the file, and its
+    engine and model when it has none yet (after that they are the owner's)."""
+    if s.get("runtime", "codex_worker") != "codex_worker" or s.get("worker") in (None, "none")             or s.get("enabled") is False or row["runtime"] not in ("builtin",):
+        return False
+    sets = {"runtime": "codex_worker"}
+    if not row["engine"] and not row["model"] and (s.get("engine") or s.get("model")):
+        sets.update({"engine": s.get("engine"), "model": s.get("model")})
+    versioning.update(conn, owner, "actor", row["id"], sets, action="agents_as_code")
+    return True
+
+
+def _budget_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s: dict) -> None:
+    """agent.json "budget" ({metric: amount}): the agent's own limits, set once while
+    it has none (then they are the Access manager's and the owner's)."""
+    from .access import service as access
+    from .access import store as access_store
+
+    budget = s.get("budget") or {}
+    if not budget or not access_store.ready(conn) or conn.execute(
+            "SELECT 1 FROM access_budgets WHERE agent_id = ?", (row["id"],)).fetchone():
+        return
+    for metric, amount in budget.items():
+        if metric in access.METRICS:
+            access._insert_budget(conn, row["id"], metric, float(amount), owner.actor_id, "platform",
+                                  f"{s['name']}: výchozí rozpočet z agent.json; mění Správce přístupů nebo majitel")
+    audit.log(conn, owner, "access_budget", "actor", row["id"], budget="agent.json", **budget)
+
+
 def write_worker_keys(conn: sqlite3.Connection, keys_dir: Path, base: Path | None = None) -> list[str]:
     """A valid key in <keys_dir>/<worker>/key for every agent with a worker;
-    an existing valid key stays. Returns the workers that got a new key."""
+    an existing valid key stays. The agents without a worker of their own get
+    one in the agent pool (pos.workers). Returns the workers that got a new key."""
+    from . import workers
+
     written = []
     for s in specs(base):
         worker = s.get("worker")
@@ -123,20 +159,8 @@ def write_worker_keys(conn: sqlite3.Connection, keys_dir: Path, base: Path | Non
         row = actors.find_by_name(conn, s["name"])
         if row is None:
             continue
-        path = keys_dir / worker / "key"
-        if path.exists():
-            current = path.read_text(encoding="utf-8").strip()
-            if current and actors.actor_for_key(conn, current) == row["id"]:
-                continue
-        path.parent.mkdir(parents=True, exist_ok=True)
-        key = actors.create_key(conn, row["id"], label=f"worker {worker} (agents as code)")
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(key + "\n", encoding="utf-8")
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, path)
-        written.append(worker)
+        if workers.write_key(conn, keys_dir / worker / "key", row["id"], f"worker {worker} (agents as code)"):
+            written.append(worker)
     conn.commit()
+    written += workers.sync_pool_keys(conn, keys_dir, base).get("written", [])
     return written

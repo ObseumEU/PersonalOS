@@ -399,20 +399,27 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
 def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int, message_id: int, body: str,
                    priority: str | None = None) -> None:
     """A person wrote to an agent that answers chat (agent.json answers_chat, e.g.
-    the Assistant), or the owner wrote to any agent with a worker here (the
-    owner is never left without an answer; a message with a priority steers
-    work already running and is not a question): its worker gets a task to reply in
-    this channel. Messages that arrive while that task is still open join it
-    instead of a new one. When the agent cannot run now (usage limit, budget,
-    pause), the platform answers at once with the reason (pos.availability)."""
-    from . import agents_code, availability, comments, tasks
+    the Assistant), or the owner wrote to any agent (the owner is never left
+    without an answer; a message with a priority steers work already running and
+    is not a question): its worker (own, pool or A2A, pos.workers) gets a task to
+    reply in this channel. A service or an agent without a worker answers in code
+    and the Project manager gets the message (availability.forward_unserved).
+    Messages that arrive while that task is still open join it instead of a new
+    one. When the agent cannot run now (usage limit, budget, pause, its worker is
+    down), the platform answers at once with the reason (pos.availability)."""
+    from . import agents_code, availability, comments, tasks, workers
 
     target = actors.get(conn, aid)
     if target["kind"] == "human" or target["archived_at"]:
         return
     author_row = actors.get(conn, ctx.actor_id)
-    if not (agents_code.answers_chat(target["name"])
-            or (author_row["is_owner"] and priority is None and agents_code.has_worker(target["name"]))):
+    to_owner = bool(author_row["is_owner"]) and priority is None
+    if not (agents_code.answers_chat(target["name"]) or to_owner):
+        return
+    path = workers.reply_path(conn, target)
+    if path is None:  # a service, or an agent without a worker: never silent (pos.availability)
+        if to_owner:
+            availability.forward_unserved(conn, ctx, ch, target, message_id, body)
         return
     author = author_row["name"]
     where = f"DM with {author}" if ch["kind"] == "dm" else f"#{ch['name']}"
@@ -427,16 +434,19 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
         audit.log(conn, ctx, "chat_task", "task", open_["id"], channel=ch["id"], message=message_id)
         availability.autoreply(conn, open_["id"], message_id)
         return
+    notes = (f"Purpose: {author} wrote to you in chat and waits for an answer.\n"
+                 f"Source: chat channel {ch['id']} ({where}), message {message_id}.\n\n{said}\n\n"
+             f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}), in the language they wrote "
+             f"in (Czech unless they wrote otherwise); read the thread with chat_read if you need context. "
+             f"Use your tools (tasks, files, the knowledge base via ask_agent 'Knowledge agent') to answer "
+             f"well; create tasks when asked to, or delegate to the agent whose job it is.")
+    if path["kind"] == "a2a":  # a remote app: it gets the message itself; pos.a2a posts its answer here
+        notes = f"{author} asks in chat ({where}); answer them directly, in the language they wrote in.\n\n{body}"
     t = tasks.create(conn, ctx, {
         "title": title, "assignee": {"type": target["kind"], "id": aid}, "status": "next",
         "priority": 1 if author_row["is_owner"] else 2,
         "topic": "chat",
-        "notes": f"Purpose: {author} wrote to you in chat and waits for an answer.\n"
-                 f"Source: chat channel {ch['id']} ({where}), message {message_id}.\n\n{said}\n\n"
-                 f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}), in the language they wrote "
-                 f"in (Czech unless they wrote otherwise); read the thread with chat_read if you need context. "
-                 f"Use your tools (tasks, files, the knowledge base via ask_agent 'Knowledge agent') to answer "
-                 f"well; create tasks when asked to, or delegate to the agent whose job it is.",
+        "notes": notes,
         "definition_of_done": "The answer is in the chat channel.",
         "reviewer": aid,  # a chat answer needs no review: it is already in front of the person
     })

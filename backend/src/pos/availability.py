@@ -50,6 +50,12 @@ def why_not(conn: sqlite3.Connection, actor_id: int) -> dict | None:
     if killswitch.is_frozen(conn):
         return {"reason": "je zapnutý nouzový vypínač (kill switch), žádný agent teď neběží",
                 "retry": "po jeho vypnutí", "until": None}
+    from . import workers
+
+    down = workers.worker_down(conn, a)
+    if down:
+        return {"reason": down, "retry": "jakmile worker znovu naběhne (Hlídač o tom dostal incident)",
+                "until": None}
     engine, _why, _model = engines.choose(conn, actor_id)
     if engine is None:
         row = conn.execute("SELECT engine, model FROM actors WHERE id = ?", (actor_id,)).fetchone()
@@ -82,6 +88,86 @@ def _budget_block(conn: sqlite3.Connection, actor_id: int) -> dict | None:
                                   f"{access._fmt(metric, access.used(conn, who, metric))} z {access._fmt(metric, lim)})",
                         "retry": "až se uvolní okno rozpočtu, nebo hned, když limit zvýšíš", "until": None}
     return None
+
+
+def post_answer(conn: sqlite3.Connection, task_id: int, author_id: int, text: str) -> dict | None:
+    """The answer of a remote (A2A) agent to a chat task goes into the thread it
+    answers (its worker is another app and cannot post itself)."""
+    from . import chat
+
+    link = chat_link(conn, task_id)
+    text = (text or "").strip()
+    if not link or not text:
+        return None
+    try:
+        chat._add_member(conn, link["channel"], author_id)
+        out = chat.send(conn, Ctx(author_id, via="a2a"), link["channel"], text[:chat.MAX_BODY],
+                        reply_to=link.get("message"), system=True)
+    except Exception:  # noqa: BLE001 - the task result keeps the answer either way
+        return None
+    audit.log(conn, Ctx(author_id, via="a2a"), "chat_a2a_answer", "task", task_id, message=out["id"])
+    conn.commit()
+    return out
+
+
+def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id: int, body: str) -> dict | None:
+    """The owner wrote to a member that has no worker (a service such as the
+    Deployer, or an agent whose worker is missing): the platform answers at once
+    in the thread, in Czech and without a model, and hands the message to the
+    Project manager, who answers the owner. Once per message."""
+    from . import chat, tasks, workers
+    from .guard.external import wrap_external
+
+    if conn.execute("SELECT 1 FROM audit_log WHERE action = 'chat_forwarded' AND entity = 'chat_message' "
+                    "AND entity_id = ?", (message_id,)).fetchone():
+        return None
+    name = target["name"]
+    service = workers.is_service(target)
+    what = (f"je služba platformy, ne agent ({workers.SERVICES.get(name, 'automatizace bez AI')})"
+            if service else "nemá workera, který by mohl odpovědět")
+    author = actors.get(conn, ctx.actor_id)
+    pm = actors.find_by_name(conn, "Project manager")
+    if pm is None or pm["id"] == target["id"] or pm["archived_at"] or workers.reply_path(conn, pm) is None:
+        pm = None
+    task = None
+    if pm is not None:
+        if ch["kind"] == "dm":  # the PM is not in this DM: it answers in its own DM with the owner
+            answer_ch = chat.dm_channel(conn, author["id"], pm["id"], Ctx(author["id"], via="system"))
+            reply_to, where = None, "v přímé zprávě"
+        else:
+            answer_ch, reply_to, where = ch, message_id, "tady ve vlákně"
+        said = wrap_external(f"chat:{author['name']}", body, ref=f"message {message_id}")
+        kind = "is a platform service" if service else "has no worker"
+        how = f"chat_send(channel={answer_ch['id']}" + (f", reply_to={reply_to})" if reply_to else ")")
+        task = tasks.create(conn, ctx, {
+            "title": f"Chat: answer {author['name']} (za {name})",
+            "assignee": {"type": "agent", "id": pm["id"]}, "status": "next", "priority": 1, "topic": "chat",
+            "notes": f"Purpose: {author['name']} wrote to {name}, which {kind} and cannot answer. The platform "
+                     f"told them you will answer instead.\nSource: chat channel {ch['id']}, message {message_id}."
+                     f"\n\n{said}\n\nAnswer with {how}, in Czech unless they wrote otherwise; say it is about "
+                     f"their message to {name}. Do what they ask or delegate it to the agent whose job it is "
+                     "(create_task, handoff_task), and say in the answer who does it.",
+            "definition_of_done": "The answer is in the chat.",
+            "reviewer": pm["id"],
+        })
+        audit.log(conn, ctx, "chat_task", "task", task["id"], channel=answer_ch["id"], message=reply_to)
+        text = (f"Automatická odpověď platformy: {name} {what}, takže sám neodpoví. Tvou zprávu jsem předal "
+                f"Project managerovi ({task['ref']}), odpoví ti {where}.")
+    else:
+        text = (f"Automatická odpověď platformy: {name} {what}, takže sám neodpoví, a Project manager teď "
+                "není k dispozici. Napiš prosím přímo agentovi, který to má na starosti.")
+    out = None
+    try:
+        chat._add_member(conn, ch["id"], target["id"])
+        out = chat.send(conn, Ctx(target["id"], via="system"), ch["id"], text, reply_to=message_id, system=True)
+    except Exception:  # noqa: BLE001 - the PM's task stays either way
+        pass
+    audit.log(conn, ctx, "chat_forwarded", "chat_message", message_id, target=target["id"],
+              task=task["id"] if task else None, at=now_iso())
+    if task:
+        autoreply(conn, task["id"])  # the PM cannot run either: the owner hears why
+    conn.commit()
+    return out
 
 
 def chat_link(conn: sqlite3.Connection, task_id: int) -> dict | None:

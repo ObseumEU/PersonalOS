@@ -85,3 +85,30 @@ created by PersonalOS at startup; issue its key on its agent page. It takes
 team work, splits it into steps and assigns them by role, and runs the weekday
 standup. Workers hand work to each other with the `handoff_task` tool and ask
 peers with `send_message` (see `agents/README.md`, "Working together").
+
+## Every agent has a worker
+
+An agent thinks with a model, so it runs somewhere (`pos.workers`):
+
+- **its own container**: `agents/<slug>/agent.json` names the `worker`
+  (a compose service in the `agents` profile, key in `data/worker-keys/<worker>/key`);
+- **the agent pool**: every agent created at runtime (hiring, the Agents page,
+  `create_agent`): the core writes its key to `data/worker-keys/pool/<slug>/key`
+  at once and the `agent-pool` container (`python -m pos_worker.pool`) starts a
+  worker for it within seconds, and stops it when the agent is archived or paused;
+- **a remote app over A2A**: `a2a_url` (the Knowledge agent in knowlage); its
+  answer to a chat question is posted into the thread.
+
+`create_agent` refuses any other runtime. Built-in automation without model
+judgment (the Deployer; Nexus while it has no A2A bridge) is a **service**
+(runtime `service`), not an agent.
+
+The owner is never left without an answer: a message to a service (or an
+agent without a worker) gets a code-built Czech reply and becomes a task for
+the Project manager; a message to an agent that cannot run (its worker down,
+usage limits, budget, pause, kill switch) gets a code-built reply with the
+reason and when it tries again. The scheduler job "Agents: workers running,
+the owner's messages answered" (every 2 min) keeps the pool's keys in step,
+files an incident for the Monitor when a worker has been silent for 10 min
+(resolved when it is back) and when an owner message has had no real answer
+for 10 min.

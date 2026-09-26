@@ -25,7 +25,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from . import actors, agents, audit, tasks
+from . import actors, agents, audit, availability, tasks
 from .api_tasks import get_db
 from .core import Ctx, Forbidden, NotFound, now_iso
 
@@ -249,6 +249,7 @@ def sync(conn: sqlite3.Connection, http: httpx.Client | None = None) -> dict:
             answer = "\n".join(p.get("text", "") for p in res["message"].get("parts", []))
             tasks.claim(conn, ctx, t["id"])
             tasks.complete(conn, ctx, t["id"], answer[:4000] or "Answered.")
+            availability.post_answer(conn, t["id"], m["id"], answer)  # a chat question: the answer in the thread
             finished.append(tasks.display_id(t["id"]))
             continue
         if not remote.get("id"):
@@ -281,6 +282,7 @@ def sync(conn: sqlite3.Connection, http: httpx.Client | None = None) -> dict:
         conn.execute("UPDATE a2a_links SET state = ?, updated_at = ? WHERE task_id = ?", (state, now_iso(), link["task_id"]))
         if state == "completed":
             tasks.complete(conn, ctx, link["task_id"], result_text(remote)[:4000] or "Completed.")
+            availability.post_answer(conn, link["task_id"], m["id"], result_text(remote))
             finished.append(tasks.display_id(link["task_id"]))
         elif state in ("failed", "rejected", "canceled"):
             tasks.update(conn, ctx, link["task_id"], {"status": "next", "progress_note": f"Remote agent: {state}"})
@@ -292,11 +294,12 @@ def sync(conn: sqlite3.Connection, http: httpx.Client | None = None) -> dict:
 
 
 def configure_builtin(conn: sqlite3.Connection) -> None:
-    """Point the built-in subsystems at their A2A endpoints when configured."""
+    """Point the built-in subsystems at their A2A endpoints when configured. The
+    remote app is their worker; without a bridge they are services (pos.workers)."""
     for name, env in (("Knowledge agent", "POS_KNOWLAGE_A2A_URL"), ("Nexus", "POS_NEXUS_A2A_URL")):
         url = os.environ.get(env)
         conn.execute("UPDATE actors SET a2a_url = ?, runtime = ? WHERE name = ?",
-                     (url or None, "a2a" if url else "builtin", name))
+                     (url or None, "a2a" if url else "service", name))
     conn.commit()
     from . import routing
 

@@ -79,6 +79,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 actors.ensure_key(conn, actors.owner_id(conn), settings.mcp_token, "POS_MCP_TOKEN")
             integrations.register_builtin_agents(conn)
             a2a.configure_builtin(conn)
+            from . import workers
+
+            workers.mark_services(conn)  # built-in automation (the Deployer) is a service, not an agent
             scheduler.seed(conn)
             chat.ensure_team_channel(conn)
             from . import agents_code, projects
