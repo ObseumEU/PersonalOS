@@ -130,8 +130,13 @@ class Worker:
     # ------------------------------------------------------------- one task
 
     def handle_task(self, task: dict) -> str:
-        if not self.me:
+        # Fresh for every task: grants change (pos.access), and an agent may answer the person
+        # waiting for it in chat only while that task is open (pos.chat.may_answer).
+        try:
             self.me = self.client.me()
+        except Exception:  # noqa: BLE001 - PersonalOS hiccup: the last known one will do
+            if not self.me:
+                raise
         ref = task["ref"]
         # Ask for the run first: if the kill switch or the budget says no, the
         # task stays in the queue untouched instead of hanging in "working".
