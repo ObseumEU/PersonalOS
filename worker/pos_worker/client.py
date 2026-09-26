@@ -76,5 +76,9 @@ class PosClient:
     def check_command(self, command: str, external: bool = False) -> dict:
         return self._post("/api/worker/check-command", {"command": command, "external": external})
 
+    def credential_session(self, run_id: int) -> str:
+        """A token for this run's credential runner (pos_worker.credentials)."""
+        return self._post("/api/worker/credentials/session", {"run_id": run_id})["token"]
+
     def wrap(self, source: str, content: str, ref: str | None = None) -> str:
         return self._post("/api/worker/wrap", {"source": source, "content": content, "ref": ref})["wrapped"]

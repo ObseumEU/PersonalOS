@@ -100,6 +100,23 @@ def main() -> None:
     workdir = os.environ.get("WORKER_WORKDIR", "/work")
     os.makedirs(workdir, exist_ok=True)
 
+    client = PosClient(url, key)
+
+    def credential_runner(me: dict) -> dict:
+        """The credential runner (pos_worker.credentials) when the agent holds a cred:<name>
+        grant: the run's session token goes to that one MCP server, not to the model's shell."""
+        if not me.get("run_id"):
+            return {}
+        if "_cred_env" not in me:
+            try:
+                got = client.credential_session(me["run_id"])
+            except Exception as e:  # noqa: BLE001 - an older PersonalOS, or none held: run without it
+                logging.getLogger("pos_worker").info("no credential runner: %s", e)
+                got = None
+            me["_cred_env"] = {"POS_URL": url, "POS_AGENT_KEY": key, "POS_CRED_SESSION": got,
+                               "POS_RUN_ID": str(me["run_id"]), "WORKER_WORKDIR": workdir} if got else {}
+        return me["_cred_env"]
+
     def browser(me: dict) -> dict:
         """The guarded browser (pos_worker.browser_guard) for agents with browser:use."""
         if "browser:use" not in (me.get("permissions") or []):
@@ -132,9 +149,13 @@ def main() -> None:
                                           if p),
                 # The agent reaches PersonalOS through the pos MCP server, as itself.
                 mcp_servers={"pos": {"type": "http", "url": mcp_url, "headers": {"Authorization": f"Bearer {key}"}},
-                             **browser(me), **claude_extra_mcp(), **tool_library.claude_servers(tools)},
+                             **browser(me), **claude_extra_mcp(), **tool_library.claude_servers(tools),
+                             **({"credentials": {"type": "stdio", "command": sys.executable,
+                                                 "args": ["-m", "pos_worker.credentials"],
+                                                 "env": credential_runner(me)}} if credential_runner(me) else {})},
                 allowed_tools=allowed + tool_library.claude_allowed(tools)
-                + (["mcp__browser"] if browser(me) and allowed else []),
+                + (["mcp__browser"] if browser(me) and allowed else [])
+                + (["mcp__credentials"] if credential_runner(me) else []),
                 builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
                 disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
                 + [t for t in tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")) if not t.startswith("mcp__pos__")],
@@ -154,13 +175,17 @@ def main() -> None:
                     *([f'mcp_servers.browser.command="{sys.executable.replace(chr(92), "/")}"',
                        'mcp_servers.browser.args=["-m","pos_worker.browser_guard"]',
                        'mcp_servers.browser.env_vars=["POS_URL","POS_AGENT_KEY","POS_TASK_ID","BROWSER_CDP","BROWSER_ALLOW",'
-                       '"BROWSER_HEADED","BROWSER_MAX_MINUTES","BROWSER_APPROVAL_WAIT","PLAYWRIGHT_MCP"]'] if browser(me) else [])],
+                       '"BROWSER_HEADED","BROWSER_MAX_MINUTES","BROWSER_APPROVAL_WAIT","PLAYWRIGHT_MCP"]'] if browser(me) else []),
+                    *([f'mcp_servers.credentials.command="{sys.executable.replace(chr(92), "/")}"',
+                       'mcp_servers.credentials.args=["-m","pos_worker.credentials"]']
+                      + [f"mcp_servers.credentials.env.{k}={json.dumps(v)}" for k, v in credential_runner(me).items()]
+                      if credential_runner(me) else [])],
         )
 
     def check(me: dict, task: dict) -> dict | None:
         return triage.check(me, task) if triage.enabled_for(task) else None
 
-    Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
+    Worker(client, new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
            max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0),
            tools_dir=str(tool_library.tools_root(workdir)), triage=check).run_forever()
 
