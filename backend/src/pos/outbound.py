@@ -54,13 +54,14 @@ def configured() -> dict[str, bool]:
     }
 
 
-def request(conn: sqlite3.Connection, ctx: Ctx, action: str, payload: dict, task_id: int | None = None) -> dict:
+def request(conn: sqlite3.Connection, ctx: Ctx, action: str, payload: dict, task_id: int | None = None,
+            why: str = "") -> dict:
     if action not in ACTIONS:
         raise tasks.Invalid(f"action must be one of {ACTIONS}")
     missing = [k for k in REQUIRED[action] if not payload.get(k)]
     if missing:
         raise tasks.Invalid(f"{action} needs {missing}")
-    return approvals.request(conn, ctx, action, {"payload": payload}, task_id)
+    return approvals.request(conn, ctx, action, {"payload": payload, **({"why": why} if why else {})}, task_id)
 
 
 # ------------------------------------------------------------------ providers
