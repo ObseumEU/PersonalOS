@@ -173,7 +173,8 @@ def manages(conn: sqlite3.Connection, manager_id: int, member_id: int | None) ->
 
 def chart(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict]:
     """Members with role, team, reports_to, status and level (0 = the top)."""
-    rows = conn.execute("SELECT * FROM actors " + ("" if include_archived else "WHERE archived_at IS NULL ")
+    rows = conn.execute("SELECT * FROM actors WHERE runtime != 'service' "  # services are not in the chart
+                        + ("" if include_archived else "AND archived_at IS NULL ")
                         + "ORDER BY is_owner DESC, id").fetchall()
     by_id = {r["id"]: r for r in rows}
     working = {r["assignee_id"]: r["n"] for r in conn.execute(

@@ -586,7 +586,9 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
 
     runtime_view = Viewer(conn)
     out = []
-    for row in conn.execute("SELECT * FROM actors ORDER BY is_owner DESC, archived_at IS NOT NULL, id"):
+    # Services (pos.workers: the Deployer, knowlage, Nexus) are not members of the team.
+    for row in conn.execute("SELECT * FROM actors WHERE runtime != 'service' "
+                            "ORDER BY is_owner DESC, archived_at IS NOT NULL, id"):
         q = conn.execute(
             """SELECT SUM(status = 'next') AS queued, SUM(status = 'working') AS working,
                       SUM(status = 'review') AS review, SUM(status = 'done' AND completed_at >= ?) AS done_today

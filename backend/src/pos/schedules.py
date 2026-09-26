@@ -103,7 +103,7 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     try:
         first = next_run(schedule, datetime.now(timezone.utc))
     except ValueError as e:
-        raise tasks.Invalid(f"{e}. Use 'every 30m', 'every 2h', 'daily 07:00', 'weekdays 07:00' "
+        raise tasks.Invalid(f"{e}. Use 'every 30m', 'every 2h', 'every 4d', 'every 4d 09:00', 'daily 07:00', 'weekdays 07:00' "
                             "or 'weekly fri 15:00' (Europe/Prague)") from e
     template = {k: fields[k] for k in TEMPLATE_FIELDS if fields.get(k) not in (None, "")}
     template.setdefault("title", name)

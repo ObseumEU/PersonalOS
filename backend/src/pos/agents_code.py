@@ -154,8 +154,8 @@ def write_worker_keys(conn: sqlite3.Connection, keys_dir: Path, base: Path | Non
     written = []
     for s in specs(base):
         worker = s.get("worker")
-        if not worker or worker == "none" or s.get("enabled") is False:
-            continue
+        if not worker or worker in ("none", workers.POOL) or s.get("enabled") is False:
+            continue  # (pool agents: sync_pool_keys below)
         row = actors.find_by_name(conn, s["name"])
         if row is None:
             continue

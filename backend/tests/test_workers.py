@@ -78,12 +78,16 @@ def test_every_agent_in_the_default_seed_has_a_worker_or_is_a_service(seeded):
         path = workers.reply_path(conn, m)
         assert path is not None or workers.is_service(m), f"{m['name']} has no worker and is not a service"
     services = {m["name"] for m in members if workers.is_service(m)}
-    assert services == {"Deployer", "Nexus"}                         # automation, no model: services
+    assert services == {"Deployer", "Nexus", "Knowledge agent"}      # automation and outside systems
+    from pos import org
+
+    shown = {m["name"] for m in agents.overview(conn)} | {m["name"] for m in org.chart(conn)}         | {m["name"] for m in chat.members_overview(conn)}
+    assert not shown & services                                      # not on the Team page, chart or chat list
+    assert actors.find_by_name(conn, "Knowledge agent")["a2a_url"]   # still reachable over A2A (ask_agent)
     hr = actors.find_by_name(conn, "HR agent")
     assert workers.reply_path(conn, hr) == {"kind": "dedicated", "name": "hr-agent"}
     assert hr["runtime"] == "codex_worker" and hr["engine"] == "claude" and hr["model"] == "claude-haiku-4-5"
     assert agents.has_permission(conn, hr["id"], "messages:send")    # it can answer in chat
-    assert workers.reply_path(conn, actors.find_by_name(conn, "Knowledge agent"))["kind"] == "a2a"
 
 
 def test_every_agent_in_the_default_seed_answers_the_owner_or_the_platform_does(seeded):
@@ -154,10 +158,17 @@ def test_an_agent_whose_worker_is_down_answers_in_code_at_once(db, tmp_path):
     assert _chat_task(conn, aid)["status"] == "next"                 # it answers for real once it is back
 
 
-def test_a_remote_agent_answers_in_the_thread(db):
+def _remote(conn, tmp_path):
+    return actors.get(conn, agents.create_agent(
+        conn, _owner(conn), name="Vzdálený analytik", purpose="research", lifetime="long_lived", runtime="a2a",
+        a2a_url="http://remote.test/a2a", data_dir=tmp_path)["agent"]["id"])
+
+
+def test_a_remote_agent_answers_in_the_thread(db, tmp_path):
     conn = db
     owner = _owner(conn)
-    kb = actors.find_by_name(conn, "Knowledge agent")
+    kb = _remote(conn, tmp_path)
+    assert workers.reply_path(conn, kb)["kind"] == "a2a"
     msg = chat.send_dm(conn, owner, kb["id"], "Co víme o zákazníkovi X?")
     t = _chat_task(conn, kb["id"])
     assert t["notes"].endswith("Co víme o zákazníkovi X?") and "chat_send" not in t["notes"]
@@ -220,6 +231,63 @@ def test_the_pool_starts_stops_and_restarts_workers(tmp_path):
     assert pool.tick()["started"] == ["a"]
     (tmp_path / "a" / "key").unlink()                                 # archived: stopped
     assert pool.tick()["stopped"] == ["a"] and pool.children == {}
+
+
+def test_the_lazy_pool_starts_a_worker_only_when_its_agent_has_work(tmp_path):
+    """svr03 is short of memory: an idle pool agent has no process at all."""
+    from pos_worker.pool import Pool
+
+    class Proc:
+        def __init__(self):
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    work = {"a": False}
+    pool = Pool(tmp_path, tmp_path / "work", spawn=lambda slug, key: Proc(), lazy=True,
+                probe=lambda slug, key: work[slug])
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "key").write_text("k1")
+    assert pool.tick()["started"] == []                              # idle: nothing runs
+    work["a"] = True
+    assert pool.tick()["started"] == ["a"]                           # a task: its worker starts
+    pool.children["a"][0].returncode = 0                              # it ended itself after idling
+    work["a"] = False
+    assert pool.tick() == {"started": [], "stopped": [], "running": []} and pool.failures == {}
+
+
+def test_a_worker_ends_itself_after_idling(tmp_path):
+    from pos_worker.loop import Worker
+
+    class Client:
+        def me(self):
+            return {"name": "Líný", "id": 1}
+
+        def next_work(self, wait):
+            return {}
+
+    now = [0.0]
+
+    def sleep(s):
+        now[0] += s
+
+    w = Worker(Client(), lambda *a: None, poll_wait=30, sleep=sleep, exit_idle_s=100, clock=lambda: now[0])
+    orig = w.step
+
+    def step():
+        now[0] += 30
+        return orig()
+
+    w.step = step
+    w.run_forever()                                                   # returns instead of looping for ever
+    assert 100 < now[0] <= 160
 
 
 # ------------------------------------------------------------------ the watch: incidents
@@ -329,9 +397,9 @@ def test_a_chat_task_closed_without_an_answer_posts_its_result(db, tmp_path):
     assert [r["body"] for r in _replies(conn, msg2["id"])] == ["Jedna."]
 
 
-def test_a_remote_agent_whose_bridge_is_off_goes_to_the_project_manager(db):
-    """2026-09-26 audit: the owner had switched off the A2A job, so the Knowledge
-    agent's task sat in the queue and nobody answered."""
+def test_a_remote_agent_whose_bridge_is_off_goes_to_the_project_manager(db, tmp_path):
+    """2026-09-26 audit: the owner had switched off the A2A job, so a remote
+    agent's task would sit in the queue and nobody would answer."""
     conn = db
     owner = _owner(conn)
     from pos import scheduler
@@ -339,11 +407,11 @@ def test_a_remote_agent_whose_bridge_is_off_goes_to_the_project_manager(db):
     scheduler.seed(conn)
     conn.execute("UPDATE jobs SET enabled = 0 WHERE action = 'a2a_sync'")
     conn.commit()
-    kb, pm = actors.find_by_name(conn, "Knowledge agent"), actors.find_by_name(conn, "Project manager")
+    kb, pm = _remote(conn, tmp_path), actors.find_by_name(conn, "Project manager")
     _seen_now(conn, pm["id"])
     msg = chat.send_dm(conn, owner, kb["id"], "Co víme o zákazníkovi X?")
     reply = _replies(conn, msg["id"])
-    assert len(reply) == 1 and "Knowledge agent teď neběží, protože jeho spojení" in reply[0]["body"]
+    assert len(reply) == 1 and "Vzdálený analytik teď neběží, protože jeho spojení" in reply[0]["body"]
     assert "Project managerovi" in reply[0]["body"] and _chat_task(conn, kb["id"]) is None
-    assert "za Knowledge agent" in _chat_task(conn, pm["id"])["title"]
+    assert "za Vzdálený analytik" in _chat_task(conn, pm["id"])["title"]
     assert "spojení se vzdálenou aplikací je vypnuté" in workers.worker_down(conn, kb)

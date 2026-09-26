@@ -26,6 +26,7 @@ Environment:
     WORKER_TRIAGE, WORKER_TRIAGE_MODEL, WORKER_TRIAGE_REPOS, WORKER_CLAUDE_MAX_USD_S
                      the cheap check before a full run and effort/cap by task size (pos_worker.triage)
     WORKER_MAX_STEPS     stop a run after this many completed steps and hand the task back (0 = no cap)
+    WORKER_EXIT_IDLE_S   end the worker after this many seconds without a task (the agent pool's lazy mode)
     WORKER_CLAUDE_MCP    more MCP servers for Claude, as JSON
     WORKER_TOOLS_DIR PersonalOS checkout with agents/*/tools and shared/tools (default: WORKER_WORKDIR)
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
@@ -187,7 +188,8 @@ def main() -> None:
 
     Worker(client, new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
            max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0),
-           tools_dir=str(tool_library.tools_root(workdir)), triage=check).run_forever()
+           tools_dir=str(tool_library.tools_root(workdir)), triage=check,
+           exit_idle_s=float(os.environ.get("WORKER_EXIT_IDLE_S") or 0)).run_forever()
 
 
 if __name__ == "__main__":

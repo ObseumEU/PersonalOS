@@ -91,6 +91,8 @@ TOOL_PERMISSIONS = {
     "project_add_member": "tasks:read",
     # Hiring: asking needs agents:create or tasks:write, deciding is the decider's (pos.hiring).
     "hire_request": "tasks:read", "hire_decide": "tasks:read", "hire_list": "tasks:read",
+    # Home Assistant's WebSocket API (pos.homeassistant); the cred:home-assistant grant is checked inside.
+    "ha_ws": "tasks:claim",
     "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
     # Pausing or stopping an agent: people and its leads (checked in pos.agents).
     "manage_agent": "tasks:claim",
@@ -768,7 +770,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     # ------------------------------------------------------------- schedules
 
     @mcp.tool(description="Schedule recurring work. Each firing creates a task from this template. schedule: "
-                          "'every 30m', 'every 2h', 'daily 07:00', 'weekdays 07:00', 'weekly fri 15:00' "
+                          "'every 30m', 'every 2h', 'every 4d', 'every 4d 09:00', 'daily 07:00', 'weekdays 07:00', 'weekly fri 15:00' "
                           "(Europe/Prague; agents at most every 15 min, max 5 active). visibility 'personal' "
                           "(for yourself, the default) or 'team' (shared; may be assigned to another member "
                           "if you have tasks:write). Outbound actions in the task still need approval each time. "

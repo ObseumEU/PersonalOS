@@ -94,14 +94,21 @@ An agent thinks with a model, so it runs somewhere (`pos.workers`):
   (a compose service in the `agents` profile, key in `data/worker-keys/<worker>/key`);
 - **the agent pool**: every agent created at runtime (hiring, the Agents page,
   `create_agent`): the core writes its key to `data/worker-keys/pool/<slug>/key`
-  at once and the `agent-pool` container (`python -m pos_worker.pool`) starts a
-  worker for it within seconds, and stops it when the agent is archived or paused;
-- **a remote app over A2A**: `a2a_url` (the Knowledge agent in knowlage); its
-  answer to a chat question is posted into the thread.
+  at once and the `agent-pool` container (`python -m pos_worker.pool`) serves it.
+  The pool is lazy: an idle agent has no process; the pool asks
+  `GET /api/worker/next?wait=0` for each key every 15 s, starts the worker when
+  the agent has a task, and the worker ends itself after 2 min without one.
+  Memory grows only with the agents working right now (`agent.json` may also
+  say `"worker": "pool"`);
+- **a remote app over A2A**: an agent created with `a2a_url`; its answer to a
+  chat question is posted into the thread.
 
 `create_agent` refuses any other runtime. Built-in automation without model
-judgment (the Deployer; Nexus while it has no A2A bridge) is a **service**
-(runtime `service`), not an agent.
+judgment or an outside system (the Deployer, knowlage's Knowledge agent,
+Nexus) is a **service** (runtime `service`), not an agent: no worker, no HR
+review, not on the Team page, the org chart or the chat's member list. Agents
+use knowlage through `ask_agent` and Nexus over its A2A bridge; their health
+shows among the subsystems.
 
 The owner is never left without an answer: a message to a service (or an
 agent without a worker) gets a code-built Czech reply and becomes a task for

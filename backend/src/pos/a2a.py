@@ -294,12 +294,11 @@ def sync(conn: sqlite3.Connection, http: httpx.Client | None = None) -> dict:
 
 
 def configure_builtin(conn: sqlite3.Connection) -> None:
-    """Point the built-in subsystems at their A2A endpoints when configured. The
-    remote app is their worker; without a bridge they are services (pos.workers)."""
+    """Point the built-in subsystems at their A2A endpoints when configured. They
+    are services, not agents (pos.workers): reached over A2A, never a worker."""
     for name, env in (("Knowledge agent", "POS_KNOWLAGE_A2A_URL"), ("Nexus", "POS_NEXUS_A2A_URL")):
         url = os.environ.get(env)
-        conn.execute("UPDATE actors SET a2a_url = ?, runtime = ? WHERE name = ?",
-                     (url or None, "a2a" if url else "service", name))
+        conn.execute("UPDATE actors SET a2a_url = ?, runtime = 'service' WHERE name = ?", (url or None, name))
     conn.commit()
     from . import routing
 

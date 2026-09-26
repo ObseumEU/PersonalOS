@@ -618,6 +618,20 @@ def placeholders(*texts: str) -> set[str]:
     return {m.group(1) for t in texts if t for m in PLACEHOLDER.finditer(t)}
 
 
+def private_host(host: str) -> bool:
+    """A host on the local network (RFC 1918, link-local, loopback, *.local / *.lan / *.home.arpa)."""
+    import ipaddress
+
+    host = (host or "").lower()
+    if host.endswith((".local", ".lan", ".home.arpa")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_link_local or ip.is_loopback
+
+
 def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credentials: list[str] | None = None,
               headers: dict | None = None, body: str | None = None, task_id: int | None = None,
               transport=None) -> dict:
@@ -633,13 +647,26 @@ def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credent
     if method not in HTTP_METHODS:
         raise CredentialError(f"method: one of {HTTP_METHODS}")
     parts = urlsplit(url or "")
-    if parts.scheme != "https" or not parts.hostname:
-        raise CredentialError("url: https://host/... only")
+    host = (parts.hostname or "").lower()
+    if parts.scheme == "http" and host and parts.port and private_host(host):
+        # Plain HTTP only inside the local network, and only to a host the credential lists
+        # with its port (like Home Assistant at 192.168.1.56:8123): the host check below uses host:port.
+        host = f"{host}:{parts.port}"
+    elif parts.scheme != "https" or not host:
+        raise CredentialError("url: https://host/... only (plain http only to a local-network host:port the "
+                              "credential lists)")
     headers = {str(k): str(v) for k, v in (headers or {}).items()}
     named = {str(n).strip().lower() for n in (credentials or []) if str(n).strip()}
     used = placeholders(url, body or "", *headers.values(), *headers.keys())
     names = sorted(named | used)
-    values = resolve_for(conn, ctx, names, "http", host=parts.hostname.lower(), task_id=task_id)
+    from .. import homeassistant
+
+    if homeassistant.CREDENTIAL in names:  # the Home Assistant safety rules (pos.homeassistant)
+        try:
+            homeassistant.check_rest(method, url, body)
+        except homeassistant.Refused as e:
+            raise CredentialError(str(e)) from None
+    values = resolve_for(conn, ctx, names, "http", host=host, task_id=task_id)
     red = Redactor({n: v["value"] for n, v in values.items()})
     try:
         final_url = _fill(url, values)
@@ -663,7 +690,7 @@ def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credent
     finally:
         values.clear()
     return {"status": status_code, "headers": {k: red(v) for k, v in keep.items()},
-            "body": wrap_external("http", red(text), ref=red(f"{parts.hostname}{parts.path}")),
+            "body": wrap_external("http", red(text), ref=red(f"{host}{parts.path}")),
             "truncated": len(text) >= MAX_BODY, "credentials": names}
 
 

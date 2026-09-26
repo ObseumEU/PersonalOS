@@ -6,8 +6,11 @@ worker container (agents/<slug>/agent.json "worker"), the shared agent pool
 key into <POS_WORKER_KEYS_DIR>/pool/<slug>/key and the `agent-pool` container
 starts a worker for every key it finds, pos_worker.pool), or a remote app over
 A2A (a2a_url, e.g. knowlage's Knowledge agent). A built-in member that is plain
-automation without model judgment (the Deployer, Nexus without its A2A bridge)
-is a *service*: runtime "service", no worker, and a message to it gets a
+automation or an outside system (the Deployer, knowlage's Knowledge agent,
+Nexus) is a *service*: runtime "service", no worker, no HR review, not on the
+Team page, the org chart or the chat's member list; agents use it through its
+own interface (ask_agent / the A2A bridge for knowlage and Nexus, the deploy
+API), and its health shows among the subsystems. A message to it anyway gets a
 code-built reply and goes to the Project manager.
 
 `reply_path` is what the chat uses so that no message from the owner is ever
@@ -28,8 +31,8 @@ from . import actors
 SERVICES = {
     "Deployer": "nasazovací služba: slučuje commity Dev agenta, pouští testy a nasazuje (pos.selfdeploy), "
                 "bez AI",
-    "Nexus": "služba pro automatizaci procesů (Nexus); dokud nemá nastavený A2A most (POS_NEXUS_A2A_URL), "
-             "nemá vlastní AI",
+    "Knowledge agent": "znalostní báze knowlage: agenti se jí ptají přes ask_agent (hledání s citacemi)",
+    "Nexus": "platforma pro automatizaci procesů (Nexus), napojená přes A2A",
 }
 POOL = "pool"
 WORKER_STALE_S = 300       # workers long-poll every 60 s; 5 min of silence and no run: not running
@@ -37,12 +40,12 @@ NEVER_SEEN_GRACE_S = 600   # a new agent's worker gets 10 min to start
 
 
 def mark_services(conn: sqlite3.Connection) -> list[str]:
-    """Built-in automation members become services (idempotent). Nexus stays an
-    agent while its A2A bridge is configured (pos.a2a.configure_builtin)."""
+    """The built-in members that are services, not agents (idempotent); their A2A
+    address stays (pos.a2a.configure_builtin), their worker never exists."""
     done = []
     for name in SERVICES:
-        row = conn.execute("SELECT id, runtime, a2a_url FROM actors WHERE name = ?", (name,)).fetchone()
-        if row is None or row["a2a_url"] or row["runtime"] == "service":
+        row = conn.execute("SELECT id, runtime FROM actors WHERE name = ?", (name,)).fetchone()
+        if row is None or row["runtime"] == "service":
             continue
         conn.execute("UPDATE actors SET runtime = 'service' WHERE id = ?", (row["id"],))
         done.append(name)
@@ -80,6 +83,8 @@ def reply_path(conn: sqlite3.Connection, row, specs_base: Path | None = None) ->
         if spec.get("enabled") is False or not worker or worker == "none" \
                 or spec.get("runtime", "codex_worker") != "codex_worker":
             return None
+        if worker == POOL:  # defined in git, run by the agent pool (e.g. the CEO, hired agents)
+            return {"kind": "pool", "name": f"{POOL}/{slug(row['name'])}"}
         return {"kind": "dedicated", "name": worker}
     if row["runtime"] == "codex_worker":
         return {"kind": "pool", "name": f"{POOL}/{slug(row['name'])}"}

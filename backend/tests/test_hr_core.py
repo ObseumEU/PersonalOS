@@ -155,7 +155,8 @@ def test_http_api(tmp_path):
         assert client.get("/api/hr").json()["ratings"] == []  # a GET never runs a review
         client.post("/api/hr/review")
         overview = client.get("/api/hr").json()
-        assert {r["name"] for r in overview["ratings"]} >= {"HR agent", "Nexus"}
+        names = {r["name"] for r in overview["ratings"]}
+        assert "HR agent" in names and not names & {"Nexus", "Knowledge agent", "Deployer"}  # services: no reviews
         assert client.post("/api/hr/review", params={"apply": "false"}).json()["proposals"] == []
         assert client.post("/api/hr/weekly").json()["report_task_id"]
         assert client.put("/api/hr/agents/999/profile", json={"purpose": "x"}).status_code == 404

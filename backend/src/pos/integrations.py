@@ -128,6 +128,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import weekly
 
     weekly.register_mcp(mcp, session)  # the weekly report, the meeting and goals (Asistent vedení)
+    from . import homeassistant
+
+    homeassistant.register_mcp(mcp, session)  # the Home Assistant Specialist's WebSocket tool
     from . import monitor
 
     monitor.register_mcp(mcp, session)  # the Monitor agent: incident_logs, incident_close

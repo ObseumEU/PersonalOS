@@ -49,7 +49,9 @@ class CorePlatform:
 
     def list_agents(self) -> list[AgentRecord]:
         profiles = store.profiles(self.conn)
-        rows = self.conn.execute("SELECT * FROM actors WHERE kind IN ('ai', 'agent') ORDER BY id").fetchall()
+        # Services (the Deployer, knowlage, Nexus) have no reviews, limits or probation (pos.workers).
+        rows = self.conn.execute("SELECT * FROM actors WHERE kind IN ('ai', 'agent') AND runtime != 'service' "
+                                 "ORDER BY id").fetchall()
         out = []
         for row in rows:
             p = profiles.get(row["id"])

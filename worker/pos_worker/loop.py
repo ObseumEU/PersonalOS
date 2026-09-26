@@ -83,8 +83,13 @@ def tool_of(ev: dict) -> str:
 class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
                  max_resumes: int = 12, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
-                 tools_dir: str | None = None, triage: Callable[[dict, dict], dict | None] | None = None):
+                 tools_dir: str | None = None, triage: Callable[[dict, dict], dict | None] | None = None,
+                 exit_idle_s: float = 0, clock: Callable[[], float] = time.monotonic):
         self.client = client
+        # The agent pool starts a worker when its agent has a task; it ends itself after
+        # this long without one (0 = never), so an idle agent costs no process at all.
+        self.exit_idle_s = exit_idle_s
+        self.clock = clock
         # The cheap check before a full run (pos_worker.triage): (me, task) -> verdict or None.
         self.triage = triage
         self.new_session = new_session
@@ -101,8 +106,15 @@ class Worker:
     def run_forever(self) -> None:
         self.me = self.client.me()
         log.info("worker for %s started", self.me["name"])
+        busy_at = self.clock()
         while True:
-            self.step()
+            what = self.step()
+            if what not in ("idle", "read_messages", "held"):
+                busy_at = self.clock()
+            elif self.exit_idle_s and self.clock() - busy_at > self.exit_idle_s:
+                log.info("worker for %s idle for %ss: exiting (the pool starts it again on work)",
+                         self.me.get("name"), int(self.exit_idle_s))
+                return
 
     def step(self) -> str:
         """One iteration; returns what happened (for tests and logs)."""

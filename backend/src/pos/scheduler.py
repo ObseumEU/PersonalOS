@@ -5,7 +5,8 @@ A job has a simple schedule and a built-in action. Actions are deterministic
 code (no tokens); where thinking is needed they create a task for an agent,
 which then spends tokens through the normal budget gates.
 
-Schedules:  "every 60m" · "every 2h" · "daily 07:00" · "weekdays 07:00" · "weekly fri 15:00"
+Schedules:  "every 60m" · "every 2h" · "every 4d" · "every 4d 09:00" · "daily 07:00" · "weekdays 07:00"
+            · "weekly fri 15:00"
 Times are Europe/Prague.
 """
 
@@ -32,6 +33,18 @@ def next_run(schedule: str, after: datetime) -> datetime:
         if n < 1:
             raise ValueError(f"unknown schedule: {schedule}")
         return after + timedelta(minutes=n)
+    if m := re.fullmatch(r"every (\d+) ?(d|day|days)(?: (\d{1,2}):(\d{2}))?", s):
+        days_n = int(m[1])
+        if days_n < 1:
+            raise ValueError(f"unknown schedule: {schedule}")
+        if m[3] is None:  # every N days from the last firing
+            return after + timedelta(days=days_n)
+        hh, mm = int(m[3]), int(m[4])  # every N days at a time of day (Prague): N days on, at that time
+        if hh > 23 or mm > 59:
+            raise ValueError(f"unknown schedule: {schedule}")
+        local = after.astimezone(TZ)
+        return (local + timedelta(days=days_n)).replace(hour=hh, minute=mm, second=0,
+                                                        microsecond=0).astimezone(timezone.utc)
     local = after.astimezone(TZ)
     if m := re.fullmatch(r"(daily|weekdays) (\d{1,2}):(\d{2})", s):
         kind, hh, mm = m[1], int(m[2]), int(m[3])

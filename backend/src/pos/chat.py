@@ -804,7 +804,8 @@ def members_overview(conn: sqlite3.Connection) -> list[dict]:
     return [{"id": r["id"], "name": r["name"], "kind": r["kind"], "is_owner": bool(r["is_owner"]),
              "remote": bool(r["a2a_url"]), "paused": bool(r["paused_at"]), "working": r["id"] in working,
              "current": current.get(r["id"])}
-            for r in conn.execute("SELECT * FROM actors WHERE archived_at IS NULL ORDER BY is_owner DESC, name")]
+            for r in conn.execute("SELECT * FROM actors WHERE archived_at IS NULL AND runtime != 'service' "
+                                  "ORDER BY is_owner DESC, name")]  # services are no one to chat with
 
 
 def conversation(conn: sqlite3.Connection, actor_id: int, limit: int = 50) -> list[dict]:
