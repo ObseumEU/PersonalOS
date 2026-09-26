@@ -40,6 +40,10 @@ services:
       proxy:
         aliases:
           - personalos
+      # knowlage's own network: its kb container posts new mail to http://personalos/api/events.
+      knowlage:
+        aliases:
+          - personalos
     logging: *logging
 
   # The deployer promotes the Dev agent's commits: it fetches agent/dev from the
@@ -90,3 +94,6 @@ networks:
   proxy:
     external: true
     name: ${PROXY_NETWORK:-my-app-network}
+  knowlage:
+    external: true
+    name: ${KNOWLAGE_NETWORK:-kb_default}
