@@ -10,6 +10,8 @@ export type ChatMember = {
   is_owner: boolean;
   role?: "owner" | "member";
   working: boolean;
+  /** The task a busy agent's live run works on (the chat's "pracuje na T-046 · 12 min"). */
+  current?: { task_id: number | null; task_ref: string | null; title: string | null; since: string; minutes: number } | null;
   remote?: boolean;
   paused?: boolean;
 };

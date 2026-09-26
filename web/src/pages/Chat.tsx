@@ -59,6 +59,18 @@ function KindTag({ m }: { m: ChatMessage }) {
   return null;
 }
 
+/** "pracuje na T-046 · 12 min", linking to the task. */
+function CurrentWork({ c }: { c: NonNullable<ChatMember["current"]> }) {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(c.since).getTime()) / 60000));
+  return (
+    <span className="normal-case text-ink-3" title={c.title ?? undefined}>
+      {" · pracuje na "}
+      {c.task_ref ? <Link to={`/tasks?task=${c.task_ref}`} className="text-accent hover:underline">{c.task_ref}</Link> : "běhu"}
+      {` · ${minutes} min`}
+    </span>
+  );
+}
+
 function WorkingDot({ on }: { on: boolean }) {
   return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${on ? "sonar bg-accent" : "bg-dim"}`} />;
 }
@@ -606,6 +618,7 @@ export default function Chat() {
                       <span key={m.id} className="cap flex items-center gap-1" title={working.has(m.id) ? "working: has a running run" : ""}>
                         {m.kind !== "human" && <WorkingDot on={working.has(m.id)} />}
                         {m.kind !== "human" ? <Link to={`/agents/${m.id}`} className="hover:text-ink-2!">{m.name}</Link> : m.name}
+                        {m.kind !== "human" && m.current && <CurrentWork c={m.current} />}
                       </span>
                     ))}
                     {channel.members.length > 8 && <span className="cap">+{channel.members.length - 8}</span>}

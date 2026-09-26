@@ -10,11 +10,27 @@ part (the task, feedback, messages) changes every run and comes after it.
 from .tools import pos_tools, prompt_section, skills_text
 
 
+CHAT_REASONS = ("dm", "mention", "reply")
+
+
+def _is_chat(m: dict) -> bool:
+    return m.get("reason") in CHAT_REASONS and bool(m.get("channel_id"))
+
+
+def _where(m: dict) -> str:
+    """Where a chat message was written and how to answer it there (same channel, same thread)."""
+    if not m.get("channel_id"):
+        return ""
+    thread = m.get("reply_to") or m["id"]
+    place = "your DM" if m.get("channel") == "dm" else (m.get("channel") or f"channel {m['channel_id']}")
+    return f" in {place}; answer with chat_send(channel={m['channel_id']}, reply_to={thread})"
+
+
 def _messages(msgs: list[dict]) -> str:
     out = []
     for m in msgs:
         # Bodies from agents arrive already wrapped as <external … trust="untrusted">.
-        out.append(f"- from {m['from_name']} (priority {m['priority']}, message {m['id']}):\n{m['body']}")
+        out.append(f"- from {m['from_name']} (priority {m['priority']}, message {m['id']}{_where(m)}):\n{m['body']}")
     return "\n".join(out)
 
 
@@ -25,8 +41,9 @@ def _messages(msgs: list[dict]) -> str:
 HOW_TO_WORK = [
     ("- You have the `pos` MCP server. Call report_progress at milestones only (plan known, work done), "
      "not after every step.", "report_progress", "report_progress"),
-    ("- The worker checks your inbox after every step for you: an owner's change_plan arrives in this "
-     "conversation. Adapt your plan then and ack_message it; you need not call check_inbox yourself.",
+    ("- The worker checks your inbox after every step for you: a change_plan, and any chat message to you "
+     "(a DM, an @mention, a reply), arrives in this conversation. Reply in that chat first, briefly, then "
+     "adapt your plan (report_progress when it changes) and carry on; you need not call check_inbox yourself.",
      None, "check_inbox"),
     ("- To coordinate with people and agents use team chat (chat_send, chat_read; #team, @Name). "
      "Keep it short; it is rate limited.", "chat_send", "chat_send"),
@@ -110,10 +127,21 @@ def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardra
     return "\n\n".join(p for p in parts if p)
 
 
+MID_TASK_CHAT = (
+    "Someone wrote to you in chat while you work on this task. For each chat message: first reply briefly "
+    "in that chat (chat_send to the same channel and thread as given above, in Czech unless they wrote "
+    "otherwise): answer a question from what you know right now, or acknowledge an instruction and say how "
+    "it changes your plan. Then adapt: if it changes the task, report_progress with the new plan and "
+    "continue with it. Do not abandon the task unless they tell you to. A question only: answer it and "
+    "carry on unchanged.")
+
+
 def injection(msgs: list[dict], before_finishing: bool = False) -> str:
     head = ("Before you finish, new information arrived. Check whether it changes your result:"
             if before_finishing else
             "New information arrived while you were working. Stop and take it into account now, "
             "then continue from where you are:")
-    return (f"{head}\n\n{_messages(msgs)}\n\n"
-            "Acknowledge each message with ack_message (say what you changed), then carry on.")
+    tail = [MID_TASK_CHAT] if any(_is_chat(m) for m in msgs) else []
+    if any(not _is_chat(m) for m in msgs):
+        tail.append("Acknowledge each of the other messages with ack_message (say what you changed), then carry on.")
+    return f"{head}\n\n{_messages(msgs)}\n\n" + "\n\n".join(tail)

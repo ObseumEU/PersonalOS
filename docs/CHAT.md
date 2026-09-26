@@ -83,4 +83,18 @@ agent rate limit.
   when the agent posts there, when the run finishes, or 30 s after the last
   sign of life. `GET /api/chat/typing`, each channel's `typing`, and the SSE
   `presence` event carry it, filtered to channels the viewer may read.
+- Talking to a working agent (pos.fastlane, pos_worker.loop): a chat message
+  to an agent with a live run (a DM, an @mention, a reply to it) goes into
+  that run at its next step boundary, like change_plan (Codex `exec resume`,
+  Claude `--resume`), with its channel and thread. The agent replies there
+  first, briefly and in Czech, then adapts (report_progress with the new
+  plan) and carries on; it does not drop the task unless told to. If the run
+  has not picked the message up after 30 s (a long step), the platform
+  answers at once from a snapshot (task, plan, latest progress, last steps
+  from the worker's heartbeats, elapsed time) with one claude-haiku-4-5 call,
+  no tools, recorded as a `chat_fastlane` run of the agent (usage, budget);
+  with no model or budget it posts a code-built status instead. People's
+  messages only, once per message. When the live run answers in that
+  channel, the queued "Chat: answer" task for those messages is closed. The
+  chat header shows a busy agent's work: "pracuje na T-046 · 12 min".
 - Network: chat adds `message` edges (count and last message) to the 3D view.

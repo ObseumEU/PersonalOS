@@ -383,6 +383,8 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
                 versioning.update(conn, ctx, "actor", aid, {"paused_at": now_iso()}, action="pause")
     conn.commit()
     typing_clear(channel_id, ctx.actor_id)  # posted: no longer typing here
+    if not system and author["kind"] != "human":
+        _close_answered(conn, ctx, channel_id, mid)
     from . import wake
 
     for aid in inbox:  # a waiting worker reads it now, not at its next poll
@@ -440,6 +442,26 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     })
     audit.log(conn, ctx, "chat_task", "task", t["id"], channel=ch["id"], message=message_id)
     availability.autoreply(conn, t["id"], message_id)
+
+
+def _close_answered(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, reply_id: int) -> None:
+    """The agent answered in this channel from a run on other work (a chat message went
+    into its running run): its queued "Chat: answer" tasks for messages here, all older
+    than this reply, are done, so it does not answer twice."""
+    from . import tasks
+
+    for t in conn.execute(
+            """SELECT t.id FROM tasks t WHERE t.assignee_id = ? AND t.topic = 'chat' AND t.archived_at IS NULL
+               AND t.status IN ('inbox', 'next') AND EXISTS (SELECT 1 FROM audit_log l WHERE l.action = 'chat_task'
+               AND l.entity = 'task' AND l.entity_id = t.id AND json_extract(l.detail, '$.channel') = ?)""",
+            (ctx.actor_id, channel_id)).fetchall():
+        msgs = [r[0] for r in conn.execute(
+            "SELECT json_extract(detail, '$.message') FROM audit_log WHERE action = 'chat_task' AND entity = 'task' "
+            "AND entity_id = ?", (t["id"],))]
+        if msgs and all(m is not None and m < reply_id for m in msgs):
+            tasks.update(conn, ctx, t["id"], {"status": "done", "progress_note":
+                                              f"Answered in chat (message {reply_id}) during another run."})
+            conn.commit()
 
 
 def send_dm(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, **kw) -> dict:
@@ -684,10 +706,14 @@ def history(conn: sqlite3.Connection, viewer: int, message_id: int) -> list[dict
              "body": h["data"].get("body")} for h in versioning.history(conn, "chat_message", message_id)]
 
 
-def channel_view(conn: sqlite3.Connection, channel_id: int, viewer: int, names=None, working=None) -> dict:
+def channel_view(conn: sqlite3.Connection, channel_id: int, viewer: int, names=None, working=None,
+                 current=None) -> dict:
+    from . import fastlane
+
     ch = _channel(conn, channel_id)
     names = names or _names(conn)
     working = set(working if working is not None else working_ids(conn))
+    current = current if current is not None else fastlane.current_work(conn)
     mem = conn.execute("SELECT actor_id, role, last_read_message_id FROM channel_members WHERE channel_id = ?",
                        (channel_id,)).fetchall()
     mine = next((m for m in mem if m["actor_id"] == viewer), None)
@@ -705,7 +731,8 @@ def channel_view(conn: sqlite3.Connection, channel_id: int, viewer: int, names=N
                         "AND archived_at IS NULL ORDER BY id DESC LIMIT 1", (channel_id,)).fetchone()
     members = [{"id": m["actor_id"], "name": names[m["actor_id"]]["name"], "kind": names[m["actor_id"]]["kind"],
                 "is_owner": bool(names[m["actor_id"]]["is_owner"]), "role": m["role"],
-                "working": m["actor_id"] in working} for m in mem if m["actor_id"] in names]
+                "working": m["actor_id"] in working, "current": current.get(m["actor_id"])}
+               for m in mem if m["actor_id"] in names]
     if ch["kind"] == "dm":
         other = [m for m in members if m["id"] != viewer] or members
         title = " · ".join(m["name"] for m in other) if mine else " ↔ ".join(m["name"] for m in members)
@@ -732,15 +759,20 @@ def list_channels(conn: sqlite3.Connection, viewer: int, include_all: bool = Fal
                OR (c.kind = 'group' AND c.visibility != 'private') OR ?)
            ORDER BY COALESCE((SELECT MAX(id) FROM chat_messages x WHERE x.channel_id = c.id), 0) DESC, c.id""",
         (viewer, 1 if include_all and is_owner else 0)).fetchall()
-    names, working = _names(conn), working_ids(conn)
-    return [channel_view(conn, r["id"], viewer, names, working) for r in rows]
+    from . import fastlane
+
+    names, working, current = _names(conn), working_ids(conn), fastlane.current_work(conn)
+    return [channel_view(conn, r["id"], viewer, names, working, current) for r in rows]
 
 
 def members_overview(conn: sqlite3.Connection) -> list[dict]:
     """Everyone who can chat, with the working indicator (for @autocomplete)."""
-    working = set(working_ids(conn))
+    from . import fastlane
+
+    working, current = set(working_ids(conn)), fastlane.current_work(conn)
     return [{"id": r["id"], "name": r["name"], "kind": r["kind"], "is_owner": bool(r["is_owner"]),
-             "remote": bool(r["a2a_url"]), "paused": bool(r["paused_at"]), "working": r["id"] in working}
+             "remote": bool(r["a2a_url"]), "paused": bool(r["paused_at"]), "working": r["id"] in working,
+             "current": current.get(r["id"])}
             for r in conn.execute("SELECT * FROM actors WHERE archived_at IS NULL ORDER BY is_owner DESC, name")]
 
 

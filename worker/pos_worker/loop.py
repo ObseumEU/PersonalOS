@@ -7,6 +7,10 @@ inbox after every completed step (a safe point):
 - stop:        stop the run now (PersonalOS has already paused the agent)
 - change_plan: stop at this point and continue the same Codex session with
                the message as the next instruction (`codex exec resume`)
+- a chat message addressed to the agent (a DM, an @mention, a reply to it):
+               like change_plan, it goes into the running conversation at this
+               safe point, with where to answer; the agent replies in that chat
+               and adapts its plan (pos_worker.prompt.injection)
 - fyi:         remember it and hand it over at the next resume point, or
                before the run finishes
 """
@@ -52,9 +56,33 @@ class _AliveTicker:
         self._stop.set()
 
 
+CHAT_REASONS = ("dm", "mention", "reply")  # a chat message addressed to the agent: it answers mid-run
+
+
+def is_chat(m: dict) -> bool:
+    return m.get("reason") in CHAT_REASONS and m.get("priority") != "stop"
+
+
+def step_label(ev: dict, last_tool: str) -> str:
+    """What the step that just completed was, for the platform's status snapshot."""
+    item = ev.get("item") or {}
+    if item.get("command"):
+        return f"{item.get('type', 'command')}: {str(item['command'])[:80]}"
+    return last_tool or str(item.get("type") or "step")
+
+
+def tool_of(ev: dict) -> str:
+    """The tool a Claude assistant event calls ('' when none)."""
+    msg = (ev.get("raw") or {}).get("message")
+    for c in (msg.get("content") if isinstance(msg, dict) else None) or []:
+        if isinstance(c, dict) and c.get("type") == "tool_use":
+            return str(c.get("name") or "")[:80]
+    return ""
+
+
 class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
-                 max_resumes: int = 6, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
+                 max_resumes: int = 12, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
                  tools_dir: str | None = None, triage: Callable[[dict, dict], dict | None] | None = None):
         self.client = client
         # The cheap check before a full run (pos_worker.triage): (me, task) -> verdict or None.
@@ -181,9 +209,12 @@ class Worker:
         resumes = 0
         steps = 0
         outcome = "ok"
+        last_tool = ""
         while True:
             interrupted = None
             for ev in session.run(prompt):
+                if ev.get("type") == "agent_message":
+                    last_tool = tool_of(ev) or last_tool
                 if ev.get("type") != "item.completed":
                     continue
                 # Safe point: the last step is complete.
@@ -192,7 +223,7 @@ class Worker:
                     session.stop()
                     interrupted = "step_cap"
                     break
-                state = self.client.heartbeat(run_id)
+                state = self.client.heartbeat(run_id, step_label(ev, last_tool), steps)
                 if state.get("run_cancelled") or state.get("frozen") or state.get("paused"):
                     session.stop()
                     interrupted = "cancelled"
@@ -202,8 +233,8 @@ class Worker:
                     session.stop()
                     interrupted = "cancelled"
                     break
-                urgent = [m for m in msgs if m["priority"] == "change_plan"]
-                pending_fyi += [m for m in msgs if m["priority"] == "fyi"]
+                urgent = [m for m in msgs if m["priority"] == "change_plan" or is_chat(m)]
+                pending_fyi += [m for m in msgs if m["priority"] == "fyi" and not is_chat(m)]
                 if urgent and resumes < self.max_resumes:
                     session.stop()
                     prompt = injection(urgent + pending_fyi)

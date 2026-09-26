@@ -325,11 +325,19 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
             "max_budget_usd": access.run_cap_usd(conn, ctx.actor_id)}
 
 
+class BeatIn(BaseModel):
+    step: str | None = None  # what the completed step was (a tool, a command), for the chat status snapshot
+    steps: int | None = None
+
+
 @router.post("/runs/{run_id}/heartbeat")
-def heartbeat(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+def heartbeat(run_id: int, body: BeatIn | None = None, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    from . import fastlane
+
     conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND actor_id = ?", (now_iso(), run_id, ctx.actor_id))
     conn.commit()
     chat.typing_run_step(run_id)
+    fastlane.step(run_id, body.step if body else None, body.steps if body else None)
     return _state(conn, ctx.actor_id, run_id)
 
 
@@ -354,6 +362,9 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     chat.typing_clear(run_id=run_id)
+    from . import fastlane
+
+    fastlane.forget(run_id)
     out = dict(row)
     # The run failed because its engine hit the subscription limit: not the task's
     # fault. It goes straight back to the queue; the next run uses the other engine.

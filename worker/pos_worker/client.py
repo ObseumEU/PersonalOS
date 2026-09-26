@@ -60,8 +60,10 @@ class PosClient:
         """{"run_id", "engine", "model"}: PersonalOS picks the runtime (Claude or Codex)."""
         return self._post("/api/worker/runs", {"task_id": ref, "kind": kind})
 
-    def heartbeat(self, run_id: int) -> dict:
-        return self._post(f"/api/worker/runs/{run_id}/heartbeat")
+    def heartbeat(self, run_id: int, step: str | None = None, steps: int | None = None) -> dict:
+        """A completed step: the run's state back; `step` (what it was) feeds the chat status snapshot."""
+        body = {k: v for k, v in (("step", step), ("steps", steps)) if v is not None}
+        return self._post(f"/api/worker/runs/{run_id}/heartbeat", body)
 
     def alive(self, run_id: int) -> None:
         """The tick between steps: keeps a chat run's "working" indicator (never raises)."""

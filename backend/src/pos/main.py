@@ -102,13 +102,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         hr_task = (asyncio.create_task(integrations.hr_loop(settings.db_path))
                    if hr_schedule.HRSettings().scheduler else None)
         sched_task = asyncio.create_task(scheduler.loop(settings.db_path)) if settings.scheduler else None
+        from . import fastlane
+
+        # A person's chat message to a busy agent gets a fast answer when its run is inside a long step.
+        fast_task = (asyncio.create_task(fastlane.loop(settings.db_path))
+                     if settings.scheduler and os.environ.get("POS_FASTLANE", "1") != "0" else None)
         if settings.scheduler and os.environ.get("POS_CLAUDE_SELFCHECK") == "1":
             asyncio.get_running_loop().run_in_executor(None, _claude_selfcheck, settings.db_path)
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
-            for task in (hr_task, sched_task):
+            for task in (hr_task, sched_task, fast_task):
                 if task:
                     task.cancel()
 
