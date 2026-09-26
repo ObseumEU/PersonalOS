@@ -156,7 +156,8 @@ def containers(s: Store, t: dict, service_of, items: list[dict], now: float) -> 
         prev = s.one("SELECT * FROM containers WHERE name = ?", name)
         streaks = s.meta(f"streak:{name}") or {}
         down = streaks.get("down", 0) + 1 if c["status"] != "running" else 0
-        unhealthy = streaks.get("unhealthy", 0) + 1 if c.get("health") == "unhealthy" else 0
+        # an exited one-off (migrations, init) keeps its last health status: only a running one counts
+        unhealthy = streaks.get("unhealthy", 0) + 1 if c.get("health") == "unhealthy" and c["status"] == "running" else 0
         s.set_meta(f"streak:{name}", {"down": down, "unhealthy": unhealthy})
         if prev is not None and c["restart_count"] is not None and prev["restart_count"] is not None:
             delta = c["restart_count"] - prev["restart_count"]

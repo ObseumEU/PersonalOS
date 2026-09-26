@@ -224,6 +224,7 @@ def test_container_rules(sen, clock):
     sen.docker.add("kb-kb-1", restarts=0)
     sen.docker.add("litellm-postgres", status="exited", exit_code=137)
     sen.docker.add("nexus-process-pilot-clamav-1", status="exited", exit_code=0)  # a clean exit is not an outage
+    sen.docker.add("nexus-process-pilot-migrate-1", status="exited", exit_code=0, health="unhealthy")  # a finished one-off
     for i in range(4):
         sen.docker.items["kb-kb-1"]["restarts"] = i
         sen.docker.items["kb-kb-1"]["started"] = f"2026-09-26T08:0{i}:00Z"
