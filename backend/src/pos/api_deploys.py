@@ -91,6 +91,26 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
     return {"id": cur.lastrowid, "task": task_ref}
 
 
+class ReviewAsk(BaseModel):
+    sha: str
+    base: str = ""
+    author: str = ""
+    subject: str = ""
+    commits: int = 0
+
+
+@router.post("/review")
+def review(body: ReviewAsk, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx)):
+    """The QA review gate (pos.deploy_review): pending, approved or returned for this tip."""
+    from . import deploy_review
+
+    try:
+        return deploy_review.ask(conn, ctx, body.sha, base=body.base, author=body.author, subject=body.subject,
+                                 commits=body.commits)
+    except tasks.Invalid as e:
+        raise HTTPException(422, str(e)) from e
+
+
 @router.get("", dependencies=[Depends(require_user)])
 def list_deploys(conn=Depends(get_db)):
     rows = conn.execute("SELECT * FROM deploys ORDER BY id DESC LIMIT 50").fetchall()

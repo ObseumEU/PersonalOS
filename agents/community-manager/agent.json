@@ -1,0 +1,30 @@
+{
+  "name": "Community Manager",
+  "display_name": "Komunita",
+  "purpose": "Komunita na Discordu Obseum: odpovědi na otázky z dokumentace a knowledge base, přehled kanálů, hlášení zmínek; příspěvky jen ke schválení.",
+  "role": "community",
+  "team": "growth",
+  "reports_to": "Head of Growth",
+  "permissions": [
+    "approvals:request",
+    "events:emit",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-haiku-4-5",
+  "effort": "low",
+  "budget": {
+    "usd_day": 1.0,
+    "usd_month": 15.0,
+    "usd_run": 0.3,
+    "runs_day": 15
+  },
+  "dormant": true,
+  "note": "Dormant until a Discord MCP server is connected (REVIZE-FUNKCI #33): no schedule, so it costs nothing; Discord mentions are routed to it. Replaces the Community agent."
+}

@@ -44,13 +44,13 @@ def make(conn, ctx, tmp_path, name, **kw):
 
 
 def test_owner_creates_agent_with_key_and_profile(conn, me, tmp_path):
-    out = make(conn, me, tmp_path, "Mail agent", lifetime="long_lived", permissions=["tasks:read", "tasks:claim"])
+    out = make(conn, me, tmp_path, "Head of Customer Success", lifetime="long_lived", permissions=["tasks:read", "tasks:claim"])
     assert out["created"] and out["api_key"].startswith("pos_")
     a = out["agent"]
-    assert (a["kind"], a["lifetime"], a["purpose"]) == ("agent", "long_lived", "Mail agent work")
+    assert (a["kind"], a["lifetime"], a["purpose"]) == ("agent", "long_lived", "Head of Customer Success work")
     assert a["permissions"] == ["tasks:claim", "tasks:read"]
     assert actors.actor_for_key(conn, out["api_key"]) == a["id"]
-    assert "Mail agent work" in a["instructions"]
+    assert "Head of Customer Success work" in a["instructions"]
 
 
 def test_agent_cannot_grant_more_than_it_has(conn, me, tmp_path):
@@ -174,20 +174,20 @@ def test_mcp_permissions_and_freeze(tmp_path):
 
 def test_http_api(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
-        r = client.post("/api/agents", json={"name": "Dev agent", "purpose": "GitHub issues to PRs",
+        r = client.post("/api/agents", json={"name": "Software Engineer", "purpose": "GitHub issues to PRs",
                                              "permissions": ["tasks:read", "tasks:claim"]})
         assert r.status_code == 201 and r.json()["created"]
         aid = r.json()["agent"]["id"]
         names = [a["name"] for a in client.get("/api/agents").json()["agents"]]
-        assert "Dev agent" in names and "Owner" in names
-        assert client.get(f"/api/agents/{aid}").json()["name"] == "Dev agent"
+        assert "Software Engineer" in names and "Owner" in names
+        assert client.get(f"/api/agents/{aid}").json()["name"] == "Software Engineer"
         assert client.post(f"/api/agents/{aid}/pause").json()["paused"] is True
         assert client.post("/api/system/freeze", json={"reason": "t"}).json()["frozen"] is True
         assert client.get("/api/system/freeze").json()["frozen"] is True
         assert client.post("/api/system/unfreeze").json()["frozen"] is False
         assert isinstance(client.get("/api/board").json(), list)
         assert client.get("/api/approvals").json() == []
-        assert client.post("/api/agents", json={"name": "Dev agent", "purpose": "dup"}).status_code == 422
+        assert client.post("/api/agents", json={"name": "Software Engineer", "purpose": "dup"}).status_code == 422
 
 
 def test_network(conn, me, assistant):
@@ -216,7 +216,7 @@ def test_message_priorities_and_trust(conn, me, assistant, tmp_path):
     agents.send_message(conn, me, worker, "Also check the invoice", priority="fyi")
     inbox = agents.check_inbox(conn, worker)
     assert [m["priority"] for m in inbox] == ["change_plan", "fyi"]
-    assert inbox[0]["trust"] == "agent" and inbox[0]["body"].startswith("<external source=\"agent:Assistant\"")
+    assert inbox[0]["trust"] == "agent" and inbox[0]["body"].startswith("<external source=\"agent:Executive_Assistant\"")
     assert inbox[1]["trust"] == "member" and inbox[1]["body"] == "Also check the invoice"
     assert agents.ack_message(conn, Ctx(worker), inbox[0]["id"], "moved my plan")["acked"]
     st = agents.status(conn, worker)

@@ -81,7 +81,7 @@ function OrgPanel({ a, onSaved }: { a: Detail; onSaved: (p: Promise<unknown>, do
   const managers = (org?.members ?? []).filter((m) => m.id !== a.id);
   const field = "h-7 rounded border border-line bg-bg px-2 font-mono text-xs outline-none focus:border-accent";
   return (
-    <Panel fig="ORG" title="Place in the team" right="owner only · everyone reports to the Project manager">
+    <Panel fig="ORG" title="Place in the team" right="owner only · the lead comes from agents/<slug>/agent.json">
       <div className="flex flex-wrap items-end gap-4 p-4">
         <label className="flex flex-col gap-1">
           <span className="cap">ROLE</span>
@@ -116,7 +116,7 @@ function OrgPanel({ a, onSaved }: { a: Detail; onSaved: (p: Promise<unknown>, do
               onChange={(e) => onSaved(agentsApi.setOrg(a.id, { reports_to: e.target.value ? Number(e.target.value) : null }), "Manager saved")}
               className={`${field} w-48`}
             >
-              <option value="">default (Project manager)</option>
+              <option value="">default (COO)</option>
               {managers.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.is_owner ? "You (owner)" : m.name}

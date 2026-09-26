@@ -15,7 +15,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from . import actors, audit, tasks, versioning
+from . import actors, audit, roles, tasks, versioning
 from .core import Ctx, Forbidden, now_iso
 
 ENTITY = "hire"
@@ -212,7 +212,7 @@ def probation_review(conn: sqlite3.Connection) -> dict:
 
 # ------------------------------------------------------------------ hiring without the owner (HR and leads)
 
-HR_NAME = "HR agent"
+HR_NAME = roles.HR
 # Only the owner grants these; no hire hands them out.
 OWNER_ONLY_PERMISSIONS = {"agents:create", "browser:use", "access:manage"}
 # A new agent's own limits by its budget class (the Access manager changes them later).
@@ -347,7 +347,7 @@ def _commit_agent_files(conn: sqlite3.Connection, ctx: Ctx, aid: int, name: str,
     like every instruction change; the deployer checks and ships it."""
     from . import agents
 
-    dev = actors.find_by_name(conn, "Dev agent")
+    dev = actors.find_by_name(conn, roles.ENGINEER)
     if dev is None or dev["archived_at"]:
         return None
     slug = agents._slug(name)

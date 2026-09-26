@@ -43,8 +43,8 @@ def test_a_project_has_a_lead_members_a_channel_and_its_lead_reviews(co):
     got = projects.get(c, me, p["slug"])
     assert got["counts"]["done"] == 1 and got["tasks"][0]["ref"] == t["ref"]
     with pytest.raises(Forbidden):
-        projects.add_member(c, Ctx(ids["Writer"]), p["slug"], "Assistant")
-    assert len(projects.add_member(c, Ctx(ids["Designer"]), p["slug"], "Assistant")["members"]) == 3
+        projects.add_member(c, Ctx(ids["Writer"]), p["slug"], "Executive Assistant")
+    assert len(projects.add_member(c, Ctx(ids["Designer"]), p["slug"], "Executive Assistant")["members"]) == 3
 
 
 def test_tasks_with_steps_become_projects_once(co):

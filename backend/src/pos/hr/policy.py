@@ -7,7 +7,8 @@ from datetime import timedelta
 
 @dataclass(frozen=True)
 class HRPolicy:
-    max_active_agents: int = 10
+    # The company of docs/REORG.md (the owner's request, 2026-09-26): ~21 role agents plus room to hire.
+    max_active_agents: int = 26
     max_new_agents_per_agent_per_day: int = 2
     # Schedules an agent creates for itself or its team (pos.schedules).
     max_active_schedules_per_agent: int = 5

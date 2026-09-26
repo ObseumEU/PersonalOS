@@ -76,32 +76,12 @@ services:
       - ${POS_DEV_WORK:-./data/dev-work}:/dev-work:ro
     logging: *logging
 
-  # The Dev agent works in its own clone (branch agent/dev, never pushes).
-  dev-agent:
-    environment:
-      WORKER_WORKDIR: /work/PersonalOS
+  agent-pool:
     volumes: !override
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - ${POS_DEV_WORK:-./data/dev-work}:/work
-      - ./data/worker-keys/dev-agent:/run/pos-key:ro
-    logging: *logging
-  assistant:
-    logging: *logging
-  mail-agent:
-    logging: *logging
-  community-agent:
-    logging: *logging
-  agent-coach:
-    logging: *logging
-  access-manager:
-    logging: *logging
-  project-manager:
-    logging: *logging
-  monitor:
-    logging: *logging
-  hr-agent:
-    logging: *logging
-  agent-pool:
+      - agent-pool-work:/work
+      - ${POS_DEV_WORK:-./data/dev-work}/PersonalOS:/work/PersonalOS
+      - ./data/worker-keys/pool:/run/pos-keys:ro
     logging: *logging
 
   # The sentinel joins the networks of what it watches. "api" is ambiguous there (Nexus has one too),

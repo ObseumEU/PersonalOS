@@ -1,4 +1,4 @@
-"""The Chief of Staff (Asistent vedení): the week packet, goals, the weekly job and the meeting."""
+"""The Chief of Staff (Chief of Staff): the week packet, goals, the weekly job and the meeting."""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -81,7 +81,7 @@ def test_packet_counts_tasks_agents_dev_and_deltas(conn, me, tmp_path):
     from pos import projects
 
     proj = projects.create(conn, me, name="Web shop", goal="sell", channel=False)
-    dev = agents.create_agent(conn, me, name="Dev agent", purpose="code", lifetime="long_lived",
+    dev = agents.create_agent(conn, me, name="Software Engineer", purpose="code", lifetime="long_lived",
                               data_dir=tmp_path)["agent"]
     # This week: 3 done (one high priority in a project, one by the agent), 1 waiting, 1 overdue.
     big = _done(conn, me, "Launch the checkout", 1, priority=1, project=proj["id"], estimate_min=240)
@@ -118,13 +118,13 @@ def test_packet_counts_tasks_agents_dev_and_deltas(conn, me, tmp_path):
     assert split["Web shop"] == 1 and split["#api"] == 1
     assert t["highlights"][0]["ref"] == big["ref"]  # the highest priority, largest item first
     who = {a["name"]: a for a in t["by_assignee"]}
-    assert who["Dev agent"]["kind"] == "agent" and who["Dev agent"]["done"] == 1
+    assert who["Software Engineer"]["kind"] == "agent" and who["Software Engineer"]["done"] == 1
     assert t["waiting_list"][0]["ref"] == w["ref"]
 
     a = p["agents"]
     assert (a["runs"], a["ok"], a["errors"], a["success_rate"]) == (4, 3, 1, 0.75)
     assert a["cost_usd"] == 1.5 and a["accepted"] == 1 and a["cost_per_accepted"] == 1.5
-    assert a["per_agent"][0]["name"] == "Dev agent" and a["per_agent"][0]["tokens"] == 1500
+    assert a["per_agent"][0]["name"] == "Software Engineer" and a["per_agent"][0]["tokens"] == 1500
 
     k = p["kpis"]
     assert k["tasks_done"] == {"value": 3, "prev": 1, "delta": 2}
@@ -312,7 +312,7 @@ def test_the_whole_meeting(conn, me, tmp_path):
     # The owner wrote while the agent was busy: reply shows it first instead of posting blindly.
     chat.send(conn, me, row["channel_id"], "Ano, cíl: 50 plateb do 31. 3.", reply_to=root)
     tasks.claim(conn, cos, t["id"])
-    chat.send(conn, me, row["channel_id"], "A ať to dělá Dev agent.", reply_to=root)
+    chat.send(conn, me, row["channel_id"], "A ať to dělá Software Engineer.", reply_to=root)
     first = weekly.reply(conn, cos, "Rozumím.")
     assert not first["posted"] and len(first["new_from_owner"]) == 2
 

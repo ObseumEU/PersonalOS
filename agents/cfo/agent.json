@@ -1,0 +1,41 @@
+{
+  "name": "CFO",
+  "display_name": "Finanční ředitel (CFO)",
+  "purpose": "Finance: náklady na LLM (LiteLLM, předplatné Claude a Codex, spotřeba agentů), předplatná a faktury z pošty, cena za úkol; týdenní a měsíční report nákladů.",
+  "role": "cfo",
+  "team": "finance",
+  "reports_to": "CEO",
+  "permissions": [
+    "approvals:request",
+    "hr:read",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "low",
+  "budget": {
+    "usd_day": 1.0,
+    "usd_month": 15.0,
+    "usd_run": 0.5,
+    "runs_day": 8
+  },
+  "schedules": [
+    {
+      "name": "CFO: týdenní report nákladů",
+      "schedule": "weekly mon 08:30",
+      "title": "CFO: týdenní report nákladů",
+      "notes": "Purpose: the company knows what it spends and on what. Source: the CFO's Monday routine (after the Access manager's budget review).\n\nFollow 'Weekly cost report' in your instructions; on the first Monday of the month write the monthly report instead.",
+      "definition_of_done": "A cost note (topic finance) exists and the CEO has a two-line summary.",
+      "priority": 2,
+      "estimate_min": 10,
+      "topic": "finance"
+    }
+  ]
+}

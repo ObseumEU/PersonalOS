@@ -115,12 +115,12 @@ def test_limits_kill_switch_and_due_firing(conn, tmp_path):
 
 
 def test_team_schedule_for_another_agent_needs_tasks_write(conn, tmp_path):
-    hr = actors.find_by_name(conn, "HR agent")["id"]  # has tasks:write
+    hr = actors.find_by_name(conn, "Head of People")["id"]  # has tasks:write
     worker = _agent(conn, tmp_path, "Helper")
     s = schedules.create(conn, Ctx(hr, via="mcp"), {
         "name": "Daily agent review", "schedule": "daily 08:00", "visibility": "team",
         "assignee": {"type": "agent", "id": worker}, "notes": "Review open and stuck tasks"})
-    assert s["created_by_name"] == "HR agent" and s["assignee_name"] == "Helper"
+    assert s["created_by_name"] == "Head of People" and s["assignee_name"] == "Helper"
     assert s in schedules.list_schedules(conn, actor_id=worker)  # shows on both pages
     assert s in schedules.list_schedules(conn, actor_id=hr)
     res = schedules.fire(conn, s["id"])

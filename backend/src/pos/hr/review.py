@@ -231,6 +231,9 @@ def run_daily_review(
     by_id = {a.id: a for a in agents}
     for proposal in result.proposals:
         agent = by_id.get(proposal.agent_id)
+        if proposal.kind is ProposalKind.ARCHIVE_IDLE and agent is not None and agent.seeded \
+                and _dormant(agent.name):
+            continue  # a dormant role from git (agent.json "dormant") is idle on purpose
         if proposal.kind in ARCHIVE_KINDS and agent is not None and agent.seeded:
             # A role agent from git is not HR's to retire: its lead gets the proposal.
             result.task_ids.append(actions.create_task(
@@ -251,3 +254,11 @@ def run_daily_review(
             result.task_ids.append(actions.create_task(
                 title, body, assignee=coach_id if coach_job and coach_id else hr_agent_id))
     return result
+
+
+def _dormant(name: str) -> bool:
+    try:
+        from ..agents_code import is_dormant
+    except ImportError:  # pos.hr without the core
+        return False
+    return is_dormant(name)

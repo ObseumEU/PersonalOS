@@ -419,7 +419,7 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     without an answer; a message with a priority steers work already running and
     is not a question): its worker (own, pool or A2A, pos.workers) gets a task to
     reply in this channel. A service or an agent without a worker answers in code
-    and the Project manager gets the message (availability.forward_unserved).
+    and the CEO gets the message (availability.forward_unserved).
     Messages that arrive while that task is still open join it instead of a new
     one. When the agent cannot run now (usage limit, budget, pause, its worker is
     down), the platform answers at once with the reason (pos.availability)."""

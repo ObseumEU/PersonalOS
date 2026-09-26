@@ -1,0 +1,31 @@
+{
+  "name": "COO",
+  "display_name": "Provozní ředitel (COO)",
+  "purpose": "Provoz a dodávky: projekty, plánování, rozdělení týmové práce na kroky, standup, koordinace mezi týmy a dotahování zaseknuté práce.",
+  "role": "project_manager",
+  "team": "leadership",
+  "reports_to": "CEO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "routes:write",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:review",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium",
+  "budget": {
+    "usd_day": 3.0,
+    "usd_month": 45.0,
+    "usd_run": 1.0,
+    "runs_day": 20
+  },
+  "note": "Takes over the Project manager's code role (pos.org PM_NAME): unrouted team work, the standup, the default lead of hired agents and the fallback for messages to services."
+}

@@ -1,0 +1,42 @@
+{
+  "name": "Security Engineer",
+  "display_name": "Bezpečnost",
+  "purpose": "Bezpečnost: revize přístupů se Správcem přístupů, hygiena tajemství, závislosti a CVE, kontrola veřejně vystavených služeb a endpointů; nálezy s konkrétní opravou.",
+  "role": "security",
+  "team": "engineering",
+  "reports_to": "CTO",
+  "permissions": [
+    "approvals:request",
+    "hr:read",
+    "messages:send",
+    "ops:observe",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "low",
+  "budget": {
+    "usd_day": 1.5,
+    "usd_month": 20.0,
+    "usd_run": 0.6,
+    "runs_day": 6
+  },
+  "schedules": [
+    {
+      "name": "Bezpečnost: týdenní sken expozice",
+      "schedule": "weekly tue 09:00",
+      "title": "Bezpečnost: týdenní sken expozice",
+      "notes": "Purpose: find what is exposed or leaking before someone else does. Source: the Security Engineer's weekly routine.\n\nFollow 'Weekly exposure scan' in your instructions (and the monthly access review on the first Tuesday of the month).",
+      "definition_of_done": "A Czech note (topic bezpecnost) with findings by severity; each real finding is a task with an owner.",
+      "priority": 2,
+      "estimate_min": 15,
+      "topic": "bezpecnost"
+    }
+  ]
+}

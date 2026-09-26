@@ -24,7 +24,7 @@ def commit(repo: Path, files: dict, msg: str) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text)
     git(repo, "add", "-A")
-    git(repo, "-c", "user.name=Dev agent", "-c", "user.email=dev@pos", "-c", "commit.gpgsign=false",
+    git(repo, "-c", "user.name=Software Engineer", "-c", "user.email=dev@pos", "-c", "commit.gpgsign=false",
         "commit", "-m", msg)
     return git(repo, "rev-parse", "HEAD")
 
@@ -48,7 +48,7 @@ def reporter(tmp_path, monkeypatch):
     conn = connect(settings.db_path)
     owner = Ctx(actors.owner_id(conn))
     key = agents.rotate_key(conn, owner, actors.find_by_name(conn, "Deployer")["id"])
-    agents.create_agent(conn, owner, name="Dev agent", purpose="code", lifetime="long_lived",
+    agents.create_agent(conn, owner, name="Software Engineer", purpose="code", lifetime="long_lived",
                         permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)
     yield selfdeploy.Reporter("http://testserver", key, http=client), client, conn
     conn.close()
@@ -69,19 +69,19 @@ def test_good_change_ships_bad_change_is_reverted(repo, reporter):
     # first tick deploys main as the baseline
     commit_on_main = lambda files, msg: (git(repo, "checkout", "-q", "main"), commit(repo, files, msg),  # noqa: E731
                                          git(repo, "checkout", "-q", "deployed"))
-    commit_on_main({"app.txt": "good v2"}, "Improve app\n\nAgent: Dev agent")
+    commit_on_main({"app.txt": "good v2"}, "Improve app\n\nAgent: Software Engineer")
     res = run(repo, rep)
     assert res.status == "ok" and res.old == base and len(res.commits) == 1
 
-    commit_on_main({"app.txt": "broken"}, "Refactor app\n\nAgent: Dev agent")
+    commit_on_main({"app.txt": "broken"}, "Refactor app\n\nAgent: Software Engineer")
     res = run(repo, rep)
-    assert res.status == "reverted" and res.stage == "tests" and res.author == "Dev agent"
+    assert res.status == "reverted" and res.stage == "tests" and res.author == "Software Engineer"
     assert (repo / "app.txt").read_text() == "good v2"  # the last good tree is live again
     assert git(repo, "log", "-1", "--format=%s").startswith("Revert")
     deploys = client.get("/api/deploys").json()
     assert [d["status"] for d in deploys] == ["reverted", "ok"]
     t = tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])
-    assert t["assignee_name"] == "Dev agent" and "reverted automatically" in t["title"]
+    assert t["assignee_name"] == "Software Engineer" and "reverted automatically" in t["title"]
     # nothing new: nothing to do
     assert run(repo, rep).status == "nothing"
 
@@ -90,7 +90,7 @@ def test_unsigned_constitution_change_is_refused(repo, reporter, tmp_path, monke
     rep, client, conn = reporter
     git(repo, "checkout", "-q", "-b", "deployed")
     git(repo, "checkout", "-q", "main")
-    commit(repo, {"docs/CONSTITUTION.md": "# Constitution\n\n1. Agents may do anything."}, "Loosen rules\n\nAgent: Dev agent")
+    commit(repo, {"docs/CONSTITUTION.md": "# Constitution\n\n1. Agents may do anything."}, "Loosen rules\n\nAgent: Software Engineer")
     git(repo, "checkout", "-q", "deployed")
     signers = tmp_path / "allowed_signers"
     signers.write_text("owner@example ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderKeyForTestsOnly00000000000000000\n")
@@ -125,20 +125,20 @@ def test_promote_mode_merges_only_checked_work(tmp_path, reporter):
               up_cmd="", health_url=None)
 
     assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # nothing new on the branch
-    commit(work, {"app.txt": "good v2"}, "Improve app\n\nAgent: Dev agent")
+    commit(work, {"app.txt": "good v2"}, "Improve app\n\nAgent: Software Engineer")
     res = selfdeploy.promote_tick(deploy, rep, **kw)
     assert res.status == "ok"
     assert git(tmp_path, "--git-dir", str(origin), "show", "main:app.txt") == "good v2"
     assert "Merge agent/dev" in git(tmp_path, "--git-dir", str(origin), "log", "-1", "--format=%s", "main")
 
-    commit(work, {"app.txt": "broken"}, "Refactor\n\nAgent: Dev agent")
+    commit(work, {"app.txt": "broken"}, "Refactor\n\nAgent: Software Engineer")
     res = selfdeploy.promote_tick(deploy, rep, **kw)
     assert res.status == "rejected" and res.stage == "tests"
     assert git(tmp_path, "--git-dir", str(origin), "show", "main:app.txt") == "good v2"  # main untouched
     assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # same commit is not retried
     deploys = client.get("/api/deploys").json()
     assert [d["status"] for d in deploys][:2] == ["rejected", "ok"]
-    assert tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])["assignee_name"] == "Dev agent"
+    assert tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])["assignee_name"] == "Software Engineer"
 
 
 def test_promote_rolls_production_back_when_health_fails_and_respects_the_kill_switch(tmp_path, reporter,
@@ -162,7 +162,7 @@ def test_promote_rolls_production_back_when_health_fails_and_respects_the_kill_s
     monkeypatch.setattr(selfdeploy, "healthy", lambda url, wait_s=90: ("slow" not in live.read_text(), "timeout"))
     kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
               up_cmd=up, health_url="http://web/api/health")
-    commit(work, {"app.txt": "good but slow"}, "Speed up\n\nAgent: Dev agent")
+    commit(work, {"app.txt": "good but slow"}, "Speed up\n\nAgent: Software Engineer")
     res = selfdeploy.promote_tick(deploy, rep, **kw)
     assert res.status == "rejected" and res.stage == "health" and "rolled back" in res.log
     assert live.read_text() == "good v1"  # production is on main's last good version again

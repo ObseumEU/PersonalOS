@@ -30,8 +30,11 @@ COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "heartbeat")
 
 def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:
     """(shown, hidden) pos MCP tools: what the agent's permissions allow, narrowed
-    by WORKER_POS_TOOLS; the COMMS tools stay when permitted."""
+    by its profile's pos_tools (agent.json) or WORKER_POS_TOOLS; the COMMS tools
+    stay when permitted."""
     permitted = list(me.get("pos_tools") or [])
+    if narrow is None:
+        narrow = (me.get("profile") or {}).get("pos_tools")
     raw = os.environ.get("WORKER_POS_TOOLS", "") if narrow is None else narrow
     wanted = {t.removeprefix("mcp__pos__") for t in tool_list(raw)}
     shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]

@@ -34,7 +34,7 @@ from . import actors, audit
 from .core import Ctx, now_iso
 
 SOURCE = "grafana"
-RULE = "Grafana alert → Monitor"
+RULE = "Grafana alert → Hlídač"
 LOKI_MAX_MINUTES = 60
 LOKI_MAX_LINES = 200
 LINE_CHARS = 400
@@ -95,7 +95,7 @@ def token() -> str:
 # ------------------------------------------------------------------ set-up
 
 def ensure(conn: sqlite3.Connection) -> dict:
-    """The routing rule "Grafana alert → Monitor" and the Monitor's ops:observe
+    """The routing rule "Grafana alert → Hlídač" and the Monitor's ops:observe
     grant, once each (a rule or grant the owner changed later stays theirs).
     Without the Monitor agent nothing is created: alerts then reach the owner
     through pos.monitor's fallback (ask_owner)."""

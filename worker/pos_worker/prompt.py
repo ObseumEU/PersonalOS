@@ -49,8 +49,8 @@ HOW_TO_WORK = [
      "Keep it short; it is rate limited.", "chat_send", "chat_send"),
     ("- Anything that leaves PersonalOS (e-mail, posts, payments, merges) needs request_approval first.",
      None, "request_approval"),
-    ("- Chain of command: report to your lead, not the owner. Only the top of the chain (the CEO, or the "
-     "Project manager while there is no CEO) contacts the owner; nobody else DMs him, @mentions him or opens "
+    ("- Chain of command: report to your lead, not the owner. Only the top of the chain (the CEO) "
+     "contacts the owner; nobody else DMs him, @mentions him or opens "
      "tickets for him, unless your instructions name a narrow exception. Replying to the owner when he wrote "
      "to you is always fine. Before contacting the owner, ask: can my lead decide this? If yes, ask the lead "
      "(a message or a task for them); org_chart shows who your lead is.", None, None),

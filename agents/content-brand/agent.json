@@ -1,0 +1,39 @@
+{
+  "name": "Content & Brand",
+  "display_name": "Obsah a značka",
+  "purpose": "Obsah a značka: příspěvky na LinkedIn a osobní značka majitele, texty na web; vždy jen koncepty ke schválení.",
+  "role": "content",
+  "team": "growth",
+  "reports_to": "Head of Growth",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium",
+  "budget": {
+    "usd_day": 2.0,
+    "usd_month": 30.0,
+    "usd_run": 1.0,
+    "runs_day": 8
+  },
+  "schedules": [
+    {
+      "name": "Obsah: týdenní návrhy",
+      "schedule": "weekly wed 09:00",
+      "title": "Obsah: týdenní návrhy",
+      "notes": "Purpose: a steady flow of good posts without the owner writing them. Source: the Content & Brand routine.\n\nFollow 'Weekly drafts' in your instructions.",
+      "definition_of_done": "1-2 post drafts wait in the approval queue (request_outbound), or the note says why none.",
+      "priority": 2,
+      "estimate_min": 20,
+      "topic": "obsah"
+    }
+  ]
+}

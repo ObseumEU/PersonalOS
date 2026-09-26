@@ -61,7 +61,7 @@ def test_the_specialist_comes_from_its_file_and_runs_in_the_pool(ha):
     conn, a = ha["conn"], ha["agent"]
     assert a is not None and a["engine"] == "claude" and a["model"] == "claude-sonnet-5"
     assert workers.reply_path(conn, a) == {"kind": "pool", "name": "pool/home-assistant-specialist"}
-    assert actors.get(conn, a["reports_to"])["name"] == "Project manager"
+    assert actors.get(conn, a["reports_to"])["name"] == "CTO"
     assert agents.instructions_of(a) is None or "Home Assistant" in agents.instructions_of(a)
     budget = {r["metric"]: r["amount"] for r in conn.execute(
         "SELECT metric, amount FROM access_budgets WHERE agent_id = ?", (a["id"],))}

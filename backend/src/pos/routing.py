@@ -1,8 +1,8 @@
 """Event routing (AGENTS-SPEC 6a, step 4): an incoming event becomes a task for
 the right member.
 
-Events come from connector agents (the Mail agent reading Gmail over MCP, the
-Community agent reading Discord), from webhooks (GitHub) or by hand. Rules
+Events come from connectors (knowlage announcing new Gmail mail, Discord once
+connected), from webhooks (GitHub, the sentinel, Grafana) or by hand. Rules
 are data in PersonalOS, versioned like tasks, so the HR agent and the
 self-improvement loop can change them (AGENTS-SPEC 6).
 
@@ -19,7 +19,7 @@ import os
 import re
 import sqlite3
 
-from . import actors, audit, tasks, versioning
+from . import actors, audit, roles, tasks, versioning
 from .core import Ctx, NotFound, now_iso
 
 versioning.register("route", "routing_rules")
@@ -28,26 +28,28 @@ SOURCES = ("gmail", "github", "discord", "calendar", "nexus", "web", "manual", "
 
 
 def dev_repos() -> list[str]:
-    """Repositories the Dev agent works on (its worktree has only these):
+    """Repositories the Software Engineer works on (its worktree has only these):
     POS_DEV_REPOS, comma-separated `owner/name` as GitHub's full_name."""
     raw = os.environ.get("POS_DEV_REPOS", "ObseumEU/PersonalOS")
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
-DEV_RULES = ("GitHub issue labelled agent → Dev agent", "GitHub review request → Dev agent")
+DEV_RULES = (f"GitHub issue labelled agent → {roles.ENGINEER}", f"GitHub review request → {roles.ENGINEER}")
+INVOICE_RULE = f"Invoice e-mail → {roles.CFO}"
 
 DEFAULT_RULES = [
-    # name, source, match, assignee, priority, topic
-    (DEV_RULES[0], "github", {"kind": "issue", "label": "agent"}, "Dev agent", 2, "dev"),
-    (DEV_RULES[1], "github", {"kind": "review_requested"}, "Dev agent", 2, "dev"),
-    ("Invoice e-mail → payment task for Nexus", "gmail", {"text_regex": r"faktur|invoice|rechnung"}, "Nexus", 1, "finance"),
-    ("New e-mail → Mail agent triage", "gmail", {}, "Mail agent", 3, "mail"),
-    ("Discord mention or question → Community agent", "discord", {"kind": "mention"}, "Community agent", 3, "community"),
+    # name, source, match, assignee, priority, topic (names since the 2026-09 reorganisation, docs/REORG.md)
+    (DEV_RULES[0], "github", {"kind": "issue", "label": "agent"}, roles.ENGINEER, 2, "dev"),
+    (DEV_RULES[1], "github", {"kind": "review_requested"}, roles.ENGINEER, 2, "dev"),
+    (INVOICE_RULE, "gmail", {"text_regex": r"faktur|invoice|rechnung"}, roles.CFO, 2, "finance"),
+    ("New e-mail → Customer Success triage", "gmail", {}, roles.CUSTOMER_SUCCESS, 3, "mail"),
+    (f"Discord mention or question → {roles.COMMUNITY}", "discord", {"kind": "mention"}, roles.COMMUNITY, 3,
+     "community"),
 ]
-# Off until the Dev agent can act on it (GitHub write access, repositories other
+# Off until the Software Engineer can act on it (GitHub write access, repositories other
 # than PersonalOS); until then every review request is a wasted run.
-OFF_BY_DEFAULT = {"GitHub review request → Dev agent"}
-# On only while Nexus is reachable (POS_NEXUS_A2A_URL); else its tasks would wait for ever.
+OFF_BY_DEFAULT = {DEV_RULES[1]}
+# The rule of installs before the reorganisation: on only while Nexus is reachable (POS_NEXUS_A2A_URL).
 NEXUS_RULE = "Invoice e-mail → payment task for Nexus"
 
 
@@ -85,7 +87,7 @@ def sync_nexus_rule(conn: sqlite3.Connection) -> None:
 
 
 def sync_dev_repos(conn: sqlite3.Connection) -> None:
-    """Give the default Dev agent rules the repo allowlist (POS_DEV_REPOS) when
+    """Give the default Software Engineer rules the repo allowlist (POS_DEV_REPOS) when
     they have none yet, unless a person changed the rule by hand."""
     for name in DEV_RULES:
         row = conn.execute("SELECT id, match FROM routing_rules WHERE name = ? AND archived_at IS NULL",

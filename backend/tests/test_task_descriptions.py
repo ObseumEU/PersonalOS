@@ -132,21 +132,21 @@ def test_events_carry_purpose_source_and_done(conn, me):
 
 
 def test_handoff_fills_an_empty_description(conn, me, tmp_path):
-    dev = agents.create_agent(conn, me, name="Dev agent", purpose="code", lifetime="long_lived",
+    dev = agents.create_agent(conn, me, name="Software Engineer", purpose="code", lifetime="long_lived",
                               data_dir=tmp_path, permissions=["tasks:read", "tasks:claim"])["agent"]["id"]
-    agents.create_agent(conn, me, name="Mail agent", purpose="mail", lifetime="long_lived",
+    agents.create_agent(conn, me, name="Head of Customer Success", purpose="mail", lifetime="long_lived",
                         data_dir=tmp_path, permissions=["tasks:read", "tasks:claim"])
     t = tasks.create(conn, me, {"title": "Reply to the invoice", "assignee": {"type": "agent", "id": dev}})
     conn.execute("UPDATE tasks SET notes = '', description_generated = 0 WHERE id = ?", (t["id"],))  # legacy row
-    org.handoff(conn, Ctx(dev), t["id"], "Mail agent", "This is e-mail, not code")
+    org.handoff(conn, Ctx(dev), t["id"], "Head of Customer Success", "This is e-mail, not code")
     after = tasks.get(conn, me, t["id"])
     _generated(after)
-    assert "Handed off by Dev agent to Mail agent: This is e-mail, not code" in after["notes"]
-    assert "the agent Mail agent" in after["notes"]
+    assert "Handed off by Software Engineer to Head of Customer Success: This is e-mail, not code" in after["notes"]
+    assert "the agent Head of Customer Success" in after["notes"]
 
     written = tasks.create(conn, me, {"title": "Fix the build", "notes": "CI is red since Monday.",
                                       "assignee": {"type": "agent", "id": dev}})
-    org.handoff(conn, Ctx(dev), written["id"], "Mail agent")
+    org.handoff(conn, Ctx(dev), written["id"], "Head of Customer Success")
     assert tasks.get(conn, me, written["id"])["notes"] == "CI is red since Monday."
 
 

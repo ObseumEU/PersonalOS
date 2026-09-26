@@ -11,7 +11,7 @@ Nexus) is a *service*: runtime "service", no worker, no HR review, not on the
 Team page, the org chart or the chat's member list; agents use it through its
 own interface (ask_agent / the A2A bridge for knowlage and Nexus, the deploy
 API), and its health shows among the subsystems. A message to it anyway gets a
-code-built reply and goes to the Project manager.
+code-built reply and goes to the CEO.
 
 `reply_path` is what the chat uses so that no message from the owner is ever
 left unanswered (pos.chat._ask_to_answer, pos.availability); `worker_down`
@@ -29,7 +29,7 @@ from . import actors
 
 # Built-in members that are automation, not agents (see the module docstring).
 SERVICES = {
-    "Deployer": "nasazovací služba: slučuje commity Dev agenta, pouští testy a nasazuje (pos.selfdeploy), "
+    "Deployer": "nasazovací služba: slučuje commity Vývojáře, pouští testy a nasazuje (pos.selfdeploy), "
                 "bez AI",
     "Knowledge agent": "znalostní báze knowlage: agenti se jí ptají přes ask_agent (hledání s citacemi)",
     "Nexus": "platforma pro automatizaci procesů (Nexus), napojená přes A2A",
@@ -72,7 +72,7 @@ def slug(name: str) -> str:
 def reply_path(conn: sqlite3.Connection, row, specs_base: Path | None = None) -> dict | None:
     """Where this member's work runs: {"kind": "dedicated" | "pool" | "a2a", "name": …};
     None for people, services and agents without any worker (the chat then
-    answers in code and passes the message to the Project manager)."""
+    answers in code and passes the message to the CEO)."""
     if row is None or row["kind"] == "human" or row["runtime"] == "service":
         return None
     if row["a2a_url"]:

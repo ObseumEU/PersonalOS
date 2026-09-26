@@ -1,0 +1,37 @@
+{
+  "name": "Software Engineer",
+  "display_name": "Vývojář",
+  "purpose": "Vývojář PersonalOS: malé ověřené změny kódu, testů a dokumentace na větvi agent/dev; GitHub issues se štítkem agent a opravy chyb z incidentů.",
+  "role": "developer",
+  "team": "engineering",
+  "reports_to": "CTO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "auto",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "profile": {
+    "workdir": "/work/PersonalOS",
+    "pos_tools": "get_task report_progress complete_task request_approval request_review create_task handoff_task",
+    "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
+    "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(python -m pytest:*)|Bash(python -m pip install:*)|Bash(backend/.venv/bin/python -m pytest:*)|Bash(npm run build:*)|Bash(npm ci:*)",
+    "max_usd_run": 6,
+    "max_steps": 90
+  },
+  "budget": {
+    "usd_day": 15.0,
+    "usd_month": 200.0,
+    "usd_run": 6.0,
+    "runs_day": 25
+  },
+  "note": "Runs in the agent pool in the clone the dev-agent container had (/work/PersonalOS, branch agent/dev, which the deployer promotes). Codex first, Claude Opus as the fallback; its GitHub tasks get the Haiku triage first."
+}

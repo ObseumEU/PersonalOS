@@ -75,33 +75,48 @@ def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None
         return {"created": [], "placed": []}
     owner = Ctx(actors.owner_id(conn), via="agents-as-code")
     created, placed = [], []
-    for s in specs(base):
-        if s.get("enabled") is False or s.get("worker") == "none" and s.get("runtime") == "builtin":
+    wanted = [s for s in specs(base)
+              if not (s.get("enabled") is False or s.get("worker") == "none" and s.get("runtime") == "builtin")]
+    # Pass 1: create every missing agent, so pass 2 finds each lead whatever the folder order.
+    from .hr import service as hr
+
+    over = []
+    for s in wanted:
+        if conn.execute("SELECT 1 FROM actors WHERE name = ?", (s["name"],)).fetchone():
             continue
+        if hr.room_for_agents(conn) <= 0:  # no HR decision (no approval per agent, no replacement)
+            over.append(s["name"])
+            continue
+        perms = sorted(set(s.get("permissions") or agents.DEFAULT_AGENT_PERMISSIONS) - NEVER_FROM_FILE)
+        # A role from git never makes HR archive someone else to fit under the limit: over it, the
+        # agent is not created (the owner raises hr.max_active_agents; docs/REORG.md).
+        made = agents.create_agent(conn, owner, name=s["name"], purpose=s.get("purpose") or s["name"],
+                                   lifetime=s.get("lifetime", "long_lived"), permissions=perms,
+                                   budget_class=s.get("budget_class", "normal"),
+                                   runtime=s.get("runtime", "codex_worker"), data_dir=data_dir, allow_replace=False)
+        if not made.get("created"):
+            log.warning("could not create %s: %s", s["name"], made)
+            continue
+        row = actors.get(conn, made["agent"]["id"])
+        created.append(s["name"])
+        if s.get("engine") or s.get("model"):  # its runtime from the file, once (then the owner's)
+            versioning.update(conn, owner, "actor", row["id"], {"engine": s.get("engine"), "model": s.get("model")},
+                              action="agents_as_code")
+    # Pass 2: its place in the chart. A missing role, team or lead is filled; an agent created just now
+    # takes the file's lead (not the COO default it got at creation). Later changes are the owner's.
+    for s in wanted:
         row = conn.execute("SELECT * FROM actors WHERE name = ?", (s["name"],)).fetchone()
         if row is None:
-            perms = sorted(set(s.get("permissions") or agents.DEFAULT_AGENT_PERMISSIONS) - NEVER_FROM_FILE)
-            made = agents.create_agent(conn, owner, name=s["name"], purpose=s.get("purpose") or s["name"],
-                                       lifetime=s.get("lifetime", "long_lived"), permissions=perms,
-                                       budget_class=s.get("budget_class", "normal"),
-                                       runtime=s.get("runtime", "codex_worker"), data_dir=data_dir)
-            if not made.get("created"):
-                log.warning("could not create %s: %s", s["name"], made)
-                continue
-            row = actors.get(conn, made["agent"]["id"])
-            created.append(s["name"])
-            if s.get("engine") or s.get("model"):  # its runtime from the file, once (then the owner's)
-                versioning.update(conn, owner, "actor", row["id"], {"engine": s.get("engine"), "model": s.get("model")},
-                                  action="agents_as_code")
-                row = actors.get(conn, row["id"])
+            continue
         sets = {}
         if not row["role"] and s.get("role"):
             sets["role"] = s["role"]
         if not row["team"] and s.get("team"):
             sets["team"] = s["team"]
-        if s.get("reports_to") and not row["is_owner"]:
+        if s.get("reports_to") and not row["is_owner"] and not row["archived_at"]:
             lead = actors.find_by_name(conn, s["reports_to"])
-            if lead and row["reports_to"] is None and lead["id"] != row["id"]:
+            if lead and lead["id"] != row["id"] and row["reports_to"] != lead["id"] \
+                    and (row["reports_to"] is None or s["name"] in created or not _lead_set_by_hand(conn, row["id"])):
                 sets["reports_to"] = lead["id"]
         if sets:
             versioning.update(conn, owner, "actor", row["id"], sets, action="agents_as_code")
@@ -109,10 +124,14 @@ def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None
         if _adopt_worker(conn, owner, row, s):
             placed.append(f"{s['name']} (worker)")
         _budget_from_file(conn, owner, row, s)
-    if created or placed:
-        audit.log(conn, owner, "agents_as_code", None, None, created=created or None, placed=placed or None)
+        _schedules_from_file(conn, owner, row, s)
+    if over:
+        log.warning("over the HR limit (hr.max_active_agents), not created yet: %s", ", ".join(over))
+    if created or placed or over:
+        audit.log(conn, owner, "agents_as_code", None, None, created=created or None, placed=placed or None,
+                  over_limit=over or None)
     conn.commit()
-    return {"created": created, "placed": placed}
+    return {"created": created, "placed": placed, "over_limit": over}
 
 
 def _adopt_worker(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s: dict) -> bool:
@@ -143,6 +162,73 @@ def _budget_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s:
             access._insert_budget(conn, row["id"], metric, float(amount), owner.actor_id, "platform",
                                   f"{s['name']}: výchozí rozpočet z agent.json; mění Správce přístupů nebo majitel")
     audit.log(conn, owner, "access_budget", "actor", row["id"], budget="agent.json", **budget)
+
+
+def _lead_set_by_hand(conn: sqlite3.Connection, actor_id: int) -> bool:
+    """Someone moved this member in the chart (set_org by the owner or a lead, or pos.reorg): the
+    file's lead no longer applies. A lead from the defaults (the COO) is not a choice by hand."""
+    return any(h["action"] in ("set_org", "reorg") for h in versioning.history(conn, "actor", actor_id))
+
+
+SCHEDULE_FIELDS = ("name", "schedule", "title", "notes", "definition_of_done", "priority", "topic", "estimate_min")
+
+
+def _schedules_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s: dict) -> list[str]:
+    """agent.json "schedules": the role's routines, created once as the owner's team schedules
+    (assigned to the agent). One that exists under the same name for the agent, even archived or
+    paused, is left alone: after creation a schedule is its lead's and the owner's to change."""
+    from . import schedules
+
+    made = []
+    if row["archived_at"] or row["paused_at"]:
+        return made
+    for item in s.get("schedules") or []:
+        if not item.get("name") or not item.get("schedule"):
+            continue
+        if conn.execute("SELECT 1 FROM schedules WHERE name = ? AND assignee_id = ?",
+                        (item["name"], row["id"])).fetchone():
+            continue
+        try:
+            schedules.create(conn, owner, {**{k: item[k] for k in SCHEDULE_FIELDS if k in item},
+                                           "visibility": "team", "assignee": {"type": "agent", "id": row["id"]}})
+            made.append(item["name"])
+        except Exception as e:  # noqa: BLE001 - a bad schedule in a file must not stop the start-up
+            log.warning("schedule %s for %s not created: %s", item.get("name"), s["name"], e)
+    return made
+
+
+def spec_of(name: str, base: Path | None = None) -> dict | None:
+    return next((s for s in specs(base) if s["name"] == name), None)
+
+
+def is_dormant(name: str) -> bool:
+    """A role kept for when it is needed (agent.json "dormant": true): no routine, and HR never
+    proposes to archive it for being idle."""
+    s = spec_of(name)
+    return bool(s and s.get("dormant"))
+
+
+# What agent.json "profile" may set for the agent's worker (pos_worker reads it from /api/worker/me);
+# it overrides the worker's environment for this agent only (the agent pool serves many agents).
+PROFILE_KEYS = {"pos_tools", "claude_tools", "claude_builtin", "claude_disallowed", "max_usd_run", "max_steps",
+                "workdir"}
+WORKDIR_ROOTS = ("/work/", "/repos/")
+EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def worker_profile(name: str, base: Path | None = None) -> dict:
+    """The worker settings from the agent's file: effort and "profile" (only the known keys; a
+    workdir only under /work or /repos)."""
+    s = spec_of(name, base)
+    if not s:
+        return {}
+    out = {k: v for k, v in (s.get("profile") or {}).items() if k in PROFILE_KEYS}
+    if "workdir" in out and not (isinstance(out["workdir"], str) and out["workdir"].startswith(WORKDIR_ROOTS)
+                                 and ".." not in out["workdir"]):
+        out.pop("workdir")
+    if s.get("effort") in EFFORTS:
+        out["effort"] = s["effort"]
+    return out
 
 
 def write_worker_keys(conn: sqlite3.Connection, keys_dir: Path, base: Path | None = None) -> list[str]:

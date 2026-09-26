@@ -1,4 +1,4 @@
-# Sentinel and the Monitor agent (Hlídač)
+# Sentinel and the Hlídač (on-call)
 
 Code watches everything; a model wakes only for a real incident, and it gets
 a compact packet, never raw logs.
@@ -9,9 +9,9 @@ a compact packet, never raw logs.
                                            │ runbook: 1 restart / 30 min (allowlist)
                                            │ still open → POST /api/events (source sentinel)
                                            ▼
- PersonalOS  routing rule "Sentinel incident → Monitor"   (pos.monitor: caps first)
+ PersonalOS  routing rule "Sentinel incident → Hlídač"   (pos.monitor: caps first)
                                            ▼
- Monitor agent (Haiku, low effort)  classify → Dev agent task | ask_owner | close
+ Hlídač (Haiku, low effort)  classify → fix task (engineer/specialist) | SRE task | close
 ```
 
 ## The sentinel (`ops/sentinel`, compose profile `sentinel`)

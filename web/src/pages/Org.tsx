@@ -93,7 +93,7 @@ export default function Org() {
       <PageHeader
         kicker="PLATFORM · ORG"
         title="Who does what"
-        sub="Everyone reports to the Project manager, who reports to you. The PM splits team work into steps and assigns them by role; agents hand work to each other and ask peers directly. Change a member's role, team or manager on its page."
+        sub="A company: you are the board, the CEO reports to you, the heads to the CEO and everyone else to a head. Routing sends events straight to the doer; the COO splits cross-team work; only the CEO contacts you (the Chief of Staff sends the digest)."
       />
       <div className="flex flex-wrap items-center gap-2">
         <Link to="/team?tab=network&view=org" className="btn">

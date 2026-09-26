@@ -80,9 +80,9 @@ def test_dm_and_group_channel(conn, me, tmp_path):
 
 
 def test_mention_reaches_the_agents_inbox_and_joins_it(conn, me, tmp_path):
-    dev = make(conn, me, tmp_path, "Dev agent")
+    dev = make(conn, me, tmp_path, "Software Engineer")
     g = chat.create_channel(conn, me, "planning", [])
-    out = chat.send(conn, me, g["id"], "@Dev agent can you take the invoice bug?")
+    out = chat.send(conn, me, g["id"], "@Software Engineer can you take the invoice bug?")
     assert out["mentions"] == [dev] and out["inbox"] == [dev]
     assert dev in chat.member_ids(conn, g["id"])  # joined by being mentioned
     inbox = agents.check_inbox(conn, dev)
@@ -183,7 +183,7 @@ def test_migration_of_old_messages(tmp_path):
         c.execute(f"PRAGMA user_version = {i}")
     c.commit()
     ids = actors.ensure_builtin(c)
-    owner, assistant, nexus = ids["Owner"], ids["Assistant"], ids["Nexus"]
+    owner, assistant, nexus = ids["Owner"], ids["Executive Assistant"], ids["Nexus"]
     rows = [(assistant, owner, "hi", "fyi", "2026-09-01T10:00:00+00:00", "2026-09-01T10:05:00+00:00"),
             (owner, assistant, "Use the new template", "change_plan", "2026-09-01T11:00:00+00:00", None),
             (nexus, assistant, "Check Q4", "fyi", "2026-09-02T09:00:00+00:00", None)]
@@ -208,7 +208,7 @@ def test_migration_of_old_messages(tmp_path):
 def test_team_channel_and_post_to_team(conn, me, tmp_path):
     cid = chat.ensure_team_channel(conn)
     assert chat.ensure_team_channel(conn) == cid  # idempotent
-    hr = actors.find_by_name(conn, "HR agent")["id"]
+    hr = actors.find_by_name(conn, "Head of People")["id"]
     assert {me.actor_id, hr} <= set(chat.member_ids(conn, cid))
     newbie = make(conn, me, tmp_path, "Newbie", perms=("tasks:read",))
     chat.ensure_team_channel(conn)
@@ -216,10 +216,10 @@ def test_team_channel_and_post_to_team(conn, me, tmp_path):
     out = chat.post_to_team(conn, hr, "Weekly check: all agents healthy")
     assert out["channel_id"] == cid and out["trust"] == "agent"
     net = network.build(conn, "24h")
-    chat.send(conn, me, cid, "@HR agent thanks")
+    chat.send(conn, me, cid, "@Head of People thanks")
     edge = next(e for e in network.build(conn, "24h")["edges"]
                 if (e["from"], e["to"], e["type"]) == (me.actor_id, hr, "message"))
-    assert edge["count"] == 1 and edge["last"]["body"] == "@HR agent thanks"
+    assert edge["count"] == 1 and edge["last"]["body"] == "@Head of People thanks"
     assert net["nodes"]
 
 
@@ -270,9 +270,9 @@ def test_http_api_and_stream(tmp_path):
         chans = client.get("/api/chat/channels").json()
         team = next(ch for ch in chans if ch["title"] == "#team")
         members = client.get("/api/chat/members").json()
-        assistant = next(m for m in members if m["name"] == "Assistant")
+        assistant = next(m for m in members if m["name"] == "Executive Assistant")
         dm = client.post("/api/chat/dm", json={"to": assistant["id"]}).json()
-        assert dm["kind"] == "dm" and dm["title"] == "Assistant"
+        assert dm["kind"] == "dm" and dm["title"] == "Executive Assistant"
 
         conn = connect(Settings(data_dir=tmp_path).db_path)
         cursor = chat.cursor_now(conn)

@@ -32,7 +32,7 @@ def app(tmp_path, monkeypatch):
     made = agents.create_agent(conn, owner, name=monitor.NAME, purpose="triage", lifetime="long_lived",
                                permissions=["tasks:read", "tasks:claim", "tasks:write", "messages:send",
                                             "approvals:request", "ops:monitor"], data_dir=tmp_path)
-    agents.create_agent(conn, owner, name="Dev agent", purpose="dev", lifetime="long_lived",
+    agents.create_agent(conn, owner, name="Software Engineer", purpose="dev", lifetime="long_lived",
                         permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)
     access.seed(conn)
     monitor.ensure(conn)
@@ -120,7 +120,7 @@ def test_escalation_comments_and_reopens_only_what_was_called_transient(app, mon
     assert third["fallback"] and third["assignee"] == "owner"
     ticket = tasks.get(conn, app["owner"], third["task_id"])
     assert ticket["assignee_id"] == actors.owner_id(conn) and "Uvolnit" not in ticket["notes"]
-    assert "Dev agentovi" in ticket["notes"]                         # the code-built recommendation for new_error
+    assert "Vývojáři" in ticket["notes"]                         # the code-built recommendation for new_error
 
 
 def test_escalation_of_a_delegated_incident_does_not_wake_the_monitor(app, monkeypatch):
@@ -241,7 +241,7 @@ def test_cap_texts_for_the_owner_are_czech(app, monkeypatch):
 
 # ------------------------------------------------------------------ the owner in chat
 
-def _owner_mentions_monitor(app, body="@Monitor co se děje s Nexusem?"):
+def _owner_mentions_monitor(app, body="@Hlídač co se děje s Nexusem?"):
     from pos import chat
 
     conn = app["conn"]
@@ -261,7 +261,7 @@ def test_owner_mention_of_the_monitor_becomes_a_task_without_incident_caps(app, 
     assert f"chat_send(channel={cid}, reply_to={msg['id']})" in t["notes"] and "Czech" in t["notes"]
     assert len(_team(conn)) == before + 1                            # the engines can run: no auto-reply
     # another message while the task is open joins it
-    _owner_mentions_monitor(app, "@Monitor a ještě jedna věc")
+    _owner_mentions_monitor(app, "@Hlídač a ještě jedna věc")
     assert conn.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id = ? AND title LIKE 'Chat: answer%'",
                         (mid,)).fetchone()[0] == 1
 
@@ -277,7 +277,7 @@ def test_owner_is_told_at_once_when_the_monitor_cannot_run(app):
     conn.commit()
     cid, msg, t = _owner_mentions_monitor(app)
     reply = conn.execute("SELECT * FROM chat_messages WHERE author_id = ? AND reply_to = ?", (mid, msg["id"])).fetchone()
-    assert reply is not None and reply["body"].startswith("Automatická odpověď platformy: Monitor teď nemůže")
+    assert reply is not None and reply["body"].startswith("Automatická odpověď platformy: Hlídač teď nemůže")
     assert "vyčerpaný limit" in reply["body"] and "zkusí to znovu" in reply["body"]
     assert "the Monitor" not in reply["body"] and "usage limit" not in reply["body"]
     # the worker asks to start and is refused: no second reply for the same message
@@ -339,7 +339,7 @@ def test_tools_need_ops_monitor_and_close_records_the_class(app, monkeypatch):
     assert calls[-1][0] == "/api/incidents/abc123-1/ack" and calls[-1][1]["resolve"] is False
     assert tasks.get(conn, app["owner"], first["task_id"])["status"] == "done"
     # another agent without ops:monitor may not read logs
-    other = actors.find_by_name(conn, "Dev agent")["id"]
+    other = actors.find_by_name(conn, "Software Engineer")["id"]
     server2 = mcp_server.build(db, default_actor=lambda c: other)
 
     async def call2():
@@ -408,7 +408,7 @@ def test_digest_with_incidents_is_one_cheap_monitor_task_or_code_only(app, monke
 def test_monitor_agent_file_is_valid_and_matches_the_rule():
     from pathlib import Path
 
-    spec = json.loads((Path(__file__).resolve().parents[2] / "agents" / "monitor" / "agent.json").read_text("utf-8"))
-    assert spec["name"] == monitor.NAME and spec["worker"] == "monitor" and "ops:monitor" in spec["permissions"]
+    spec = json.loads((Path(__file__).resolve().parents[2] / "agents" / "hlidac" / "agent.json").read_text("utf-8"))
+    assert spec["name"] == monitor.NAME and spec["worker"] == "pool" and "ops:monitor" in spec["permissions"]
     assert set(spec["permissions"]) <= set(agents.PERMISSIONS)
     assert spec["engine"] == "claude" and "haiku" in spec["model"]

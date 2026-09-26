@@ -435,7 +435,7 @@ def test_mcp_file_upload_and_list(tmp_path, monkeypatch):
     ids = actors.ensure_builtin(c)
     agents.seed_builtin_permissions(c)
     c.close()
-    server = mcp_server.build(db, default_actor=lambda conn: ids["Assistant"])
+    server = mcp_server.build(db, default_actor=lambda conn: ids["Executive Assistant"])
 
     async def scenario():
         async with Client(server) as cl:

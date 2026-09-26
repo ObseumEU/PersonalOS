@@ -16,7 +16,7 @@ def team(tmp_path, monkeypatch):
     org.ensure(c)
     agents.seed_builtin_permissions(c)
     me = Ctx(actors.owner_id(c))
-    pm = actors.find_by_name(c, "Project manager")["id"]
+    pm = actors.find_by_name(c, "COO")["id"]
     made = {}
     for name in ("Writer", "Editor"):
         made[name] = agents.create_agent(c, me, name=name, purpose=name, lifetime="long_lived",
@@ -30,7 +30,7 @@ def test_whoever_asked_reviews_and_nobody_approves_their_own_work(team):
     t = tasks.create(c, pm, {"title": "Blog post", "assignee": {"type": "agent", "id": writer.actor_id}})
     tasks.claim(c, writer, t["id"])
     out = tasks.complete(c, writer, t["id"], "draft ready")
-    assert out["status"] == "review" and tasks.get(c, me, t["id"])["reviewer_name"] == "Project manager"
+    assert out["status"] == "review" and tasks.get(c, me, t["id"])["reviewer_name"] == "COO"
     assert chat.inbox_unread(c, pm.actor_id) >= 1  # the PM heard of it
     with pytest.raises(Forbidden):
         tasks.review(c, writer, t["id"], True)  # own work

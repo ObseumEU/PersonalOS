@@ -24,7 +24,7 @@ def co(tmp_path, monkeypatch):
 def test_the_lead_decides_and_the_new_agent_starts_on_probation(co):
     c, me, pm, tmp = co
     asked = hiring.request(c, me, name="Researcher", purpose="market research for offers", role="analyst")
-    assert asked["decider_id"] == pm.actor_id and asked["lead_name"] == "Project manager"
+    assert asked["decider_id"] == pm.actor_id and asked["lead_name"] == "COO"
     assert chat.inbox_unread(c, pm.actor_id) >= 1
     with pytest.raises(Forbidden):  # only the decider (or the owner)
         hiring.decide(c, Ctx(actors.assistant_id(c)), asked["id"], True, data_dir=tmp)
@@ -34,7 +34,7 @@ def test_the_lead_decides_and_the_new_agent_starts_on_probation(co):
     assert new["reports_to"] == pm.actor_id and new["role"] == "analyst" and hiring.on_probation(c, new["id"])
     # on probation, the lead reviews all its work, even what the owner asked for
     t = tasks.create(c, me, {"title": "Competitor prices", "assignee": {"type": "agent", "id": new["id"]}})
-    assert tasks.get(c, me, t["id"])["reviewer_name"] == "Project manager"
+    assert tasks.get(c, me, t["id"])["reviewer_name"] == "COO"
 
 
 def test_more_permissions_than_the_requester_go_to_the_owner(co):
@@ -57,5 +57,5 @@ def test_probation_end_gives_the_lead_a_decision(co):
     out = hiring.probation_review(c)
     assert out["ended"] == 1
     t = tasks.get(c, me, tasks.parse_id(out["tasks"][0]))
-    assert t["assignee_name"] == "Project manager" and "Tester" in t["title"]
+    assert t["assignee_name"] == "COO" and "Tester" in t["title"]
     assert not hiring.on_probation(c, new) and hiring.probation_review(c)["ended"] == 0

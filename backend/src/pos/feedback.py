@@ -10,7 +10,7 @@ applied or dismissed with the reason. Versioned and audited.
 
 import sqlite3
 
-from . import actors, audit, tasks, versioning
+from . import actors, audit, roles, tasks, versioning
 from .core import Ctx, Forbidden, now_iso
 
 ENTITY = "feedback"
@@ -18,7 +18,7 @@ versioning.register(ENTITY, "feedback")
 KINDS = ("praise", "critique", "suggestion")
 STATUSES = ("open", "applied", "dismissed")
 MAX_BODY = 4000
-COACH = "Agent coach"
+COACH = roles.COACH
 
 
 def give(conn: sqlite3.Connection, ctx: Ctx, to, body: str, kind: str = "critique",
@@ -116,7 +116,7 @@ def coach_digest(conn: sqlite3.Connection) -> dict:
         """SELECT to_id, COUNT(*) AS n FROM feedback f JOIN actors a ON a.id = f.to_id
            WHERE f.status = 'open' AND f.kind = 'critique' AND f.archived_at IS NULL AND a.kind != 'human'
            GROUP BY to_id HAVING n >= 2""").fetchall()
-    coach = actors.find_by_name(conn, COACH) or actors.find_by_name(conn, "Dev agent")
+    coach = actors.find_by_name(conn, COACH) or actors.find_by_name(conn, roles.ENGINEER)
     if coach is None or not rows:
         return {"agents": 0}
     ctx = Ctx(actors.owner_id(conn), via="system")
@@ -133,7 +133,7 @@ def coach_digest(conn: sqlite3.Connection) -> dict:
         t = tasks.create(conn, ctx, {
             "title": title, "assignee": {"type": "agent", "id": coach["id"]}, "priority": 2, "topic": "feedback",
             "notes": f"Účel: {name} dostal opakovanou kritiku ({r['n']}×). Najdi společný vzor a navrhni změnu "
-                     f"instrukcí (agents/<slug>/INSTRUCTIONS.md, úkol pro Dev agenta), nebo kritiku zamítni s "
+                     f"instrukcí (agents/<slug>/INSTRUCTIONS.md, úkol pro Vývojáře), nebo kritiku zamítni s "
                      f"důvodem.\nOdkud: denní přehled zpětné vazby (pos.feedback).\n\nOtevřená zpětná vazba:\n{lines}",
             "definition_of_done": "Každá položka je vyřešená (feedback_resolve: applied s odkazem na úkol/commit, "
                                   "nebo dismissed s důvodem)."})

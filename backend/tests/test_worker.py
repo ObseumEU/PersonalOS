@@ -93,7 +93,7 @@ def setup(tmp_path, monkeypatch):
     client.__enter__()
     conn = connect(settings.db_path)
     owner = Ctx(actors.owner_id(conn))
-    out = agents.create_agent(conn, owner, name="Dev agent", purpose="code", lifetime="long_lived",
+    out = agents.create_agent(conn, owner, name="Software Engineer", purpose="code", lifetime="long_lived",
                               permissions=["tasks:read", "tasks:claim", "approvals:request"], data_dir=tmp_path)
     yield client, conn, owner, out["agent"]["id"], out["api_key"]
     conn.close()
@@ -374,6 +374,7 @@ def test_claude_limit_in_the_selfcheck_pauses_only_until_the_named_reset(tmp_pat
 
 def test_step_cap_stops_a_runaway_run_and_hands_the_task_back(setup, fake_codex, tmp_path, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    monkeypatch.setenv("POS_AGENTS_REPO_DIR", str(tmp_path / "no-agents"))  # no profile: the worker's cap
     client, conn, owner, agent_id, key = setup
     from pos import tasks
 
@@ -420,7 +421,7 @@ def test_reassign_mid_run_stops_the_old_worker_and_the_task_stays_with_the_new_a
     client, conn, owner, agent_id, key = setup
     from pos import reassign, tasks
 
-    other = agents.create_agent(conn, owner, name="Mail agent", purpose="mail", lifetime="long_lived",
+    other = agents.create_agent(conn, owner, name="Head of Customer Success", purpose="mail", lifetime="long_lived",
                                 permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
     t = tasks.create(conn, owner, {"title": "Answer the invoice e-mail", "assignee": {"type": "agent", "id": agent_id}})
     conn.commit()
@@ -433,7 +434,7 @@ def test_reassign_mid_run_stops_the_old_worker_and_the_task_stays_with_the_new_a
                 break
             time.sleep(0.1)
         time.sleep(0.3)
-        reassign.reassign(c, owner, t["id"], "Mail agent", "this is mail")
+        reassign.reassign(c, owner, t["id"], "Head of Customer Success", "this is mail")
         c.close()
 
     th = threading.Thread(target=hand_over)
@@ -450,7 +451,7 @@ def test_worker_tools_follow_the_agents_permissions(setup, monkeypatch):
     from pos_worker.__main__ import pos_tools
 
     client, conn, owner, dev_id, key = setup
-    # tasks:read/claim, approvals:request; messages:send is seeded for the Dev agent (standup, chat)
+    # tasks:read/claim, approvals:request; messages:send is seeded for the Software Engineer (standup, chat)
     agents.seed_builtin_permissions(conn)
     me = client.get("/api/worker/me", headers={"Authorization": f"Bearer {key}"}).json()
     assert {"get_task", "complete_task", "check_inbox", "chat_send"} <= set(me["pos_tools"])
@@ -500,7 +501,7 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
     monkeypatch.setenv("WORKER_POS_TOOLS", "get_task report_progress complete_task request_approval create_task "
                                            "handoff_task")
     root = Path(__file__).resolve().parents[2]
-    me = {"name": "Dev agent", "instructions": (root / "agents/dev-agent/INSTRUCTIONS.md").read_text(encoding="utf-8"),
+    me = {"name": "Software Engineer", "instructions": (root / "agents/software-engineer/INSTRUCTIONS.md").read_text(encoding="utf-8"),
           "pos_tools": ["get_task", "report_progress", "complete_task", "request_approval", "create_task",
                         "handoff_task", "schedule_create", "check_inbox", "chat_send", "chat_read"],
           "guardrails": "RULES", "feedback": [{"kind": "praise", "body": "quick"}]}
@@ -515,7 +516,7 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
     assert "praise" in a and "praise" not in b
     assert stable_prompt({**me, "task_ref": "T-002", "feedback": []}) == stable  # byte-stable across runs
     codex = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [])
-    assert codex.startswith("RULES\n\n---\n\n# You are Dev agent") and "# Your task T-001" in codex
+    assert codex.startswith("RULES\n\n---\n\n# You are Software Engineer") and "# Your task T-001" in codex
     # An agent without its own guidance keeps the generic lines it has tools for.
     monkeypatch.delenv("WORKER_POS_TOOLS")
     plain = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["chat_send", "schedule_create"]})
@@ -580,7 +581,7 @@ def test_triage_parks_an_unclear_issue_with_one_question_and_a_comment_requeues_
     answer = comment(2, "The agenda page, since v0.4")
     assert answer["requeued"] and answer["task_id"] == t["id"]
     t = tasks.get(conn, owner, t["id"])
-    assert (t["status"], t["assignee_name"], t["retry_after"]) == ("next", "Dev agent", None)
+    assert (t["status"], t["assignee_name"], t["retry_after"]) == ("next", "Software Engineer", None)
     assert "The agenda page" in t["notes"] and 'trust="untrusted"' in t["notes"]
 
 
@@ -601,7 +602,7 @@ def test_triage_hands_back_the_wrong_repo_and_backs_off_for_a_day(setup, fake_cl
 
     # Put back by an agent (e.g. the PM): still backed off. By a person: offered again.
     h = {"Authorization": f"Bearer {key}"}
-    pm = Ctx(actors_mod.find_by_name(conn, "Project manager")["id"], via="mcp")
+    pm = Ctx(actors_mod.find_by_name(conn, "COO")["id"], via="mcp")
     tasks.assign(conn, pm, t["id"], {"type": "agent", "id": agent_id})
     conn.commit()
     assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
@@ -617,7 +618,7 @@ def test_triage_hands_back_the_wrong_repo_and_backs_off_for_a_day(setup, fake_cl
     worker.step()
     assert tasks.get(conn, owner, tid)["retry_after"]
     again = _issue(conn, owner, number=6)
-    assert again["requeued"] and tasks.get(conn, owner, tid)["assignee_name"] == "Dev agent"
+    assert again["requeued"] and tasks.get(conn, owner, tid)["assignee_name"] == "Software Engineer"
 
 
 def test_a_failed_run_is_not_retried_at_once(setup, monkeypatch):
@@ -681,7 +682,7 @@ def test_triage_check_calls_haiku_without_tools_and_reads_its_json(tmp_path, mon
     from pos_worker import triage
 
     task = {"ref": "T-009", "title": "Make it better", "source": "event:github"}
-    out = triage.check({"name": "Dev agent"}, task, binary=_wrap(tmp_path, "haiku", FAKE_HAIKU))
+    out = triage.check({"name": "Software Engineer"}, task, binary=_wrap(tmp_path, "haiku", FAKE_HAIKU))
     assert (out["verdict"], out["size"], out["question"]) == ("unclear", "M", "Which page?")
     assert '"subtype": "triage"' in out["jsonl"] and '"total_cost_usd": 0.001' in out["jsonl"]
     assert triage.parse('{"type": "result", "is_error": false, "result": "no json"}') is None

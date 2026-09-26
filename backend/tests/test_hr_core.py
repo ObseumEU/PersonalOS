@@ -1,4 +1,4 @@
-"""HR agent wired to the real core: actors, tasks, runs, budget, API and MCP."""
+"""Head of People wired to the real core: actors, tasks, runs, budget, API and MCP."""
 
 import json
 from datetime import timedelta
@@ -44,14 +44,14 @@ def test_hr_agent_is_a_system_member(conn):
     hr_id = service.ensure_hr_agent(conn)
     assert service.ensure_hr_agent(conn) == hr_id
     agents = {a.name: a for a in CorePlatform(conn, Ctx(hr_id)).list_agents()}
-    assert agents["HR agent"].system and agents["Nexus"].system and agents["Assistant"].system
+    assert agents["Head of People"].system and agents["Nexus"].system and agents["Executive Assistant"].system
 
 
 def test_stats_come_from_tasks_runs_and_budget(conn):
     owner = Ctx(actors.owner_id(conn))
-    mail = new_agent(conn, "Mail agent", "Sorts incoming emails")
+    mail = new_agent(conn, "Head of Customer Success", "Sorts incoming emails")
     agent = Ctx(mail, via="mcp")
-    refs = [tasks.create(conn, owner, {"title": f"t{i}", "assignee": "Mail agent"})["id"] for i in range(4)]
+    refs = [tasks.create(conn, owner, {"title": f"t{i}", "assignee": "Head of Customer Success"})["id"] for i in range(4)]
     for tid in refs[:3]:
         tasks.claim(conn, agent, tid)
     tasks.intervene(conn, owner, refs[1], "wrong folder")
@@ -78,8 +78,8 @@ def test_stats_come_from_tasks_runs_and_budget(conn):
 def test_daily_review_archives_idle_agents_only(conn):
     owner = Ctx(actors.owner_id(conn))
     idle = new_agent(conn, "Old helper", "Summarises meeting notes")
-    busy = new_agent(conn, "Dev agent", "Fixes GitHub issues")
-    tasks.create(conn, owner, {"title": "Fix login", "assignee": "Dev agent"})
+    busy = new_agent(conn, "Software Engineer", "Fixes GitHub issues")
+    tasks.create(conn, owner, {"title": "Fix login", "assignee": "Software Engineer"})
     conn.commit()
 
     later = service.utcnow() + timedelta(days=20)
@@ -104,7 +104,7 @@ def test_daily_review_archives_idle_agents_only(conn):
 
 def test_review_is_owner_or_hr_only(conn):
     nexus = Ctx(actors.find_by_name(conn, "Nexus")["id"])
-    with pytest.raises(Exception, match="only the owner or the HR agent"):
+    with pytest.raises(Exception, match="only the owner or the Head of People"):
         service.daily_review(conn, nexus)
     assert service.daily_review(conn, nexus, apply=False)["active_before"] >= 4
 
@@ -116,7 +116,7 @@ def test_merge_task_goes_to_hr_agent(conn):
     report = service.daily_review(conn, owner)
     [task_id] = report["task_ids"]
     t = tasks.get(conn, owner, int(task_id))
-    assert t["title"].startswith("Sloučit agenta") and t["assignee_name"] == "HR agent"
+    assert t["title"].startswith("Sloučit agenta") and t["assignee_name"] == "Head of People"
 
 
 def test_weekly_report_is_a_task_for_the_owner(conn):
@@ -131,11 +131,11 @@ def test_weekly_report_is_a_task_for_the_owner(conn):
 
 def test_admit_agent_limits(conn):
     policy = HRPolicy(max_active_agents=2)
-    dev = new_agent(conn, "Dev agent", "Fixes GitHub issues")
+    dev = new_agent(conn, "Software Engineer", "Fixes GitHub issues")
     dev_ctx = Ctx(dev, via="mcp")
     assert service.admit_agent(conn, dev_ctx, name="x", purpose="y", policy=policy) == {"allowed": True}
 
-    new_agent(conn, "Mail agent", "Sorts incoming emails", created_by=dev)
+    new_agent(conn, "Head of Customer Success", "Sorts incoming emails", created_by=dev)
     reuse = service.admit_agent(conn, dev_ctx, name="Mail 2", purpose="sort incoming email", policy=policy)
     assert (reuse["allowed"], reuse["decision"], reuse["limit"]) == (False, "reuse", "active_limit")
 
@@ -156,7 +156,7 @@ def test_http_api(tmp_path):
         client.post("/api/hr/review")
         overview = client.get("/api/hr").json()
         names = {r["name"] for r in overview["ratings"]}
-        assert "HR agent" in names and not names & {"Nexus", "Knowledge agent", "Deployer"}  # services: no reviews
+        assert "Head of People" in names and not names & {"Nexus", "Knowledge agent", "Deployer"}  # services: no reviews
         assert client.post("/api/hr/review", params={"apply": "false"}).json()["proposals"] == []
         assert client.post("/api/hr/weekly").json()["report_task_id"]
         assert client.put("/api/hr/agents/999/profile", json={"purpose": "x"}).status_code == 404
@@ -214,8 +214,8 @@ def test_approved_limit_raise_lets_the_agent_in(conn):
 
     owner = Ctx(actors.owner_id(conn))
     settings_store.put(conn, owner, SETTING_MAX_ACTIVE, 1)
-    new_agent(conn, "Mail agent", "Sorts incoming emails")
-    pm = Ctx(new_agent(conn, "Project manager", "Splits team work by role"), via="mcp")
+    new_agent(conn, "Head of Customer Success", "Sorts incoming emails")
+    pm = Ctx(new_agent(conn, "COO", "Splits team work by role"), via="mcp")
     ask = service.admit_agent(conn, pm, name="Research", purpose="market research")
     assert ask["allowed"] is False and ask["decision"] == "ask_owner"
     approvals.decide(conn, owner, ask["approval_id"], True)
@@ -228,14 +228,14 @@ def test_approved_limit_raise_lets_the_agent_in(conn):
 
 
 def test_hr_never_archives_a_role_agent_from_git(conn, tmp_path, monkeypatch):
-    (tmp_path / "agents" / "mail-agent").mkdir(parents=True)
+    (tmp_path / "agents" / "head-of-customer-success").mkdir(parents=True)
     monkeypatch.setenv("POS_AGENTS_REPO_DIR", str(tmp_path / "agents"))
     owner = Ctx(actors.owner_id(conn))
-    mail = new_agent(conn, "Mail agent", "Sorts incoming emails")
+    mail = new_agent(conn, "Head of Customer Success", "Sorts incoming emails")
     later = service.utcnow() + timedelta(days=20)
     service.daily_review(conn, owner, now=later)
     assert actors.get(conn, mail)["archived_at"] is None
-    proposal = conn.execute("SELECT title FROM tasks WHERE title LIKE 'Návrh HR: archivovat Mail agent%'").fetchone()
+    proposal = conn.execute("SELECT title FROM tasks WHERE title LIKE 'Návrh HR: archivovat Head of Customer Success%'").fetchone()
     assert proposal is not None
 
 
@@ -243,25 +243,25 @@ def test_weekly_report_says_which_shared_tools_help(conn):
     from pos import comments
 
     owner = Ctx(actors.owner_id(conn))
-    dev = new_agent(conn, "Dev agent", "Fixes GitHub issues")
+    dev = new_agent(conn, "Software Engineer", "Fixes GitHub issues")
     for ok in (1, 1, 0):
         conn.execute("INSERT INTO tool_usage (tool, actor_id, at, ok) VALUES ('shared/pdf-to-text', ?, ?, ?)",
                      (dev, now_iso(), ok))
     conn.commit()
     report = service.weekly_report(conn, owner)
-    assert report["tool_usage"][0] == {"tool": "shared/pdf-to-text", "uses": 3, "failed": 1, "by": ["Dev agent"]}
+    assert report["tool_usage"][0] == {"tool": "shared/pdf-to-text", "uses": 3, "failed": 1, "by": ["Software Engineer"]}
     notes = [a["body"] for a in comments.list_for(conn, owner, int(report["report_task_id"]))]
     assert any("shared/pdf-to-text: 3× (1 failed)" in n for n in notes)
 
 
 def test_claude_usage_counts_for_hr_with_cache_reads_and_cost_per_task(conn):
-    """A Dev agent on Claude: engine usage (not budget runs) is what HR and the task show."""
+    """A Software Engineer on Claude: engine usage (not budget runs) is what HR and the task show."""
     from pos import engines
     from pos.hr.metrics import rate_agent
 
     owner = Ctx(actors.owner_id(conn))
-    dev = new_agent(conn, "Dev agent", "Improves PersonalOS")
-    t = tasks.create(conn, owner, {"title": "Fix the flaky test", "assignee": "Dev agent"})
+    dev = new_agent(conn, "Software Engineer", "Improves PersonalOS")
+    t = tasks.create(conn, owner, {"title": "Fix the flaky test", "assignee": "Software Engineer"})
     for cost in (0.5, 1.5):  # two runs on the same task (one handed back, one done)
         run_id = conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at, engine) "
                               "VALUES (?, ?, 'task', 'ok', ?, 'claude')", (dev, t["id"], now_iso())).lastrowid

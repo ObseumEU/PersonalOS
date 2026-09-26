@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 
-from .. import actors, approvals, audit
+from .. import actors, approvals, audit, roles
 from ..budget import service as budget
 from ..core import TZ, Ctx, Forbidden, NotFound, now_iso
 from . import store
@@ -16,7 +16,7 @@ from .policy import SETTING_MAX_ACTIVE, HRPolicy, current
 from .report import file_weekly_report
 from .review import ReviewResult, run_daily_review
 
-HR_NAME = "HR agent"
+HR_NAME = roles.HR  # "HR agent" until the 2026-09 reorganisation
 HR_PURPOSE = "Hlídá počet agentů, jejich efektivitu a životnost; rozhoduje o založení nad limit."
 
 
@@ -52,7 +52,7 @@ def _may_run_hr(conn: sqlite3.Connection, ctx: Ctx) -> None:
     """Applying a review or filing reports: the owner or the HR agent itself."""
     me = actors.get(conn, ctx.actor_id)
     if not (me["is_owner"] or me["name"] == HR_NAME):
-        raise Forbidden("only the owner or the HR agent runs the HR review")
+        raise Forbidden(f"only the owner or the {HR_NAME} runs the HR review")
 
 
 def _serialize(result: ReviewResult, names: dict[str, str]) -> dict:
@@ -82,7 +82,7 @@ def daily_review(conn: sqlite3.Connection, ctx: Ctx | None = None, *, apply: boo
         _may_run_hr(conn, ctx)
     platform = CorePlatform(conn, hr_ctx)
     now = now or utcnow()
-    coach = conn.execute("SELECT id FROM actors WHERE name = 'Agent coach' AND archived_at IS NULL").fetchone()
+    coach = conn.execute("SELECT id FROM actors WHERE name = ? AND archived_at IS NULL", (roles.COACH,)).fetchone()
     result = run_daily_review(platform, platform, now, policy, hr_agent_id=str(hr_ctx.actor_id), apply=apply,
                               coach_id=str(coach["id"]) if coach else None)
     names = {a.id: a.name for a in platform.list_agents()}
@@ -146,6 +146,12 @@ def register_agent(conn: sqlite3.Connection, actor_id: int, *, purpose: str, lif
 
 def _active_agents(platform: CorePlatform) -> list:
     return [a for a in platform.list_agents() if a.active and not a.system]
+
+
+def room_for_agents(conn: sqlite3.Connection) -> int:
+    """How many more non-system agents fit under the active limit (may be <= 0)."""
+    platform = CorePlatform(conn, _hr_ctx(conn, "system"))
+    return current(conn).max_active_agents - len(_active_agents(platform))
 
 
 def _created_today(conn: sqlite3.Connection, creator_id: int) -> int:

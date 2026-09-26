@@ -12,7 +12,10 @@ import sqlite3
 from .core import NotFound, now_iso
 
 OWNER_NAME = "Owner"
-ASSISTANT_NAME = "Assistant"
+ASSISTANT_NAME = "Executive Assistant"
+# Renamed in place in the 2026-09 reorganisation (docs/REORG.md): the same actor (the platform's
+# system identity, id 2 on existing installs), so its history, DMs and the "ai" alias stay.
+LEGACY_ASSISTANT_NAMES = ("Assistant",)
 
 
 def _hash(key: str) -> str:
@@ -22,6 +25,7 @@ def _hash(key: str) -> str:
 def ensure_builtin(conn: sqlite3.Connection) -> dict[str, int]:
     """Create the built-in actors once; return their ids by name."""
     ids = {}
+    _rename_legacy_assistant(conn)
     # The two subsystems from docs/PLAN.md are members from the start, so tasks
     # can be assigned to them before their A2A bridges exist.
     builtin = ((OWNER_NAME, "human", 1), (ASSISTANT_NAME, "ai", 0),
@@ -40,6 +44,17 @@ def ensure_builtin(conn: sqlite3.Connection) -> dict[str, int]:
             ids[name] = row["id"]
     conn.commit()
     return ids
+
+
+def _rename_legacy_assistant(conn: sqlite3.Connection) -> None:
+    """The built-in assistant under its old name becomes the Executive Assistant (once)."""
+    if conn.execute("SELECT 1 FROM actors WHERE name = ?", (ASSISTANT_NAME,)).fetchone():
+        return
+    for old in LEGACY_ASSISTANT_NAMES:
+        row = conn.execute("SELECT id FROM actors WHERE name = ? AND kind = 'ai'", (old,)).fetchone()
+        if row:
+            conn.execute("UPDATE actors SET name = ? WHERE id = ?", (ASSISTANT_NAME, row["id"]))
+            return
 
 
 def owner_id(conn: sqlite3.Connection) -> int:

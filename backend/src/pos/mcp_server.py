@@ -32,8 +32,7 @@ assistant, an agent, or someone outside. As an agent: claim_task before you
 start, report_progress while you work, complete_task when done (the owner
 reviews it). Anything that leaves PersonalOS (e-mail, posts, payments) needs
 request_approval first. Chain of command: report to your lead, not the owner.
-Only the top of the chain (the CEO, or the Project manager while there is no
-CEO) contacts the owner; replying when the owner wrote to you is always fine.
+Only the top of the chain (the CEO) contacts the owner; replying when the owner wrote to you is always fine.
 Can your lead decide it? Then ask the lead (chat_send to=<lead>, a task or
 handoff_task). The top of the chain asks the owner with ask_owner (one ticket
 plus a #team ping; the answer comes to your inbox). Need a tool, a permission or more budget: request_access
@@ -46,9 +45,9 @@ came from (your task ref, the message or event) and what done looks like (also
 set definition_of_done). Without notes PersonalOS writes a generic one.
 You can schedule recurring work for yourself (schedule_create, e.g. "daily
 07:00: check the inbox"); each firing becomes a task in your queue.
-Work together: the Project manager splits and assigns team work by role
-(org_chart shows who does what). Pass a task on with handoff_task, ask a peer
-with send_message, report status to the Project manager.
+Work together: your lead and org_chart show who does what; the COO splits
+cross-team work. Pass a task on with handoff_task, ask a peer with
+send_message, report status to your lead.
 Team chat (chat_send, chat_read, #team): talk to people and agents inside
 PersonalOS; @Name mentions land in their inbox. It never leaves PersonalOS.
 Files, notes and topics: search finds tasks, files and notes; file_get gives a
@@ -78,7 +77,7 @@ TOOL_PERMISSIONS = {
     "hr_overview": "hr:read",
     # Your own task needs tasks:claim, someone else's tasks:write (checked in pos.org).
     "handoff_task": "tasks:read", "org_chart": "tasks:read",
-    # Reassign a task and wake the new agent (pos.reassign); the PM routes work with it.
+    # Reassign a task and wake the new agent (pos.reassign); the COO and leads route work with it.
     "task_reassign": "tasks:write",
     # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
     "task_comment": "tasks:read",
@@ -110,8 +109,10 @@ TOOL_PERMISSIONS = {
     # Files, notes and topics: reading needs tasks:read, writing notes tasks:write.
     "search": "tasks:read", "file_get": "tasks:read", "topic_get": "tasks:read",
     "note_create": "tasks:write", "note_update": "tasks:write",
-    # The sentinel's incidents (pos.monitor): the Monitor agent's narrow log read and its verdict.
+    # The sentinel's incidents (pos.monitor): the Hlídač's narrow log read and its verdict.
     "incident_logs": "ops:monitor", "incident_close": "ops:monitor",
+    # The deploy review gate (pos.deploy_review): the QA Reviewer's verdict; who may decide is checked inside.
+    "deploy_review": "tasks:review",
     # Observability (pos.observability): a narrow Loki read and a fixed metrics snapshot.
     "loki_query": "ops:observe", "metrics_snapshot": "ops:observe",
     # Access (pos.access): request_access and my_access are for everyone; deciding is the Access manager's.
@@ -283,7 +284,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             return agents.propose_instructions(conn, c, target["id"], text, reason)
 
     @mcp.tool(description="Ask for a new colleague (an agent): name, purpose, role, lead (who it reports to; "
-                          "default the Project manager), permissions (never more than yours), budget_class, "
+                          "default the COO), permissions (never more than yours), budget_class, "
                           "lifetime and draft instructions. HR's limits run first; the lead decides, or the owner "
                           "when it is over the limit or asks for more than you have.")
     def hire_request(ctx: Context, name: str, purpose: str, role: str | None = None, lead: str | None = None,
@@ -374,8 +375,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     @mcp.tool(description="Change an event routing rule (list_routes shows them): name, source, match "
                           "(kind, label, from_contains, text_regex), assignee, priority, topic, enabled, position. "
-                          "Say why in `reason`; every change is versioned. For the HR agent, the Agent coach and "
-                          "the Project manager (routes:write).")
+                          "Say why in `reason`; every change is versioned. For the Head of People, the Performance "
+                          "Coach and the COO (routes:write).")
     def route_update(ctx: Context, rule_id: int, changes: dict, reason: str = "") -> dict:
         from . import routing
 
@@ -481,8 +482,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     @mcp.tool(description="Ask the owner to approve something that leaves PersonalOS: sending an e-mail, "
                           "posting, a payment, a merge. why: one sentence on why it is needed. The owner is "
-                          "pinged in #team, so do not ping him again in chat: the Project manager bundles "
-                          "pending approvals into its bundle for him. Returns the approval id. A decision, "
+                          "pinged in #team, so do not ping him again in chat: the Chief of Staff lists "
+                          "pending approvals in its digest for him. Returns the approval id. A decision, "
                           "confirmation or input goes to your lead (or, at the top of the chain, ask_owner).")
     def request_approval(ctx: Context, action: str, details: dict[str, Any] | None = None,
                          task_id: str | None = None, why: str = "") -> dict:
@@ -493,9 +494,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             return approvals.request(conn, c, action, {**(details or {}), **({"why": why} if why else {})}, tid)
 
     @mcp.tool(description="Chain of command: report to your lead, not the owner. Only the top of the chain "
-                          "(the CEO, or the Project manager while there is no CEO) uses this tool, plus the "
-                          "narrow exceptions an agent's instructions name (the Monitor for critical "
-                          "incidents). Everyone else: can your lead decide it? Then ask the lead (chat_send "
+                          "(the CEO) uses this tool, plus the narrow exceptions an agent's instructions "
+                          "name (the Hlídač for critical incidents, the HA Specialist's safety OKs). Everyone else: can your lead decide it? Then ask the lead (chat_send "
                           "to=<lead>, a task or handoff_task); org_chart shows your lead. At the top, this "
                           "is the one way to ask the owner for a decision, confirmation, input or approval: "
                           "it opens a ticket assigned to the owner (a readable description from "
@@ -609,7 +609,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "their inbox. priority (optional): fyi, change_plan or stop, as for send_message. "
                           "reply_to: a message id to answer in its thread. Write T-123 to link a task. "
                           "Chain of command: talk to your lead, not the owner. Only the top of the chain (the "
-                          "CEO, or the Project manager while there is no CEO) DMs or @mentions the owner; "
+                          "CEO) DMs or @mentions the owner; the Chief of Staff sends his digest; "
                           "replying when the owner wrote to you is always fine. "
                           "Chat stays inside PersonalOS; at most 20 messages per 10 minutes.")
     def chat_send(ctx: Context, body: str, channel: str | None = None, to: str | None = None,

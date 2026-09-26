@@ -280,14 +280,14 @@ def test_active_limit_asks_owner_when_everyone_works():
 
 
 def test_weekly_report_lists_kpis_ratings_and_changes():
-    agents = [agent("mail", name="Mail agent"), agent("idle", name="Old helper", idle_days=30)]
+    agents = [agent("mail", name="Head of Customer Success"), agent("idle", name="Old helper", idle_days=30)]
     result = review_agents(agents, {"mail": stats("mail", done=8, returned=1, tokens=120000)}, NOW)
     previous = team_kpis([stats("mail", done=4, returned=2)])
     text = weekly_report(result, agents, previous)
     assert text.startswith("# HR přehled 2026-09-25")
     assert "| Dokončené úkoly | 8 | 4 |" in text
     assert "| Tokeny | 120 000 | 0 |" in text
-    assert "Mail agent: skóre" in text
+    assert "Head of Customer Success: skóre" in text
     assert "Old helper: archivován (nečinný)" in text
 
 

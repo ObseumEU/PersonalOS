@@ -60,7 +60,7 @@ export default function HiringPanel({ members, onHired }: { members: { id: numbe
         <input className={`${input} md:col-span-2`} placeholder="Purpose: what it is for" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} aria-label="Purpose" />
         <input className={input} placeholder="Role (optional)" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} aria-label="Role" />
         <select className={input} value={form.lead} onChange={(e) => setForm({ ...form, lead: e.target.value })} aria-label="Lead">
-          <option value="">reports to the Project manager</option>
+          <option value="">reports to the COO</option>
           {members.map((m) => (
             <option key={m.id} value={m.id}>
               reports to {m.name}

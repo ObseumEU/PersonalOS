@@ -68,227 +68,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
-  # --- Agents: each one is its own Codex worker app (AGENTS-SPEC step 3).
-  # Start with:  docker compose --profile agents up -d --build
-  # Keys come from the agent's page (New key); Codex login from CODEX_HOME_HOST.
-  dev-agent:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${DEV_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
-      WORKER_CODEX_CONFIG: '${DEV_AGENT_CODEX_CONFIG:-model_reasoning_effort="medium"}'
-      KB_AGENT_KEY: ${DEV_KB_AGENT_KEY:-}
-      GITHUB_TOKEN: ${DEV_GITHUB_TOKEN:-}
-      # Token budget (agents/dev-agent/INSTRUCTIONS.md): only the pos tools it uses (of those its
-      # permissions allow; inbox and team chat always stay), medium effort, a cost cap per Claude run
-      # and a step cap per run.
-      WORKER_POS_TOOLS: 'get_task report_progress complete_task request_approval create_task handoff_task'
-      # Bash exists for it under Claude too, limited to git, tests and the web build; every
-      # command goes through the command guard first (pos_worker.command_hook).
-      WORKER_CLAUDE_BUILTIN: Bash,Read,Edit,Write,Glob,Grep
-      WORKER_CLAUDE_TOOLS: 'Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(python -m pytest:*)|Bash(python -m pip install:*)|Bash(backend/.venv/bin/python -m pytest:*)|Bash(npm run build:*)|Bash(npm ci:*)'
-      WORKER_CLAUDE_EFFORT: medium
-      WORKER_CLAUDE_MAX_USD: "6"
-      WORKER_MAX_STEPS: "90"
-      # A Haiku check before each GitHub task (pos_worker.triage): an unclear issue gets one question
-      # instead of a run, another repository goes back; the size sets effort and cap (S: low, $2).
-      WORKER_TRIAGE: ${DEV_AGENT_TRIAGE:-1}
-      WORKER_TRIAGE_REPOS: ${POS_DEV_REPOS:-ObseumEU/PersonalOS}
-      WORKER_CLAUDE_MAX_USD_S: "2"
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - dev-agent-work:/work
-      - ./data/worker-keys/dev-agent:/run/pos-key:ro
-    restart: unless-stopped
-
-  assistant:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${ASSISTANT_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - assistant-work:/work
-      - ./data/worker-keys/assistant:/run/pos-key:ro
-    restart: unless-stopped
-
-  # The Agent coach reviews the agents' work daily (agents/agent-coach/INSTRUCTIONS.md):
-  # pos tools only, no shell or repository, a small budget.
-  agent-coach:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${COACH_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CODEX_CONFIG: 'model_reasoning_effort="medium"'
-      WORKER_POS_TOOLS: 'hr_overview list_tasks get_task get_agent_status create_task send_message report_progress complete_task schedule_create schedule_list'
-      WORKER_CLAUDE_TOOLS: ' '
-      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit WebSearch WebFetch'
-      WORKER_CLAUDE_EFFORT: medium
-      WORKER_CLAUDE_MAX_USD: "2"
-      WORKER_MAX_STEPS: "40"
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - agent-coach-work:/work
-      - ./data/worker-keys/agent-coach:/run/pos-key:ro
-    restart: unless-stopped
-
-  # The Access manager (Správce přístupů) decides other agents' grants and budgets
-  # (agents/access-manager/INSTRUCTIONS.md, pos.access): access tools and numbers only,
-  # no shell, repository, web or content tools; Claude at low effort with a small cap.
-  access-manager:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${ACCESS_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
-      WORKER_POS_TOOLS: 'access_review_requests access_decide access_grant access_revoke access_set_budget access_usage access_audit access_resume_agent access_report my_access org_chart ask_owner send_message report_progress complete_task'
-      WORKER_CLAUDE_TOOLS: ' '
-      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
-      WORKER_CLAUDE_EFFORT: low
-      WORKER_CLAUDE_MAX_USD: "0.5"
-      WORKER_MAX_STEPS: "30"
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - access-manager-work:/work
-      - ./data/worker-keys/access-manager:/run/pos-key:ro
-    restart: unless-stopped
-
-  mail-agent:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${MAIL_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # The Mail agent only reacts to routed new-mail tasks; knowlage ingests
-      # e-mail itself, so this agent gets no knowlage ingest key or server.
-      WORKER_CODEX_CONFIG: ${MAIL_AGENT_CODEX_CONFIG:-}
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - mail-agent-work:/work
-      - ./data/worker-keys/mail-agent:/run/pos-key:ro
-    restart: unless-stopped
-
-  # Every agent has a worker (pos.workers). Its Discord tools come once a Discord MCP server is
-  # connected (COMMUNITY_AGENT_CODEX_CONFIG); until then it answers in chat and works with pos tools.
-  community-agent:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${COMMUNITY_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # More MCP servers for this agent (knowlage ingest, GitHub, Gmail, Discord), '||' between entries.
-      WORKER_CODEX_CONFIG: ${COMMUNITY_AGENT_CODEX_CONFIG:-}
-      KB_AGENT_KEY: ${COMMUNITY_KB_AGENT_KEY:-}
-      DISCORD_TOKEN: ${COMMUNITY_DISCORD_TOKEN:-}
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - community-agent-work:/work
-      - ./data/worker-keys/community-agent:/run/pos-key:ro
-    restart: unless-stopped
-
-  # Splits team work and assigns it by role; runs the weekday standup (pos.org).
-  project-manager:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${PM_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CLAUDE_EFFORT: medium
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - project-manager-work:/work
-      - ./data/worker-keys/project-manager:/run/pos-key:ro
-    restart: unless-stopped
-
-  # Asistent vedení (Chief of Staff): the weekly report and the Friday meeting with the owner in #weekly
-  # (agents/asistent-vedeni/INSTRUCTIONS.md, pos.weekly). pos tools only; the numbers come from the core.
-  asistent-vedeni:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${COS_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CODEX_CONFIG: 'model_reasoning_effort="medium"'
-      WORKER_POS_TOOLS: 'weekly_packet report_publish meeting_status meeting_reply meeting_close goal_list goal_upsert goal_link create_task get_task org_chart complete_task report_progress'
-      WORKER_CLAUDE_TOOLS: ' '
-      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit WebSearch WebFetch'
-      WORKER_CLAUDE_EFFORT: medium
-      # The report run is the big one (one narrative from the packet); meeting turns are short.
-      WORKER_CLAUDE_MAX_USD: "3"
-      WORKER_MAX_STEPS: "30"
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - asistent-vedeni-work:/work
-      - ./data/worker-keys/asistent-vedeni:/run/pos-key:ro
-    restart: unless-stopped
-
-  # The HR agent (agents/hr-agent/INSTRUCTIONS.md, pos.hr): the review, limits and reports stay code in the
-  # core; this worker answers people in chat and does HR's tasks (hire requests, instruction proposals).
-  # pos tools only, Claude Haiku at low effort, a small cap per run.
-  hr-agent:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${HR_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
-      WORKER_POS_TOOLS: 'hr_overview hr_review hr_admit_agent hr_weekly_report hire_agent hire_request hire_list hire_decide schedule_create schedule_list propose_instructions org_chart get_agent_status list_tasks get_task create_task update_task task_comment handoff_task ask_owner send_message report_progress complete_task'
-      WORKER_CLAUDE_TOOLS: ' '
-      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
-      WORKER_CLAUDE_EFFORT: low
-      WORKER_CLAUDE_MAX_USD: "0.3"
-      WORKER_MAX_STEPS: "20"
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - hr-agent-work:/work
-      - ./data/worker-keys/hr-agent:/run/pos-key:ro
-    restart: unless-stopped
-
-  # The agent pool (pos.workers, pos_worker.pool): one worker process for every agent without a worker
-  # container of its own (agents hired or created at runtime). The core writes each one's key into
-  # data/worker-keys/pool/<slug>/key when the agent is created; the pool starts it within seconds and
-  # stops it when the agent is archived or paused.
   agent-pool:
     profiles: ["agents"]
     build: ./worker
@@ -300,6 +79,13 @@ services:
       POS_URL: http://api:8000
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       POOL_KEYS_DIR: /run/pos-keys
+      # Each agent's effort, tools, caps and work folder come from its agents/<slug>/agent.json
+      # ("effort", "profile"), served in /api/worker/me; the values below are the defaults.
+      # The Software Engineer's GitHub tasks get a Haiku check first (pos_worker.triage): an unclear
+      # issue gets one question instead of a run, another repository goes back; S tasks: low, $2.
+      WORKER_TRIAGE: ${DEV_AGENT_TRIAGE:-1}
+      WORKER_TRIAGE_REPOS: ${POS_DEV_REPOS:-ObseumEU/PersonalOS}
+      WORKER_CLAUDE_MAX_USD_S: "2"
       WORKER_CODEX_CONFIG: 'model_reasoning_effort="medium"'
       WORKER_CLAUDE_EFFORT: medium
       WORKER_CLAUDE_MAX_USD: "1"
@@ -307,37 +93,12 @@ services:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - agent-pool-work:/work
+      # The Software Engineer's clone (branch agent/dev, which the deployer promotes); the QA Reviewer
+      # reads it (its profile allows only read tools). Same path as before, so its venv keeps working.
+      - ${POS_DEV_WORK:-./data/dev-work}/PersonalOS:/work/PersonalOS
       - ./data/worker-keys/pool:/run/pos-keys:ro
     restart: unless-stopped
 
-  # The Monitor agent (Hlídač) triages the sentinel's incidents (agents/monitor/INSTRUCTIONS.md, pos.monitor):
-  # pos tools only, Claude Haiku at low effort, a small cap per run; code caps runs per incident and per day.
-  monitor:
-    profiles: ["agents"]
-    build: ./worker
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      POS_URL: http://api:8000
-      POS_AGENT_KEY: ${MONITOR_AGENT_KEY:-}
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      WORKER_CODEX_CONFIG: 'model_reasoning_effort="low"'
-      WORKER_POS_TOOLS: 'get_task list_tasks incident_logs incident_close metrics_snapshot loki_query create_task task_comment ask_owner report_progress complete_task'
-      WORKER_CLAUDE_TOOLS: ' '
-      WORKER_CLAUDE_DISALLOWED: 'Read Glob Grep Write Edit Bash WebSearch WebFetch'
-      WORKER_CLAUDE_EFFORT: low
-      WORKER_CLAUDE_MAX_USD: "0.3"
-      WORKER_MAX_STEPS: "20"
-    volumes:
-      - ${CODEX_HOME_HOST:-./data/codex}:/codex
-      - monitor-work:/work
-      - ./data/worker-keys/monitor:/run/pos-key:ro
-    restart: unless-stopped
-
-  # --- The sentinel (ops/sentinel, docs/SENTINEL.md): code watches the apps every minute and wakes the
-  # Monitor agent only for a real incident. Start with:  docker compose --profile sentinel up -d --build
-  # Docker access goes through a proxy that allows reads and restarts only (no exec, create, delete, volumes).
   docker-proxy:
     profiles: ["sentinel"]
     image: tecnativa/docker-socket-proxy:${DOCKER_PROXY_TAG:-v0.5.0}

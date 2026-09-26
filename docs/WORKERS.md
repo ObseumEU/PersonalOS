@@ -80,8 +80,9 @@ docker compose logs -f dev-agent
 
 A new agent: add a service like `dev-agent` with its own key.
 
-The **Project manager** (`project-manager` service, key `PM_AGENT_KEY`) is
-created by PersonalOS at startup; issue its key on its agent page. It takes
+Since the 2026-09 reorganisation (docs/REORG.md) every agent runs in the
+agent pool; no agent has a container of its own. The **COO** (the code role
+that was the Project manager) is created by PersonalOS at startup. It takes
 team work, splits it into steps and assigns them by role, and runs the weekday
 standup. Workers hand work to each other with the `handoff_task` tool and ask
 peers with `send_message` (see `agents/README.md`, "Working together").
@@ -90,16 +91,20 @@ peers with `send_message` (see `agents/README.md`, "Working together").
 
 An agent thinks with a model, so it runs somewhere (`pos.workers`):
 
-- **its own container**: `agents/<slug>/agent.json` names the `worker`
-  (a compose service in the `agents` profile, key in `data/worker-keys/<worker>/key`);
+- **its own container** (none since the reorganisation; still supported):
+  `agents/<slug>/agent.json` names the `worker` (a compose service in the
+  `agents` profile, key in `data/worker-keys/<worker>/key`);
 - **the agent pool**: every agent created at runtime (hiring, the Agents page,
   `create_agent`): the core writes its key to `data/worker-keys/pool/<slug>/key`
   at once and the `agent-pool` container (`python -m pos_worker.pool`) serves it.
   The pool is lazy: an idle agent has no process; the pool asks
   `GET /api/worker/next?wait=0` for each key every 15 s, starts the worker when
   the agent has a task, and the worker ends itself after 2 min without one.
-  Memory grows only with the agents working right now (`agent.json` may also
-  say `"worker": "pool"`);
+  Memory grows only with the agents working right now (`agent.json` says
+  `"worker": "pool"`). Each agent's worker settings come from its file
+  (`effort` and `profile`: narrowed pos tools, Claude tools, cost and step
+  caps, a work folder under `/work` or `/repos`), served in `/api/worker/me`,
+  so one pool runs agents with different needs;
 - **a remote app over A2A**: an agent created with `a2a_url`; its answer to a
   chat question is posted into the thread.
 
@@ -112,10 +117,10 @@ shows among the subsystems.
 
 The owner is never left without an answer: a message to a service (or an
 agent without a worker) gets a code-built Czech reply and becomes a task for
-the Project manager; a message to an agent that cannot run (its worker down,
+the CEO (the COO where there is no CEO); a message to an agent that cannot run (its worker down,
 usage limits, budget, pause, kill switch) gets a code-built reply with the
 reason and when it tries again. The scheduler job "Agents: workers running,
 the owner's messages answered" (every 2 min) keeps the pool's keys in step,
-files an incident for the Monitor when a worker has been silent for 10 min
+files an incident for the Hlídač when a worker has been silent for 10 min
 (resolved when it is back) and when an owner message has had no real answer
 for 10 min.

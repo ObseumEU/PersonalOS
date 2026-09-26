@@ -1,0 +1,30 @@
+{
+  "name": "Executive Assistant",
+  "display_name": "Asistent",
+  "purpose": "Osobní asistent majitele: rychlé odpovědi v chatu, osobní požadavky, agenda a termíny, dohledání v knowledge base; větší práci předá správnému členovi týmu.",
+  "role": "assistant",
+  "team": "leadership",
+  "reports_to": "Chief of Staff",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "system",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "low",
+  "budget": {
+    "usd_day": 3.0,
+    "usd_month": 45.0,
+    "usd_run": 1.0,
+    "runs_day": 40
+  },
+  "answers_chat": true,
+  "note": "The built-in assistant (actor id 2, the platform's system identity) renamed in place: its history, DMs and the 'ai' alias stay. Runs in the agent pool."
+}

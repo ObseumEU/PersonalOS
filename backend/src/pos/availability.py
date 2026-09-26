@@ -13,7 +13,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
-from . import actors, audit
+from . import actors, audit, roles
 from .core import TZ, Ctx, now_iso
 
 
@@ -148,7 +148,7 @@ def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id:
     """The owner wrote to a member that has no worker (a service such as the
     Deployer, or an agent whose worker is missing): the platform answers at once
     in the thread, in Czech and without a model, and hands the message to the
-    Project manager, who answers the owner. Once per message."""
+    CEO, who answers the owner. Once per message."""
     from . import chat, tasks, workers
     from .guard.external import wrap_external
 
@@ -162,7 +162,8 @@ def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id:
     if why:
         what = f"teď neběží, protože {why}"
     author = actors.get(conn, ctx.actor_id)
-    pm = actors.find_by_name(conn, "Project manager")
+    # The top of the chain answers for services (the CEO; the COO where there is no CEO yet).
+    pm = actors.find_by_name(conn, roles.CEO) or actors.find_by_name(conn, roles.COO)
     if pm is None or pm["id"] == target["id"] or pm["archived_at"] or workers.reply_path(conn, pm) is None:
         pm = None
     task = None
@@ -188,9 +189,9 @@ def forward_unserved(conn: sqlite3.Connection, ctx: Ctx, ch, target, message_id:
         })
         audit.log(conn, ctx, "chat_task", "task", task["id"], channel=answer_ch["id"], message=reply_to)
         text = (f"Automatická odpověď platformy: {name} {what}, takže sám neodpoví. Tvou zprávu jsem předal "
-                f"Project managerovi ({task['ref']}), odpoví ti {where}.")
+                f"dál: {pm['name']} ({task['ref']}), odpoví ti {where}.")
     else:
-        text = (f"Automatická odpověď platformy: {name} {what}, takže sám neodpoví, a Project manager teď "
+        text = (f"Automatická odpověď platformy: {name} {what}, takže sám neodpoví, a vedení ({roles.CEO}) teď "
                 "není k dispozici. Napiš prosím přímo agentovi, který to má na starosti.")
     out = None
     try:

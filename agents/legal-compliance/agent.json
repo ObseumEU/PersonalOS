@@ -1,0 +1,29 @@
+{
+  "name": "Legal & Compliance",
+  "display_name": "Právo a compliance",
+  "purpose": "Právo a compliance na vyžádání: kontrola smluv, GDPR a otázky k datům; bez rutiny, odpovídá jen na úkoly.",
+  "role": "legal",
+  "team": "leadership",
+  "reports_to": "CEO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium",
+  "budget": {
+    "usd_day": 2.0,
+    "usd_month": 20.0,
+    "usd_run": 1.5,
+    "runs_day": 4
+  },
+  "dormant": true,
+  "note": "Dormant by default: no schedule and no routing rule, so it costs nothing until someone gives it a task. Not legal advice: it flags risks and drafts questions for a lawyer."
+}

@@ -1,8 +1,9 @@
-# The Agent coach
+# The Performance Coach
 
-The Agent coach turns what colleagues say about an agent's work into better
-instructions. It is a role agent (`agents/agent-coach/`), always present,
-reporting to the Project manager, on a small budget.
+The Performance Coach (the Agent coach until the 2026-09 reorganisation,
+docs/REORG.md) turns what colleagues say about an agent's work into better
+instructions. It is a role agent (`agents/performance-coach/`), always present,
+reporting to the Head of People, on a small budget.
 
 ## Where its input comes from
 

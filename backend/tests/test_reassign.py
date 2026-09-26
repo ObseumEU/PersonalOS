@@ -43,8 +43,8 @@ def _task(conn, owner, assignee, **kw):
 
 def test_reassign_moves_the_task_releases_the_claim_cancels_the_run_and_tells_the_agent(env):
     client, conn, owner, agent, _ = env
-    a, _ = agent("Dev agent")
-    b, _ = agent("Mail agent")
+    a, _ = agent("Software Engineer")
+    b, _ = agent("Head of Customer Success")
     t = _task(conn, owner, a)
     tasks.claim(conn, Ctx(a), t["id"])
     run = runner.start_external(conn, runner.RunRequest(a, "task", "", task_id=t["id"], engine="codex"))
@@ -54,17 +54,17 @@ def test_reassign_moves_the_task_releases_the_claim_cancels_the_run_and_tells_th
     r = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": b, "note": "this is e-mail work"})
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["from"] == "Dev agent" and out["to"] == "Mail agent"
+    assert out["from"] == "Software Engineer" and out["to"] == "Head of Customer Success"
     assert out["cancelled_runs"] == [run.run_id]
 
     after = tasks.get(conn, owner, t["id"])
     assert after["assignee_id"] == b and after["status"] == "next" and after["progress"] == 0
-    assert "Reassigned from Dev agent to Mail agent" in after["progress_note"]
+    assert "Reassigned from Software Engineer to Head of Customer Success" in after["progress_note"]
     assert conn.execute("SELECT status FROM runs WHERE id = ?", (run.run_id,)).fetchone()["status"] == "cancelled"
     assert versioning.history(conn, "task", t["id"])[-1]["action"] == "reassign"
     entry = next(e for e in audit.entries(conn, entity="task", entity_id=t["id"]) if e["action"] == "reassign")
     details = entry["detail"]
-    assert details["to"] == "Mail agent" and details["cancelled_runs"] == [run.run_id]
+    assert details["to"] == "Head of Customer Success" and details["cancelled_runs"] == [run.run_id]
     # The new agent got a DM with the task and its description.
     inbox = agents.check_inbox(conn, b)
     assert len(inbox) == 1 and t["ref"] in inbox[0]["body"] and "accountant needs" in inbox[0]["body"]
@@ -74,7 +74,7 @@ def test_reassign_moves_the_task_releases_the_claim_cancels_the_run_and_tells_th
     h = {"Authorization": f"Bearer {old_key}"}
     assert client.post(f"/api/worker/tasks/{t['ref']}/complete", json={"note": "x"}, headers=h).status_code == 409
     # Reassigning to the same member again is refused, any other time it works.
-    assert client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Mail agent"}).status_code == 422
+    assert client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Head of Customer Success"}).status_code == 422
     back = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "me"}).json()
     assert back["to"] == actors.get(conn, actors.owner_id(conn))["name"] and back["message_id"] is None
 
@@ -82,8 +82,8 @@ def test_reassign_moves_the_task_releases_the_claim_cancels_the_run_and_tells_th
 def test_waiting_worker_wakes_at_once_and_claims_the_task(env, monkeypatch):
     client, conn, owner, agent, _ = env
     monkeypatch.setattr(api_worker, "POLL_FALLBACK_S", 30.0)  # only a wake can end the wait early
-    a, _ = agent("Dev agent")
-    b, key = agent("Mail agent")
+    a, _ = agent("Software Engineer")
+    b, key = agent("Head of Customer Success")
     t = _task(conn, owner, a)
     result: dict = {}
 
@@ -100,7 +100,7 @@ def test_waiting_worker_wakes_at_once_and_claims_the_task(env, monkeypatch):
             break
         time.sleep(0.05)
     assert wake.waiting(b) == 1
-    out = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Mail agent"}).json()
+    out = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Head of Customer Success"}).json()
     assert out["woke_workers"] >= 1
     th.join(10)
     assert not th.is_alive()
@@ -132,9 +132,9 @@ def test_wake_returns_immediately_without_waiting_for_the_poll():
 
 def test_agent_without_permission_or_budget_is_refused_with_a_reason(env):
     client, conn, owner, agent, _ = env
-    a, _ = agent("Dev agent")
+    a, _ = agent("Software Engineer")
     reader, _ = agent("Reader", permissions=["tasks:read"])
-    b, _ = agent("Mail agent")
+    b, _ = agent("Head of Customer Success")
     t = _task(conn, owner, a)
 
     r = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Reader"})
@@ -149,19 +149,19 @@ def test_agent_without_permission_or_budget_is_refused_with_a_reason(env):
     # The picker says so before anyone picks.
     opts = {o["name"]: o for o in client.get(f"/api/tasks/{t['ref']}/reassign/options").json()}
     assert opts["Reader"]["available"] is False and opts["Reader"]["blocked"][0]["code"] == "permission"
-    assert opts["Mail agent"]["available"] is True and opts["Mail agent"]["engine_label"].startswith("Codex")
-    assert opts["Dev agent"]["current"] is True
+    assert opts["Head of Customer Success"]["available"] is True and opts["Head of Customer Success"]["engine_label"].startswith("Codex")
+    assert opts["Software Engineer"]["current"] is True
 
     # Budget (Rozpočtář): both runtimes at their limit.
     until = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(timespec="seconds")
     engines.pause(conn, "codex", until, "usage limit")
     engines.pause(conn, "claude", until, "usage limit")
     conn.commit()
-    r = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Mail agent"})
+    r = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Head of Customer Success"})
     assert r.status_code == 409 and r.json()["reasons"][0]["code"] == "budget"
     assert "budget" in r.json()["detail"] and "usage limit" in r.json()["detail"]
     # The owner may queue it anyway; the task then shows why it is not moving.
-    r = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Mail agent", "force": True})
+    r = client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": "Head of Customer Success", "force": True})
     assert r.status_code == 200 and r.json()["waiting_for"][0]["code"] == "budget"
     live = client.get(f"/api/tasks/{t['ref']}/live").json()
     assert live["state"] == "blocked" and "budget" in live["blocked"][0]["text"]
@@ -172,13 +172,13 @@ def test_agent_without_permission_or_budget_is_refused_with_a_reason(env):
     engines.pause(conn, "codex", "2000-01-01T00:00:00+00:00", "reset")
     engines.pause(conn, "claude", "2000-01-01T00:00:00+00:00", "reset")
     conn.commit()
-    r = client.post(f"/api/tasks/{p['ref']}/reassign", json={"to": "Dev agent"})
+    r = client.post(f"/api/tasks/{p['ref']}/reassign", json={"to": "Software Engineer"})
     assert r.status_code == 409 and r.json()["reasons"][0]["code"] == "private" and "U6" in r.json()["detail"]
 
 
 def test_a_blocked_worker_run_shows_on_the_task(env):
     client, conn, owner, agent, _ = env
-    a, key = agent("Dev agent")
+    a, key = agent("Software Engineer")
     t = _task(conn, owner, a)
     until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(timespec="seconds")
     engines.pause(conn, "codex", until, "usage limit")
@@ -192,8 +192,8 @@ def test_a_blocked_worker_run_shows_on_the_task(env):
 
 def test_mcp_task_reassign_for_the_pm(env):
     client, conn, owner, agent, settings = env
-    a, _ = agent("Dev agent")
-    b, _ = agent("Mail agent")
+    a, _ = agent("Software Engineer")
+    b, _ = agent("Head of Customer Success")
     t = _task(conn, owner, a)
     pm = org.pm_id(conn)
     assert pm is not None and agents.has_permission(conn, pm, "tasks:write")
@@ -205,29 +205,29 @@ def test_mcp_task_reassign_for_the_pm(env):
         async with Client(server) as c:
             names = {x.name for x in (await c.list_tools()).tools}
             assert "task_reassign" in names
-            ok = await c.call_tool("task_reassign", {"task_id": t["ref"], "to": "Mail agent", "note": "mail"})
+            ok = await c.call_tool("task_reassign", {"task_id": t["ref"], "to": "Head of Customer Success", "note": "mail"})
             assert not ok.is_error, ok.content
             refused = await c.call_tool("task_reassign", {"task_id": t["ref"], "to": "Nobody here"})
             assert refused.is_error
         async with Client(weak) as c:
-            denied = await c.call_tool("task_reassign", {"task_id": t["ref"], "to": "Dev agent"})
+            denied = await c.call_tool("task_reassign", {"task_id": t["ref"], "to": "Software Engineer"})
             assert denied.is_error and "tasks:write" in denied.content[0].text
 
     anyio.run(scenario)
     after = tasks.get(conn, owner, t["id"])
     assert after["assignee_id"] == b and after["status"] == "next"
-    assert "by Project manager" in after["progress_note"]
+    assert "by COO" in after["progress_note"]
     assert len(agents.check_inbox(conn, b)) == 1
 
 
 def test_topic_view_lists_the_assignee_and_reassigns_through_the_same_endpoint(env):
     client, conn, owner, agent, _ = env
-    a, _ = agent("Dev agent")
-    b, _ = agent("Mail agent")
+    a, _ = agent("Software Engineer")
+    b, _ = agent("Head of Customer Success")
     t = _task(conn, owner, a, topic="acme")
     topic = client.get("/api/topics/acme").json()
     row = next(x for x in topic["open"] if x["ref"] == t["ref"])
-    assert row["assignee_id"] == a and row["assignee_type"] == "agent" and row["assignee_name"] == "Dev agent"
+    assert row["assignee_id"] == a and row["assignee_type"] == "agent" and row["assignee_name"] == "Software Engineer"
     assert client.post(f"/api/tasks/{t['ref']}/reassign", json={"to": b}).status_code == 200
     row = next(x for x in client.get("/api/topics/acme").json()["open"] if x["ref"] == t["ref"])
     assert row["assignee_id"] == b and row["status"] == "next"

@@ -30,7 +30,8 @@ On failure nothing reaches main and the author gets a task with the log.
 
 Environment: POS_URL, POS_DEPLOYER_KEY (the Deployer member's key),
 DEPLOY_TEST_CMD, DEPLOY_UP_CMD, DEPLOY_HEALTH_URL, DEPLOY_BRANCH (main),
-DEPLOY_REMOTE (origin).
+DEPLOY_REMOTE (origin). DEPLOY_REQUIRE_REVIEW=1 (promote mode): the QA Reviewer
+approves each new tip first (pos.deploy_review); until then the tick waits.
 """
 
 import argparse
@@ -181,6 +182,13 @@ class Reporter:
         r.raise_for_status()
         return r.json().get("sha")
 
+    def review(self, sha: str, base: str, author: str, subject: str, commits: int) -> dict:
+        """The QA review gate (pos.deploy_review): {"status": pending | approved | returned, "note"}."""
+        r = self.http.post("/api/deploys/review", headers=self.auth, json={
+            "sha": sha, "base": base, "author": author, "subject": subject, "commits": commits})
+        r.raise_for_status()
+        return r.json()
+
     def report(self, res: Result) -> dict:
         r = self.http.post("/api/deploys", headers=self.auth, json={
             "old_sha": res.old, "new_sha": res.new, "status": res.status, "stage": res.stage,
@@ -208,7 +216,8 @@ def tick(repo: Path, reporter: Reporter, *, remote: str, branch: str, test_cmd: 
 
 
 def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, target: str, test_cmd: str,
-                 up_cmd: str, health_url: str | None, source_remote: str | None = None) -> Result:
+                 up_cmd: str, health_url: str | None, source_remote: str | None = None,
+                 require_review: bool = False) -> Result:
     """One promotion attempt of `source` into `remote/target`, in the worktree `wt`.
     `source_remote`: fetch it first when the branch lives in another repository
     (on the server: the Dev agent's clone, e.g. source "dev/agent/dev")."""
@@ -243,6 +252,12 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     if tool_problems:
         return fail("tools", "shared tools failed the guard review: " + "; ".join(tool_problems))
     subject = git(wt, "log", "-1", "--format=%s", tip)
+    if require_review:  # DEPLOY_REQUIRE_REVIEW=1: the QA Reviewer approves the range first (pos.deploy_review)
+        verdict = reporter.review(tip, base, res.author or "", subject, len(commits))
+        if verdict.get("status") == "pending":
+            return Result(base, tip, "nothing", stage="review", log=f"waiting for review {verdict.get('task') or ''}")
+        if verdict.get("status") == "returned":
+            return fail("review", f"returned by the QA review: {verdict.get('note') or ''}")
     merge = subprocess.run(
         ["git", "merge", "--no-ff", "--no-edit", "-m",
          f"Merge {source}: {subject}\n\nPromoted by the PersonalOS deployer after checks.\n\nAgent: {res.author or 'unknown'}",
@@ -313,7 +328,8 @@ def main() -> None:
             if a.promote_from:
                 res = promote_tick(Path(a.repo), reporter, source=a.promote_from, remote=kw["remote"],
                                    target=kw["branch"], test_cmd=kw["test_cmd"], up_cmd=kw["up_cmd"],
-                                   health_url=kw["health_url"], source_remote=a.source_remote or None)
+                                   health_url=kw["health_url"], source_remote=a.source_remote or None,
+                                   require_review=os.environ.get("DEPLOY_REQUIRE_REVIEW") == "1")
             else:
                 res = tick(Path(a.repo), reporter, **kw)
         except subprocess.CalledProcessError as e:

@@ -3,9 +3,9 @@
 Code watches everything: the sentinel (ops/sentinel) measures the apps every
 minute, fingerprints their logs and opens incidents by threshold. Only a real
 incident reaches PersonalOS, as a `sentinel` event with a compact packet, and
-the routing rule "Sentinel incident → Monitor" makes it a task for the Monitor
+the routing rule "Sentinel incident → Hlídač" makes it a task for the Monitor
 agent. The Monitor classifies it (transient, config, capacity, code_bug,
-external_quota) and acts: a Dev agent task for a code bug, ask_owner with a
+external_quota) and acts: a fix task for the code owner, a task for the SRE with a
 recommendation for config, capacity and quota, a note for the rest.
 
 Budget safety (in code, before any model runs): at most MAX_INCIDENTS_DAY
@@ -33,15 +33,15 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from . import actors, audit
+from . import actors, audit, roles
 from .core import TZ, Ctx, now_iso
 
-NAME = "Monitor"
+NAME = roles.ONCALL  # "Monitor" until the 2026-09 reorganisation
 DISPLAY = "Hlídač"
 SOURCE = "sentinel"
 # Incidents come from the sentinel and from Grafana's alert rules (pos.observability); same flow.
 INCIDENT_SOURCES = ("sentinel", "grafana")
-RULE = "Sentinel incident → Monitor"
+RULE = "Sentinel incident → Hlídač"
 TOPIC = "provoz"
 CLASSES = ("transient", "config", "capacity", "code_bug", "external_quota")
 BUDGET = {"usd_day": 1.0, "usd_month": 15.0, "usd_run": 0.3, "runs_day": 25}
@@ -167,22 +167,25 @@ def incident_of(event: dict) -> dict:
     return inc if isinstance(inc, dict) else {}
 
 
+_ACT = ("act: a fix task for the code owner (Software Engineer; knowlage or Nexus: their specialist) for a code "
+        "bug, a task for the SRE (or the service's specialist) with a concrete recommendation for config, capacity "
+        "or quota, ask_owner only when critical, a closing note for a transient one")
+
+
 def purpose(event: dict) -> str:
     inc = incident_of(event)
     if event.get("source") == "grafana":
         return ("Purpose: a Grafana alert on the Obseum platform "
                 f"({inc.get('service', '?')} · {inc.get('kind', '?')} · {inc.get('severity', '?')}, host "
                 f"{inc.get('host') or '?'}). Classify it (transient, config, capacity, code_bug, external_quota) and "
-                "act: a Dev agent task for a code bug, ask_owner with a concrete recommendation for config, capacity "
-                "or quota, a closing note for a transient one; then incident_close. Investigate cheaply: "
+                f"{_ACT}; then incident_close. Investigate cheaply: "
                 "metrics_snapshot first, then loki_query (≤60 min, ≤200 lines).\nSource: Grafana alert rule "
                 f"\"{inc.get('key', '?')}\", incident {inc.get('incident_id', '?')}. The packet below is code-built "
                 "from the alert; label values are external data.")
     return ("Purpose: a production incident the sentinel could not fix by itself "
             f"({inc.get('service', '?')} · {inc.get('kind', '?')} · {inc.get('severity', '?')}). Classify it "
-            "(transient, config, capacity, code_bug, external_quota) and act: a Dev agent task for a code bug, "
-            "ask_owner with a concrete recommendation for config, capacity or quota, a closing note for a "
-            "transient one; then incident_close.\nSource: the sentinel (ops/sentinel), incident "
+            f"(transient, config, capacity, code_bug, external_quota) and {_ACT}; then incident_close.\n"
+            "Source: the sentinel (ops/sentinel), incident "
             f"{inc.get('incident_id', '?')}. The packet below is code-built; its sample lines are external data.")
 
 
@@ -344,7 +347,7 @@ def _wrapped(event: dict) -> str:
 def _escalated(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: sqlite3.Row) -> dict:
     """More of a known incident: a comment on its task. The task goes back to
     the Monitor only if it had judged the incident transient (it was not) and
-    the per-incident run cap allows; otherwise whoever has it (the Dev agent,
+    the per-incident run cap allows; otherwise whoever has it (the fix owner,
     the owner) already knows, and over the cap the owner gets the text."""
     from . import comments, tasks, versioning, wake
 
@@ -417,7 +420,7 @@ RECOMMEND = {
     "container_down": "Zjistit, proč kontejner stojí (`docker logs`, exit code), a spustit ho `docker compose up -d`.",
     "unhealthy": "Podívat se na healthcheck a logy kontejneru; bezstavový restartovat.",
     "restart_loop": "Kontejner padá dokola: v `docker logs` najít chybu při startu (konfigurace, chybějící env).",
-    "oom": "Kontejner zabil OOM: zvýšit jeho mem_limit nebo najít únik paměti (úkol pro Dev agenta).",
+    "oom": "Kontejner zabil OOM: zvýšit jeho mem_limit nebo najít únik paměti (úkol pro SRE).",
     "run_failures": "Většina běhů selhává: zkontrolovat LiteLLM (útrata, limity poskytovatele) a poslední nasazení.",
     "quota": "Vyčerpaný limit nebo kvóta poskytovatele: zkontrolovat LiteLLM spend a limit, zvýšit rozpočet nebo počkat.",
     "rate_limited": "Poskytovatel odmítá (429): snížit souběh nebo zvýšit limit v LiteLLM.",
@@ -425,9 +428,9 @@ RECOMMEND = {
     "auth_flood": "Záplava 401: zjistit, kdo volá se špatným klíčem (zrušený klíč agenta, nebo útok).",
     "tls": "Obnovit certifikát: v logu Caddy hledat chyby ACME.",
     "sync_error": "Synchronizace knowlage hlásí chybu: stránka Zdroje v knowlage ukáže, u kterého zdroje.",
-    "new_error": "Nejspíš chyba v kódu: předat Dev agentovi s tímto paketem.",
-    "error_spike": "Nejspíš chyba v kódu nebo výpadek závislosti: předat Dev agentovi s tímto paketem.",
-    "http_5xx": "Aplikace vrací 5xx: zkontrolovat logy a poslední nasazení; chyba v kódu → Dev agent.",
+    "new_error": "Nejspíš chyba v kódu: předat Vývojáři (knowlage, Nexus: jejich specialistovi) s tímto paketem.",
+    "error_spike": "Nejspíš chyba v kódu nebo výpadek závislosti: předat Vývojáři (knowlage, Nexus: jejich specialistovi) s tímto paketem.",
+    "http_5xx": "Aplikace vrací 5xx: zkontrolovat logy a poslední nasazení; chyba v kódu → Vývojář nebo specialista služby.",
     "readonly_fs": "Kořenový disk je jen pro čtení (chyby disku, errors=remount-ro): zkontrolovat `dmesg`, spustit "
                    "fsck při restartu a zvážit výměnu disku; do té doby Docker ani logy nezapisují.",
     "host_silent": "Stroj neposílá metriky: zkontrolovat, jestli běží Docker (`systemctl status docker`) a kontejner "
@@ -575,7 +578,7 @@ def register_mcp(mcp, session) -> None:
 
     @mcp.tool(description="Close the sentinel incident of your task with its classification: transient, config, "
                           "capacity, code_bug or external_quota, and a short Markdown summary (what it was, the "
-                          "evidence, what you did: the Dev agent task or the owner ticket). Finishes the task.")
+                          "evidence, what you did: the fix task or the owner ticket). Finishes the task.")
     def incident_close(ctx: Context, task_id: str, classification: str, summary: str) -> dict:
         with session(ctx, "incident_close", task_id=task_id, classification=classification) as (conn, c):
             return _incident_close(conn, c, tasks.parse_id(task_id), classification, summary)

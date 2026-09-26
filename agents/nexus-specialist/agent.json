@@ -1,0 +1,58 @@
+{
+  "name": "Nexus Specialist",
+  "display_name": "Specialista Nexus",
+  "purpose": "Správce služby Nexus (nexus-process-pilot): zdraví, agenti a jejich zapínání, LiteLLM tiery, Codex/Claude fallback a kvóty, nasazení, migrace a upgrady; opravy v kódu na své větvi.",
+  "role": "specialist",
+  "team": "engineering",
+  "reports_to": "CTO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "ops:observe",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "auto",
+  "model": "claude-opus-5-5",
+  "effort": "low",
+  "profile": {
+    "workdir": "/work/nexus-specialist/nexus-process-pilot",
+    "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
+    "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(git switch:*)|Bash(git checkout -b:*)|Bash(git branch:*)",
+    "max_steps": 60
+  },
+  "budget": {
+    "usd_day": 6.0,
+    "usd_month": 60.0,
+    "usd_run": 3.0,
+    "runs_day": 15
+  },
+  "schedules": [
+    {
+      "name": "Nexus: denní kontrola",
+      "schedule": "daily 07:40",
+      "title": "Nexus: denní kontrola",
+      "notes": "Purpose: know every morning that Nexus is healthy. Source: the Nexus Specialist's routine.\n\nFollow 'Daily health pass' in your instructions. All green: complete with one line, no message.",
+      "definition_of_done": "The health pass ran; anything red is a task or an incident comment; all green is one line.",
+      "priority": 2,
+      "estimate_min": 5,
+      "topic": "nexus"
+    },
+    {
+      "name": "Nexus: týdenní zlepšení",
+      "schedule": "weekly wed 10:00",
+      "title": "Nexus: týdenní zlepšení",
+      "notes": "Purpose: make Nexus a little better every week. Source: the Nexus Specialist's routine.\n\nFollow 'Weekly improvement' in your instructions.",
+      "definition_of_done": "One improvement is done (commit or config change with a rollback note) or proposed to the CTO.",
+      "priority": 2,
+      "estimate_min": 30,
+      "topic": "nexus"
+    }
+  ],
+  "note": "Pool worker with its own clone of ObseumEU/nexus-process-pilot in /work/nexus-specialist (set up in REORG phase B). It commits on agent/nexus-specialist; pushing needs the owner's cred grant; deploys follow docs/REORG.md 'Service deploys'."
+}

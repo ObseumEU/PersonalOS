@@ -6,7 +6,7 @@ Agent ids in pos.hr are the actor id as a string, the same key pos.budget uses.
 import sqlite3
 from datetime import datetime, timezone
 
-from .. import actors, audit, tasks
+from .. import actors, audit, roles, tasks
 from ..agents import is_seeded, usage
 from ..budget import store as budget_store
 from ..core import Ctx
@@ -14,7 +14,7 @@ from . import store
 from .models import AgentRecord, AgentStats, Lifetime, Status
 
 # Agents that run the platform itself; HR rates them but never retires them.
-BUILTIN_SYSTEM = {actors.ASSISTANT_NAME, "Knowledge agent", "Nexus", "Deployer", "Project manager"}
+BUILTIN_SYSTEM = {actors.ASSISTANT_NAME, "Knowledge agent", "Nexus", "Deployer", roles.COO}
 
 
 def iso(at: datetime) -> str:

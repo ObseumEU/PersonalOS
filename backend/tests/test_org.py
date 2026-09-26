@@ -49,22 +49,22 @@ def _call(result):
 def test_org_fields_are_seeded_and_idempotent(conn, tmp_path):
     pm = org.pm_id(conn)
     owner = actors.owner_id(conn)
-    dev = _agent(conn, tmp_path, "Dev agent")
+    dev = _agent(conn, tmp_path, "Software Engineer")
     by_name = {m["name"]: m for m in org.chart(conn)}
     assert by_name["Owner"]["role"] == "owner" and by_name["Owner"]["reports_to"] is None
-    assert by_name["Project manager"]["reports_to"] == owner and by_name["Project manager"]["level"] == 1
-    for name, role in (("Assistant", "assistant"), ("Knowledge agent", "knowledge"), ("Nexus", "automation"),
-                       ("Deployer", "deployer"), ("HR agent", "hr"), ("Dev agent", "developer")):
+    assert by_name["COO"]["reports_to"] == owner and by_name["COO"]["level"] == 1
+    for name, role in (("Executive Assistant", "assistant"), ("Knowledge agent", "knowledge"), ("Nexus", "automation"),
+                       ("Deployer", "deployer"), ("Head of People", "hr"), ("Software Engineer", "developer")):
         assert by_name[name]["role"] == role and by_name[name]["reports_to"] == pm, name
         assert by_name[name]["level"] == 2
-    assert by_name["Dev agent"]["team"] == "engineering" and by_name["Dev agent"]["id"] == dev
+    assert by_name["Software Engineer"]["team"] == "engineering" and by_name["Software Engineer"]["id"] == dev
     # Running startup again changes nothing and never overwrites the owner's choice.
     org.set_org(conn, Ctx(owner), dev, {"team": "platform"})
     integrations.register_builtin_agents(conn)
     again = {m["name"]: m for m in org.chart(conn)}
-    assert again["Dev agent"]["team"] == "platform"
-    assert conn.execute("SELECT COUNT(*) FROM actors WHERE name = 'Project manager'").fetchone()[0] == 1
-    assert agents.detail(conn, dev)["reports_to_name"] == "Project manager"
+    assert again["Software Engineer"]["team"] == "platform"
+    assert conn.execute("SELECT COUNT(*) FROM actors WHERE name = 'COO'").fetchone()[0] == 1
+    assert agents.detail(conn, dev)["reports_to_name"] == "COO"
 
 
 def test_pm_exists_within_hr_limits(conn):
@@ -79,30 +79,30 @@ def test_pm_exists_within_hr_limits(conn):
 
     assert hr_store.get_profile(conn, pm)["system"] == 1
     listed = {a.name: a for a in hr.CorePlatform(conn, Ctx(pm)).list_agents()}
-    assert listed["Project manager"].system
+    assert listed["COO"].system
     assert hr.admit_agent(conn, Ctx(actors.owner_id(conn)), name="X", purpose="x")["allowed"]
     assert len(hr._active_agents(hr.CorePlatform(conn, Ctx(pm)))) <= HRPolicy().max_active_agents
 
 
 def test_handoff_reassigns_and_records_an_edge(db, conn, tmp_path):
-    dev = _agent(conn, tmp_path, "Dev agent")
-    mail = _agent(conn, tmp_path, "Mail agent")
+    dev = _agent(conn, tmp_path, "Software Engineer")
+    mail = _agent(conn, tmp_path, "Head of Customer Success")
     owner = Ctx(actors.owner_id(conn))
-    t = tasks.create(conn, owner, {"title": "Reply to the invoice", "assignee": "Dev agent"})
+    t = tasks.create(conn, owner, {"title": "Reply to the invoice", "assignee": "Software Engineer"})
     conn.commit()
     server = mcp_server.build(db, default_actor=lambda _c: dev)
 
     async def scenario():
         async with Client(server) as cl:
-            out = _call(await cl.call_tool("handoff_task", {"task": t["ref"], "to": "Mail agent",
+            out = _call(await cl.call_tool("handoff_task", {"task": t["ref"], "to": "Head of Customer Success",
                                                             "note": "This is e-mail, not code"}))
             chart = _call(await cl.call_tool("org_chart", {}))
             return out, chart
 
     out, chart = anyio.run(scenario)
-    assert out["to"] == "Mail agent" and out["from"] == "Dev agent"
-    assert {"name": "Project manager", "role": "project_manager"}.items() <= next(
-        m for m in chart if m["name"] == "Project manager").items()
+    assert out["to"] == "Head of Customer Success" and out["from"] == "Software Engineer"
+    assert {"name": "COO", "role": "project_manager"}.items() <= next(
+        m for m in chart if m["name"] == "COO").items()
     after = tasks.get(conn, owner, t["id"])
     assert after["assignee_id"] == mail and after["status"] == "next"
     assert "This is e-mail" in after["progress_note"]
@@ -116,12 +116,12 @@ def test_handoff_reassigns_and_records_an_edge(db, conn, tmp_path):
 
 
 def test_network_has_message_handoff_and_org_edges(conn, tmp_path):
-    dev = _agent(conn, tmp_path, "Dev agent", permissions=["tasks:read", "tasks:claim", "messages:send"])
-    mail = _agent(conn, tmp_path, "Mail agent")
+    dev = _agent(conn, tmp_path, "Software Engineer", permissions=["tasks:read", "tasks:claim", "messages:send"])
+    mail = _agent(conn, tmp_path, "Head of Customer Success")
     owner = Ctx(actors.owner_id(conn))
-    t = tasks.create(conn, owner, {"title": "Fix the build", "assignee": "Dev agent"})
+    t = tasks.create(conn, owner, {"title": "Fix the build", "assignee": "Software Engineer"})
     agents.send_message(conn, Ctx(dev), mail, "Can you check the invoice thread?")
-    org.handoff(conn, Ctx(dev), t["id"], "Mail agent", "yours")
+    org.handoff(conn, Ctx(dev), t["id"], "Head of Customer Success", "yours")
     conn.commit()
     net = network.build(conn, "24h")
     edges = {(e["from"], e["to"], e["kind"]): e for e in net["edges"]}
@@ -139,28 +139,28 @@ def test_standup_schedule_exists_and_fires_a_task_for_the_pm(conn):
     mine = [s for s in schedules.list_schedules(conn, actor_id=pm) if s["name"] == org.STANDUP_NAME]
     assert len(mine) == 1
     s = mine[0]
-    assert s["visibility"] == "team" and s["schedule"] == "weekdays 08:30" and s["assignee_id"] == pm
+    assert s["visibility"] == "team" and s["schedule"] == "weekdays 08:15" and s["assignee_id"] == pm
     org.ensure_standup(conn)  # idempotent
     assert len([x for x in schedules.list_schedules(conn) if x["name"] == org.STANDUP_NAME]) == 1
     fired = schedules.fire(conn, s["id"])
     t = tasks.get(conn, Ctx(actors.owner_id(conn)), tasks.parse_id(fired["task"]))
-    assert t["assignee_id"] == pm and t["status"] == "next" and "summary" in t["definition_of_done"]
+    assert t["assignee_id"] == pm and t["status"] == "next" and "standup note" in t["definition_of_done"]
     # Archived by the owner: startup does not bring it back.
     schedules.archive(conn, Ctx(actors.owner_id(conn)), s["id"])
     assert org.ensure_standup(conn) is None
 
 
 def test_permission_checks(conn, tmp_path):
-    dev = _agent(conn, tmp_path, "Dev agent")  # tasks:read + tasks:claim, no tasks:write
-    mail = _agent(conn, tmp_path, "Mail agent")
+    dev = _agent(conn, tmp_path, "Software Engineer")  # tasks:read + tasks:claim, no tasks:write
+    mail = _agent(conn, tmp_path, "Head of Customer Success")
     owner = Ctx(actors.owner_id(conn))
-    theirs = tasks.create(conn, owner, {"title": "Mail triage", "assignee": "Mail agent"})
+    theirs = tasks.create(conn, owner, {"title": "Mail triage", "assignee": "Head of Customer Success"})
     with pytest.raises(Forbidden, match="tasks:write"):
-        org.handoff(conn, Ctx(dev), theirs["id"], "Dev agent")
+        org.handoff(conn, Ctx(dev), theirs["id"], "Software Engineer")
     # Its own task it may pass on; the PM (tasks:write) may move anyone's.
-    own = tasks.create(conn, owner, {"title": "Code fix", "assignee": "Dev agent"})
-    assert org.handoff(conn, Ctx(dev), own["id"], "Mail agent")["to"] == "Mail agent"
-    assert org.handoff(conn, Ctx(org.pm_id(conn)), theirs["id"], "Dev agent")["to"] == "Dev agent"
+    own = tasks.create(conn, owner, {"title": "Code fix", "assignee": "Software Engineer"})
+    assert org.handoff(conn, Ctx(dev), own["id"], "Head of Customer Success")["to"] == "Head of Customer Success"
+    assert org.handoff(conn, Ctx(org.pm_id(conn)), theirs["id"], "Software Engineer")["to"] == "Software Engineer"
     # The owner and a member's lead change where it sits (the PM leads new agents); a peer does not; no loops.
     with pytest.raises(Forbidden):
         org.set_org(conn, Ctx(mail), dev, {"role": "boss"})
@@ -172,17 +172,17 @@ def test_permission_checks(conn, tmp_path):
 
     killswitch.freeze(conn, owner, "test")
     with pytest.raises(Forbidden):
-        org.handoff(conn, Ctx(mail), own["id"], "Dev agent")
+        org.handoff(conn, Ctx(mail), own["id"], "Software Engineer")
 
 
 def test_org_api(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path))) as client:
         data = client.get("/api/org").json()
         names = {m["name"]: m for m in data["members"]}
-        assert names["Project manager"]["id"] == data["project_manager"]
-        assistant = names["Assistant"]["id"]
+        assert names["COO"]["id"] == data["project_manager"]
+        assistant = names["Executive Assistant"]["id"]
         r = client.put(f"/api/agents/{assistant}/org", json={"team": "front desk"})
         assert r.status_code == 200 and r.json()["team"] == "front_desk"
         assert r.json()["role"] == "assistant"  # untouched fields stay
         listed = {a["name"]: a for a in client.get("/api/agents").json()["agents"]}
-        assert listed["Assistant"]["reports_to_name"] == "Project manager"
+        assert listed["Executive Assistant"]["reports_to_name"] == "COO"

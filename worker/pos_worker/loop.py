@@ -149,6 +149,11 @@ class Worker:
         except Exception:  # noqa: BLE001 - PersonalOS hiccup: the last known one will do
             if not self.me:
                 raise
+        # The agent's own step cap from its profile (agents/<slug>/agent.json) wins over the worker's.
+        try:
+            self.max_steps = int((self.me.get("profile") or {}).get("max_steps") or self.max_steps)
+        except (TypeError, ValueError):
+            pass
         ref = task["ref"]
         # Ask for the run first: if the kill switch or the budget says no, the
         # task stays in the queue untouched instead of hanging in "working".

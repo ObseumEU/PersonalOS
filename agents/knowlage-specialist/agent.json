@@ -1,0 +1,58 @@
+{
+  "name": "Knowlage Specialist",
+  "display_name": "Specialista knowlage",
+  "purpose": "Správce služby knowlage: konektory (2× Gmail, 2× Drive, GitHub), ingest a backfill, klasifikace do workspaců, úrovně úsilí, evaly, Qdrant a Voyage, nasazení; opravy v kódu na své větvi.",
+  "role": "specialist",
+  "team": "engineering",
+  "reports_to": "CTO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "ops:observe",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "auto",
+  "model": "claude-opus-5-5",
+  "effort": "low",
+  "profile": {
+    "workdir": "/work/knowlage-specialist/knowlage-agent",
+    "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
+    "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(git switch:*)|Bash(git checkout -b:*)|Bash(git branch:*)",
+    "max_steps": 60
+  },
+  "budget": {
+    "usd_day": 6.0,
+    "usd_month": 60.0,
+    "usd_run": 3.0,
+    "runs_day": 15
+  },
+  "schedules": [
+    {
+      "name": "knowlage: denní kontrola",
+      "schedule": "daily 07:50",
+      "title": "knowlage: denní kontrola",
+      "notes": "Purpose: know every morning that knowlage syncs and answers. Source: the Knowlage Specialist's routine.\n\nFollow 'Daily health pass' in your instructions. All green: one line, no message.",
+      "definition_of_done": "The health pass ran; anything red is a task; all green is one line.",
+      "priority": 2,
+      "estimate_min": 5,
+      "topic": "knowlage"
+    },
+    {
+      "name": "knowlage: týdenní zlepšení",
+      "schedule": "weekly thu 10:00",
+      "title": "knowlage: týdenní zlepšení",
+      "notes": "Purpose: better answers and cleaner data every week. Source: the Knowlage Specialist's routine.\n\nFollow 'Weekly improvement' in your instructions.",
+      "definition_of_done": "One improvement is done (with before/after numbers) or proposed to the CTO.",
+      "priority": 2,
+      "estimate_min": 30,
+      "topic": "knowlage"
+    }
+  ],
+  "note": "Pool worker with its own clone of ObseumEU/knowlage-agent in /work/knowlage-specialist (REORG phase B). Admin API through the owner-granted credential knowlage-admin."
+}

@@ -127,16 +127,19 @@ def register_mcp_tools(mcp, session) -> None:
     access_mcp.register(mcp, session)
     from . import weekly
 
-    weekly.register_mcp(mcp, session)  # the weekly report, the meeting and goals (Asistent vedení)
+    weekly.register_mcp(mcp, session)  # the weekly report, the meeting and goals (the Chief of Staff)
     from . import homeassistant
 
     homeassistant.register_mcp(mcp, session)  # the Home Assistant Specialist's WebSocket tool
     from . import monitor
 
-    monitor.register_mcp(mcp, session)  # the Monitor agent: incident_logs, incident_close
+    monitor.register_mcp(mcp, session)  # the Hlídač: incident_logs, incident_close
+    from . import deploy_review
+
+    deploy_review.register_mcp(mcp, session)  # the QA Reviewer's verdict for the deployer's gate
     from . import observability
 
-    observability.register_mcp(mcp, session)  # the Monitor agent: loki_query, metrics_snapshot
+    observability.register_mcp(mcp, session)  # loki_query, metrics_snapshot (ops:observe)
     from .credentials import mcp as credentials_mcp
 
     credentials_mcp.register(mcp, session)  # credentials_list, credential_http (values never shown)

@@ -1,0 +1,57 @@
+{
+  "name": "Chief of Staff",
+  "display_name": "Asistent vedení",
+  "purpose": "Kancelář ředitele: týdenní report a meeting s majitelem (board), cíle, souhrn pro majitele dvakrát denně, zápisy z board meetingu.",
+  "role": "chief_of_staff",
+  "team": "leadership",
+  "reports_to": "CEO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "normal",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium",
+  "profile": {
+    "pos_tools": "weekly_packet report_publish meeting_status meeting_reply meeting_close goal_list goal_upsert goal_link create_task get_task list_tasks search org_chart send_message complete_task report_progress",
+    "claude_tools": " ",
+    "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
+    "max_steps": 30
+  },
+  "budget": {
+    "usd_day": 2.0,
+    "usd_month": 30.0,
+    "usd_run": 0.8,
+    "runs_day": 14
+  },
+  "schedules": [
+    {
+      "name": "Souhrn pro majitele (ráno)",
+      "schedule": "weekdays 08:40",
+      "title": "Souhrn pro majitele (ráno)",
+      "notes": "Purpose: one bundled Czech message for the owner instead of pings from every agent. Source: the Chief of Staff's routine.\n\nFollow 'The owner digest' in your instructions. Nothing waiting: send nothing, complete with 'nic'.",
+      "definition_of_done": "Either one digest message was sent in the owner's DM, or nothing was waiting and the note says so.",
+      "priority": 2,
+      "estimate_min": 5,
+      "topic": "digest"
+    },
+    {
+      "name": "Souhrn pro majitele (odpoledne)",
+      "schedule": "weekdays 16:30",
+      "title": "Souhrn pro majitele (odpoledne)",
+      "notes": "Purpose: the afternoon bundle for the owner. Source: the Chief of Staff's routine.\n\nFollow 'The owner digest' in your instructions. Nothing new since the morning: send nothing.",
+      "definition_of_done": "Either one digest message was sent in the owner's DM, or nothing was waiting and the note says so.",
+      "priority": 2,
+      "estimate_min": 5,
+      "topic": "digest"
+    }
+  ],
+  "note": "Takes over the Asistent vedení's code role (role chief_of_staff: pos.weekly finds it by role). The weekly_report job gives it the Friday report and meeting."
+}

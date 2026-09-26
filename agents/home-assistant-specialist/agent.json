@@ -4,7 +4,7 @@
   "purpose": "Spravuje a rozvíjí majitelův Home Assistant (http://192.168.1.56:8123): automatizace, skripty, scény, dashboardy, helpery, entity a oblasti, zdraví integrací; udržuje pořádek a dokumentaci a navrhuje i provádí malá vratná zlepšení. Bezpečnostní věci (zámky, alarmy, garáž/brány, čidla kouře/CO/úniku, ochrana topení) jen navrhuje.",
   "role": "home_automation",
   "team": "home",
-  "reports_to": "Project manager",
+  "reports_to": "CTO",
   "permissions": [
     "tasks:read",
     "tasks:claim",

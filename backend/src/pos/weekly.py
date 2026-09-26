@@ -46,8 +46,8 @@ from .core import Ctx, Forbidden, NotFound, now_iso
 log = logging.getLogger(__name__)
 
 ROLE = "chief_of_staff"
-NAME = "Asistent vedení"  # the display name; "Chief of Staff" in English
-ALIASES = (NAME, "Chief of Staff")
+NAME = "Chief of Staff"  # "Asistent vedení" in Czech (its name until the 2026-09 reorganisation)
+ALIASES = (NAME, "Asistent vedení")
 CHANNEL = "weekly"
 TOPIC = "weekly"
 ANSWER_HOURS = 24
@@ -136,6 +136,11 @@ def channel_id(conn: sqlite3.Connection) -> int:
     cos = agent_id(conn)
     if cos:
         chat._add_member(conn, cid, cos)
+    # The CEO takes part in the Friday board meeting (docs/REORG.md).
+    ceo = conn.execute("SELECT id FROM actors WHERE role = 'ceo' AND archived_at IS NULL AND kind != 'human' "
+                       "ORDER BY id LIMIT 1").fetchone()
+    if ceo:
+        chat._add_member(conn, cid, ceo["id"])
     return cid
 
 
@@ -148,7 +153,7 @@ def _may_run_meeting(conn: sqlite3.Connection, ctx: Ctx) -> None:
     me = actors.get(conn, ctx.actor_id)
     if me["kind"] == "human" or ctx.actor_id == agent_id(conn):
         return
-    raise Forbidden("only the Chief of Staff (Asistent vedení) or a person runs the weekly meeting")
+    raise Forbidden("only the Chief of Staff or a person runs the weekly meeting")
 
 
 # ------------------------------------------------------------------ storage

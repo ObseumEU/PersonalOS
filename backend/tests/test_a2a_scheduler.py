@@ -76,8 +76,8 @@ def test_a2a_server(app, tmp_path):
     t = tasks.get(conn, me, tasks.parse_id(task["id"]))
     assert (t["topic"], t["priority"], t["source"]) == ("acme", 1, "a2a")
     assert rpc("GetTask", {"id": task["id"]})["result"]["id"] == task["id"]
-    to_member = rpc("message/send", {"message": {**msg, "parts": [{"text": "hello"}]}, "metadata": {"to": "Assistant"}})
-    assert "Delivered to Assistant" in to_member["result"]["message"]["parts"][0]["text"]
+    to_member = rpc("message/send", {"message": {**msg, "parts": [{"text": "hello"}]}, "metadata": {"to": "Executive Assistant"}})
+    assert "Delivered to Executive Assistant" in to_member["result"]["message"]["parts"][0]["text"]
     assert rpc("SendStreamingMessage", {"message": msg})["error"]["code"] == -32004
     assert rpc("CancelTask", {"id": task["id"]})["result"]["status"]["state"] == "TASK_STATE_CANCELED"
     assert client.post("/a2a", json={"jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": {}}).status_code == 401

@@ -1,0 +1,49 @@
+{
+  "name": "Performance Coach",
+  "display_name": "Kouč agentů",
+  "purpose": "Kvalita práce agentů: čte, co agenti skutečně odevzdali, a z opakované zpětné vazby navrhuje lepší instrukce.",
+  "role": "coach",
+  "team": "people",
+  "reports_to": "Head of People",
+  "permissions": [
+    "approvals:request",
+    "hr:read",
+    "messages:send",
+    "routes:write",
+    "tasks:claim",
+    "tasks:read",
+    "tasks:write"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "low",
+  "profile": {
+    "pos_tools": "hr_overview list_tasks get_task get_agent_status create_task propose_instructions give_feedback send_message report_progress complete_task schedule_list",
+    "claude_tools": " ",
+    "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
+    "max_steps": 40
+  },
+  "budget": {
+    "usd_day": 1.5,
+    "usd_month": 25.0,
+    "usd_run": 0.8,
+    "runs_day": 4
+  },
+  "schedules": [
+    {
+      "name": "Revize práce agentů",
+      "schedule": "weekdays 21:00",
+      "title": "Revize práce agentů",
+      "notes": "Purpose: agents do work that makes sense and improve. Source: the Performance Coach's routine.\n\nFollow 'The review' in your instructions. A quiet day takes under 10 turns.",
+      "definition_of_done": "A table of reviewed agents with verdicts, and at most 3 proposals with task refs.",
+      "priority": 2,
+      "estimate_min": 15,
+      "topic": "agents"
+    }
+  ],
+  "note": "Takes over the Agent coach's code role (pos.feedback COACH)."
+}

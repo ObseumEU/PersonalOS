@@ -21,8 +21,10 @@ other feedback that changes how the work is done.
 
 ## Leads
 
-Everyone has a lead (`reports_to`); the Project manager leads the agents and
-reports to the owner (to the CEO once there is one). A lead, for everyone below it:
+Everyone has a lead (`reports_to`). The team is a company (docs/REORG.md):
+the owner is the board, the CEO reports to him, the heads to the CEO and
+everyone else to a head; `agents/<slug>/agent.json` sets each role's lead,
+and a member without one gets the COO. A lead, for everyone below it:
 
 - assigns, hands on and reassigns their tasks (`task_reassign`, `handoff_task`);
 - pauses, resumes or stops them (`manage_agent`), and may send them `stop` in chat;
@@ -33,8 +35,8 @@ Permissions, limits, budget and archiving stay with the owner and HR.
 
 ## Chain of command: who talks to the owner
 
-Report to your lead, not the owner. Only the top of the chain (the CEO, or
-the Project manager while there is no CEO) contacts the owner: a DM, an
+Report to your lead, not the owner. Only the top of the chain (the CEO)
+contacts the owner: a DM, an
 @mention of him, an `ask_owner` ticket. Replying to the owner when he wrote to
 you (his DM, a thread he started, his message while you work) is always fine.
 
@@ -43,19 +45,18 @@ lead (`chat_send` with `to`, `send_message`, a task or `handoff_task`). The
 lead decides what it can, answers the asker and escalates up only what it
 cannot, by the same rule.
 
-- **The top of the chain batches.** The Project manager (later the CEO)
-  collects what needs the owner and sends him one Czech message at most twice
-  a day, around 08:30 and 16:30: numbered items, a one-line recommendation
-  each, the task refs. Only urgent things (money being lost, the owner's data
+- **The top of the chain batches.** The CEO collects what needs the owner;
+  the Chief of Staff sends him one Czech digest at most twice a day (08:40
+  and 16:30): numbered items, a one-line recommendation each, the task refs. Only urgent things (money being lost, the owner's data
   or security at risk, a deadline today) go at once, with the reason.
 - **Owner-only items stay the owner's:** outbound approvals (constitution
   rule 1) and credential grants. They wait in their queues (Approvals,
-  Přístupy) and the PM's bundle lists them; nobody pings him per item.
+  Přístupy) and the digest lists them; nobody pings him per item.
 - **Narrow exceptions**, each written in the agent's instructions: the
-  Monitor for critical incidents (severity critical, or the owner's data or
+  Hlídač for critical incidents (severity critical, or the owner's data or
   security at stake), at most 3 a day; the Access manager's daily digest (and
-  its company-cap alert); the Asistent vedení's weekly report and meeting in
-  #weekly.
+  its company-cap alert); the Chief of Staff's digest, weekly report and
+  meeting in #weekly; the Home Assistant Specialist's safety OKs.
 
 This is a rule in the agents' instructions (the shared how-to-work lines, the
 MCP tool descriptions, `agents/README.md`, each `INSTRUCTIONS.md`), not a gate

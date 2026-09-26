@@ -9,9 +9,9 @@ from pos.db import connect, migrate
 def _repo(tmp_path):
     base = tmp_path / "agents"
     for slug, spec in {
-        "writer": {"name": "Writer", "role": "specialist", "team": "content", "reports_to": "Project manager",
+        "writer": {"name": "Writer", "role": "specialist", "team": "content", "reports_to": "COO",
                    "permissions": ["tasks:read", "tasks:claim", "agents:create"], "worker": "writer"},
-        "hr-agent": {"name": "HR agent", "runtime": "builtin", "worker": "none"},
+        "hr-agent": {"name": "Head of People", "runtime": "builtin", "worker": "none"},
         "discord": {"name": "Discord bot", "enabled": False, "worker": "discord"},
     }.items():
         (base / slug).mkdir(parents=True)
@@ -34,12 +34,12 @@ def test_role_agents_come_from_their_files_and_workers_get_keys(tmp_path, monkey
     assert actors.find_by_name(c, "Discord bot") is None  # disabled
     assert agents_code.ensure_from_repo(c, tmp_path, base)["created"] == []  # idempotent
     keys = tmp_path / "keys"
-    # the Project manager has no file here: it gets its worker in the agent pool (pos.workers)
-    assert agents_code.write_worker_keys(c, keys, base) == ["writer", "pool/project-manager"]
+    # the COO has no file here: it gets its worker in the agent pool (pos.workers)
+    assert agents_code.write_worker_keys(c, keys, base) == ["writer", "pool/coo"]
     key = (keys / "writer" / "key").read_text().strip()
     assert actors.actor_for_key(c, key) == w["id"]
     assert agents_code.write_worker_keys(c, keys, base) == []  # a valid key stays
-    pm_key = (keys / "pool" / "project-manager" / "key").read_text().strip()
+    pm_key = (keys / "pool" / "coo" / "key").read_text().strip()
     assert actors.actor_for_key(c, pm_key) == org.pm_id(c)
     c.execute("UPDATE actors SET paused_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (org.pm_id(c),))
     agents_code.write_worker_keys(c, keys, base)
@@ -61,6 +61,12 @@ def test_worker_reads_its_key_file(tmp_path, monkeypatch):
 
 def test_the_repository_files_are_valid():
     specs = {s["slug"]: s for s in agents_code.specs()}
-    assert {"dev-agent", "mail-agent", "agent-coach", "project-manager"} <= set(specs)
+    assert {"ceo", "coo", "cto", "software-engineer", "head-of-customer-success", "performance-coach", "hlidac",
+            "access-manager", "home-assistant-specialist"} <= set(specs)
+    # every role runs in the agent pool (docs/REORG.md), and its lead is a member defined here or the owner
+    names = {s["name"] for s in specs.values()} | {"Owner"}
+    for s in specs.values():
+        assert s.get("worker") == "pool" and s.get("reports_to") in names, s["slug"]
+        assert "messages:send" in s.get("permissions", []), s["slug"]
     for s in specs.values():
         assert set(s.get("permissions", [])) <= set(agents.PERMISSIONS), s["slug"]

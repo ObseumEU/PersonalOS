@@ -18,7 +18,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import actors, audit, runner, tasks, versioning
+from . import actors, audit, roles, runner, tasks, versioning
 from .core import Ctx, NotFound, now_iso
 from .core import Forbidden as _Forbidden
 
@@ -44,13 +44,13 @@ BUILTIN_PERMISSIONS = {
                             "messages:send"],
     "Knowledge agent": ["tasks:read", "tasks:claim", "approvals:request"],
     "Nexus": ["tasks:read", "tasks:write", "tasks:claim", "approvals:request"],
-    "HR agent": ["tasks:read", "tasks:claim", "tasks:write", "messages:send", "approvals:request", "hr:read"],
+    roles.HR: ["tasks:read", "tasks:claim", "tasks:write", "messages:send", "approvals:request", "hr:read"],
     "Deployer": ["tasks:read", "tasks:write"],
-    "Project manager": ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
+    roles.COO: ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
 }
 DEFAULT_AGENT_PERMISSIONS = ["tasks:read", "tasks:claim", "approvals:request"]
 # HR edits anyone's instructions except these (and the owner-only areas).
-HR_HANDS_OFF = ("CEO", "Access manager")
+HR_HANDS_OFF = (roles.CEO, roles.ACCESS_MANAGER)
 LIFETIMES = ("one_shot", "long_lived")
 BUDGET_CLASSES = ("system", "normal", "low")
 
@@ -96,11 +96,11 @@ def seed_builtin_permissions(conn: sqlite3.Connection) -> None:
     # Permissions added to an agent later (platform code, not an agent's own
     # change): hr:read for the HR agent, which hr_overview requires; messages:send
     # for the role agents, so they can answer the standup and colleagues in chat.
-    for name, perm in (("HR agent", "hr:read"), ("Dev agent", "messages:send"), ("Agent coach", "messages:send"),
-                       ("Project manager", "tasks:review"), ("HR agent", "routes:write"),
-                       ("Agent coach", "routes:write"), ("Project manager", "routes:write"),
-                       # the HR agent runs in its own worker (2026-09-26): it claims its tasks, answers in chat
-                       ("HR agent", "tasks:claim"), ("HR agent", "messages:send")):
+    for name, perm in ((roles.HR, "hr:read"), (roles.ENGINEER, "messages:send"), (roles.COACH, "messages:send"),
+                       (roles.COO, "tasks:review"), (roles.HR, "routes:write"),
+                       (roles.COACH, "routes:write"), (roles.COO, "routes:write"),
+                       # HR runs in a worker (2026-09-26): it claims its tasks, answers in chat
+                       (roles.HR, "tasks:claim"), (roles.HR, "messages:send")):
         row = conn.execute("SELECT id, permissions FROM actors WHERE name = ?", (name,)).fetchone()
         if row and perm not in json.loads(row["permissions"] or "[]"):
             conn.execute("UPDATE actors SET permissions = ? WHERE id = ?",
@@ -166,9 +166,11 @@ def _write_instructions(data_dir: Path, name: str, text: str) -> str:
 def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, lifetime: str = "one_shot",
                  instructions: str = "", permissions: list[str] | None = None, budget_class: str = "normal",
                  expires_at: str | None = None, runtime: str = "codex_worker", a2a_url: str | None = None,
-                 data_dir: Path) -> dict:
+                 data_dir: Path, allow_replace: bool = True) -> dict:
     """Create an agent. Returns {"created": True, "agent": ..., "api_key": ...} or,
-    when HR stops it at a limit, {"created": False, **HR's decision}."""
+    when HR stops it at a limit, {"created": False, **HR's decision}. With
+    allow_replace=False HR may not archive another agent to make room (agents
+    from git): over the limit the agent is simply not created."""
     from .guard import policy
     from .hr import service as hr
     from .integrations import guard_actor
@@ -212,6 +214,8 @@ def create_agent(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str,
     decision = hr.admit_agent(conn, ctx, name=name, purpose=purpose, lifetime=lifetime, defer_replace=True)
     if not decision.get("allowed"):
         return {"created": False, **decision}
+    if decision.get("replace_id") and not allow_replace:  # HR only proposed it (defer_replace): nothing written
+        return {"created": False, **decision, "allowed": False, "decision": "over_limit"}
     try:
         return _insert_agent(conn, ctx, creator, decision, name=name, purpose=purpose, lifetime=lifetime,
                              instructions=instructions, requested=requested, budget_class=budget_class,
@@ -239,7 +243,7 @@ def _insert_agent(conn: sqlite3.Connection, ctx: Ctx, creator: sqlite3.Row, deci
     budget.set_agent_class(conn, str(row["id"]), budget_class)
     from . import org
 
-    org.place_new(conn, row["id"])  # reports to the Project manager
+    org.place_new(conn, row["id"])  # reports to the COO unless a lead is given
     from .access import service as access
 
     access.seed_agent(conn, row["id"], ctx.actor_id)  # its permissions become grants right away
@@ -362,17 +366,17 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
 
 def propose_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, text: str, reason: str = "") -> dict:
     """A new version of an agent's instructions goes the way every change does:
-    a task for the Dev agent to commit agents/<slug>/INSTRUCTIONS.md on agent/dev,
+    a task for the Software Engineer to commit agents/<slug>/INSTRUCTIONS.md on agent/dev,
     which the deployer checks and promotes. The owner, the agent's lead and the
-    Agent coach may propose."""
+    Performance Coach may propose."""
     from .org import manages
 
     row = _agent_row(conn, agent_id)
     me = actors.get(conn, ctx.actor_id)
-    hr_may = me["name"] == "HR agent" and row["name"] not in HR_HANDS_OFF and not row["is_owner"]
-    if not (me["is_owner"] or me["name"] == "Agent coach" or hr_may or manages(conn, ctx.actor_id, agent_id)):
-        raise _Forbidden("the owner, the agent's lead, HR (not the CEO or the Access manager) or the Agent coach "
-                         "proposes its instructions")
+    hr_may = me["name"] == roles.HR and row["name"] not in HR_HANDS_OFF and not row["is_owner"]
+    if not (me["is_owner"] or me["name"] == roles.COACH or hr_may or manages(conn, ctx.actor_id, agent_id)):
+        raise _Forbidden(f"the owner, the agent's lead, HR (not the CEO or the Access manager) or the "
+                         f"{roles.COACH} proposes its instructions")
     text = (text or "").strip()
     if len(text) < 40:
         raise AgentError("the instructions are too short")
@@ -382,7 +386,7 @@ def propose_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, text
         # An agent created at runtime (no file in git yet): its copy changes now, git follows.
         Path(row["instructions_path"]).write_text(text + "\n", encoding="utf-8")
         applied = True
-    dev = actors.find_by_name(conn, "Dev agent")
+    dev = actors.find_by_name(conn, roles.ENGINEER)
     t = tasks.create(conn, ctx, {
         "title": f"Instrukce {row['name']}: {(reason or 'nová verze').strip()[:80]}",
         "assignee": {"type": "agent", "id": dev["id"]} if dev and not dev["archived_at"] else "me",

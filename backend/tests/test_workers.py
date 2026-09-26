@@ -1,6 +1,6 @@
 """Every agent has a worker, and the owner is never left without an answer (pos.workers).
 
-2026-09-26: the owner's DMs to the HR agent got no reply at all. HR ran inside the
+2026-09-26: the owner's DMs to the Head of People got no reply at all. HR ran inside the
 core without a worker, and the chat only made "answer" tasks for agents with one.
 Now every agent has a worker (its own container, the agent pool or A2A), built-in
 automation is a service, a message to a service or to an agent that cannot run
@@ -72,8 +72,8 @@ def test_every_agent_in_the_default_seed_has_a_worker_or_is_a_service(seeded):
     conn = seeded
     members = conn.execute("SELECT * FROM actors WHERE kind != 'human' AND archived_at IS NULL").fetchall()
     names = {m["name"] for m in members}
-    assert {"HR agent", "Monitor", "Project manager", "Assistant", "Deployer", "Nexus", "Knowledge agent",
-            "Community agent"} <= names
+    assert {"Head of People", "Hlídač", "COO", "Executive Assistant", "Deployer", "Nexus", "Knowledge agent",
+            "Community Manager"} <= names
     for m in members:
         path = workers.reply_path(conn, m)
         assert path is not None or workers.is_service(m), f"{m['name']} has no worker and is not a service"
@@ -84,25 +84,25 @@ def test_every_agent_in_the_default_seed_has_a_worker_or_is_a_service(seeded):
     shown = {m["name"] for m in agents.overview(conn)} | {m["name"] for m in org.chart(conn)}         | {m["name"] for m in chat.members_overview(conn)}
     assert not shown & services                                      # not on the Team page, chart or chat list
     assert actors.find_by_name(conn, "Knowledge agent")["a2a_url"]   # still reachable over A2A (ask_agent)
-    hr = actors.find_by_name(conn, "HR agent")
-    assert workers.reply_path(conn, hr) == {"kind": "dedicated", "name": "hr-agent"}
+    hr = actors.find_by_name(conn, "Head of People")
+    assert workers.reply_path(conn, hr) == {"kind": "pool", "name": "pool/head-of-people"}
     assert hr["runtime"] == "codex_worker" and hr["engine"] == "claude" and hr["model"] == "claude-haiku-4-5"
     assert agents.has_permission(conn, hr["id"], "messages:send")    # it can answer in chat
 
 
 def test_every_agent_in_the_default_seed_answers_the_owner_or_the_platform_does(seeded):
     """The audit as a test: a DM from the owner to each member ends in a task for
-    its worker, or in an automatic reply plus a task for the Project manager."""
+    its worker, or in an automatic reply plus a task for the COO."""
     conn = seeded
     owner = _owner(conn)
-    pm = actors.find_by_name(conn, "Project manager")
+    pm = actors.find_by_name(conn, "CEO")  # the top of the chain answers for services
     for m in conn.execute("SELECT * FROM actors WHERE kind != 'human' AND archived_at IS NULL").fetchall():
         _seen_now(conn, m["id"])
         msg = chat.send_dm(conn, owner, m["id"], f"Test pro {m['name']}: ozvi se")
         if workers.is_service(m):
             reply = _replies(conn, msg["id"])
             assert reply and reply[0]["author_id"] == m["id"], m["name"]
-            assert reply[0]["body"].startswith("Automatická odpověď platformy") and "Project managerovi" in reply[0]["body"]
+            assert reply[0]["body"].startswith("Automatická odpověď platformy") and "dál: CEO" in reply[0]["body"]
             assert "za " + m["name"] in _chat_task(conn, pm["id"])["title"]
         else:
             t = _chat_task(conn, m["id"])
@@ -112,7 +112,7 @@ def test_every_agent_in_the_default_seed_answers_the_owner_or_the_platform_does(
 def test_hr_answers_the_owner_through_its_worker(seeded):
     """The bug itself: the owner's DM to HR becomes HR's chat task, not silence."""
     conn = seeded
-    hr = actors.find_by_name(conn, "HR agent")
+    hr = actors.find_by_name(conn, "Head of People")
     _seen_now(conn, hr["id"])
     msg = chat.send_dm(conn, _owner(conn), hr["id"], "Prosím vytvoř agenta HomeAssistant")
     t = _chat_task(conn, hr["id"])
@@ -125,7 +125,7 @@ def test_hr_answers_the_owner_through_its_worker(seeded):
 def test_a_message_to_a_service_gets_a_code_reply_and_goes_to_the_project_manager(seeded):
     conn = seeded
     owner = _owner(conn)
-    dep, pm = actors.find_by_name(conn, "Deployer"), actors.find_by_name(conn, "Project manager")
+    dep, pm = actors.find_by_name(conn, "Deployer"), actors.find_by_name(conn, "CEO")
     _seen_now(conn, pm["id"])
     msg = chat.send_dm(conn, owner, dep["id"], "Kdy bylo poslední nasazení?")
     reply = _replies(conn, msg["id"])
@@ -364,7 +364,7 @@ def test_a_worker_silent_for_10_minutes_is_an_incident_until_it_is_back(watched)
 # ------------------------------------------------------------------ an agent always can and does answer
 
 def test_an_agent_without_messages_send_answers_the_person_waiting_for_it(db, tmp_path):
-    """2026-09-26 audit: the Mail agent and the Community agent closed their chat tasks
+    """2026-09-26 audit: the Head of Customer Success and the Community Manager closed their chat tasks
     without a word: chat_send needs messages:send, which they do not have."""
     from pos import mcp_server
 
@@ -413,11 +413,11 @@ def test_a_remote_agent_whose_bridge_is_off_goes_to_the_project_manager(db, tmp_
     scheduler.seed(conn)
     conn.execute("UPDATE jobs SET enabled = 0 WHERE action = 'a2a_sync'")
     conn.commit()
-    kb, pm = _remote(conn, tmp_path), actors.find_by_name(conn, "Project manager")
+    kb, pm = _remote(conn, tmp_path), actors.find_by_name(conn, "CEO") or actors.find_by_name(conn, "COO")
     _seen_now(conn, pm["id"])
     msg = chat.send_dm(conn, owner, kb["id"], "Co víme o zákazníkovi X?")
     reply = _replies(conn, msg["id"])
     assert len(reply) == 1 and "Vzdálený analytik teď neběží, protože jeho spojení" in reply[0]["body"]
-    assert "Project managerovi" in reply[0]["body"] and _chat_task(conn, kb["id"]) is None
+    assert f"dál: {pm['name']}" in reply[0]["body"] and _chat_task(conn, kb["id"]) is None
     assert "za Vzdálený analytik" in _chat_task(conn, pm["id"])["title"]
     assert "spojení se vzdálenou aplikací je vypnuté" in workers.worker_down(conn, kb)

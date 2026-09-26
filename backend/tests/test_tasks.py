@@ -241,4 +241,4 @@ def test_who_may_change_a_task(conn, me, tmp_path):
     share_item(conn, eva, "task", secret["id"], "Petr")
     assert tasks.get(conn, petr, secret["id"])["title"] == "Salary"
     with pytest.raises(Forbidden):
-        share_item(conn, petr, "task", secret["id"], "Assistant")  # only its owner shares it
+        share_item(conn, petr, "task", secret["id"], "Executive Assistant")  # only its owner shares it

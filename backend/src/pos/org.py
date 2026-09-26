@@ -1,10 +1,12 @@
 """Company structure: each member's role (profession), who they report to and
-their team; the Project manager agent that splits team work and routes it by
-role; handoffs between members; the PM's daily standup.
+their team; the COO (formerly the Project manager) that splits team work and
+routes it by role; handoffs between members; the COO's daily standup.
 
-Everyone reports to the Project manager, the Project manager reports to the
-owner. Defaults are seeded at startup and for agents created later; the owner
-changes them on the agent's page (set_org). Handoffs are versioned task
+The chart is a company (docs/REORG.md): the owner is the board, the CEO
+reports to him and the heads to the CEO; agents/*/agent.json sets each
+role's lead. A member with no lead yet gets the COO (the code role PM_NAME),
+the COO gets the owner. Defaults are seeded at startup and for agents created
+later; the owner changes them on the agent's page (set_org). Handoffs are versioned task
 changes plus a message to the receiver, and a row in `handoffs` so the
 network can draw them.
 """
@@ -13,49 +15,52 @@ import json
 import sqlite3
 from pathlib import Path
 
-from . import actors, agents, audit, task_descriptions, tasks, versioning
+from . import actors, agents, audit, roles, task_descriptions, tasks, versioning
 from .core import Ctx, Forbidden, NotFound, now_iso
 
-PM_NAME = "Project manager"
-PM_PURPOSE = ("Takes incoming team work, splits it into steps with a definition of done, assigns them by "
-              "role, follows up and escalates to the owner.")
+PM_NAME = roles.COO  # the code role "project manager" (was "Project manager" until the 2026-09 reorganisation)
+PM_PURPOSE = ("Provoz a dodávky: projekty, plánování, rozdělení týmové práce na kroky, standup, koordinace "
+              "mezi týmy a dotahování zaseknuté práce.")
 # Never more than its creator (the owner) has; tasks:claim lets it hand in its own tasks.
 PM_PERMISSIONS = ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:review", "tasks:write"]
 
-ROLES = ("owner", "project_manager", "assistant", "developer", "mail", "community", "knowledge",
-         "automation", "hr", "deployer", "access_manager", "specialist")
+ROLES = ("owner", "ceo", "chief_of_staff", "project_manager", "assistant", "cto", "developer", "qa", "sre",
+         "monitor", "specialist", "home_automation", "security", "cfo", "access_manager", "hr", "coach", "growth",
+         "content", "community", "customer_success", "legal", "mail", "knowledge", "automation", "deployer")
 # name -> (role, team) for the members PersonalOS knows by name.
 DEFAULTS = {
     actors.OWNER_NAME: ("owner", "leadership"),
     PM_NAME: ("project_manager", "leadership"),
     actors.ASSISTANT_NAME: ("assistant", "operations"),
-    "HR agent": ("hr", "operations"),
-    "Dev agent": ("developer", "engineering"),
+    roles.HR: ("hr", "people"),
+    roles.ENGINEER: ("developer", "engineering"),
     "Deployer": ("deployer", "engineering"),
-    "Mail agent": ("mail", "communication"),
-    "Community agent": ("community", "communication"),
+    roles.CUSTOMER_SUCCESS: ("customer_success", "customers"),
+    roles.COMMUNITY: ("community", "growth"),
     "Knowledge agent": ("knowledge", "knowledge"),
     "Nexus": ("automation", "platform"),
-    "Access manager": ("access_manager", "operations"),
+    roles.ACCESS_MANAGER: ("access_manager", "leadership"),
 }
 
 STANDUP_NAME = "Daily standup"
-STANDUP_SCHEDULE = "weekdays 08:30"
+STANDUP_SCHEDULE = "weekdays 08:15"
+# Cheap by design (docs/REORG.md): it reads the board, it does not wake every agent with a message.
 STANDUP_TEMPLATE = {
     "title": "Daily standup",
     "topic": "standup",
     "priority": 2,
     "estimate_min": 10,
-    "notes": ("Purpose: keep the owner informed about what every agent did, is doing and is stuck on, "
-              "without the owner asking each one. Source: the Project manager's weekday schedule.\n\n"
-              "1. org_chart: the active agents.\n"
-              "2. send_message to each one: 'Standup: done since yesterday, doing now, blocked by?' "
-              "(priority fyi, this task's id).\n"
-              "3. get_agent_status for each, and read replies already in your inbox.\n"
-              "4. create_task for the owner (assignee 'me', topic standup): one line per agent "
-              "(done / doing / blocked) and what needs the owner. Late replies go into tomorrow's summary.\n"
-              "5. complete_task this one."),
-    "definition_of_done": "Every active agent was asked; one summary task for the owner exists.",
+    "notes": ("Purpose: one picture of what the team did, is doing and is stuck on, without waking every agent. "
+              "Source: the COO's weekday schedule.\n\n"
+              "1. org_chart, then list_tasks for working, waiting and review (compact).\n"
+              "2. get_agent_status only for agents with something stuck (no progress for a day, blocked, "
+              "failed runs).\n"
+              "3. note_create 'Standup <date>' (topic standup): one line per agent that did or does something "
+              "(done / doing / blocked), then 'Blokuje' with the task refs.\n"
+              "4. Message only the assignees of blocked items (one message each). Send the CEO the note link only "
+              "when something needs the CEO; the Chief of Staff links it in the morning digest.\n"
+              "5. complete_task this one. A quiet day is 3-4 tool calls."),
+    "definition_of_done": "A standup note exists; blocked items have their assignee asked; nothing was sent to the owner.",
 }
 
 REPO_AGENTS = Path(__file__).resolve().parents[3] / "agents"

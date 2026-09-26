@@ -31,6 +31,11 @@ Environment:
     WORKER_TOOLS_DIR PersonalOS checkout with agents/*/tools and shared/tools (default: WORKER_WORKDIR)
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
                      GitHub, Gmail, Discord) with their own tokens in env vars
+
+The agent's own "profile" and "effort" in agents/<slug>/agent.json (served in /api/worker/me)
+override WORKER_POS_TOOLS, WORKER_CLAUDE_TOOLS, WORKER_CLAUDE_BUILTIN, WORKER_CLAUDE_DISALLOWED,
+WORKER_CLAUDE_EFFORT, WORKER_CLAUDE_MAX_USD, WORKER_MAX_STEPS and the work folder for that agent:
+the agent pool runs many agents with one environment.
 """
 
 import json
@@ -56,6 +61,38 @@ def extra_config() -> list[str]:
     """
     raw = os.environ.get("WORKER_CODEX_CONFIG", "").replace("||", chr(10))
     return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def setting(me: dict, key: str, env: str, default: str = "") -> str:
+    """One worker setting: the agent's profile from its agent.json (served in /api/worker/me)
+    wins over this worker's environment, so one pool container can run agents with different
+    effort, tools and caps."""
+    value = (me.get("profile") or {}).get(key)
+    return str(value) if value is not None else os.environ.get(env, default)
+
+
+CODEX_EFFORTS = {"minimal": "minimal", "low": "low", "medium": "medium", "high": "high", "xhigh": "high",
+                 "max": "high"}
+
+
+def codex_effort(me: dict) -> list[str]:
+    """The profile's effort for Codex too (it comes after WORKER_CODEX_CONFIG, so it wins)."""
+    effort = CODEX_EFFORTS.get(str((me.get("profile") or {}).get("effort") or ""))
+    return [f'model_reasoning_effort="{effort}"'] if effort else []
+
+
+def session_workdir(me: dict, default: str) -> str:
+    """The profile's work folder (a repository clone, or a read-only view under /repos); else the
+    worker's own. PersonalOS only serves folders under /work or /repos (pos.agents_code)."""
+    wanted = (me.get("profile") or {}).get("workdir")
+    if not wanted:
+        return default
+    try:
+        os.makedirs(wanted, exist_ok=True)
+    except OSError:  # a read-only mount that exists already is fine; anything else: the default
+        if not os.path.isdir(wanted):
+            return default
+    return wanted
 
 
 def claude_extra_mcp() -> dict:
@@ -130,11 +167,12 @@ def main() -> None:
 
     def new_session(engine: str, model: str | None, me: dict):
         tools = me.get("tools") or []  # the tool library: skills, MCP tools, scripts
+        where = session_workdir(me, workdir)
         if me.get("task_ref") and browser(me):  # Codex passes env_vars through from this process
             os.environ["POS_TASK_ID"] = me["task_ref"]
         if engine == "claude":
             skills = tool_library.skills_text(tools)
-            configured = tool_list(os.environ.get("WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
+            configured = tool_list(setting(me, "claude_tools", "WORKER_CLAUDE_TOOLS", DEFAULT_TOOLS))
             if me.get("pos_tools"):
                 shown, hidden = pos_tools(me)
                 allowed = [f"mcp__pos__{t}" for t in shown] + [
@@ -143,7 +181,7 @@ def main() -> None:
                 hidden, allowed = [], configured
             return ClaudeSession(
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
-                workdir=workdir,
+                workdir=where,
                 model=model,
                 # Byte-stable across runs (no task, no time), so the prompt cache reuses it.
                 system_prompt="\n\n".join(p for p in (me.get("guardrails", ""), me.get("stable_prompt", ""), skills)
@@ -157,22 +195,24 @@ def main() -> None:
                 allowed_tools=allowed + tool_library.claude_allowed(tools)
                 + (["mcp__browser"] if browser(me) and allowed else [])
                 + (["mcp__credentials"] if credential_runner(me) else []),
-                builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
+                builtin_tools=[t for t in setting(me, "claude_builtin", "WORKER_CLAUDE_BUILTIN").split(",") if t],
                 disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
-                + [t for t in tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")) if not t.startswith("mcp__pos__")],
+                + [t for t in tool_list(setting(me, "claude_disallowed", "WORKER_CLAUDE_DISALLOWED"))
+                   if not t.startswith("mcp__pos__")],
                 # By the task's size when the check gave one (S: low effort, a smaller cap).
                 # The cap is the lower of this worker's and the agent's max USD per run (pos.access).
-                **triage.size_settings(me.get("size"), os.environ.get("WORKER_CLAUDE_EFFORT") or None,
-                                       run_cap(float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None,
+                **triage.size_settings(me.get("size"), setting(me, "effort", "WORKER_CLAUDE_EFFORT") or None,
+                                       run_cap(float(setting(me, "max_usd_run", "WORKER_CLAUDE_MAX_USD") or 0) or None,
                                                me.get("max_budget_usd"))),
             )
         return CodexSession(
             binary=os.environ.get("CODEX_BIN", "codex"),
-            workdir=workdir,
+            workdir=where,
             sandbox=os.environ.get("WORKER_SANDBOX", "workspace-write"),
             config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
                     *([f"mcp_servers.pos.enabled_tools={json.dumps(pos_tools(me)[0])}"] if me.get("pos_tools") else []),
-                    *([f'model="{model}"'] if model else []), *extra_config(), *tool_library.codex_config(tools),
+                    *([f'model="{model}"'] if model else []), *extra_config(), *codex_effort(me),
+                    *tool_library.codex_config(tools),
                     *([f'mcp_servers.browser.command="{sys.executable.replace(chr(92), "/")}"',
                        'mcp_servers.browser.args=["-m","pos_worker.browser_guard"]',
                        'mcp_servers.browser.env_vars=["POS_URL","POS_AGENT_KEY","POS_TASK_ID","BROWSER_CDP","BROWSER_ALLOW",'

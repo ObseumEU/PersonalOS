@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 def manifest(name: str, **over) -> dict:
-    return {"name": name, "kind": "script", "description": "does a thing", "owner": "Dev agent",
+    return {"name": name, "kind": "script", "description": "does a thing", "owner": "Software Engineer",
             "visibility": "personal", "version": "1.0.0", "entry": "main.py", "tests": "test_main.py",
             "permissions_needed": [], "outbound": False, **over}
 
@@ -46,7 +46,7 @@ def app(tmp_path, root):
     with TestClient(create_app(settings)) as client:
         conn = connect(settings.db_path)
         owner = Ctx(actors.owner_id(conn))
-        made = agents.create_agent(conn, owner, name="Dev agent", purpose="code", lifetime="long_lived",
+        made = agents.create_agent(conn, owner, name="Software Engineer", purpose="code", lifetime="long_lived",
                                    permissions=["tasks:read", "tasks:claim", "approvals:request"], data_dir=tmp_path)
         dev = made["agent"]["id"]
         yield client, conn, owner, Ctx(dev), made["api_key"], settings
@@ -56,15 +56,15 @@ def app(tmp_path, root):
 # ------------------------------------------------------------------ manifests and the guard review
 
 def test_manifest_validation(root):
-    make(root, "agents/dev-agent/tools/good", manifest("good"))
-    make(root, "agents/dev-agent/tools/bad", manifest("other", kind="plugin", version="1.0", visibility="team",
+    make(root, "agents/software-engineer/tools/good", manifest("good"))
+    make(root, "agents/software-engineer/tools/bad", manifest("other", kind="plugin", version="1.0", visibility="team",
                                                       entry="missing.py", permissions_needed=["root:all"]),
          {"main.py": "print('hi')\n"})
     make(root, "shared/tools/skill-x", manifest("skill-x", kind="skill", visibility="team", entry="SKILL.md"),
          {"SKILL.md": "---\nname: skill-x\n---\n", "test_main.py": "pass\n"})
-    make(root, "agents/dev-agent/tools/sneaky", manifest("sneaky", owner="Owner"))
+    make(root, "agents/software-engineer/tools/sneaky", manifest("sneaky", owner="Owner"))
     found = {t.name: t for t in tools.discover()}
-    assert found["good"].errors == [] and found["good"].scope == "dev-agent" and found["good"].id == "dev-agent/good"
+    assert found["good"].errors == [] and found["good"].scope == "software-engineer" and found["good"].id == "software-engineer/good"
     assert found["skill-x"].errors == [] and found["skill-x"].shared
     errs = " | ".join(found["bad"].errors)
     for bit in ("match the folder", "kind must be", "semver", "visibility personal", "does not exist",
@@ -86,40 +86,40 @@ def test_shipped_shared_tools_are_valid_clean_and_tested():
 
 def test_review_catches_secret_outbound_and_escalation(root):
     fake_key = "sk-" + "a1B2c3D4" * 4  # built at runtime so this file holds no key-shaped literal
-    make(root, "agents/dev-agent/tools/leaky", manifest("leaky", permissions_needed=["agents:create"]), {
+    make(root, "agents/software-engineer/tools/leaky", manifest("leaky", permissions_needed=["agents:create"]), {
         "main.py": f'import requests\nAPI_KEY = "{fake_key}"\nrequests.get("https://example.org")\n',
         "test_main.py": "pass\n",
         "NOTES.md": "Post results to https://discord.com/api/webhooks/123/abc\n",
     })
-    t = tools.find("leaky", "dev-agent")
+    t = tools.find("leaky", "software-engineer")
     findings = tools.review(t)
     kinds = {(f["kind"], f["file"]) for f in findings}
     assert ("secret", "main.py") in kinds
     assert ("outbound", "main.py") in kinds and ("outbound", "NOTES.md") in kinds
-    assert ("permission", "tool.json") in kinds  # agents:create is more than a Dev agent has
+    assert ("permission", "tool.json") in kinds  # agents:create is more than a Software Engineer has
     assert fake_key not in json.dumps(findings)  # findings never repeat the secret
 
     # Declared outbound is allowed by the review (it needs approval per use instead).
-    make(root, "agents/dev-agent/tools/poster", manifest("poster", outbound=True),
+    make(root, "agents/software-engineer/tools/poster", manifest("poster", outbound=True),
          {"main.py": "import httpx\n", "test_main.py": "pass\n"})
-    assert tools.review(tools.find("poster", "dev-agent")) == []
+    assert tools.review(tools.find("poster", "software-engineer")) == []
     # Guardrail bypasses are always findings.
-    make(root, "agents/dev-agent/tools/hooky", manifest("hooky"),
+    make(root, "agents/software-engineer/tools/hooky", manifest("hooky"),
          {"main.py": "import os\nos.system('git commit --no-verify -m x')\n", "test_main.py": "pass\n"})
-    assert [f["kind"] for f in tools.review(tools.find("hooky", "dev-agent"))] == ["bypass"]
+    assert [f["kind"] for f in tools.review(tools.find("hooky", "software-engineer"))] == ["bypass"]
 
 
 # ------------------------------------------------------------------ publishing, the deployer hook
 
 def test_publish_creates_pending_publication_and_owner_decides(app, root):
     client, conn, owner, dev, _, _ = app
-    make(root, "agents/dev-agent/tools/lint-notes", manifest("lint-notes"))
+    make(root, "agents/software-engineer/tools/lint-notes", manifest("lint-notes"))
     out = tools.publish(conn, dev, "lint-notes")
     conn.commit()
     assert out["status"] == "pending" and out["findings"] == []
     assert out["copy"]["to"] == "shared/tools/lint-notes" and '"visibility": "team"' in out["copy"]["tool.json"]
     pub = out["publication"]
-    assert pub["tool"] == "lint-notes" and pub["from_name"] == "Dev agent" and pub["version"] == "1.0.0"
+    assert pub["tool"] == "lint-notes" and pub["from_name"] == "Software Engineer" and pub["version"] == "1.0.0"
 
     with pytest.raises(Exception):
         tools.decide(conn, dev, pub["id"], True)  # agents do not approve their own tools
@@ -133,7 +133,7 @@ def test_publish_creates_pending_publication_and_owner_decides(app, root):
     assert shared["review"]["ok"] and shared["usage"]["uses"] == 0
 
     # A tool with findings is recorded as rejected, with the findings.
-    make(root, "agents/dev-agent/tools/leaky", manifest("leaky"),
+    make(root, "agents/software-engineer/tools/leaky", manifest("leaky"),
          {"main.py": "import smtplib\n", "test_main.py": "pass\n"})
     bad = tools.publish(conn, dev, "leaky")
     assert bad["status"] == "rejected" and bad["findings"][0]["kind"] == "outbound" and "copy" not in bad
@@ -149,7 +149,7 @@ def commit(repo: Path, files: dict, msg: str) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
     git(repo, "add", "-A")
-    git(repo, "-c", "user.name=Dev agent", "-c", "user.email=dev@pos", "-c", "commit.gpgsign=false", "commit", "-m", msg)
+    git(repo, "-c", "user.name=Software Engineer", "-c", "user.email=dev@pos", "-c", "commit.gpgsign=false", "commit", "-m", msg)
     return git(repo, "rev-parse", "HEAD")
 
 
@@ -167,7 +167,7 @@ def test_deployer_rejects_a_shared_tool_with_a_secret(tmp_path):
     leaked = "ghp_" + "Z9y8X7w6" * 5
     bad = commit(repo, {"shared/tools/oops/tool.json": json.dumps(manifest("oops", visibility="team")),
                         "shared/tools/oops/main.py": f'TOKEN = "{leaked}"\n', "shared/tools/oops/test_main.py": "pass\n"},
-                 "Add a shared tool\n\nAgent: Dev agent")
+                 "Add a shared tool\n\nAgent: Software Engineer")
     problems = tools.check_range(repo, base, bad)
     assert len(problems) == 1 and "shared/tools/oops" in problems[0] and "secret" in problems[0]
     assert leaked not in problems[0]
@@ -182,7 +182,7 @@ def test_deployer_rejects_a_shared_tool_with_a_secret(tmp_path):
 
 def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root):
     client, conn, owner, dev, key, _ = app
-    make(root, "agents/dev-agent/tools/mine", manifest("mine"))
+    make(root, "agents/software-engineer/tools/mine", manifest("mine"))
     make(root, "agents/other-agent/tools/theirs", manifest("theirs", owner="Other agent"))
     make(root, "shared/tools/links", manifest("links", kind="mcp", visibility="team", entry="server.py"),
          {"server.py": "print('mcp')\n", "test_main.py": "pass\n"})
@@ -195,7 +195,7 @@ def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root):
     r = client.get("/api/worker/tools", headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 200
     by_id = {t["id"]: t for t in r.json()}
-    assert set(by_id) == {"dev-agent/mine", "shared/links", "shared/guide"}
+    assert set(by_id) == {"software-engineer/mine", "shared/links", "shared/guide"}
     assert by_id["shared/guide"]["content"].endswith("Be brief.\n")
     assert by_id["shared/links"]["entry_path"] == "shared/tools/links/server.py"
     assert client.get("/api/worker/tools").status_code == 401
@@ -208,7 +208,7 @@ def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root):
     assert pw.claude_servers(items)["tool_links"]["args"] == [str(root / "shared/tools/links/server.py")]
     assert pw.codex_config(items)[0].startswith("mcp_servers.tool_links.command=")
     text = pw.prompt_section(items, include_skills=True)
-    assert "mine [script, dev-agent]" in text and "Be brief." in text and "tools_record_use" in text
+    assert "mine [script, software-engineer]" in text and "Be brief." in text and "tools_record_use" in text
 
     class Broken:
         def tools(self):
@@ -246,7 +246,7 @@ def _call(result):
 
 def test_mcp_tools_and_their_permissions(app, root):
     client, conn, owner, dev, _, settings = app
-    make(root, "agents/dev-agent/tools/mine", manifest("mine"))
+    make(root, "agents/software-engineer/tools/mine", manifest("mine"))
     make(root, "shared/tools/guide", manifest("guide", kind="skill", visibility="team", entry="SKILL.md"),
          {"SKILL.md": "---\nname: guide\n---\nBe brief.\n", "test_main.py": "pass\n"})
     reader = agents.create_agent(conn, owner, name="Reader", purpose="reads", lifetime="long_lived",
@@ -255,7 +255,7 @@ def test_mcp_tools_and_their_permissions(app, root):
     async def scenario():
         async with Client(mcp_server.build(settings.db_path, default_actor=lambda c: dev.actor_id)) as c:
             listed = _call(await c.call_tool("tools_list", {"scope": "all"}))
-            assert {t["id"] for t in listed} == {"dev-agent/mine", "shared/guide"}
+            assert {t["id"] for t in listed} == {"software-engineer/mine", "shared/guide"}
             assert [t["id"] for t in _call(await c.call_tool("tools_list", {"scope": "shared"}))] == ["shared/guide"]
             got = _call(await c.call_tool("tools_get", {"name": "guide"}))
             assert "Be brief." in got["entry_content"]
