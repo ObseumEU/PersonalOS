@@ -708,6 +708,11 @@ MIGRATIONS: list[str] = [
     ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER;
     ALTER TABLE runs ADD COLUMN cost_usd REAL;
     """,
+    # 28: back-off: a task an agent handed back or failed is not offered to it again before this
+    # time, unless a person reassigns it or a new event on it arrives (pos.api_worker, pos.routing).
+    """
+    ALTER TABLE tasks ADD COLUMN retry_after TEXT;
+    """,
 ]
 
 

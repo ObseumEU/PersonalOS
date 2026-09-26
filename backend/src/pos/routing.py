@@ -204,6 +204,10 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
                            (source, ref)).fetchone()
         if dup:
             return _reroute(conn, ctx, dup, event)
+    if source == "github" and event.get("kind") == "comment" and ref and "/c" in ref:
+        answered = _comment_on_parked(conn, ctx, event, title)
+        if answered:
+            return answered
 
     from . import mailfilter
 
@@ -257,6 +261,12 @@ def _reroute(conn: sqlite3.Connection, ctx: Ctx, dup: sqlite3.Row, event: dict) 
     labelled `agent` later. If no rule caught it the first time and one matches
     now, the existing task is routed by that rule (still open tasks only)."""
     out = {"event_id": dup["id"], "task_id": dup["task_id"], "duplicate": True}
+    if dup["rule_id"] is not None and dup["task_id"]:
+        # A new label on an issue whose task was handed back or parked: back in the queue.
+        rule = next((r for r in list_rules(conn) if matches(r, event)), None)
+        if rule and _wake(conn, ctx, dup["task_id"], rule, "a new label on the issue"):
+            return {**out, "requeued": True}
+        return out
     if dup["rule_id"] is not None or not dup["task_id"]:
         return out
     rule = next((r for r in list_rules(conn) if matches(r, event)), None)
@@ -273,6 +283,61 @@ def _reroute(conn: sqlite3.Connection, ctx: Ctx, dup: sqlite3.Row, event: dict) 
     t = tasks.get(conn, ctx, dup["task_id"])
     audit.log(conn, ctx, "event_rerouted", "task", t["id"], source=event.get("source"), rule=rule["name"])
     return {**out, "rerouted": True, "task_ref": t["ref"], "rule": rule["name"], "assignee": t["assignee_name"]}
+
+
+def _wake(conn: sqlite3.Connection, ctx: Ctx, task_id: int, rule: dict, why: str) -> bool:
+    """Requeue a task that an agent handed back, failed or parked (it has a
+    back-off, pos.api_worker.back_off) because something new happened on it."""
+    t = conn.execute("SELECT status, retry_after FROM tasks WHERE id = ? AND archived_at IS NULL",
+                     (task_id,)).fetchone()
+    if t is None or not t["retry_after"] or t["status"] not in ("inbox", "next", "waiting") or not rule["enabled"]:
+        return False
+    conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (task_id,))
+    tasks.update(conn, ctx, task_id, {"status": "next", "progress_note": f"Back in the queue: {why}."})
+    if rule["assignee"]:
+        tasks.assign(conn, ctx, task_id, rule["assignee"])
+    audit.log(conn, ctx, "event_requeued", "task", task_id, rule=rule["name"], why=why)
+    return True
+
+
+def _comment_on_parked(conn: sqlite3.Connection, ctx: Ctx, event: dict, title: str) -> dict | None:
+    """A comment on an issue whose task is parked or handed back (e.g. the answer
+    to the agent's question): the comment goes into that task and it is queued
+    again, instead of becoming a task of its own. Our own posted question is
+    only recorded."""
+    from .guard.external import wrap_external
+
+    issue_ref = event["ref"].rsplit("/c", 1)[0]
+    parent = conn.execute("SELECT task_id, rule_id FROM events WHERE source = 'github' AND ref = ? "
+                          "AND task_id IS NOT NULL AND rule_id IS NOT NULL", (issue_ref,)).fetchone()
+    if parent is None:
+        return None
+    body = (event.get("body") or "").strip()
+    ours = any((json.loads(a["details"] or "{}").get("payload") or {}).get("body", "").strip() == body
+               for a in conn.execute("SELECT details FROM approvals WHERE task_id = ? AND action = 'github.comment'",
+                                     (parent["task_id"],)))
+    rule = get_rule(conn, parent["rule_id"])
+
+    def record(task_id):
+        return conn.execute(
+            """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
+               VALUES ('github', 'comment', ?, ?, ?, ?, ?, ?, ?, '')""",
+            (event["ref"], title[:300], json.dumps(event, ensure_ascii=False, default=str), rule["id"], task_id,
+             ctx.actor_id, now_iso())).lastrowid
+
+    if ours and body:
+        return {"event_id": record(parent["task_id"]), "task_id": parent["task_id"], "own_comment": True}
+    t = conn.execute("SELECT notes, retry_after FROM tasks WHERE id = ?", (parent["task_id"],)).fetchone()
+    if t is None or not t["retry_after"]:
+        return None
+    if not _wake(conn, ctx, parent["task_id"], rule, "a new comment on the issue"):
+        return None
+    who = f" from {event['author']}" if event.get("author") else ""
+    wrapped = wrap_external("github", body, ref=event.get("url") or event["ref"]) if body else ""
+    tasks.update(conn, ctx, parent["task_id"], {"notes": f"{t['notes'] or ''}\n\nNew comment{who}:\n{wrapped}".strip()})
+    tk = tasks.get(conn, ctx, parent["task_id"])
+    return {"event_id": record(parent["task_id"]), "task_id": tk["id"], "task_ref": tk["ref"], "rule": rule["name"],
+            "assignee": tk["assignee_name"], "requeued": True}
 
 
 def skipped_mail(conn: sqlite3.Connection, days: int = 7) -> dict:

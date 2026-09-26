@@ -227,7 +227,9 @@ def reset_time(message: str) -> datetime:
     return _utcnow() + timedelta(hours=1)
 
 
-def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) -> dict:
+def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str, update_run: bool = True) -> dict:
+    """Claude usage of a run into engine_usage and the run. update_run=False: only
+    the cost goes on the run (a Claude check before a Codex run keeps Codex's tokens)."""
     u = parse_claude(jsonl)
     conn.execute(
         """INSERT INTO engine_usage (at, engine, actor_id, task_id, run_id, input_tokens, output_tokens, cost_usd,
@@ -236,9 +238,13 @@ def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str) ->
         (now_iso(), run_row["actor_id"], run_row["task_id"], run_row["id"], u["input_tokens"], u["output_tokens"],
          u["cost_usd"], u["cache_read_tokens"], u["cache_creation_tokens"]),
     )
-    conn.execute("UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cost_usd = ? WHERE id = ?",
-                 (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"], round(u["cost_usd"], 6),
-                  run_row["id"]))
+    if update_run:
+        conn.execute("UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cost_usd = ? "
+                     "WHERE id = ?", (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"],
+                                      round(u["cost_usd"], 6), run_row["id"]))
+    else:
+        conn.execute("UPDATE runs SET cost_usd = COALESCE(cost_usd, 0) + ? WHERE id = ?",
+                     (round(u["cost_usd"], 6), run_row["id"]))
     rl = u["rate_limit"] or {}
     resets = (datetime.fromtimestamp(int(rl["resetsAt"]), timezone.utc).isoformat(timespec="seconds")
               if rl.get("resetsAt") else None)

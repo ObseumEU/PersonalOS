@@ -39,6 +39,14 @@ class RunIn(BaseModel):
     kind: str = "task"
 
 
+class TriageIn(BaseModel):
+    verdict: str
+    size: str | None = None
+    question: str = ""
+    reason: str = ""
+    run_id: int | None = None
+
+
 class FinishIn(BaseModel):
     status: str
     jsonl: str = ""
@@ -101,8 +109,9 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     row = conn.execute(
         f"""SELECT id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
            AND (status = 'next' OR (status = 'working' AND NOT {live}))
+           AND (retry_after IS NULL OR retry_after <= ?)
            ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 1""",
-        (ctx.actor_id, cutoff, None),
+        (ctx.actor_id, cutoff, None, now_iso()),
     ).fetchone()
     out: dict = {"state": st, "unread_messages": unread}
     if row:
@@ -189,16 +198,86 @@ def progress(task_id: str, body: dict, conn=Depends(get_db), ctx: Ctx = Depends(
     return t
 
 
+BACKOFF_HOURS = 24  # a handed-back or failed task is not requeued automatically sooner
+
+
+def back_off(conn: sqlite3.Connection, task_id: int) -> None:
+    """No automatic retry of this task for BACKOFF_HOURS; a person assigning it
+    or a new event on it (a label, a comment) lifts that (pos.routing)."""
+    from datetime import datetime, timedelta, timezone
+
+    until = (datetime.now(timezone.utc) + timedelta(hours=BACKOFF_HOURS)).isoformat(timespec="seconds")
+    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (until, task_id))
+
+
+def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
+    name = actors.get(conn, ctx.actor_id)["name"]
+    tasks.update(conn, ctx, tid, {"status": "next", "progress_note": f"{name} handed it back: {note}"[:500]})
+    t = tasks.assign(conn, ctx, tid, {"type": "human", "id": actors.owner_id(conn)})
+    back_off(conn, tid)
+    return t
+
+
 @router.post("/tasks/{task_id}/handback")
 def handback(task_id: str, body: NoteIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """The agent could not finish: the task goes back to the owner, with the reason."""
     tid = tasks.parse_id(task_id)
     _still_mine(conn, ctx, tid)
-    name = actors.get(conn, ctx.actor_id)["name"]
-    tasks.update(conn, ctx, tid, {"status": "next", "progress_note": f"{name} handed it back: {body.note}"[:500]})
-    t = tasks.assign(conn, ctx, tid, {"type": "human", "id": actors.owner_id(conn)})
+    t = _hand_back(conn, ctx, tid, body.note)
     conn.commit()
     return t
+
+
+def _github_issue(conn: sqlite3.Connection, task_id: int) -> tuple[str, int] | None:
+    """(repo, issue number) when the task came from a GitHub issue."""
+    row = conn.execute("SELECT ref FROM events WHERE task_id = ? AND source = 'github' AND kind = 'issue' "
+                       "ORDER BY id LIMIT 1", (task_id,)).fetchone()
+    if row is None or "#" not in (row["ref"] or ""):
+        return None
+    repo, _, number = row["ref"].rpartition("#")
+    return (repo, int(number)) if number.isdigit() and "/" in repo else None
+
+
+VERDICTS = ("clear", "unclear", "too_big", "wrong_repo")
+
+
+@router.post("/tasks/{task_id}/triage")
+def triage(task_id: str, body: TriageIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """The worker's cheap check before a full run. clear: run it. unclear: one
+    clarifying question goes out through the approval queue (a GitHub comment
+    on the issue, else an approval for the owner) and the task waits.
+    too_big, wrong_repo: back to the owner. Either way no full run for a day."""
+    from . import audit, outbound
+
+    if body.verdict not in VERDICTS:
+        raise HTTPException(422, f"verdict must be one of {VERDICTS}")
+    tid = tasks.parse_id(task_id)
+    _still_mine(conn, ctx, tid)
+    rctx = Ctx(ctx.actor_id, via="worker", run_id=body.run_id)
+    audit.log(conn, rctx, "triage", "task", tid, verdict=body.verdict, size=body.size)
+    out: dict = {"verdict": body.verdict, "action": "run"}
+    if body.verdict == "unclear" and not agents.has_permission(conn, ctx.actor_id, "approvals:request"):
+        _hand_back(conn, rctx, tid, f"unclear, and I may not ask: {body.question}"[:400])
+        out["action"] = "handed_back"
+    elif body.verdict == "unclear":
+        question = (body.question or "What exactly should change, and how will we know it is done?").strip()[:1000]
+        issue = _github_issue(conn, tid)
+        if issue:
+            a = outbound.request(conn, rctx, "github.comment",
+                                 {"repo": issue[0], "number": issue[1], "body": question}, tid)
+        else:
+            a = approvals.request(conn, rctx, "clarify", {"question": question}, tid)
+        tasks.update(conn, rctx, tid, {"status": "waiting",
+                                       "progress_note": f"Needs clarification (approval #{a['id']}): {question}"[:500]})
+        back_off(conn, tid)
+        out.update(action="parked", approval_id=a["id"])
+    elif body.verdict in ("too_big", "wrong_repo"):
+        why = {"too_big": "too big for one run; please split it",
+               "wrong_repo": "not about a repository this agent works on"}[body.verdict]
+        _hand_back(conn, rctx, tid, f"{why}. {body.reason}".strip()[:400])
+        out["action"] = "handed_back"
+    conn.commit()
+    return out
 
 
 @router.post("/runs", status_code=201)
@@ -254,6 +333,9 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
                                  "retrying on the other runtime."})
             conn.commit()
             out["requeued"] = True
+    if body.status == "error" and row["task_id"] and not out.get("requeued"):
+        back_off(conn, row["task_id"])  # a failed task is not retried at once
+        conn.commit()
     return out
 
 

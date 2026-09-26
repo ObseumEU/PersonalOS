@@ -96,6 +96,11 @@ services:
       WORKER_CLAUDE_EFFORT: medium
       WORKER_CLAUDE_MAX_USD: "6"
       WORKER_MAX_STEPS: "90"
+      # A Haiku check before each GitHub task (pos_worker.triage): an unclear issue gets one question
+      # instead of a run, another repository goes back; the size sets effort and cap (S: low, $2).
+      WORKER_TRIAGE: ${DEV_AGENT_TRIAGE:-1}
+      WORKER_TRIAGE_REPOS: ${POS_DEV_REPOS:-ObseumEU/PersonalOS}
+      WORKER_CLAUDE_MAX_USD_S: "2"
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - dev-agent-work:/work

@@ -567,6 +567,8 @@ def assign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, assignee) -> dict:
             changes["follow_up"] = (today() + timedelta(days=3)).isoformat()
     elif row["status"] in ("inbox", "waiting"):
         changes["status"] = "next"
+    if row["retry_after"] and actors.get(conn, ctx.actor_id)["kind"] == "human":
+        changes["retry_after"] = None  # a person hands it out again: no back-off
     versioning.update(conn, ctx, ENTITY, task_id, {**cols, **changes}, action="assign")
     return get(conn, ctx, task_id)
 

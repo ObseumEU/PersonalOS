@@ -26,8 +26,10 @@ log = logging.getLogger("pos_worker")
 class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
                  max_resumes: int = 6, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
-                 tools_dir: str | None = None):
+                 tools_dir: str | None = None, triage: Callable[[dict, dict], dict | None] | None = None):
         self.client = client
+        # The cheap check before a full run (pos_worker.triage): (me, task) -> verdict or None.
+        self.triage = triage
         self.new_session = new_session
         self.poll_wait = poll_wait
         self.max_resumes = max_resumes
@@ -90,8 +92,14 @@ class Worker:
             return "skipped"
 
         engine = started.get("engine") or "codex"
+        check = self._triage(ref, task, run_id)
+        if check and check.get("action") in ("parked", "handed_back"):
+            self.client.finish_run(run_id, "ok", check.get("jsonl", ""),
+                                   f"triage: {check['verdict']}, {check['action'].replace('_', ' ')}")
+            log.info("%s: triage said %s, no full run", ref, check["verdict"])
+            return "triaged"
         try:
-            return self._run_task(ref, task, run_id, engine, started.get("model"))
+            return self._run_task(ref, task, run_id, engine, started.get("model"), check)
         except Exception as e:  # noqa: BLE001 - report it, hand the task back, keep the worker alive
             log.exception("run %s for %s failed", run_id, ref)
             try:
@@ -101,10 +109,29 @@ class Worker:
                 log.exception("could not report the failure")
             return "error"
 
-    def _run_task(self, ref: str, task: dict, run_id: int, engine: str, model: str | None) -> str:
+    def _triage(self, ref: str, task: dict, run_id: int) -> dict | None:
+        """Ask the cheap check, tell PersonalOS what it said. Any failure: run as usual."""
+        if not self.triage:
+            return None
+        try:
+            check = self.triage(self.me, task)
+            if not check:
+                return None
+            res = self.client.triage(ref, {"verdict": check["verdict"], "size": check.get("size"),
+                                           "question": check.get("question", ""), "run_id": run_id})
+            return {**check, "action": res.get("action", "run")}
+        except Exception:  # noqa: BLE001 - fail-open: the check must never cost the task its run
+            log.exception("%s: triage failed; running as usual", ref)
+            return None
+
+    def _run_task(self, ref: str, task: dict, run_id: int, engine: str, model: str | None,
+                  check: dict | None = None) -> str:
         # The agent's tools (personal and shared); none if PersonalOS cannot say.
         me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir), "task_ref": ref,
               "feedback": self.client.feedback()}
+        if check and check.get("size"):
+            me["size"] = check["size"]  # effort and cost cap follow it (new_session)
+            me["size_hint"] = f"A first check sized this task {check['size']}; keep to that size's budget."
         claude = engine == "claude"
         if claude:
             me["stable_prompt"] = stable_prompt(me)
@@ -170,7 +197,9 @@ class Worker:
                 continue
             break
 
-        done = self.client.finish_run(run_id, outcome, session.jsonl,
+        # The check's usage line first, so PersonalOS counts its cost with the run's.
+        jsonl = "\n".join(x for x in ((check or {}).get("jsonl", ""), session.jsonl) if x)
+        done = self.client.finish_run(run_id, outcome, jsonl,
                                       session.failed or ("stopped" if outcome == "cancelled" else ""))
         if done.get("requeued"):  # the runtime hit its usage limit; PersonalOS retries on the other one
             log.info("%s: %s hit its usage limit, task requeued", ref, engine)

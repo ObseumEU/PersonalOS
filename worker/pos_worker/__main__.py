@@ -23,6 +23,8 @@ Environment:
     WORKER_CLAUDE_DISALLOWED  tools hidden from a Claude agent (saves their definitions on every turn)
     WORKER_CLAUDE_EFFORT     Claude effort level (low, medium, high, xhigh, max)
     WORKER_CLAUDE_MAX_USD    Claude cost cap per run (--max-budget-usd)
+    WORKER_TRIAGE, WORKER_TRIAGE_MODEL, WORKER_TRIAGE_REPOS, WORKER_CLAUDE_MAX_USD_S
+                     the cheap check before a full run and effort/cap by task size (pos_worker.triage)
     WORKER_MAX_STEPS     stop a run after this many completed steps and hand the task back (0 = no cap)
     WORKER_CLAUDE_MCP    more MCP servers for Claude, as JSON
     WORKER_TOOLS_DIR PersonalOS checkout with agents/*/tools and shared/tools (default: WORKER_WORKDIR)
@@ -40,6 +42,7 @@ from .client import PosClient
 from .codex import CodexSession
 from .loop import Worker
 from . import tools as tool_library
+from . import triage
 from .tools import COMMS, pos_tools, tool_list  # noqa: F401 - COMMS and pos_tools are this module's API too
 
 
@@ -129,8 +132,9 @@ def main() -> None:
                 builtin_tools=[t for t in os.environ.get("WORKER_CLAUDE_BUILTIN", "").split(",") if t],
                 disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
                 + [t for t in tool_list(os.environ.get("WORKER_CLAUDE_DISALLOWED", "")) if not t.startswith("mcp__pos__")],
-                effort=os.environ.get("WORKER_CLAUDE_EFFORT") or None,
-                max_budget_usd=float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None,
+                # By the task's size when the check gave one (S: low effort, a smaller cap).
+                **triage.size_settings(me.get("size"), os.environ.get("WORKER_CLAUDE_EFFORT") or None,
+                                       float(os.environ.get("WORKER_CLAUDE_MAX_USD") or 0) or None),
             )
         return CodexSession(
             binary=os.environ.get("CODEX_BIN", "codex"),
@@ -145,9 +149,12 @@ def main() -> None:
                        '"BROWSER_HEADED","BROWSER_MAX_MINUTES","BROWSER_APPROVAL_WAIT","PLAYWRIGHT_MCP"]'] if browser(me) else [])],
         )
 
+    def check(me: dict, task: dict) -> dict | None:
+        return triage.check(me, task) if triage.enabled_for(task) else None
+
     Worker(PosClient(url, key), new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
            max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0),
-           tools_dir=str(tool_library.tools_root(workdir))).run_forever()
+           tools_dir=str(tool_library.tools_root(workdir)), triage=check).run_forever()
 
 
 if __name__ == "__main__":
