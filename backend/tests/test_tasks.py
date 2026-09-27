@@ -221,7 +221,7 @@ def test_my_day_scope_steps_and_capacity(conn, me, ai):
 
 
 def test_who_may_change_a_task(conn, me, tmp_path):
-    from pos import accounts, agents
+    from pos import accounts
     from pos.core import Forbidden
     from pos.visibility import share_item
 

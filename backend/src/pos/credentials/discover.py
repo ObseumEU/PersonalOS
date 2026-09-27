@@ -62,7 +62,7 @@ EXTRA_GRANTS = frozenset(SSH_TOOLS.values())  # the only non-credential grants a
 
 STOP = {"the", "and", "for", "api", "key", "token", "login", "password", "heslo", "user", "admin", "ssh", "http",
         "https", "www", "com", "cz", "cloud", "local", "server", "account", "ucet", "pro", "agent", "agents",
-        "personalos", "obseum", "secret", "access", "credentials", "credential", "the", "new", "old", "prod"}
+        "personalos", "obseum", "secret", "access", "credentials", "credential", "new", "old", "prod"}
 USER_TITLES = {"username", "user", "login", "uzivatel", "uzivatelske jmeno", "email", "e-mail", "user name"}
 PASSWORD_TITLES = {"password", "heslo", "pass", "passwd", "pwd"}
 TOKEN_WORDS = {"token", "apikey", "api key", "api_key", "key", "secret", "pat", "bearer", "credential",

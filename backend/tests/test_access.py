@@ -306,11 +306,13 @@ def test_spend_spike_pauses_first_then_the_manager_reviews_and_resumes(app, tmp_
     conn, agent, am = app["conn"], app["agent"], app["am"]
     ceo = agents.create_agent(conn, app["owner"], name="CEO", purpose="runs the company", lifetime="long_lived",
                               permissions=["tasks:read"], data_dir=tmp_path)["agent"]["id"]
+    cfg = access.DEFAULT_SETTINGS
+    spike = 1.5 * cfg["spike_floor_usd"]
     _age(conn, agent, 24 * 10)
-    access.set_budget(conn, app["owner"], agent, "usd_day", 40.0, "test")
+    access.set_budget(conn, app["owner"], agent, "usd_day", spike / cfg["spike_budget_share"] / 1.5, "test")
     for h in range(2, 50, 4):
-        _usage(conn, agent, 0.1, hours_ago=h)  # baseline: cents per hour
-    _usage(conn, agent, 30.0, hours_ago=0.2)   # a truly extreme hour: > $20, > 20x, > half its day
+        _usage(conn, agent, spike / cfg["spike_factor"] / 10, hours_ago=h)  # a quiet baseline
+    _usage(conn, agent, spike, hours_ago=0.2)  # a truly extreme hour: > the floor, > the factor, > its day share
     out = access.watch(conn)
     assert out["paused"] == ["Writer"] and actors.get(conn, agent)["paused_at"]
     req = access.requests(conn, "pending", agent)[0]
@@ -333,15 +335,19 @@ def test_spend_spike_pauses_first_then_the_manager_reviews_and_resumes(app, tmp_
 
 def test_a_young_agent_is_measured_against_its_own_hours_and_its_daily_budget(app):
     conn, agent = app["conn"], app["agent"]
+    cfg = access.DEFAULT_SETTINGS
+    factor, share = cfg["spike_factor"], cfg["spike_budget_share"]
+    rate = 1.5 * cfg["spike_floor_usd"] / factor  # its own hourly rate, high enough that 0.8x factor tops the floor
     _age(conn, agent, 3)
     for h in (1.5, 2.5):
-        _usage(conn, agent, 3.0, hours_ago=h)  # $3/h since it exists (3 hours), not $6 over a week
-    _usage(conn, agent, 50.0, hours_ago=0.2)   # 16x its own rate: below the 20x factor
+        _usage(conn, agent, rate, hours_ago=h)  # `rate`/h since it exists (3 hours), not half that over a week
+    _usage(conn, agent, 0.8 * factor * rate, hours_ago=0.2)  # above the floor, below the factor
     assert access.watch(conn)["paused"] == []
-    _usage(conn, agent, 30.0, hours_ago=0.1)   # $80 in the hour: 26x, but within half its daily budget
-    access.set_budget(conn, app["owner"], agent, "usd_day", 200.0, "test")
+    _usage(conn, agent, 0.5 * factor * rate, hours_ago=0.1)  # 1.3x the factor, but within its daily budget share
+    hour = 1.3 * factor * rate
+    access.set_budget(conn, app["owner"], agent, "usd_day", 1.25 * hour / share, "test")
     assert access.watch(conn)["paused"] == []
-    access.set_budget(conn, app["owner"], agent, "usd_day", 100.0, "test")
+    access.set_budget(conn, app["owner"], agent, "usd_day", 0.8 * hour / share, "test")
     assert access.watch(conn)["paused"] == ["Writer"]
 
 
@@ -355,8 +361,9 @@ def test_company_cap_ping_goes_to_the_ceo_not_the_owner(app, tmp_path):
     from pos import integrations
 
     assert integrations.company_cap(conn)["usd_month"]["cap"] == 1000.0  # the hourly budget check reports it
+    ratio = access.DEFAULT_SETTINGS["cap_alert_ratio"]
     for _ in range(9):
-        _usage(conn, agent, 4.5, hours_ago=2)  # $40.50 today: 81 % of the daily cap, no spike
+        _usage(conn, agent, 50.0 * (ratio + 0.01) / 9, hours_ago=2)  # just over the alert ratio today, no spike
     assert "usd_day" in access.watch(conn)["cap_alerts"]
     assert any("Strop firmy" in b for b in _dms(conn, ceo))
     assert not any("Strop firmy" in b for b in _dms(conn, actors.owner_id(conn)))
@@ -365,8 +372,9 @@ def test_company_cap_ping_at_80_percent_once_and_daily_digest(app):
     conn, agent, am = app["conn"], app["agent"], app["am"]
     owner = actors.owner_id(conn)
     access.set_budget(conn, app["owner"], None, "usd_month", 100.0, "company cap")
+    ratio = access.DEFAULT_SETTINGS["cap_alert_ratio"]
     for _ in range(9):
-        _usage(conn, agent, 9.0, hours_ago=30)  # $81 this month, not in the last hour (no spike)
+        _usage(conn, agent, 100.0 * (ratio + 0.01) / 9, hours_ago=30)  # over the ratio, not in the last hour
     assert "usd_month" in access.watch(conn)["cap_alerts"]
     assert access.watch(conn)["cap_alerts"] == []  # once
     access.grant(conn, am, agent, "messages:send", "standups")

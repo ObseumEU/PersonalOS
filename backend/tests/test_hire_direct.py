@@ -48,7 +48,8 @@ def test_hr_hires_an_agent_that_works_at_once(co):
     key = (co["keys"] / "pool" / "hlidac-faktur" / "key").read_text().strip()
     assert actors.actor_for_key(conn, key) == aid                     # its worker can start now
     assert agents.permissions_of(conn, aid) >= {"tasks:read", "tasks:claim"}  # grants seeded
-    assert conn.execute("SELECT COUNT(*) FROM access_budgets WHERE agent_id = ?", (aid,)).fetchone()[0] == 4
+    seeded = conn.execute("SELECT COUNT(*) FROM access_budgets WHERE agent_id = ?", (aid,)).fetchone()[0]
+    assert seeded == len(hiring.DEFAULT_BUDGETS["low"])               # a hire's default budget class
     assert "Náplň práce" in agents.instructions_of(a)
     assert "Hlídač faktur" in conn.execute("SELECT body FROM chat_messages ORDER BY id DESC LIMIT 1").fetchone()[0]
     files = conn.execute("SELECT notes FROM tasks WHERE title LIKE 'Soubory nového agenta%'").fetchone()

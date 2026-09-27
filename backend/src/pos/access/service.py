@@ -921,7 +921,7 @@ def pause_for_spike(conn: sqlite3.Connection, agent_id: int, detail: dict) -> in
     ctx = Ctx(am or actors.owner_id(conn), via="system")
     name = actors.get(conn, agent_id)["name"]
     versioning.update(conn, ctx, "actor", agent_id, {"paused_at": now_iso()}, action="access_pause")
-    stopped = runner.cancel_all(conn, f"paused by the Access manager: spend spike", actor_id=agent_id)
+    stopped = runner.cancel_all(conn, "paused by the Access manager: spend spike", actor_id=agent_id)
     why = (f"{name} utratil za poslední hodinu {detail['last_hour_usd']:.2f} USD / {detail['last_hour_tokens']:,} tok "
            f"(běžně {detail['baseline_usd']:.2f} USD / {int(detail['baseline_tokens']):,} tok za hodinu).").replace(",", " ")
     rid = _insert_request(conn, agent_id=agent_id, requested_by=None, trigger="spike", what="review", why=why,

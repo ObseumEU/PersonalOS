@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from pos import actors, agents, agents_code, availability, chat, fastlane, scheduler, schedules, tasks, workers
-from pos.core import Ctx, now_iso
+from pos.core import now_iso
 
 pytest.importorskip("pos_worker")
 from pos_worker import pool as wpool  # noqa: E402

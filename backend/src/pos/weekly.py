@@ -536,7 +536,7 @@ def on_owner_message(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, messag
 def task_notes(week: str, packet: dict) -> str:
     p = packet.get("period", {})
     return "\n".join([
-        f"### Proč",
+        "### Proč",
         f"Týdenní report firmy za **{week}** ({p.get('start')} – {p.get('end')}) a krátký meeting s majitelem, "
         "na kterém se nastaví cíle a priority na další týden.",
         "",

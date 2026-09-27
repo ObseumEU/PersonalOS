@@ -1,0 +1,20 @@
+# Lint for the Python code (backend, worker, ops, shared tools). A pragmatic set: real bugs
+# (pyflakes, bugbear) and basic style errors; formatting and line length are not enforced.
+# CI runs `ruff check .` (.github/workflows/tests.yml).
+target-version = "py310"
+line-length = 120
+extend-exclude = ["apps", "web", "data", "**/node_modules", "**/.venv"]
+
+[lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "E501",  # line length: not enforced
+    "E741",  # short names like `l` are fine here
+    "B008",  # FastAPI's Depends(...) in defaults is the framework's idiom
+    "B007",  # an unused loop variable is harmless
+    "B904",  # `raise ... from` inside except: style
+]
+
+[lint.per-file-ignores]
+# pytest fixtures are imported into test modules and then requested as arguments.
+"**/tests/**" = ["F811", "B017", "F841"]

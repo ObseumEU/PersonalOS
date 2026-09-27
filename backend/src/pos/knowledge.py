@@ -19,7 +19,7 @@ import json
 import os
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 import httpx
 

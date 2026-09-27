@@ -34,7 +34,6 @@ keep it that way:
 Nothing here costs model tokens; the knowlage lookups are two cheap searches.
 """
 
-import json
 import logging
 import os
 import re
@@ -42,7 +41,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from . import actors, audit
-from .core import Ctx, now_iso
+from .core import Ctx
 
 log = logging.getLogger(__name__)
 

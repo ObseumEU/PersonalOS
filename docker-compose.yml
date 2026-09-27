@@ -67,7 +67,7 @@ services:
       POS_URL: http://pos-api:8000
       POS_DEPLOYER_KEY: ${DEPLOYER_KEY:-}
       DEPLOY_HEALTH_URL: http://web/api/health
-      DEPLOY_TEST_CMD: ${DEPLOY_TEST_CMD:-cd backend && pip install -q -e .[dev] && python -m pytest -q}
+      DEPLOY_TEST_CMD: ${DEPLOY_TEST_CMD:-cd backend && pip install -q -e .[dev] && python -m pytest -q -n auto -p no:cacheprovider}
       DEPLOY_UP_CMD: ${DEPLOY_UP_CMD:-docker compose up -d --build api web}
     volumes:
       - .:/repo

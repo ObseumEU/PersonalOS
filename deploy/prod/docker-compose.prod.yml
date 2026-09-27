@@ -81,7 +81,7 @@ services:
               "--source-remote", "dev", "--watch", "60"]
     environment:
       DEPLOY_TEST_CMD: >-
-        cd backend && pip install -q -e .[dev] -e ../worker && python -m pytest -q && cd ../web && npm ci --silent && npm run build
+        cd backend && pip install -q -e .[dev] -e ../worker && python -m pytest -q -n auto -p no:cacheprovider && cd ../web && npm ci --silent && npm run build
       DEPLOY_UP_CMD: >-
         docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml up -d --build api web
       DEPLOY_HEALTH_URL: http://web/api/health

@@ -76,7 +76,7 @@ def demux(raw: bytes, tty: bool) -> list[str]:
     (stream, 0, 0, 0, size as big-endian uint32)."""
     if tty or not raw or raw[0] not in (0, 1, 2) or raw[1:4] != b"\x00\x00\x00":
         return raw.decode("utf-8", "replace").splitlines()
-    out, i = [], 0
+    i = 0
     buf = bytearray()
     while i + 8 <= len(raw):
         size = struct.unpack(">I", raw[i + 4:i + 8])[0]

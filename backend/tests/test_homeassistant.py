@@ -10,7 +10,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from pos import actors, agents, homeassistant, schedules, workers
+from pos import actors, agents, agents_code, homeassistant, schedules, workers
+from pos.access import service as access
 from pos.config import Settings
 from pos.core import Ctx
 from pos.credentials import onepassword
@@ -65,7 +66,9 @@ def test_the_specialist_comes_from_its_file_and_runs_in_the_pool(ha):
     assert agents.instructions_of(a) is None or "Home Assistant" in agents.instructions_of(a)
     budget = {r["metric"]: r["amount"] for r in conn.execute(
         "SELECT metric, amount FROM access_budgets WHERE agent_id = ?", (a["id"],))}
-    assert budget["usd_run"] == 3.0 * 5 and budget["runs_day"] == 20 * 20  # the file (Opus caps), loosened (autonomy)
+    spec = agents_code.spec_of(NAME)["budget"]  # the file (Opus caps), loosened (autonomy)
+    assert budget["usd_run"] == access.scaled("usd_run", spec["usd_run"])
+    assert budget["runs_day"] == access.scaled("runs_day", spec["runs_day"])
 
 
 def test_rest_over_plain_http_only_to_the_listed_local_host(ha):

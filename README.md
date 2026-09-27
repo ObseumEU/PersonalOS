@@ -51,7 +51,7 @@ npm run dev
 ```
 
 With no `POS_PASSWORD` set, dev runs without a login. Run the API tests with
-`.venv/Scripts/pytest` in `backend/`.
+`.venv/Scripts/python -m pytest -n auto` in `backend/` (parallel; `ruff check .` at the root lints).
 
 ## Run with Docker
 

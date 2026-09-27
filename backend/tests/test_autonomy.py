@@ -72,10 +72,12 @@ def test_the_one_off_switch_brings_existing_agents_along_once(app, monkeypatch):
     access.set_budget(conn, owner, old, "usd_day", 3.0, "old budget")
     access.set_budget(conn, owner, old, "usd_run", 0.5, "old run cap")
     from pos import settings_store
-    from pos.hr.policy import SETTING_MAX_ACTIVE
+    from pos.hr.policy import SETTING_MAX_ACTIVE, HRPolicy
 
-    settings_store.put(conn, owner, SETTING_MAX_ACTIVE, 26)
-    settings_store.put(conn, owner, access.SETTINGS_KEY, {"spike_factor": 5.0, "spike_floor_usd": 1.0})
+    spikes = access.DEFAULT_SETTINGS  # the stored values are below the defaults, whatever those are now
+    settings_store.put(conn, owner, SETTING_MAX_ACTIVE, HRPolicy().max_active_agents - 1)
+    settings_store.put(conn, owner, access.SETTINGS_KEY, {"spike_factor": spikes["spike_factor"] / 4,
+                                                          "spike_floor_usd": spikes["spike_floor_usd"] / 20})
     conn.commit()
     assert "tasks:write" not in access.effective(conn, old)
     dry = autonomy.run(conn, apply=False)
@@ -83,11 +85,12 @@ def test_the_one_off_switch_brings_existing_agents_along_once(app, monkeypatch):
     assert "tasks:write" not in access.effective(conn, old)            # a dry run writes nothing
     autonomy.run(conn, apply=True)
     assert set(access.autonomy_caps()) <= access.effective(conn, old)
-    assert access.limit(conn, old, "usd_day") == 60.0 and access.limit(conn, old, "usd_run") == 2.5
-    assert access.settings(conn)["spike_factor"] == 20.0
+    assert access.limit(conn, old, "usd_day") == access.scaled("usd_day", 3.0)
+    assert access.limit(conn, old, "usd_run") == access.scaled("usd_run", 0.5)
+    assert access.settings(conn)["spike_factor"] == spikes["spike_factor"]
     again = autonomy.run(conn, apply=True)
     assert not any(again.values())                                     # budgets are not scaled twice
-    assert access.limit(conn, old, "usd_day") == 60.0
+    assert access.limit(conn, old, "usd_day") == access.scaled("usd_day", 3.0)
 
 
 def test_a_pending_review_holds_the_deployer_only_until_the_sla(app, monkeypatch, tmp_path):

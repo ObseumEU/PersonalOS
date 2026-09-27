@@ -1,0 +1,56 @@
+# The fast checks on every push and pull request to main: the backend tests in parallel
+# (pytest-xdist), ruff, and the web typecheck + build. The deployer runs the same tests
+# before it promotes a branch (pos.selfdeploy DEFAULT_TEST, DEPLOY_TEST_CMD in the compose files).
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install
+        run: pip install -e "backend[dev]"
+      - name: Tests (parallel)
+        working-directory: backend
+        run: python -m pytest -q -n auto -p no:cacheprovider --durations=10
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ruff
+        run: pip install "ruff~=0.16.0" && ruff check --output-format=github .
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npx vite build

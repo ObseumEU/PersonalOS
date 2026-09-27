@@ -415,7 +415,9 @@ def test_step_cap_stops_a_runaway_run_and_hands_the_task_back(setup, fake_codex,
     worker.base_max_steps = 1  # the owner asked for it himself: twice the cap (pos_worker.loop.step_cap)
     assert worker.step() == "error"
     run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
-    assert run["status"] == "error" and "step limit reached (2 steps)" in run["detail"]
+    from pos_worker.loop import OWNER_STEP_FACTOR
+
+    assert run["status"] == "error" and f"step limit reached ({OWNER_STEP_FACTOR} steps)" in run["detail"]
     assert tasks.get(conn, owner, t["id"])["status"] != "working"
 
 
@@ -635,7 +637,7 @@ def test_triage_parks_an_unclear_issue_with_one_question_and_a_comment_requeues_
 def test_triage_hands_back_the_wrong_repo_and_backs_off_for_a_day(setup, fake_claude, tmp_path, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
     client, conn, owner, agent_id, key = setup
-    from pos import actors as actors_mod, routing, tasks
+    from pos import actors as actors_mod, tasks
 
     t = tasks.create(conn, owner, {"title": "Fix the logo on acme.com", "assignee": {"type": "agent", "id": agent_id},
                                    "source": "event:github"})
@@ -684,6 +686,7 @@ def test_a_failed_run_is_not_retried_at_once(setup, monkeypatch):
 
 def test_a_clear_small_task_runs_at_low_effort_and_the_check_is_paid_for(setup, fake_claude, tmp_path, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    monkeypatch.setenv("WORKER_CLAUDE_MAX_USD_S", "2")  # the small-task cap is set here, not the worker's default
     client, conn, owner, agent_id, key = setup
     from pos_worker import triage
 

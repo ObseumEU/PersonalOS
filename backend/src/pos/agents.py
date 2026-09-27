@@ -786,7 +786,7 @@ def board(conn: sqlite3.Connection) -> list[dict]:
                  "progress": r["progress"]}
                 for r in conn.execute(
                     f"SELECT id, title, status, progress FROM tasks WHERE assignee_id = ? AND archived_at IS NULL "
-                    f"AND {cond} ORDER BY COALESCE(priority, 4), id LIMIT 8", (a["id"], *params))
+                    f"AND {cond} ORDER BY COALESCE(priority, 4), id LIMIT 8", (a["id"], *params))  # noqa: B023 - called right away, inside the loop
             ]
 
         needs_you = pick("status = 'review'") + [

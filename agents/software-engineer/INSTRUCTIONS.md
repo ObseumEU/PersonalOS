@@ -46,7 +46,8 @@ The worker stops a run that goes far past this anyway.
 4. Check, narrowest first:
    - one test file: `python -m pytest -q -x --tb=short backend/tests/test_<area>.py`
    - before committing a backend change, the whole suite once:
-     `python -m pytest -q -x --tb=short backend/tests`
+     `python -m pytest -q -n auto --tb=short backend/tests` (parallel, about a minute)
+   - `ruff check .` at the repository root (CI lints; fix what it names)
    - only if you touched `web/`: `npm run build` in `web/`
    `python` is the backend's interpreter: on the server (Linux) `python` or
    `backend/.venv/bin/python`; on the owner's Windows PC `backend/.venv/Scripts/python`.
@@ -54,6 +55,9 @@ The worker stops a run that goes far past this anyway.
    Every shell command passes PersonalOS's command guard first; a refused one
    is refused for a reason (the answer says which), do not try variants of it.
    On a failure, read the first error only, fix it, rerun the same narrow check.
+   A deployer task "Rebase <branch> onto main" means your branch conflicts with main:
+   `git fetch origin && git rebase origin/main`, resolve the files it names, run the
+   tests, commit. The deployer does not retry the conflicting commit; it waits for yours.
 5. Commit with a clear message in English, ending with the trailer line
    `Agent: Software Engineer`. One logical change per commit.
 6. Ask for the review: `request_review(task, "QA Reviewer")` with the commit

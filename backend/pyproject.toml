@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27"]
+dev = ["pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27", "ruff~=0.16.0"]
 # Text extraction from PDFs for full-text search (optional; pos.files skips PDFs without it).
 pdf = ["pypdf>=4"]
 # 1Password service account for agents' credentials (pos.credentials); the api image installs it.
@@ -36,4 +36,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# ../worker: the worker package (pos_worker) is importable without installing it or a PYTHONPATH.
+pythonpath = ["src", "../worker"]

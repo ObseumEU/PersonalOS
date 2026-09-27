@@ -9,8 +9,8 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from pos import (actors, agents, agents_code, approvals, business, chat, integrations, kb_files, knowledge_tool,
-                 mcp_server, routing, tasks, weekly, weekly_packet)
+from pos import (actors, agents, agents_code, approvals, business, chat, hiring, integrations, kb_files,
+                 knowledge_tool, mcp_server, routing, tasks, weekly, weekly_packet)
 from pos.access import service as access
 from pos.core import Ctx, now_iso
 from pos.db import connect, migrate
@@ -157,22 +157,22 @@ def test_owner_requests_are_recognised(conn, owner, company):
 
 
 def test_step_cap_per_agent_and_higher_for_the_owners_tasks():
-    from pos_worker.loop import step_cap
+    from pos_worker.loop import OWNER_STEP_FACTOR, step_cap
 
     assert step_cap({}, {}, 40) == 40
     assert step_cap({"max_steps": 80}, {}, 40) == 80
     assert step_cap({"max_steps": 80, "max_steps_owner": 160}, {"owner_request": True}, 40) == 160
-    assert step_cap({"max_steps": 30}, {"owner_request": True}, 40) == 60
+    assert step_cap({"max_steps": 30}, {"owner_request": True}, 40) == 30 * OWNER_STEP_FACTOR
     assert step_cap({}, {"owner_request": True}, 0) == 0  # no cap stays no cap
 
 
 def test_agent_files_give_the_ha_specialist_and_the_engineer_higher_caps():
     ha = agents_code.worker_profile("Home Assistant Specialist")
     se = agents_code.worker_profile("Software Engineer")
-    assert ha["max_steps"] >= 80 and ha["max_steps_owner"] > ha["max_steps"]
-    assert se["max_steps"] >= 120 and se["max_steps_owner"] > se["max_steps"]
+    assert ha["max_steps"] >= agents_code.MIN_STEPS and ha["max_steps_owner"] > ha["max_steps"]
+    assert se["max_steps"] >= agents_code.MIN_STEPS and se["max_steps_owner"] > se["max_steps"]
     for spec in agents_code.specs():
-        assert spec.get("model") == "claude-opus-5-5" and spec.get("effort") == "medium", spec["name"]
+        assert spec.get("model") == hiring.DEFAULT_MODEL and spec.get("effort") == hiring.DEFAULT_EFFORT, spec["name"]
         assert spec.get("engine") == "claude", spec["name"]
 
 
@@ -521,7 +521,8 @@ def test_rollout_switches_models_scales_budgets_and_closes_gmail(conn, owner, tm
     conn.commit()
     p = biz_rollout.plan(conn)
     assert "CFO" in [m["name"] for m in p["models"]] and p["tasks"][0]["ref"] == "T-016"
-    assert not p["settings"]  # the spike floor's default (20 USD, pos.access autonomy) is above 3 already
+    # the spike floor's default (pos.access autonomy) is above the rollout's floor already, or it is raised
+    assert bool(p["settings"]) == (access.DEFAULT_SETTINGS["spike_floor_usd"] < biz_rollout.SPIKE_FLOOR_USD)
     out = biz_rollout.apply(conn)
     a = actors.get(conn, cfo.actor_id)
     assert (a["engine"], a["model"]) == ("claude", "claude-opus-5-5")
@@ -529,7 +530,7 @@ def test_rollout_switches_models_scales_budgets_and_closes_gmail(conn, owner, tm
         "SELECT metric, amount FROM access_budgets WHERE agent_id = ? AND ended_at IS NULL", (cfo.actor_id,))}
     spec = agents_code.spec_of("CFO")["budget"]
     assert active["usd_day"] == spec["usd_day"] and active["usd_month"] == 99.0  # a raise is never lowered
-    assert access.settings(conn)["spike_floor_usd"] >= 3.0
+    assert access.settings(conn)["spike_floor_usd"] >= biz_rollout.SPIKE_FLOOR_USD
     assert tasks.get(conn, owner, 16)["status"] == "done"
     again = biz_rollout.plan(conn)
     assert not again["models"] and not again["budgets"] and not again["settings"] and not again["tasks"]

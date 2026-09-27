@@ -540,7 +540,7 @@ def _json(obj) -> str:
 def browser_check(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
                   settings: Settings = Depends(get_settings)):
     """Before a browser action: allow, or an approval the guard waits for."""
-    from . import agents, browser
+    from . import browser
 
     st = _state(conn, ctx.actor_id)
     if st["frozen"] or st["paused"] or st["archived"]:

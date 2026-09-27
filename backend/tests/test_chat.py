@@ -4,7 +4,7 @@ import anyio
 import pytest
 from fastapi.testclient import TestClient
 
-from pos import actors, agents, chat, integrations, killswitch, network, tasks
+from pos import actors, agents, chat, integrations, killswitch, network
 from pos.config import Settings
 from pos.core import Ctx, Forbidden
 from pos.db import MIGRATIONS, connect, migrate

@@ -1,9 +1,6 @@
 import base64
 import sys
-import threading
-import time
 
-import anyio
 import pytest
 from fastapi.testclient import TestClient
 
