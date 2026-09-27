@@ -14,7 +14,7 @@ import json
 import re
 import sqlite3
 
-from . import actors, audit, tasks, versioning
+from . import actors, audit, project_info, tasks, versioning
 from .core import Ctx, Forbidden, NotFound, now_iso
 from .visibility import DEFAULT, LAYERS, check_read, visible_sql
 
@@ -60,6 +60,10 @@ def _view(conn: sqlite3.Connection, row) -> dict:
                   SUM(status = 'review') AS review, SUM(status = 'done') AS done
            FROM tasks WHERE project_id = ? AND archived_at IS NULL""", (d["id"],)).fetchone()
     d["counts"] = {k: counts[k] or 0 for k in ("queued", "working", "review", "done")}
+    d["total"] = sum(d["counts"].values())
+    info = project_info.details(conn, d["id"])
+    d["info"] = info
+    d["lead_kind"] = lead["kind"] if lead else None
     return d
 
 
@@ -71,14 +75,39 @@ def list_projects(conn: sqlite3.Connection, ctx: Ctx, status: str | None = None)
         params = [*params, status]
     else:
         sql += " AND status != 'archived'"
-    return [_view(conn, r) for r in conn.execute(sql + " ORDER BY status = 'active' DESC, updated_at DESC", params)]
+    out = [_view(conn, r) for r in conn.execute(sql + " ORDER BY status = 'active' DESC, updated_at DESC", params)]
+    cached = project_info.cached_summaries(conn, [p["id"] for p in out])
+    for p in out:
+        p["summary"] = cached.get(p["id"])
+    return out
 
 
 def get(conn: sqlite3.Connection, ctx: Ctx, ref) -> dict:
     row = _row(conn, ctx, ref)
     out = _view(conn, row)
     out["tasks"] = tasks.list_project(conn, ctx, row["id"])
+    out["decisions"] = project_info.log_entries(conn, row["id"])
+    out["people"] = project_info.people(conn, ctx, out)
+    out["can_edit"] = may_edit(conn, ctx, row)
     return out
+
+
+def may_edit(conn: sqlite3.Connection, ctx: Ctx, row) -> bool:
+    try:
+        _may_edit(conn, ctx, row)
+        return True
+    except Forbidden:
+        return False
+
+
+def may_log(conn: sqlite3.Connection, ctx: Ctx, row) -> None:
+    """Decisions and files: whoever may edit the project, and its members."""
+    if may_edit(conn, ctx, row):
+        return
+    if conn.execute("SELECT 1 FROM project_members WHERE project_id = ? AND actor_id = ?",
+                    (row["id"], ctx.actor_id)).fetchone():
+        return
+    raise Forbidden("the project's members, its lead or the owner record decisions and files")
 
 
 def _may_edit(conn: sqlite3.Connection, ctx: Ctx, row) -> None:
@@ -94,7 +123,7 @@ def _may_edit(conn: sqlite3.Connection, ctx: Ctx, row) -> None:
 
 def create(conn: sqlite3.Connection, ctx: Ctx, *, name: str, goal: str = "", definition_of_done: str = "",
            lead=None, member_refs: list | None = None, visibility: str = DEFAULT, labels: list[str] | None = None,
-           due: str | None = None, channel: bool = True) -> dict:
+           due: str | None = None, channel: bool = True, details: dict | None = None, slug: str | None = None) -> dict:
     from . import agents
     from .org import _member
 
@@ -106,7 +135,7 @@ def create(conn: sqlite3.Connection, ctx: Ctx, *, name: str, goal: str = "", def
         raise tasks.Invalid("a project needs a name")
     if visibility not in LAYERS:
         raise tasks.Invalid(f"visibility must be one of {LAYERS}")
-    slug = base = slugify(name)
+    slug = base = slugify(slug or name)
     n = 2
     while conn.execute("SELECT 1 FROM projects WHERE slug = ?", (slug,)).fetchone():
         slug, n = f"{base}-{n}", n + 1
@@ -126,6 +155,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, *, name: str, goal: str = "", def
             _add(conn, pid, mid, "member")
     if channel:
         _open_channel(conn, ctx, pid)
+    info = {k: v for k, v in (details or {}).items() if v not in (None, "", [], {})}
+    if info:
+        project_info.update_details(conn, ctx, pid, info)
     audit.log(conn, ctx, "project_create", ENTITY, pid, slug=slug)
     return get(conn, ctx, pid)
 
@@ -158,6 +190,9 @@ def add_member(conn: sqlite3.Connection, ctx: Ctx, ref, member, role: str = "mem
     if role not in ROLES:
         raise tasks.Invalid(f"role must be one of {ROLES}")
     m = _member(conn, member)
+    if role == "lead":  # one lead: the previous one stays a member
+        conn.execute("UPDATE project_members SET role = 'member' WHERE project_id = ? AND role = 'lead' AND actor_id != ?",
+                     (row["id"], m["id"]))
     _add(conn, row["id"], m["id"], role)
     if role == "lead":
         versioning.update(conn, ctx, ENTITY, row["id"], {"lead_id": m["id"]}, action="set_lead")
@@ -175,11 +210,20 @@ def add_member(conn: sqlite3.Connection, ctx: Ctx, ref, member, role: str = "mem
 def update(conn: sqlite3.Connection, ctx: Ctx, ref, changes: dict) -> dict:
     row = _row(conn, ctx, ref)
     _may_edit(conn, ctx, row)
-    allowed = {"name", "goal", "definition_of_done", "status", "visibility", "labels", "due"}
-    unknown = set(changes) - allowed
+    allowed = {"name", "goal", "definition_of_done", "status", "visibility", "labels", "due", "lead"}
+    unknown = set(changes) - allowed - project_info.DETAIL_FIELDS
     if unknown:
         raise tasks.Invalid(f"unknown fields: {sorted(unknown)}")
-    sets = dict(changes)
+    info = {k: v for k, v in changes.items() if k in project_info.DETAIL_FIELDS}
+    if info:
+        project_info.update_details(conn, ctx, row["id"], info)
+    sets = {k: v for k, v in changes.items() if k in allowed and k != "lead"}
+    if changes.get("lead") not in (None, ""):
+        add_member(conn, ctx, row["id"], changes["lead"], "lead")
+    if "due" in sets and sets["due"] and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(sets["due"])):
+        raise tasks.Invalid("due must be YYYY-MM-DD")
+    if "name" in sets and not (sets["name"] or "").strip():
+        raise tasks.Invalid("a project needs a name")
     if "status" in sets and sets["status"] not in STATUSES:
         raise tasks.Invalid(f"status must be one of {STATUSES}")
     if "visibility" in sets and sets["visibility"] != row["visibility"]:
@@ -188,7 +232,8 @@ def update(conn: sqlite3.Connection, ctx: Ctx, ref, changes: dict) -> dict:
         check_visibility_change(conn, ctx, row, sets["visibility"])
     if "labels" in sets:
         sets["labels"] = json.dumps(sorted({l.lower().lstrip("#") for l in sets["labels"] or []}))
-    versioning.update(conn, ctx, ENTITY, row["id"], sets)
+    if sets:
+        versioning.update(conn, ctx, ENTITY, row["id"], sets)
     return get(conn, ctx, row["id"])
 
 

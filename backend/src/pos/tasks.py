@@ -319,6 +319,13 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         values["project_id"] = parent["project_id"]  # a step belongs to its task's project
     if values.get("topic"):
         values["topic"] = values["topic"].lower().lstrip("#")
+    if values.get("project_id") is None and parent_id is None and project is None:
+        # A task for a known repo, customer or label joins its project (pos.project_info.match_project).
+        from . import project_info
+
+        values["project_id"] = project_info.match_project(conn, values)
+        if values["project_id"] is None:
+            values.pop("project_id")
     from . import business
 
     dup = business.find_duplicate_escalation(conn, ctx, values)

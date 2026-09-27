@@ -96,6 +96,8 @@ TOOL_PERMISSIONS = {
     # Projects: reading needs tasks:read; creating tasks:write, members by the project's lead (pos.projects).
     "project_list": "tasks:read", "project_get": "tasks:read", "project_create": "tasks:write",
     "project_add_member": "tasks:read",
+    # Editing a project and its decision log: checked in pos.projects (lead, creator, their lead, owner; members log).
+    "project_update": "tasks:read", "project_decision": "tasks:read",
     # Hiring: asking needs agents:create or tasks:write, deciding is the decider's (pos.hiring).
     "hire_request": "tasks:read", "hire_decide": "tasks:read", "hire_list": "tasks:read",
     # Hiring directly: the owner, the HR agent and leads (checked in pos.hiring.hire).
@@ -386,6 +388,32 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "project_add_member", project=project, member=member) as (conn, c):
             p = projects.add_member(conn, c, project, member, role)
             return {"slug": p["slug"], "members": [f"{m['name']} ({m['role']})" for m in p["members"]]}
+
+    @mcp.tool(description="Change a project (id or slug): name, goal, definition_of_done, status (active, paused, "
+                          "done), due (target date YYYY-MM-DD), lead, labels, description (Markdown), start_date, "
+                          "goal_progress (0-100), links {repos: ['ObseumEU/X'], drive_folder, website, customer, "
+                          "customer_url}, facts {customer, contact, budget, stack}, kb_workspace (knowlage "
+                          "workspace), keywords (auto-attach words). Links and facts merge key by key. The "
+                          "project's lead, its creator, their lead or the owner.")
+    def project_update(ctx: Context, project: str, changes: dict) -> dict:
+        from . import projects
+
+        with session(ctx, "project_update", project=project) as (conn, c):
+            p = projects.update(conn, c, project, changes)
+            return {k: p[k] for k in ("slug", "name", "status", "lead_name", "due", "info")}
+
+    @mcp.tool(description="Record a decision (or a milestone, kind='milestone') in a project's log: text, why, "
+                          "who decided, date (YYYY-MM-DD, default today), source (a link). Only what really was "
+                          "decided; the project's members and lead.")
+    def project_decision(ctx: Context, project: str, text: str, why: str | None = None, who: str | None = None,
+                         date: str | None = None, kind: str = "decision", source: str | None = None) -> dict:
+        from . import project_info, projects
+
+        with session(ctx, "project_decision", project=project) as (conn, c):
+            row = projects._row(conn, c, project)
+            projects.may_log(conn, c, row)
+            return project_info.add_log(conn, c, row["id"], text=text, why=why, who=who, date=date, kind=kind,
+                                        source=source)
 
     @mcp.tool(description="Change an event routing rule (list_routes shows them): name, source, match "
                           "(kind, label, from_contains, text_regex), assignee, priority, topic, enabled, position. "

@@ -358,6 +358,12 @@ class ProjectIn(BaseModel):
     visibility: str = "team"
     labels: list[str] = []
     due: str | None = None
+    description: str | None = None
+    start_date: str | None = None
+    links: dict | None = None
+    facts: dict | None = None
+    kb_workspace: str | None = None
+    keywords: list[str] | None = None
 
 
 class MemberIn(BaseModel):
@@ -377,7 +383,8 @@ def create_project(body: ProjectIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     from . import projects
 
     d = body.model_dump()
-    p = projects.create(conn, ctx, member_refs=d.pop("members"), **d)
+    details = {k: d.pop(k) for k in ("description", "start_date", "links", "facts", "kb_workspace", "keywords")}
+    p = projects.create(conn, ctx, member_refs=d.pop("members"), details=details, **d)
     conn.commit()
     return p
 

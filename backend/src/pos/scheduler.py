@@ -360,7 +360,14 @@ def weekly_publish_overdue(conn: sqlite3.Connection) -> dict:
     return weekly.publish_overdue(conn)
 
 
+def projects_weekly(conn: sqlite3.Connection) -> dict:
+    from . import project_info
+
+    return project_info.weekly_job(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "projects_weekly": projects_weekly,
     "review_sla": review_sla,
     "idle_agents": idle_agents,
     "github_triage": github_triage,
@@ -439,6 +446,8 @@ DEFAULT_JOBS = [
     ("Weekly report: publish a draft nobody published", "every 60m", "weekly_publish_overdue"),
     # Invoice mail -> the owner's Google Drive (pos.invoices): sure ones filed at once, unsure ones to the CFO.
     ("Invoices: file new invoice mail to Google Drive (CFO)", "every 5m", "invoices_poll"),
+    # Projects (pos.project_info): fresh status summaries, the week's milestones, stale projects → the COO.
+    ("Projects: weekly status, milestones and stale projects (COO)", "weekly mon 07:00", "projects_weekly"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on

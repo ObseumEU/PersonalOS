@@ -11,12 +11,13 @@ import chat from "./cs/chat";
 import common from "./cs/common";
 import home from "./cs/home";
 import knowledge from "./cs/knowledge";
+import projects from "./cs/projects";
 import settings from "./cs/settings";
 import team from "./cs/team";
 import tickets from "./cs/tickets";
 import work from "./cs/work";
 
-export const cs: Record<string, string> = { ...common, ...home, ...chat, ...agents, ...work, ...knowledge, ...settings, ...team, ...tickets };
+export const cs: Record<string, string> = { ...common, ...home, ...chat, ...agents, ...work, ...knowledge, ...settings, ...team, ...tickets, ...projects };
 
 export type Vars = Record<string, string | number | null | undefined>;
 
