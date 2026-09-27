@@ -71,7 +71,7 @@ def transient(e: Exception) -> bool:
     return isinstance(e, (httpx.TransportError, OSError, TimeoutError))
 
 
-CHAT_REASONS = ("dm", "mention", "reply")  # a chat message addressed to the agent: it answers mid-run
+CHAT_REASONS = ("dm", "mention", "reply", "routed")  # a chat message addressed to the agent: it answers mid-run
 
 
 def is_chat(m: dict) -> bool:

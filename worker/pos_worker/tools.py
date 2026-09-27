@@ -25,7 +25,8 @@ def tool_list(raw: str) -> list[str]:
 
 
 # Talking to colleagues is never narrowed away (standup answers, questions, handoffs).
-COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "heartbeat")
+COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "chat_react", "heartbeat", "meeting_decide",
+         "meeting_info")
 
 
 def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:

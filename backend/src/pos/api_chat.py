@@ -167,3 +167,55 @@ async def stream(request: Request, since: int | None = None, timeout: float | No
                       timeout=min(timeout, 30) if timeout else None, disconnected=request.is_disconnected)
     return StreamingResponse(gen, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ------------------------------------------------------------------ meetings (pos.meetings)
+
+class MeetingIn(BaseModel):
+    channel: int | str
+    topic: str
+    agenda: str | list[str] = ""
+    participants: list[int | str]
+    rounds: int = 2
+    facilitator: int | str | None = None
+    budget_usd: float | None = None
+    max_minutes: int | None = None
+
+
+def _meeting(fn):
+    from . import meetings
+
+    try:
+        return _wrap(fn)
+    except meetings.MeetingError as e:
+        raise tasks.Invalid(str(e)) from e
+
+
+@router.get("/meetings")
+def meetings_list(channel_id: int | None = None, conn=Depends(get_db)):
+    from . import meetings
+
+    return meetings.list_meetings(conn, channel_id)
+
+
+@router.post("/meetings", status_code=201)
+def meeting_start(body: MeetingIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import meetings
+
+    return _meeting(lambda: meetings.start(conn, ctx, body.channel, body.topic, body.agenda, body.participants,
+                                           body.rounds, body.facilitator, budget_usd=body.budget_usd,
+                                           max_minutes=body.max_minutes))
+
+
+@router.get("/meetings/{meeting_id}")
+def meeting_get(meeting_id: int, conn=Depends(get_db)):
+    from . import meetings
+
+    return meetings.view(conn, meeting_id)
+
+
+@router.post("/meetings/{meeting_id}/close")
+def meeting_close(meeting_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import meetings
+
+    return meetings.close(conn, meeting_id, "closed by the owner")

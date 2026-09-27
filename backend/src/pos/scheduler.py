@@ -294,6 +294,12 @@ def weekly_meeting_timeouts(conn: sqlite3.Connection) -> dict:
     return weekly.meeting_timeouts(conn)
 
 
+def meetings_tick(conn: sqlite3.Connection) -> dict:
+    from . import meetings
+
+    return meetings.tick(conn)
+
+
 def sentinel_watch(conn: sqlite3.Connection) -> dict:
     from . import monitor
 
@@ -371,6 +377,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "access_weekly": access_weekly,
     "weekly_report": weekly_report,
     "weekly_meeting_timeouts": weekly_meeting_timeouts,
+    "meetings_tick": meetings_tick,
     "knowlage_files": knowlage_files,
     "feedback_digest": feedback_digest,
     "probation_review": probation_review,
@@ -410,6 +417,9 @@ DEFAULT_JOBS = [
     ("Weekly company report and meeting (Asistent vedení)",
      os.environ.get("POS_WEEKLY_REPORT_SCHEDULE") or "weekly fri 14:00", "weekly_report"),
     ("Weekly meeting: close it after 24 h without an answer", "every 30m", "weekly_meeting_timeouts"),
+    # Agents' meetings in a channel (pos.meetings): a turn over its time is skipped, a meeting over its
+    # duration or budget goes to the decision.
+    ("Meetings: turn and meeting time limits, budget", "every 1m", "meetings_tick"),
     # The sentinel (pos.monitor): its heartbeat must not stop; a daily health digest (quiet days: nothing).
     ("Sentinel: alert when its heartbeat stops", "every 2m", "sentinel_watch"),
     ("Sentinel: daily health digest in #team", "daily 08:00", "sentinel_digest"),

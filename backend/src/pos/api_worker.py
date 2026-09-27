@@ -230,7 +230,10 @@ def back_off(conn: sqlite3.Connection, task_id: int) -> None:
 
 
 def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
-    from . import owner_notice
+    from . import meetings, owner_notice
+
+    if meetings.skip_task(conn, tid, f"handed back: {note}"[:200]):
+        return tasks.get(conn, ctx, tid)  # a meeting turn: skipped, the next participant speaks (no owner notice)
 
     name = actors.get(conn, ctx.actor_id)["name"]
     before = conn.execute("SELECT progress_note FROM tasks WHERE id = ?", (tid,)).fetchone()

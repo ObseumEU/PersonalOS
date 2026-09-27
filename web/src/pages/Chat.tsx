@@ -70,6 +70,29 @@ function KindTag({ m }: { m: ChatMessage }) {
   return null;
 }
 
+function MeetingTag({ m }: { m: ChatMessage }) {
+  const mark = m.meeting;
+  if (!mark) return null;
+  if (mark.kind === "decision")
+    return <span className="rounded-[3px] border border-emerald-400/60 bg-emerald-400/10 px-1 text-xs text-emerald-300">{t("chat.meeting_decision")}</span>;
+  if (mark.kind === "agenda")
+    return <span className="rounded-[3px] border border-accent/60 px-1 text-xs text-accent">{t("chat.meeting")}</span>;
+  return <span className="rounded-[3px] border border-line px-1 text-xs text-ink-2">{t("chat.meeting_round", { n: mark.round ?? 1, of: mark.rounds ?? 1 })}</span>;
+}
+
+/** Round markers in a meeting thread: a divider where the next round starts. */
+function RoundDivider({ prev, m }: { prev?: ChatMessage; m: ChatMessage }) {
+  const r = m.meeting?.round;
+  if (!r || m.meeting?.kind === "agenda" || m.meeting?.kind === "decision" || prev?.meeting?.round === r) return null;
+  return (
+    <div className="mx-4 my-1 flex items-center gap-2 text-[11px] uppercase tracking-wide text-ink-2">
+      <span className="h-px flex-1 bg-line" />
+      {t(r === 1 ? "chat.meeting_round1" : "chat.meeting_roundN", { n: r })}
+      <span className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
+
 function TypingDots({ soft = false }: { soft?: boolean }) {
   return (
     <span className={`typing-dots ${soft ? "soft" : ""}`} aria-hidden="true">
@@ -131,7 +154,7 @@ function MessageItem({
   const mentioned = m.mentions.includes(me);
   return (
     // Focusable, so a tap on a phone shows the actions (no hover there).
-    <div tabIndex={0} className={`group relative flex flex-col gap-1 px-4 py-2 outline-none hover:bg-raised/50 focus-within:bg-raised/50 ${mentioned ? "shadow-[inset_2px_0_0_var(--color-accent)]" : ""}`}>
+    <div tabIndex={0} className={`group relative flex flex-col gap-1 px-4 py-2 outline-none hover:bg-raised/50 focus-within:bg-raised/50 ${m.meeting?.kind === "decision" ? "border-l-2 border-emerald-400/70 bg-emerald-400/5" : mentioned ? "shadow-[inset_2px_0_0_var(--color-accent)]" : ""}`}>
       {parent && !compact && (
         <button onClick={onOpenThread} className="flex min-w-0 items-center gap-1 text-left text-xs text-ink-2 hover:text-ink">
           ↳ <span className="shrink-0 whitespace-nowrap">{parent.author_name}</span>
@@ -141,6 +164,7 @@ function MessageItem({
       <div className="flex flex-wrap items-baseline gap-2">
         <span className={`text-[13px] font-medium ${m.author_kind === "human" ? "text-ink" : "text-accent"}`}>{m.author_name}</span>
         <KindTag m={m} />
+        <MeetingTag m={m} />
         {m.priority && <span className={`rounded-[3px] border px-1 text-xs ${PRIORITY_CLS[m.priority]}`}>{t(`priority.${m.priority}`)}</span>}
         <span className="text-xs text-ink-2">
           {hhmm(m.created_at)}
@@ -791,7 +815,12 @@ export default function Chat() {
               <div className="min-h-0 flex-1 overflow-y-auto py-2">
                 {item(rootMsg, true)}
                 <div className="mx-4 my-1 border-t border-line" />
-                {threadReplies.map((m) => item(m, true))}
+                {threadReplies.map((m, i) => (
+                  <Fragment key={m.id}>
+                    <RoundDivider prev={threadReplies[i - 1]} m={m} />
+                    {item(m, true)}
+                  </Fragment>
+                ))}
               </div>
               <TypingLine entries={typingHere.filter((e) => e.thread === rootMsg.id)} />
               <Composer channel={channel} members={members} replyTo={rootMsg} placeholder={t("chat.reply_placeholder")} />

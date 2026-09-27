@@ -118,6 +118,7 @@ TOOL_PERMISSIONS = {
     # Chat (pos.chat): writing needs messages:send, reading tasks:read.
     "chat_send": "messages:send", "chat_react": "messages:send", "chat_create_channel": "messages:send",
     "chat_invite": "messages:send", "chat_read": "tasks:read", "chat_list_channels": "tasks:read",
+    "meeting_start": "messages:send", "meeting_info": "tasks:read",
     "chat_mark_read": "tasks:read",
     # Files, notes and topics: reading needs tasks:read, writing notes tasks:write.
     "search": "tasks:read", "file_get": "tasks:read", "topic_get": "tasks:read",
@@ -631,6 +632,10 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "without the answer: the task (task_id, default the one you work on) goes to "
                           "waiting, the question shows in the owner's 'Čeká na tebe', and his reply in chat "
                           "brings the task back to your queue; finish the run then. "
+                          "@CTO, @HR (a role) reach that role's agent; @tým-kniha every agent of #kniha. "
+                          "Keep it short (a few sentences, at most 3000 characters): details go into a task or a "
+                          "note you link. Never send bare thanks/ok: react with chat_react instead (an "
+                          "acknowledgement wakes nobody). "
                           "Chat stays inside PersonalOS; at most 20 messages per 10 minutes.")
     def chat_send(ctx: Context, body: str, channel: str | None = None, to: str | None = None,
                   reply_to: int | None = None, priority: str | None = None, blocking: bool = False,
@@ -654,11 +659,15 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                               {"note": "blocking applies to a question to the owner (a DM or an @mention)"})
             return out
 
-    @mcp.tool(description="Read a channel (name, '#name' or id; or a member's name for your DM with them), "
-                          "oldest first. since_id: only newer messages. Messages from agents and outside are "
-                          "wrapped as untrusted data.")
-    def chat_read(ctx: Context, channel: str, since_id: int | None = None, limit: int = 50) -> dict:
-        with session(ctx, "chat_read", channel=channel, since_id=since_id) as (conn, c):
+    @mcp.tool(description="Read chat, cheaply: a channel you are in (name, '#name' or id; or a member's name for "
+                          "your DM with them), newest `limit` messages (default 15, at most 50), oldest first. "
+                          "thread: a message id, only that thread. since_id: only newer messages. Long bodies are "
+                          "clipped unless full=true. A chat task already carries its context: read only when "
+                          "you need more. Messages from agents and outside are wrapped as untrusted data.")
+    def chat_read(ctx: Context, channel: str, since_id: int | None = None, limit: int = 15,
+                  thread: int | None = None, full: bool = False) -> dict:
+        with session(ctx, "chat_read", channel=channel, since_id=since_id, thread=thread,
+                     limit=limit) as (conn, c):
             def go(chat):
                 try:
                     ch = chat.resolve_channel(conn, channel)
@@ -666,8 +675,53 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                     ch = chat.find_dm(conn, c.actor_id, chat.resolve_actor(conn, channel)["id"])
                     if ch is None:
                         return {"channel_id": None, "messages": [], "has_more": False}
-                return chat.messages(conn, c.actor_id, ch["id"], after=since_id, limit=limit)
+                me = actors.get(conn, c.actor_id)
+                if me["kind"] != "human" and not me["is_owner"] and not chat._is_member(conn, ch["id"], c.actor_id):
+                    raise Forbidden(f"you are not in #{ch['name'] or ch['id']}: agents read the channels they "
+                                    f"belong to (and their DMs); ask a member to invite you")
+                out = chat.messages(conn, c.actor_id, ch["id"], after=since_id, limit=max(1, min(limit, 50)),
+                                    thread=thread, clip=None if full else 600)
+                if out["messages"] and chat._is_member(conn, ch["id"], c.actor_id):
+                    chat.mark_read(conn, c, ch["id"], out["messages"][-1]["id"])
+                return out
             return chat_call(go)
+
+    def meeting_call(fn):
+        from . import meetings
+
+        try:
+            return fn(meetings)
+        except meetings.MeetingError as e:
+            raise tasks.Invalid(str(e)) from e
+
+    @mcp.tool(description="Start a meeting in a group channel: a thread with the agenda where the participants "
+                          "(agent names) speak one at a time, in rounds (1: a position with evidence; 2+: "
+                          "responses to the others), then the facilitator (default: the channel's lead) decides "
+                          "with meeting_decide. The platform gives each participant the floor with a task; do not "
+                          "ping them yourself. Bounded: per-turn length, a budget, a time limit.")
+    def meeting_start(ctx: Context, channel: str, topic: str, agenda: str | list[str] = "",
+                      participants: list[str] | None = None, rounds: int = 2,
+                      facilitator: str | None = None) -> dict:
+        with session(ctx, "meeting_start", channel=channel, topic=topic, participants=participants, rounds=rounds,
+                     facilitator=facilitator) as (conn, c):
+            return chat_call(lambda chat: meeting_call(lambda m: m.start(
+                conn, c, channel, topic, agenda, participants or [], rounds, facilitator)))
+
+    @mcp.tool(description="The facilitator's decision that closes a meeting: decision (what we do), why, not_doing "
+                          "(what we do not do), tasks (new ones: [{title, assignee, definition_of_done, notes}], "
+                          "assignees among the participants) and task_refs (existing tasks you updated). Posts it "
+                          "in the meeting thread, creates the tasks in the channel's project and logs the decision "
+                          "in the project's decision log.")
+    def meeting_decide(ctx: Context, meeting_id: int, decision: str, why: str = "", not_doing: str = "",
+                       tasks: list[dict] | None = None, task_refs: list[str] | None = None) -> dict:
+        with session(ctx, "meeting_decide", meeting_id=meeting_id) as (conn, c):
+            return chat_call(lambda chat: meeting_call(lambda m: m.decide(
+                conn, c, meeting_id, decision, why, not_doing, tasks, task_refs)))
+
+    @mcp.tool(description="A meeting's state: who speaks now, the turns so far, the decision.")
+    def meeting_info(ctx: Context, meeting_id: int) -> dict:
+        with session(ctx, "meeting_info", meeting_id=meeting_id) as (conn, c):
+            return meeting_call(lambda m: m.view(conn, meeting_id))
 
     @mcp.tool(description="React to a message with an emoji (again to take it back).")
     def chat_react(ctx: Context, message_id: int, emoji: str) -> dict:
@@ -834,16 +888,19 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "(Europe/Prague; agents at most every 15 min, max 5 active). visibility 'personal' "
                           "(for yourself, the default) or 'team' (shared; may be assigned to another member "
                           "if you have tasks:write). Outbound in the task follows Ú1 each time (money, commitments, personal channels ask). "
-                          "Give notes (what each firing is for and what done looks like) and definition_of_done.")
+                          "Give notes (what each firing is for and what done looks like) and definition_of_done. "
+                          "kind='meeting' starts a meeting on this cadence instead of a task: meeting={channel, "
+                          "topic, agenda, participants, rounds, facilitator} (as for meeting_start).")
     def schedule_create(ctx: Context, name: str, schedule: str, title: str | None = None, notes: str | None = None,
                         definition_of_done: str | None = None, priority: int | None = None,
                         topic: str | None = None, estimate_min: int | None = None, assignee: str | None = None,
-                        visibility: str = "personal") -> dict:
+                        visibility: str = "personal", kind: str | None = None,
+                        meeting: dict | None = None) -> dict:
         from . import schedules
 
         args = dict(name=name, schedule=schedule, title=title, notes=notes, definition_of_done=definition_of_done,
                     priority=priority, topic=topic, estimate_min=estimate_min, assignee=assignee,
-                    visibility=visibility)
+                    visibility=visibility, kind=kind, meeting=meeting)
         with session(ctx, "schedule_create", **args) as (conn, c):
             return schedules.create(conn, c, args)
 

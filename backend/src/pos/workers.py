@@ -319,7 +319,8 @@ def _incident(conn: sqlite3.Connection, *, iid: str, kind: str, key: str, title:
 
 
 def _owner_messages(conn: sqlite3.Connection, since: str, until: str) -> list[tuple[sqlite3.Row, int]]:
-    """(message, agent) for the owner's plain messages to agents: DMs and @mentions. What the
+    """(message, agent) for the owner's plain messages to agents: DMs, @mentions and unaddressed
+    group messages routed to a lead; acknowledgements and meeting posts wait for no answer. What the
     platform sends by itself under the owner's name (a system message: reminders, notices) is not
     his message and waits for no answer (T-194/T-195: review reminders counted as unanswered)."""
     import json
@@ -332,13 +333,18 @@ def _owner_messages(conn: sqlite3.Connection, since: str, until: str) -> list[tu
                  AND m.priority IS NULL AND NOT EXISTS (
                    SELECT 1 FROM audit_log l WHERE l.action = 'chat_send' AND l.entity = 'chat_message'
                    AND l.entity_id = m.id AND (l.via IN ('system', 'scheduler', 'personalos-watch')
-                                               OR json_extract(l.detail, '$.system') = 1))
+                                               OR json_extract(l.detail, '$.system') = 1
+                                               OR json_extract(l.detail, '$.ack') = 1
+                                               OR json_extract(l.detail, '$.meeting') IS NOT NULL))
                ORDER BY m.id""", (owner, since, until)).fetchall():
         if m["ch_kind"] == "dm":
             targets = [r[0] for r in conn.execute(
                 "SELECT actor_id FROM channel_members WHERE channel_id = ? AND actor_id != ?", (m["channel_id"], owner))]
-        else:
+        else:  # the members he mentioned, or the one his unaddressed message was routed to (pos.chat)
             targets = json.loads(m["mentions"] or "[]")
+            routed = conn.execute("""SELECT json_extract(detail, '$.routed') FROM audit_log WHERE action = 'chat_send'
+                                     AND entity = 'chat_message' AND entity_id = ?""", (m["id"],)).fetchone()
+            targets += [a for a in json.loads(routed[0] or "[]") if a not in targets] if routed and routed[0] else []
         for aid in targets:
             row = conn.execute("SELECT kind, archived_at, runtime FROM actors WHERE id = ?", (aid,)).fetchone()
             # services (the Deployer, knowlage, Nexus) never answer: the chat's code reply covers them

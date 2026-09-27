@@ -10,7 +10,7 @@ part (the task, feedback, messages) changes every run and comes after it.
 from .tools import pos_tools, prompt_section, skills_text
 
 
-CHAT_REASONS = ("dm", "mention", "reply")
+CHAT_REASONS = ("dm", "mention", "reply", "routed")
 
 
 def _is_chat(m: dict) -> bool:
@@ -183,7 +183,8 @@ MID_TASK_CHAT = (
     "otherwise): answer a question from what you know right now, or acknowledge an instruction and say how "
     "it changes your plan. Then adapt: if it changes the task, report_progress with the new plan and "
     "continue with it. Do not abandon the task unless they tell you to. A question only: answer it and "
-    "carry on unchanged.")
+    "carry on unchanged. One short reply (a few sentences), never a series; do not answer thanks or an "
+    "acknowledgement (react with chat_react if at all).")
 
 
 def injection(msgs: list[dict], before_finishing: bool = False) -> str:

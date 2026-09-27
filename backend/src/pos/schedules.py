@@ -31,7 +31,10 @@ from .scheduler import next_run
 ENTITY = "schedule"
 versioning.register(ENTITY, "schedules")
 VISIBILITIES = ("personal", "team")
-TEMPLATE_FIELDS = ("title", "notes", "definition_of_done", "priority", "topic", "estimate_min")
+TEMPLATE_FIELDS = ("title", "notes", "definition_of_done", "priority", "topic", "estimate_min", "kind", "meeting")
+KINDS = ("task", "meeting")  # a meeting schedule starts a meeting (pos.meetings) instead of making a task
+MEETING_KEYS = ("channel", "topic", "agenda", "participants", "rounds", "facilitator", "budget_usd",
+                "max_minutes", "turn_minutes")
 OPEN = ("inbox", "next", "working", "waiting", "review")
 DEFER_MINUTES = 15
 
@@ -108,6 +111,16 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
                             "or 'weekly fri 15:00' (Europe/Prague)") from e
     template = {k: fields[k] for k in TEMPLATE_FIELDS if fields.get(k) not in (None, "")}
     template.setdefault("title", name)
+    if template.get("kind", "task") not in KINDS:
+        raise tasks.Invalid(f"kind is one of {KINDS}")
+    if template.get("kind") == "meeting":
+        template["meeting"] = _meeting_spec(conn, template.get("meeting"), name)
+        if fields.get("assignee") in (None, ""):  # the facilitator owns the routine
+            fac = template["meeting"].get("facilitator")
+            if fac:
+                fields["assignee"] = {"type": "agent", "id": _facilitator_id(conn, fac)}
+                if fields.get("visibility") in (None, "", "personal") and fields["assignee"]["id"] != ctx.actor_id:
+                    fields["visibility"] = "team"
     visibility = fields.get("visibility") or "personal"
     if visibility not in VISIBILITIES:
         raise tasks.Invalid(f"visibility must be one of {VISIBILITIES}")
@@ -142,6 +155,38 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     return get(conn, row["id"])
 
 
+def _facilitator_id(conn: sqlite3.Connection, ref) -> int:
+    from . import chat
+
+    return chat.resolve_actor(conn, ref)["id"]
+
+
+def _meeting_spec(conn: sqlite3.Connection, spec, name: str) -> dict:
+    """A meeting schedule's template: channel, topic, agenda, participants, rounds, facilitator."""
+    from . import chat
+
+    if isinstance(spec, str):
+        try:
+            spec = json.loads(spec)
+        except ValueError as e:
+            raise tasks.Invalid("meeting is an object: {channel, topic, agenda, participants, rounds, "
+                                "facilitator}") from e
+    if not isinstance(spec, dict):
+        raise tasks.Invalid("a meeting schedule needs meeting={channel, topic, agenda, participants, rounds, "
+                            "facilitator}")
+    spec = {k: spec[k] for k in MEETING_KEYS if spec.get(k) not in (None, "", [])}
+    spec.setdefault("topic", name)
+    if not spec.get("channel") or not spec.get("participants"):
+        raise tasks.Invalid("a meeting schedule needs a channel and participants")
+    try:
+        chat.resolve_channel(conn, spec["channel"])
+        for p in spec["participants"]:
+            chat.resolve_actor(conn, p)
+    except (NotFound, chat.ChatError) as e:
+        raise tasks.Invalid(str(e)) from e
+    return spec
+
+
 def update(conn: sqlite3.Connection, ctx: Ctx, schedule_id: int, changes: dict) -> dict:
     s = get(conn, schedule_id)
     _may_manage(conn, ctx, s)
@@ -170,6 +215,8 @@ def update(conn: sqlite3.Connection, ctx: Ctx, schedule_id: int, changes: dict) 
         sets["schedule"] = changes["schedule"]
         sets["next_run_at"] = nxt.isoformat(timespec="seconds")
     template = dict(s["template"])
+    if changes.get("meeting") not in (None, ""):
+        changes = {**changes, "meeting": _meeting_spec(conn, changes["meeting"], s["name"])}
     for k in TEMPLATE_FIELDS:
         if k in changes:
             template[k] = changes[k]
@@ -210,6 +257,8 @@ def fire(conn: sqlite3.Connection, schedule_id: int, *, manual_by: Ctx | None = 
         result = {"skipped": f"{assignee['name']} is archived"}
     elif prev and prev["status"] in OPEN:
         result = {"skipped": f"{tasks.display_id(s['last_task_id'])} from the last firing is still open"}
+    elif s["template"].get("kind") == "meeting":
+        result = _fire_meeting(conn, s, creator)
     else:
         try:
             _check_assign(conn, creator["id"], assignee["id"])
@@ -242,6 +291,26 @@ def fire(conn: sqlite3.Connection, schedule_id: int, *, manual_by: Ctx | None = 
               manual=manual_by is not None, **result)
     conn.commit()
     return {**result, "next_run_at": nxt}
+
+
+def _fire_meeting(conn: sqlite3.Connection, s: dict, creator: sqlite3.Row) -> dict:
+    """A meeting schedule fires: the meeting starts, unless the last one still runs."""
+    from . import meetings
+
+    meetings.ensure_schema(conn)
+    running = conn.execute("SELECT id FROM meetings WHERE schedule_id = ? AND status = 'running'",
+                           (s["id"],)).fetchone()
+    if running:
+        return {"skipped": f"meeting {running['id']} from the last firing still runs"}
+    spec = dict(s["template"].get("meeting") or {})
+    try:
+        m = meetings.start(conn, Ctx(creator["id"], via="schedule"), spec.pop("channel"), spec.pop("topic", s["name"]),
+                           spec.pop("agenda", ""), spec.pop("participants", []), spec.pop("rounds", 2),
+                           spec.pop("facilitator", None), schedule_id=s["id"], **spec)
+    except Exception as e:  # noqa: BLE001 - the reason goes into last_result
+        conn.rollback()
+        return {"skipped": f"meeting not started: {e}"[:300]}
+    return {"meeting": m["id"]}
 
 
 OVERDUE_S = 3600  # a routine this late means its loop is not running: an incident for the SRE

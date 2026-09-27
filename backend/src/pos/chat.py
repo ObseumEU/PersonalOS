@@ -42,6 +42,68 @@ class ChatError(AgentError):
     pass
 
 
+# Chat hygiene (the chat audit, prod 2026-09-27: 29 of 155 agent-to-agent DMs were "díky, beru na
+# vědomí", 13 of them stopped a running session to be answered; 7 exact duplicates; 24 agent
+# messages over 800 characters; an owner message in #kniha without a mention reached nobody).
+AGENT_SOFT_BODY = 1200   # longer: the author gets a note to put details into a task or a note
+DUP_WINDOW_S = 120       # the same body from the same author in the same place: one message
+UNROUTED = ("system", "weekly")  # channels whose unaddressed messages have their own handling
+
+
+def agent_max_body() -> int:
+    """An agent's chat message is a short answer; long content goes into a task or a note."""
+    try:
+        return max(500, int(os.environ.get("POS_CHAT_AGENT_MAX", "3000")))
+    except ValueError:
+        return 3000
+
+
+def loop_limit() -> tuple[int, int]:
+    """(messages, window s) two agents may exchange in a DM before it counts as a loop;
+    POS_CHAT_LOOP='8/1800'."""
+    raw = os.environ.get("POS_CHAT_LOOP", "8/1800")
+    try:
+        n, s = raw.split("/")
+        return max(2, int(n)), max(60, int(s))
+    except ValueError:
+        return 8, 1800
+
+
+_ACK_WORDS = set("""
+díky dík diky dik děkuji dekuji děkuju dekuju moc mockrát mockrat thanks thank thx ty you ok okay oki okej
+jasně jasne jasny jasný rozumím rozumim rozumím. beru na vědomí vedomi vědomí super fajn skvělé skvele skvělý
+výborně vyborne paráda parada v pořádku poradku za info informaci informace předání predani to taky i great noted
+got it perfect cool sounds good dobře dobre dobrý dobry good k ke all noted 👍 ✅ 🙏 👌 🙂 😊 👏 ❤️
+""".split())
+_WORD = re.compile(r"[^\W\d_][\w'’-]*", re.UNICODE)
+
+
+def is_ack(body: str) -> bool:
+    """A bare acknowledgement ("díky", "ok, beru na vědomí", "👍"): nothing to answer or act on.
+    A question mark, a number or any other word makes it a real message."""
+    text = _TASK_REF.sub(" ", (body or "").strip()).lower()
+    if not text or "?" in text or len(text) > 120 or any(ch.isdigit() for ch in text):
+        return False
+    words = _WORD.findall(text)
+    if not words:  # emoji and punctuation only
+        return not any(ch.isalnum() for ch in text)
+    return all(w in _ACK_WORDS for w in words)
+
+
+def _asked_before(conn: sqlite3.Connection, channel_id: int, reply_to: int | None, author_id: int) -> bool:
+    """The other side's last message here (the DM, or the thread) asked something: an "ok" to it
+    is an answer, not an acknowledgement."""
+    if reply_to:
+        root = _thread_of(conn, reply_to)
+        row = conn.execute("""SELECT body FROM chat_messages WHERE channel_id = ? AND (id = ? OR reply_to = ?)
+                              AND author_id != ? AND archived_at IS NULL ORDER BY id DESC LIMIT 1""",
+                           (channel_id, root, root, author_id)).fetchone()
+    else:
+        row = conn.execute("""SELECT body FROM chat_messages WHERE channel_id = ? AND author_id != ?
+                              AND archived_at IS NULL ORDER BY id DESC LIMIT 1""", (channel_id, author_id)).fetchone()
+    return bool(row and "?" in row["body"])
+
+
 def rate_limit() -> tuple[int, int]:
     """(max messages, window in seconds) per agent; POS_CHAT_RATE_LIMIT='20/600'."""
     raw = os.environ.get("POS_CHAT_RATE_LIMIT", "20/600")
@@ -96,7 +158,19 @@ def _add_member(conn: sqlite3.Connection, channel_id: int, actor_id: int, role: 
 def may_answer(conn: sqlite3.Connection, actor_id: int, channel_id: int | None = None) -> bool:
     """Someone waits for this agent's answer: it has an open "Chat: answer" task
     (for this channel, when given). Answering them needs no messages:send: every
-    agent answers the person who wrote to it (pos.workers)."""
+    agent answers the person who wrote to it (pos.workers). A meeting participant whose turn it
+    is may speak in that meeting (pos.meetings)."""
+    from . import meetings
+
+    if channel_id is None:
+        try:
+            if conn.execute("SELECT 1 FROM meeting_turns WHERE actor_id = ? AND status = 'open'",
+                            (actor_id,)).fetchone():
+                return True
+        except sqlite3.OperationalError:
+            pass
+    elif meetings.may_post(conn, actor_id, channel_id):
+        return True
     for t in conn.execute("""SELECT id FROM tasks WHERE assignee_id = ? AND topic = 'chat' AND archived_at IS NULL
                              AND status IN ('inbox', 'next', 'working')""", (actor_id,)).fetchall():
         if channel_id is None:
@@ -218,8 +292,21 @@ def archive_channel(conn: sqlite3.Connection, ctx: Ctx, channel_id: int) -> dict
     return channel_view(conn, channel_id, ctx.actor_id)
 
 
+def _project_team_agents(conn: sqlite3.Connection) -> set[int]:
+    """Agents of a project team (actors.team is the slug of a project with its own channel, e.g.
+    the Kniha team): they talk in their project channel and DMs, not in #team."""
+    try:
+        rows = conn.execute("""SELECT a.id FROM actors a JOIN projects p ON lower(p.slug) = lower(a.team)
+                               WHERE a.kind != 'human' AND p.channel_id IS NOT NULL
+                               AND COALESCE(p.status, 'active') NOT IN ('done', 'archived')""").fetchall()
+    except sqlite3.OperationalError:  # no projects table (an old database)
+        return set()
+    return {r["id"] for r in rows}
+
+
 def ensure_team_channel(conn: sqlite3.Connection) -> int:
-    """#team with the owner and every active agent; safe to call at every start."""
+    """#team with the owner and every active agent except project teams (they have their own
+    channel, _project_team_agents); safe to call at every start."""
     owner = actors.owner_id(conn)
     row = conn.execute("SELECT id FROM channels WHERE kind = 'group' AND name = ? AND archived_at IS NULL",
                        (TEAM,)).fetchone()
@@ -231,8 +318,14 @@ def ensure_team_channel(conn: sqlite3.Connection) -> int:
         _add_member(conn, cid, owner, "owner")
     else:
         cid = row["id"]
+    scoped = _project_team_agents(conn)
     for a in conn.execute("SELECT id FROM actors WHERE archived_at IS NULL AND (kind != 'human' OR is_owner = 1)"):
-        _add_member(conn, cid, a["id"])
+        if a["id"] not in scoped:
+            _add_member(conn, cid, a["id"])
+    for aid in scoped:
+        if conn.execute("DELETE FROM channel_members WHERE channel_id = ? AND actor_id = ?", (cid, aid)).rowcount:
+            audit.log(conn, Ctx(owner, via="system"), "chat_leave", "channel", cid, member=aid,
+                      reason="project team: its own channel")
     conn.commit()
     return cid
 
@@ -302,8 +395,51 @@ def post_system(conn: sqlite3.Connection, author_id: int, body: str, subject: st
 
 # ------------------------------------------------------------------ messages
 
-def _mentions(conn: sqlite3.Connection, body: str, extra: list[int | str] | None) -> list[int]:
-    """@Name anywhere in the body (names may contain spaces; longest wins)."""
+_AT_TOKEN = re.compile(r"(?<![\w@])@([^\W_][\w-]*)", re.UNICODE)
+_TEAM_TOKEN = re.compile(r"(?:t[ýy]m|team)-(.+)")
+
+
+def _agents_sql() -> str:
+    return ("SELECT id, role, reports_to FROM actors WHERE archived_at IS NULL AND kind != 'human' "
+            "AND runtime != 'service'")
+
+
+def _team_members(conn: sqlite3.Connection, slug: str) -> list[int]:
+    """@tým-kniha: the agents of that project channel (by channel name or project slug)."""
+    ch = conn.execute("SELECT id FROM channels WHERE kind = 'group' AND name = ? COLLATE NOCASE "
+                      "AND archived_at IS NULL", (slug,)).fetchone()
+    if ch is None:
+        try:
+            ch = conn.execute("SELECT channel_id AS id FROM projects WHERE slug = ? COLLATE NOCASE "
+                              "AND channel_id IS NOT NULL", (slug,)).fetchone()
+        except sqlite3.OperationalError:
+            ch = None
+    if ch is None:
+        return []
+    return [r["id"] for r in conn.execute(
+        f"{_agents_sql()} AND id IN (SELECT actor_id FROM channel_members WHERE channel_id = ?) ORDER BY id",
+        (ch["id"],))]
+
+
+def role_member(conn: sqlite3.Connection, role: str, channel_id: int | None = None) -> int | None:
+    """@CTO, @HR, @SRE: the active agent with that role (its role key, '_' or '-' alike). Several
+    with one role: the channel's own first, then the one highest in the chain."""
+    key = role.strip().lower().replace("-", "_")
+    rows = [r for r in conn.execute(_agents_sql() + " ORDER BY id") if (r["role"] or "").lower() == key]
+    if not rows:
+        return None
+    if channel_id is not None and len(rows) > 1:
+        inside = set(member_ids(conn, channel_id))
+        rows = [r for r in rows if r["id"] in inside] or rows
+    ids = {r["id"] for r in rows}
+    top = [r for r in rows if r["reports_to"] not in ids]
+    return (top or rows)[0]["id"]
+
+
+def _mentions(conn: sqlite3.Connection, body: str, extra: list[int | str] | None,
+              channel_id: int | None = None) -> list[int]:
+    """@Name anywhere in the body (names may contain spaces; longest wins), then @role
+    (@CTO, @HR: role_member) and @tým-<channel> (every agent of that project channel)."""
     found: list[int] = []
     lowered = body.lower()
     rows = conn.execute("SELECT id, name FROM actors WHERE archived_at IS NULL").fetchall()
@@ -316,6 +452,12 @@ def _mentions(conn: sqlite3.Connection, body: str, extra: list[int | str] | None
                 # Blank the match so "@HR agent" does not also count as "@HR".
                 lowered = lowered[:m.start()] + " " * (end - m.start()) + lowered[end:]
                 break
+    for m in _AT_TOKEN.finditer(lowered):
+        tok = m.group(1).rstrip("-")
+        team = _TEAM_TOKEN.fullmatch(tok)
+        hits = _team_members(conn, team.group(1)) if team else [
+            x for x in [role_member(conn, tok, channel_id)] if x is not None]
+        found += [h for h in hits if h not in found]
     for ref in extra or []:
         aid = resolve_actor(conn, ref)["id"]
         if aid not in found:
@@ -349,11 +491,121 @@ def _check_budget(conn: sqlite3.Connection, author_id: int) -> None:
         raise ChatError(f"budget: {d.reason}")
 
 
+def _duplicate(conn: sqlite3.Connection, author_id: int, channel_id: int, body: str,
+               reply_to: int | None) -> int | None:
+    """The same message from the same author in the same place a moment ago (a double submit,
+    a retried tool call): that message's id."""
+    since = (datetime.now(timezone.utc) - timedelta(seconds=DUP_WINDOW_S)).isoformat(timespec="seconds")
+    row = conn.execute("""SELECT id FROM chat_messages WHERE channel_id = ? AND author_id = ? AND body = ?
+                          AND COALESCE(reply_to, 0) = ? AND archived_at IS NULL AND created_at >= ?
+                          ORDER BY id DESC LIMIT 1""",
+                       (channel_id, author_id, body, reply_to or 0, since)).fetchone()
+    return row["id"] if row else None
+
+
+def channel_lead(conn: sqlite3.Connection, ch: sqlite3.Row) -> int | None:
+    """Who answers an unaddressed question in a group channel: the project's lead when an agent
+    leads it, else the top agent of the channel's own team (actors.team = the channel name, e.g.
+    the Kniha Lead in #kniha), else the CEO (the chain of command)."""
+    name = (ch["name"] or "").lower()
+    try:
+        p = conn.execute("SELECT lead_id FROM projects WHERE channel_id = ? OR lower(slug) = ?",
+                         (ch["id"], name)).fetchone()
+    except sqlite3.OperationalError:
+        p = None
+    if p and p["lead_id"]:
+        lead = actors.get(conn, p["lead_id"])
+        if lead["kind"] != "human" and not lead["archived_at"]:
+            return lead["id"]
+    team = conn.execute(_agents_sql() + " AND lower(COALESCE(team, '')) = ? ORDER BY id", (name,)).fetchall()
+    ids = {r["id"] for r in team}
+    top = [r["id"] for r in team if r["reports_to"] not in ids]
+    if top:
+        return top[0]
+    return role_member(conn, "ceo")
+
+
+def _route_unaddressed(conn: sqlite3.Connection, ch: sqlite3.Row,
+                       parent: sqlite3.Row | None) -> tuple[int, str] | None:
+    """An owner's message in a group that names nobody still reaches someone: a reply in a thread
+    goes to the agent he answers (or the last agent in that thread), anything else to the
+    channel's lead (channel_lead; in #team the CEO)."""
+    if parent is not None:
+        root = parent["reply_to"] or parent["id"]
+        author = actors.get(conn, parent["author_id"])
+        if author["kind"] != "human" and not author["archived_at"] and author["runtime"] != "service":
+            return author["id"], "reply"
+        row = conn.execute("""SELECT m.author_id FROM chat_messages m JOIN actors a ON a.id = m.author_id
+                              WHERE m.channel_id = ? AND (m.id = ? OR m.reply_to = ?) AND a.kind != 'human'
+                              AND a.runtime != 'service' AND a.archived_at IS NULL AND m.archived_at IS NULL
+                              ORDER BY m.id DESC LIMIT 1""", (ch["id"], root, root)).fetchone()
+        if row:
+            return row["author_id"], "reply"
+    lead = channel_lead(conn, ch)
+    return (lead, "mention") if lead else None  # an addressed message in the inbox (reason CHECK)
+
+
+def _loop(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, others: list[int],
+          parent: sqlite3.Row | None = None) -> int | None:
+    """Two agents ping-ponging in their DM (loop_limit messages in its window, both writing):
+    the other agent's id. The message is kept but wakes nobody, and their lead gets one task to
+    sort it out (per window)."""
+    n, window = loop_limit()
+    since = (datetime.now(timezone.utc) - timedelta(seconds=window)).isoformat(timespec="seconds")
+    if ch["kind"] == "dm":
+        if len(others) != 1:
+            return None
+        rows = conn.execute("SELECT author_id FROM chat_messages WHERE channel_id = ? AND created_at >= ? "
+                            "AND archived_at IS NULL", (ch["id"], since)).fetchall()
+    elif parent is not None:  # two agents answering each other in a group thread
+        root = parent["reply_to"] or parent["id"]
+        rows = conn.execute("""SELECT author_id FROM chat_messages WHERE channel_id = ? AND (id = ? OR reply_to = ?)
+                               AND created_at >= ? AND archived_at IS NULL""", (ch["id"], root, root, since)).fetchall()
+    else:
+        return None
+    authors = {r["author_id"] for r in rows} | {ctx.actor_id}
+    if len(rows) + 1 < n or len(authors) != 2:
+        return None
+    other = actors.get(conn, next(a for a in authors if a != ctx.actor_id))
+    if other["kind"] == "human":
+        return None
+    if not conn.execute("""SELECT 1 FROM audit_log WHERE action = 'chat_loop' AND entity = 'channel'
+                           AND entity_id = ? AND at >= ?""", (ch["id"], since)).fetchone():
+        _escalate_loop(conn, ctx, ch, other, len(rows), window)
+    return other["id"]
+
+
+def _escalate_loop(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, other: sqlite3.Row, n: int,
+                   window: int) -> None:
+    from . import tasks
+
+    me = actors.get(conn, ctx.actor_id)
+    lead_id = me["reports_to"] or other["reports_to"] or role_member(conn, "ceo")
+    audit.log(conn, ctx, "chat_loop", "channel", ch["id"], between=[me["id"], other["id"]], messages=n,
+              lead=lead_id)
+    if not lead_id or lead_id in (me["id"], other["id"]):
+        return
+    lead = actors.get(conn, lead_id)
+    tasks.create(conn, Ctx(lead_id, via="system"), {
+        "title": f"Chat loop: {me['name']} ↔ {other['name']}",
+        "assignee": {"type": "human" if lead["kind"] == "human" else "agent", "id": lead_id},
+        "status": "next", "priority": 2, "topic": "chat-loop", "reviewer": lead_id,
+        "notes": (f"Purpose: {me['name']} and {other['name']} exchanged {n} DMs in {window // 60} min "
+                  f"(chat channel {ch['id']}). The platform stopped waking them for each other's messages "
+                  f"until it calms down.\nSource: loop detection in team chat.\n\nLook at their DM (the chat "
+                  f"page, or chat_read), decide what each of them should do and tell them in one message "
+                  f"each."),
+        "definition_of_done": "Both agents know what to do; the DM is quiet.",
+    })
+
+
 def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, reply_to: int | None = None,
          priority: str | None = None, mentions: list[int | str] | None = None,
          attachments: list[dict] | None = None, system: bool = False) -> dict:
     """Post a message. Returns it (as the author sees it) plus `delivered_to_run`
     (the DM recipient's running run, if any) and `inbox` (who got it)."""
+    from . import meetings
+
     body = (body or "").strip()
     if not body:
         raise ChatError("empty message")
@@ -374,6 +626,14 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     ch = _channel(conn, channel_id)
     if ch["archived_at"]:
         raise ChatError("this channel is archived")
+    agent_author = author["kind"] != "human" and not system
+    if agent_author and len(body) > agent_max_body():
+        raise ChatError(f"a chat message from an agent is at most {agent_max_body()} characters: answer in a "
+                        f"few sentences and put the details into a task (a comment or its notes) or a note, "
+                        f"then link it (T-123)")
+    meeting = meetings.for_thread(conn, channel_id, reply_to)
+    if meeting is not None and not system:
+        meetings.check_turn_message(conn, meeting, ctx.actor_id, body)  # agents speak on their turn only
     if not system:
         _require_send(conn, ctx, channel_id)
         if author["kind"] != "human":
@@ -389,9 +649,14 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         parent = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (reply_to,)).fetchone()
         if parent is None or parent["channel_id"] != channel_id:
             raise ChatError(f"message {reply_to} is not in this channel")
+    if not system:
+        dup = _duplicate(conn, ctx.actor_id, channel_id, body, reply_to)
+        if dup is not None:  # a double submit or a retried call: the message is there already
+            return {**message_view(conn, dup, ctx.actor_id), "duplicate": True, "delivered_to_run": None,
+                    "inbox": []}
 
     members = set(member_ids(conn, channel_id))
-    mentioned = [m for m in _mentions(conn, body, mentions) if m != ctx.actor_id]
+    mentioned = [m for m in _mentions(conn, body, mentions, channel_id) if m != ctx.actor_id]
     if ch["kind"] == "dm":
         mentioned = [m for m in mentioned if m in members]
     else:
@@ -410,6 +675,20 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         if refused:
             names = ", ".join(actors.get(conn, m)["name"] for m in refused)
             raise Forbidden(f"only people and their leads send stop; you do not lead {names}")
+
+    # An acknowledgement ("díky", "ok", "👍") that answers no question wakes nobody, asks for no answer.
+    ack = (not system and priority is None and is_ack(body)
+           and not _asked_before(conn, channel_id, reply_to, ctx.actor_id))
+    looping = _loop(conn, ctx, ch, others, parent) if agent_author and meeting is None else None
+    # The owner's message in a group that names nobody still reaches someone (_route_unaddressed).
+    routed: dict[int, str] = {}
+    if (not system and author["is_owner"] and ch["kind"] == "group" and not mentioned and priority is None
+            and not ack and meeting is None and (ch["name"] or "").lower() not in UNROUTED):
+        hit = _route_unaddressed(conn, ch, parent)
+        if hit and hit[0] != ctx.actor_id:
+            routed[hit[0]] = hit[1]
+            if hit[0] not in members and _add_member(conn, channel_id, hit[0]):
+                members.add(hit[0])
 
     refs = [{"type": "task", "id": int(n)} for n in dict.fromkeys(_TASK_REF.findall(body))]
     atts = list(attachments or [])
@@ -431,18 +710,27 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         if parent and parent["author_id"] != ctx.actor_id and parent["author_id"] in members:
             inbox[parent["author_id"]] = "reply"
         inbox.update({m: "mention" for m in mentioned})
+        for m, why in routed.items():
+            inbox.setdefault(m, why)
     targets = others if ch["kind"] == "dm" else mentioned
+    # Kept in the chat and the inbox, read already: nobody is woken. A meeting thread wakes nobody either:
+    # the platform gives the next speaker the floor (pos.meetings) and later turns read the thread.
+    quiet = ack or looping is not None or meeting is not None
     runs = {}
+    now = now_iso()
     for aid, reason in inbox.items():
         run = conn.execute("SELECT id FROM runs WHERE actor_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
                            (aid,)).fetchone()
         runs[aid] = run["id"] if run else None
-        conn.execute("INSERT INTO chat_inbox (message_id, actor_id, reason, run_id) VALUES (?, ?, ?, ?)",
-                     (mid, aid, reason, runs[aid]))
+        conn.execute("INSERT INTO chat_inbox (message_id, actor_id, reason, run_id, read_at) VALUES (?, ?, ?, ?, ?)",
+                     (mid, aid, reason, runs[aid], now if quiet else None))
     conn.execute("UPDATE channel_members SET last_read_message_id = ? WHERE channel_id = ? AND actor_id = ?",
                  (mid, channel_id, ctx.actor_id))
     audit.log(conn, ctx, "chat_send", "chat_message", mid, channel=channel_id, priority=priority,
-              mentions=mentioned, inbox=sorted(inbox), **({"system": True} if system else {}))
+              mentions=mentioned, inbox=sorted(inbox), **({"system": True} if system else {}),
+              **({"routed": sorted(routed)} if routed else {}), **({"ack": True} if ack else {}),
+              **({"loop": True} if looping is not None else {}),
+              **({"meeting": meeting["id"]} if meeting is not None else {}))
 
     platform_note = None
     if not system and author["kind"] != "human":
@@ -453,8 +741,8 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
             conn, ctx, channel_id, owner in (others if ch["kind"] == "dm" else mentioned))
     if not system and author["is_owner"]:
         _owner_dm_interventions(conn, ctx, ch, targets, atts)
-    if not system and author["kind"] == "human" and priority != "stop":
-        for aid in targets:
+    if not system and author["kind"] == "human" and priority != "stop" and not ack and meeting is None:
+        for aid in [*targets, *[r for r in routed if r not in targets]]:
             _ask_to_answer(conn, ctx, ch, aid, mid, body, priority)
         if ch["kind"] == "group" and (ch["name"] or "").lower() == "weekly":
             from . import weekly
@@ -478,16 +766,30 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     typing_clear(channel_id, ctx.actor_id)  # posted: no longer typing here
     if not system and author["kind"] != "human":
         _close_answered(conn, ctx, channel_id, mid)
+    if meeting is not None:
+        meetings.on_message(conn, meeting, ctx.actor_id, mid, system)  # a turn posted: the next one speaks
     from . import wake
 
-    for aid in inbox:  # a waiting worker reads it now, not at its next poll
-        wake.wake(aid)
+    if not quiet:
+        for aid in inbox:  # a waiting worker reads it now, not at its next poll
+            wake.wake(aid)
     out = message_view(conn, mid, ctx.actor_id)
     dm_target = others[0] if ch["kind"] == "dm" and others else None
-    out["delivered_to_run"] = runs.get(dm_target) if dm_target else None
+    out["delivered_to_run"] = runs.get(dm_target) if dm_target and not quiet else None
     out["inbox"] = sorted(inbox)
-    if platform_note:
-        out["platform_note"] = platform_note
+    notes = [platform_note] if platform_note else []
+    if agent_author and ack:
+        notes.append("An acknowledgement wakes nobody and needs no answer; next time react with chat_react "
+                     "(👍) instead of a message.")
+    if looping is not None:
+        notes.append("You and this agent have been messaging back and forth: your messages no longer wake it "
+                     "and your lead got a task to sort it out. Go on with your task; do not answer each "
+                     "other's acknowledgements.")
+    if agent_author and len(body) > AGENT_SOFT_BODY and meeting is None:
+        notes.append(f"Long message ({len(body)} characters): a chat answer is a few sentences; put details "
+                     f"into a task comment or a note and link it.")
+    if notes:
+        out["platform_note"] = " ".join(notes)
     return out
 
 
@@ -556,12 +858,20 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
         # one from its inbox (_own_question keeps only the first one out).
         availability.autoreply(conn, open_["id"], message_id)
         return
+    context = recent_context(conn, ch, message_id)
     notes = (f"Purpose: {author} wrote to you in chat and waits for an answer.\n"
                  f"Source: chat channel {ch['id']} ({where}), message {message_id}.\n\n{said}\n\n"
-             f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}), in the language they wrote "
-             f"in (Czech unless they wrote otherwise); read the thread with chat_read if you need context. "
-             f"Use your tools (tasks, files, the company knowledge base with the `knowledge` tool when you "
-             f"have it) to answer well; create tasks when asked to, or delegate to the agent whose job it is.")
+             + (f"The conversation just before it (oldest first; enough context, no chat_read needed):\n"
+                f"{context}\n\n" if context else "")
+             + f"Answer once with chat_send(channel={ch['id']}, reply_to={message_id}), in the language they "
+             f"wrote in (Czech unless they wrote otherwise): a few sentences; details go into a task or a "
+             f"note you link (T-123). Use your tools (tasks, files, the company knowledge base with the "
+             f"`knowledge` tool when you have it) to answer well; create tasks when asked to, or delegate to "
+             f"the agent whose job it is.")
+    msg = conn.execute("SELECT mentions, reply_to FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    if ch["kind"] == "group" and msg and msg["reply_to"] is None and aid not in json.loads(msg["mentions"] or "[]"):
+        notes += (f"\n\nThey addressed nobody by name in {where}; the platform gave it to you as the one "
+                  f"responsible there. Answer it, or name in one sentence who takes it (@Name) and hand it on.")
     if author_row["is_owner"] and target["role"] != "ceo":
         notes += ("\n\nChain of command: the owner talks to the CEO. If this is really a company-level request "
                   "(new work across teams, priorities, money, customers, anything beyond your own job), answer "
@@ -579,6 +889,37 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     })
     audit.log(conn, ctx, "chat_task", "task", t["id"], channel=ch["id"], message=message_id)
     availability.autoreply(conn, t["id"], message_id)
+
+
+def recent_context(conn: sqlite3.Connection, ch: sqlite3.Row, message_id: int, limit: int = 6,
+                   clip: int = 300) -> str:
+    """The few messages before this one that it answers (the DM, or its thread), clipped, as one
+    block marked untrusted: a chat task carries its context, so the agent needs no chat_read
+    (prod: every chat_read read a whole channel, ~26k characters)."""
+    from .guard.external import wrap_external
+
+    msg = conn.execute("SELECT reply_to FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
+    if msg is None:
+        return ""
+    if ch["kind"] == "dm":
+        rows = conn.execute("""SELECT m.id, m.body, a.name FROM chat_messages m JOIN actors a ON a.id = m.author_id
+                               WHERE m.channel_id = ? AND m.id < ? AND m.archived_at IS NULL
+                               ORDER BY m.id DESC LIMIT ?""", (ch["id"], message_id, limit)).fetchall()
+    elif msg["reply_to"]:
+        root = _thread_of(conn, msg["reply_to"])
+        rows = conn.execute("""SELECT m.id, m.body, a.name FROM chat_messages m JOIN actors a ON a.id = m.author_id
+                               WHERE m.channel_id = ? AND (m.id = ? OR m.reply_to = ?) AND m.id < ?
+                               AND m.archived_at IS NULL ORDER BY m.id DESC LIMIT ?""",
+                            (ch["id"], root, root, message_id, limit)).fetchall()
+    else:
+        return ""
+    if not rows:
+        return ""
+    lines = []
+    for r in reversed(rows):
+        text = " ".join(r["body"].split())
+        lines.append(f"- {r['name']} (message {r['id']}): {text[:clip]}{'…' if len(text) > clip else ''}")
+    return wrap_external(f"chat:{ch['id']}", "\n".join(lines), ref=f"before message {message_id}")
 
 
 def _task_question(conn: sqlite3.Connection, task_id: int | None) -> int | None:
@@ -821,6 +1162,9 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
         replies = {r[0]: r[1] for r in conn.execute(
             f"SELECT reply_to, COUNT(*) FROM chat_messages WHERE archived_at IS NULL "
             f"AND reply_to IN ({','.join('?' for _ in ids)}) GROUP BY reply_to", ids)}
+    from . import meetings
+
+    marks = meetings.annotations(conn, ids)
     out = []
     for r in rows:
         author = names.get(r["author_id"])
@@ -833,6 +1177,8 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
                             for a in json.loads(r["attachments"] or "[]")]
         d["reactions"] = reacts.get(r["id"], [])
         d["replies"] = replies.get(r["id"], 0)
+        if r["id"] in marks:
+            d["meeting"] = marks[r["id"]]
         body = r["body"] if not r["archived_at"] else ""
         if for_agent and r["author_id"] != viewer and body:
             body, d["trust_seen"] = _wrap_for_agent({**dict(r), "from_name": d["author_name"]}, body)
@@ -848,14 +1194,20 @@ def message_view(conn: sqlite3.Connection, message_id: int, viewer: int) -> dict
 
 
 def messages(conn: sqlite3.Connection, viewer: int, channel_id: int, *, before: int | None = None,
-             after: int | None = None, limit: int = 50, for_agent: bool | None = None) -> dict:
-    """A page of a channel, oldest first. `before` pages back, `after` catches up."""
+             after: int | None = None, limit: int = 50, for_agent: bool | None = None,
+             thread: int | None = None, clip: int | None = None) -> dict:
+    """A page of a channel, oldest first. `before` pages back, `after` catches up, `thread` keeps
+    one thread (its root and replies), `clip` shortens long bodies (an agent's cheap read)."""
     ch = _channel(conn, channel_id)
     _check_read(conn, ch, viewer)
     limit = max(1, min(limit, 200))
     if for_agent is None:
         for_agent = actors.get(conn, viewer)["kind"] != "human"
     where, params = ["channel_id = ?", "archived_at IS NULL"], [channel_id]
+    if thread:
+        root = _thread_of(conn, thread) or thread
+        where.append("(id = ? OR reply_to = ?)")
+        params += [root, root]
     if before:
         where.append("id < ?")
         params.append(before)
@@ -869,6 +1221,9 @@ def messages(conn: sqlite3.Connection, viewer: int, channel_id: int, *, before: 
     rows = rows[:limit]
     if order == "DESC":
         rows = list(reversed(rows))
+    if clip:
+        rows = [{**dict(r), "body": r["body"][:clip] + f"… [clipped: chat_read(thread={r['id']}, full=true)]"}
+                if len(r["body"] or "") > clip else r for r in rows]
     return {"channel_id": channel_id, "messages": _view(conn, rows, viewer, _names(conn), for_agent),
             "has_more": has_more}
 
@@ -1102,7 +1457,7 @@ def typing_on_run_start(conn: sqlite3.Connection, actor_id: int, run_id: int, ta
 def typing_on_delivery(conn: sqlite3.Connection, actor_id: int, run_id: int, items: list[dict]) -> None:
     """A running run gets a DM, mention or thread reply: it will answer, so it types there."""
     for m in items:
-        if m.get("reason") in ("dm", "mention", "reply") and m.get("channel_id"):
+        if m.get("reason") in ("dm", "mention", "reply", "routed") and m.get("channel_id"):
             agent_typing(m["channel_id"], actor_id, run_id, m.get("reply_to"))
 
 

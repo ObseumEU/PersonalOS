@@ -64,6 +64,17 @@ export type ChatMessage = {
   created_at: string;
   edited_at: string | null;
   archived_at: string | null;
+  /** In a meeting thread (pos.meetings): the agenda, a turn (round, kind) or the decision. */
+  meeting?: MeetingMark;
+};
+
+export type MeetingMark = {
+  meeting: number;
+  kind: "agenda" | "position" | "response" | "decision";
+  round?: number;
+  rounds?: number;
+  topic?: string;
+  status?: string;
 };
 
 export type Page = { channel_id: number; messages: ChatMessage[]; has_more: boolean };

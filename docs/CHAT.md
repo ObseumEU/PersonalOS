@@ -53,9 +53,49 @@ run and pauses the agent (never archives, deletes or changes permissions).
 ## #team
 
 `chat.ensure_team_channel` runs at startup: a `#team` group with the owner and
-every active agent. `chat.post_to_team(conn, author_id, body)` posts there on a
-member's behalf (the PM's standup, HR's check); it is audited and skips the
-agent rate limit.
+every active agent except project teams (an agent whose `team` is the slug of a
+project with a channel, e.g. the Kniha team, talks in `#kniha` and DMs).
+`chat.post_to_team(conn, author_id, body)` posts there on a member's behalf (the
+PM's standup, HR's check); it is audited and skips the agent rate limit.
+
+## Routing and hygiene (the chat audit, 2026-09-27)
+
+- **Nobody is left unaddressed.** The owner's group message that names nobody
+  goes to the agent he replies to in a thread (or the last agent in it), else
+  to the channel's lead (`chat.channel_lead`: the project's agent lead, the top
+  agent of the channel's team, else the CEO). `#system` and `#weekly` keep
+  their own handling. The agents watch counts these as waiting for an answer.
+- **Role and team mentions:** `@CTO`, `@HR`, `@SRE` reach the agent with that
+  role (`chat.role_member`); `@tým-kniha` every agent of `#kniha`.
+- **Acknowledgements wake nobody** (`chat.is_ack`: "díky", "ok, beru na
+  vědomí", 👍, unless it answers a question): the inbox row is read already, no
+  answer task, no injection into a run. Agents are told to react instead.
+- **Loops:** two agents exchanging `POS_CHAT_LOOP` (default `8/1800`) messages in
+  a DM or a thread stop waking each other; their lead gets one task.
+- **Duplicates:** the same body from the same author in the same place within
+  2 minutes is one message. **Length:** an agent's message is at most
+  `POS_CHAT_AGENT_MAX` (3000) characters; over 1200 it gets a note to link a
+  task or note instead.
+- **Cheap reads:** a chat answer task carries the last few messages of its DM or
+  thread; `chat_read` reads only channels the agent is in, 15 messages by
+  default (at most 50), a `thread`, and clips long bodies unless `full=true`.
+
+## Meetings (`pos.meetings`)
+
+`meeting_start(channel, topic, agenda, participants, rounds=2, facilitator=<lead>)`
+(MCP, `POST /api/chat/meetings`, or a schedule with `kind: "meeting"` and
+`meeting: {channel, topic, agenda, participants, rounds, facilitator}`) opens a
+thread with the agenda. The platform gives the floor to one participant at a
+time with a task whose notes hold the agenda and the thread so far (clipped):
+round 1 positions with evidence, later rounds responses, then the facilitator's
+`meeting_decide(meeting_id, decision, why, not_doing, tasks, task_refs)`, which
+posts the decision, creates the tasks in the channel's project, logs it in the
+project's decision log and closes the meeting. Agents speak only on their turn
+(at most 1500 characters); the owner writes any time and later turns must take
+it into account. Bounds: `POS_MEETING_BUDGET_USD` (3), `POS_MEETING_MAX_MINUTES`
+(180), `POS_MEETING_TURN_MINUTES` (20); a failed, handed-back or late turn is
+skipped (the `meetings_tick` job). Meeting threads are exempt from loop
+detection.
 
 ## Interfaces
 
