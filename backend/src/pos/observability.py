@@ -176,6 +176,7 @@ def to_event(alert: dict) -> dict:
     incident = {"incident_id": f"grafana-{fp}-{start}", "source": SOURCE, "kind": labels.get("kind") or "alert",
                 "severity": sev, "service": labels.get("service") or labels.get("app") or labels.get("stack")
                 or target or labels.get("host") or "platform", "key": name, "container": labels.get("container"),
+                "stack": labels.get("stack") or labels.get("compose_project"),
                 "host": labels.get("host"), "first_seen": alert.get("startsAt"),
                 "last_seen": alert.get("endsAt") if status == "resolved" else now_iso()}
     return {"source": SOURCE, "kind": "incident" if status == "firing" else "incident_resolved",

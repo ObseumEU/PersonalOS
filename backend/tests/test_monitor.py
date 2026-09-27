@@ -145,19 +145,50 @@ def test_resolved_before_triage_closes_without_a_run(app):
     assert row["classification"] == "transient" and row["status"] == "closed"
 
 
-def test_daily_cap_sends_the_incident_to_the_owner_as_text(app, monkeypatch):
+def _sre(app):
+    return agents.create_agent(app["conn"], app["owner"], name="SRE", purpose="ops", lifetime="long_lived",
+                               permissions=["tasks:read", "tasks:claim", "tasks:review"],
+                               data_dir=app["db"].parent)["agent"]["id"]
+
+
+def test_daily_cap_sends_the_incident_to_the_sre_as_text(app, monkeypatch):
     conn, mid = app["conn"], app["mid"]
+    sre = _sre(app)
     monkeypatch.setenv("POS_MONITOR_MAX_INCIDENTS_DAY", "2")
-    _post(app, _event(1))
-    _post(app, _event(2, key="fp2"))
+    a = _post(app, _event(1))
+    b = _post(app, _event(2, key="fp2"))
+    # the cap counts incidents the Hlídač spent a run on: these two are not triaged yet
+    assert monitor.incidents_today(conn) == 0
+    _run(conn, mid, a["task_id"])
+    _run(conn, mid, b["task_id"])
+    team_before = len(_team(conn))
     out = _post(app, _event(3, ikind="swap", severity="high"))
-    assert out["fallback"].startswith("Hlídač už dnes třídil 2 incidentů")
+    assert out["fallback"].startswith("Hlídač už dnes třídil 2 incidentů") and out["assignee"] == "SRE"
     ticket = tasks.get(conn, app["owner"], out["task_id"])
-    assert ticket["assignee_id"] == actors.owner_id(conn) and ticket["source"] == "ask_owner"
+    assert ticket["assignee_id"] == sre and ticket["source"] == "sentinel" and ticket["reviewer_id"] == sre
     assert "Uvolnit paměť" in ticket["notes"]                        # capacity: a concrete recommendation
     assert conn.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id = ?", (mid,)).fetchone()[0] == 2
     assert conn.execute("SELECT llm_skipped FROM sentinel_incidents WHERE incident_id = 'abc123-3'").fetchone()[0] == 1
-    assert any("@" in m and out["task_ref"] in m for m in _team(conn))  # the owner is pinged in #team
+    assert len(_team(conn)) == team_before                           # nobody pings the owner in #team
+    assert not conn.execute("SELECT 1 FROM tasks WHERE assignee_id = ? AND source = 'ask_owner'",
+                            (actors.owner_id(conn),)).fetchone()
+
+
+def test_the_cap_leaves_out_tests_and_incidents_closed_without_a_run(app, monkeypatch):
+    conn, mid = app["conn"], app["mid"]
+    monkeypatch.setenv("POS_MONITOR_MAX_INCIDENTS_DAY", "1")
+    t = _post(app, _event(1))
+    _post(app, _event(1, kind="incident_resolved", level="resolved"))  # closed before triage: no run
+    assert monitor.incidents_today(conn) == 0
+    grafana_test = _event(2, key="TestAlert")
+    grafana_test["title"] = "[critical] TestAlert: Notification test"
+    g = _post(app, grafana_test)
+    _run(conn, mid, g["task_id"])
+    assert monitor.incidents_today(conn) == 0 and monitor.over_cap(conn) is None
+    assert t["task_id"]
+    real = _post(app, _event(3, key="fp-real"))
+    _run(conn, mid, real["task_id"])
+    assert monitor.incidents_today(conn) == 1 and monitor.over_cap(conn)
 
 
 def test_used_up_budget_or_pause_also_falls_back(app):
@@ -194,6 +225,7 @@ def test_the_same_incident_again_is_a_comment_not_a_new_ticket_and_not_counted(a
     last = conn.execute("SELECT body FROM task_comments WHERE task_id = ? ORDER BY id DESC",
                         (first["task_id"],)).fetchone()["body"]
     assert last.startswith("**Znovu** totéž") and "ticket" in last
+    _run(conn, mid, first["task_id"])
     assert monitor.incidents_today(conn) == 1 and monitor.over_cap(conn) is None
     # once the first is closed, the same key is a new incident again
     _run(conn, mid, first["task_id"])
@@ -395,7 +427,8 @@ def test_digest_with_incidents_is_one_cheap_monitor_task_or_code_only(app, monke
     conn, mid = app["conn"], app["mid"]
     monitor.heartbeat(conn, {"checks": [{"name": "a", "ok": True}, {"name": "b", "ok": False}],
                              "counters": {"remediations_fixed_24h": 1}, "host": {"swap_pct": 99.0, "disk_pct": {"/": 63}}})
-    _post(app, _event())
+    first = _post(app, _event())
+    _run(conn, mid, first["task_id"])
     out = monitor.digest(conn)
     assert out["sent"] == "monitor_task"
     t = tasks.get(conn, app["owner"], tasks.parse_id(out["task"]))
@@ -412,3 +445,49 @@ def test_monitor_agent_file_is_valid_and_matches_the_rule():
     assert spec["name"] == monitor.NAME and spec["worker"] == "pool" and "ops:monitor" in spec["permissions"]
     assert set(spec["permissions"]) <= set(agents.PERMISSIONS)
     assert spec["engine"] == "claude" and spec["model"] == "claude-opus-5-5"  # every agent on Opus 5.5 (2026-09-27)
+
+
+def test_a_resolved_incident_closes_its_ticket_and_the_owner_ask(app, monkeypatch):
+    conn = app["conn"]
+    monkeypatch.setenv("POS_MONITOR_MAX_INCIDENTS_DAY", "0")
+    out = _post(app, _event(1))                                      # no SRE here: an older-style owner ask
+    ticket = tasks.get(conn, app["owner"], out["task_id"])
+    assert ticket["source"] == "ask_owner" and ticket["status"] == "next"
+    res = _post(app, _event(1, kind="incident_resolved", level="resolved"))
+    assert res["resolved"] and res["ticket_closed"] == out["task_id"]
+    assert tasks.get(conn, app["owner"], out["task_id"])["status"] == "done"
+    ask = conn.execute("SELECT status FROM owner_asks WHERE ticket_id = ?", (out["task_id"],)).fetchone()
+    assert ask["status"] == "answered"
+    assert conn.execute("SELECT status FROM sentinel_incidents WHERE incident_id = 'abc123-1'").fetchone()[0] == "closed"
+    # the SRE's fallback task closes the same way
+    _sre(app)
+    two = _post(app, _event(2, key="fp2"))
+    assert two["assignee"] == "SRE"
+    _post(app, _event(2, kind="incident_resolved", level="resolved"))
+    assert tasks.get(conn, app["owner"], two["task_id"])["status"] == "done"
+
+
+def _grafana(n, service="web", container=None, status="firing"):
+    labels = {"alertname": "PersonalOSDown", "severity": "critical", "service": service, "kind": "health"}
+    if container:
+        labels["container"] = container
+    return {"alerts": [{"status": status, "labels": labels, "annotations": {"summary": "web is down"},
+                        "fingerprint": f"fp{n}", "startsAt": "2026-09-26T08:00:00Z"}]}
+
+
+def test_the_sentinel_and_grafana_seeing_one_outage_make_one_task(app):
+    from pos import observability
+
+    conn, mid = app["conn"], app["mid"]
+    ev = _event(1, ikind="health", key="personalos-web")
+    ev["data"]["incident"].update(service="personalos", container="personalos-web-1")
+    first = _post(app, ev)
+    assert monitor.canonical_service({"service": "web"}) == "personalos"
+    assert monitor.canonical_service({"service": "web", "container": "nexus-process-pilot-web-1"}) == "nexus"
+    got = observability.ingest_webhook(conn, app["owner"], _grafana(1))
+    assert got["alerts"][0]["task_id"] == first["task_id"]
+    assert conn.execute("SELECT dup_of FROM sentinel_incidents WHERE incident_id LIKE 'grafana-%'").fetchone()[0] == "abc123-1"
+    assert conn.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id = ?", (mid,)).fetchone()[0] == 1
+    # another app is another incident
+    other = observability.ingest_webhook(conn, app["owner"], _grafana(2, service="kb"))
+    assert other["alerts"][0]["task_id"] != first["task_id"]

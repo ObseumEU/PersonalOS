@@ -11,11 +11,16 @@ recommendation for config, capacity and quota, a note for the rest.
 Budget safety (in code, before any model runs): at most MAX_INCIDENTS_DAY
 incident tasks a day, at most MAX_RUNS_INCIDENT Monitor runs per incident, and
 the Monitor's own access budget (usd_day, runs_day). Above any of them the
-incident still reaches the owner, through ask_owner with code-built text.
-Duplicates do not count against the daily cap and make no new ticket: an
-incident of the same service, kind and key while the first one's task or
-ticket is still open (or while a quota is exhausted until its reset) is a
-comment on that one. The cap also leaves out an ongoing quota incident with a
+incident goes to engineering (the SRE, else the CTO) as a task with
+code-built text, not to the owner. The daily cap counts only incidents the
+Monitor actually spent a run on, never test notifications. Duplicates do not
+count against the daily cap and make no new ticket: an incident of the same
+app (names normalized across sources: "web" and "personalos-web-1" are
+personalos), kind and key while the first one's task or ticket is still open
+(or while a quota is exhausted until its reset), or the same app from the
+other source within DEDUP_WINDOW_MIN, is a comment on that one. A resolved
+incident closes its untouched task or ticket (and the owner ask behind an
+older ticket). The cap also leaves out an ongoing quota incident with a
 known reset ("quota exhausted until X"). A message from the owner in chat is
 not an incident and never goes through these caps (pos.chat, pos.availability).
 
@@ -226,13 +231,29 @@ def over_cap(conn: sqlite3.Connection) -> str | None:
     return None
 
 
+# Test notifications (Grafana's "Test contact point", the sentinel's /api/test/inject) are no incidents.
+TEST_SQL = ("(s.service LIKE 'sentinel-test%' OR LOWER(COALESCE(s.key, '')) LIKE 'testalert%' "
+            "OR LOWER(s.title) LIKE '%notification test%' OR LOWER(s.title) LIKE '%[test]%')")
+
+
+def is_test(event: dict, inc: dict) -> bool:
+    title = str(event.get("title") or "").lower()
+    return (str(inc.get("service") or "").startswith("sentinel-test")
+            or str(inc.get("key") or "").lower().startswith("testalert")
+            or "notification test" in title or "[test]" in title)
+
+
 def incidents_today(conn: sqlite3.Connection) -> int:
-    """Incidents the Monitor triaged in the last 24 h, for the daily cap: not the
-    duplicates, not an ongoing quota incident with a known reset."""
+    """Incidents the Monitor triaged in the last 24 h, for the daily cap: only those it
+    actually spent a model run on (one closed before triage, or a Grafana test, costs
+    nothing); not the duplicates, not an ongoing quota incident with a known reset."""
     ensure_schema(conn)
     since = (_utcnow() - timedelta(days=1)).isoformat(timespec="seconds")
-    return conn.execute("SELECT COUNT(*) FROM sentinel_incidents WHERE task_id IS NOT NULL AND opened_at >= ? "
-                        "AND dup_of IS NULL AND quota_until IS NULL", (since,)).fetchone()[0]
+    return conn.execute(
+        f"""SELECT COUNT(*) FROM sentinel_incidents s WHERE s.task_id IS NOT NULL AND s.opened_at >= ?
+            AND s.dup_of IS NULL AND s.quota_until IS NULL AND NOT {TEST_SQL}
+            AND EXISTS (SELECT 1 FROM runs r WHERE r.task_id = s.task_id AND r.status != 'blocked')""",
+        (since,)).fetchone()[0]
 
 
 def quota_until(inc: dict) -> str | None:
@@ -242,19 +263,59 @@ def quota_until(inc: dict) -> str | None:
     return str(v) if v else None
 
 
+# One app, many names: the sentinel says "personalos" (its container globs), Grafana the compose
+# service ("web", "api") or the container ("personalos-web-1"). Prefix of a container/stack → app.
+_APP_PREFIXES = (("personalos", "personalos"), ("nexus", "nexus"), ("kb-", "knowlage"), ("knowlage", "knowlage"),
+                 ("litellm", "litellm"), ("langfuse", "langfuse"))
+# Bare compose service names of the PersonalOS stack (Grafana's `service` label).
+_POS_SERVICES = {"web", "api", "agent-pool", "deployer", "pos", "pos-api", "pos-web", "worker"}
+DEDUP_WINDOW_MIN = 30  # the same app from another source within this long is the same outage
+
+
+def canonical_service(inc: dict | sqlite3.Row) -> str:
+    """The app an incident is about, whatever the source calls it."""
+    get = (lambda k: inc[k] if k in inc.keys() else None) if isinstance(inc, sqlite3.Row) else inc.get
+    for value in (get("container"), get("stack"), get("service")):
+        v = str(value or "").strip().lower()
+        for prefix, app in _APP_PREFIXES:
+            if v.startswith(prefix):
+                return app
+    service = str(get("service") or "?").strip().lower()
+    return "personalos" if service in _POS_SERVICES else service
+
+
+def _source_of(incident_id: str | None) -> str:
+    return "grafana" if str(incident_id or "").startswith("grafana-") else "sentinel"
+
+
+_OPEN_TASK = "(t.id IS NOT NULL AND t.status NOT IN ('done', 'cancelled') AND t.archived_at IS NULL)"
+
+
 def _open_twin(conn: sqlite3.Connection, inc: dict) -> sqlite3.Row | None:
-    """An earlier incident of the same service, kind and key whose task or ticket
-    is still open, or a quota incident whose reset has not come yet."""
-    if not inc.get("kind") or inc.get("key") in (None, ""):
+    """An earlier incident of the same app, kind and key whose task or ticket is still open,
+    or a quota incident whose reset has not come yet; or the same app reported by the other
+    source (the sentinel and Grafana both see one outage) within DEDUP_WINDOW_MIN while its
+    task or ticket is open."""
+    if not inc.get("kind"):
         return None
-    return conn.execute(
-        """SELECT s.* FROM sentinel_incidents s LEFT JOIN tasks t ON t.id = COALESCE(s.ticket_id, s.task_id)
-           WHERE s.service = ? AND s.kind = ? AND s.key = ? AND s.incident_id != ? AND s.dup_of IS NULL
-             AND ((t.id IS NOT NULL AND t.status NOT IN ('done', 'cancelled') AND t.archived_at IS NULL)
-                  OR (s.quota_until IS NOT NULL AND s.quota_until > ?))
-           ORDER BY s.id DESC LIMIT 1""",
-        (str(inc.get("service") or "?"), str(inc["kind"]), str(inc["key"])[:200], inc.get("incident_id"),
-         _utcnow().isoformat(timespec="seconds"))).fetchone()
+    now = _utcnow()
+    app, source = canonical_service(inc), _source_of(inc.get("incident_id"))
+    since = (now - timedelta(minutes=DEDUP_WINDOW_MIN)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        f"""SELECT s.* FROM sentinel_incidents s LEFT JOIN tasks t ON t.id = COALESCE(s.ticket_id, s.task_id)
+            WHERE s.incident_id != ? AND s.dup_of IS NULL
+              AND ({_OPEN_TASK} OR (s.quota_until IS NOT NULL AND s.quota_until > ?))
+            ORDER BY s.id DESC LIMIT 200""",
+        (inc.get("incident_id"), now.isoformat(timespec="seconds"))).fetchall()
+    key = str(inc.get("key") or "")[:200]
+    for r in rows:  # the same kind and key first
+        if key and r["kind"] == str(inc["kind"]) and r["key"] == key and canonical_service(r) == app:
+            return r
+    for r in rows:
+        if (_source_of(r["incident_id"]) != source and canonical_service(r) == app and app not in ("?", "platform")
+                and r["opened_at"] >= since):
+            return r
+    return None
 
 
 def _duplicate(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, twin: sqlite3.Row) -> dict:
@@ -405,12 +466,19 @@ def _resolved(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: s
     conn.execute("UPDATE sentinel_incidents SET resolved_at = ?, status = CASE WHEN status = 'open' THEN 'resolved' "
                  "ELSE status END WHERE id = ?", (now_iso(), row["id"]))
     mid = monitor_id(conn)
-    if not row["task_id"]:
-        return out
-    t = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
     mctx = Ctx(mid or ctx.actor_id, via="sentinel")
     grafana = event.get("source") == "grafana"
     who = "Grafana hlásí alert jako" if grafana else "Sentinel hlásí incident jako"
+    if row["dup_of"]:
+        # a duplicate shares its twin's task or ticket: the twin's own resolution closes it
+        if target:
+            comments.log(conn, mctx, target, f"{who} **vyřešený** i duplikát {row['incident_id']}.", "system")
+        return out
+    if not row["task_id"]:
+        if row["ticket_id"]:
+            out.update(close_ticket(conn, mctx, row, f"{who} vyřešený (od té doby klid)."))
+        return out
+    t = conn.execute("SELECT status FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
     comments.log(conn, mctx, row["task_id"], f"{who} **vyřešený** (od té doby klid).", "system")
     if t and t["status"] == "next" and _runs_on(conn, row["task_id"]) == 0 and mid:
         seen = "Grafana alert zrušila" if grafana else "sentinel už ho nevidí"
@@ -420,6 +488,35 @@ def _resolved(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, row: s
                      "summary = 'resolved before triage' WHERE id = ?", (now_iso(), row["id"]))
         out["closed_without_run"] = True
     return out
+
+
+def close_ticket(conn: sqlite3.Connection, ctx: Ctx, row: sqlite3.Row, why: str) -> dict:
+    """An incident that went to a ticket (the over-cap fallback: the SRE's task, or an older
+    ask_owner ticket) resolved by itself: the ticket and its owner ask close with a note,
+    unless someone is working on it (then only the note)."""
+    from . import comments, versioning
+    from .tasks import ENTITY
+
+    tid = row["ticket_id"]
+    t = conn.execute("SELECT id, status, archived_at FROM tasks WHERE id = ?", (tid,)).fetchone()
+    if t is None or t["archived_at"] or t["status"] == "done":
+        return {}
+    ran = _runs_on(conn, tid) > 0 and t["status"] in ("working", "review")
+    comments.log(conn, ctx, tid, f"{why} " + ("Nechávám otevřené, už se na tom pracuje." if ran else
+                                              "Zavírám ticket, není co dělat."), "system")
+    if ran:
+        return {"ticket_noted": tid}
+    now = now_iso()
+    versioning.update(conn, ctx, ENTITY, tid, {"status": "done", "completed_at": now, "progress": 100,
+                                               "progress_note": f"Vyřešilo se samo: {why}"[:500]},
+                      action="incident_resolved")
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'owner_asks'").fetchone():
+        conn.execute("UPDATE owner_asks SET status = 'answered', answered_at = ? WHERE ticket_id = ? "
+                     "AND status = 'open'", (now, tid))
+    conn.execute("UPDATE sentinel_incidents SET status = 'closed', closed_at = COALESCE(closed_at, ?), "
+                 "summary = COALESCE(summary, 'resolved by itself (ticket closed)') WHERE id = ?", (now, row["id"]))
+    audit.log(conn, ctx, "incident_ticket_closed", "task", tid, incident=row["incident_id"])
+    return {"ticket_closed": tid}
 
 
 RECOMMEND = {
@@ -450,21 +547,50 @@ RECOMMEND = {
 }
 
 
-def _fallback(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, reason: str, record: bool = True) -> dict:
-    """The owner gets the incident as code-built text (ask_owner), no model run."""
-    from . import asks
+def platform_ticket(conn: sqlite3.Connection, asker: Ctx, *, title: str, why: str, details: str,
+                    recommendation: str, priority: int, topic: str) -> dict:
+    """A platform problem nobody triaged goes to engineering, not the owner: a task for the SRE
+    (the CTO without one) with the code-built text. Only without either does the owner get an
+    ask_owner ticket. Returns {ticket_id, ref, assignee}."""
+    from . import asks, tasks, wake
 
+    who = platform_owner_id(conn)
+    if who is None:
+        out = asks.ask(conn, asker, title=title, why=why, details=details,
+                       options=["Podívám se na to", "Ignorovat: přechodné"], recommendation=recommendation,
+                       blocking=False, kind="decision", topic=topic, priority=priority)
+        return {"ticket_id": out["ticket_id"], "ref": out["ref"], "assignee": "owner"}
+    same = conn.execute("SELECT id FROM tasks WHERE assignee_id = ? AND title = ? AND status != 'done' "
+                        "AND archived_at IS NULL ORDER BY id DESC LIMIT 1", (who, title[:200])).fetchone()
+    if same:  # the same incident again (an escalation): one open task
+        from . import comments
+
+        comments.log(conn, asker, same["id"], f"Znovu: {why}", "system")
+        return {"ticket_id": same["id"], "ref": tasks.display_id(same["id"]),
+                "assignee": actors.get(conn, who)["name"]}
+    notes = (f"Purpose: a platform incident nobody triaged ({why}); decide what to do and do it.\n"
+             f"Source: {topic} (code-built, no model run so far).\n\n**Doporučení:** {recommendation}\n\n{details}")
+    t = tasks.create(conn, asker, {
+        "title": title[:200], "notes": notes[:8000], "status": "next", "priority": priority, "topic": TOPIC,
+        "assignee": {"type": "agent", "id": who}, "source": "sentinel",
+        "definition_of_done": "The cause is known and fixed (or judged transient) with a one-line note."})
+    conn.execute("UPDATE tasks SET reviewer_id = ? WHERE id = ?", (who, t["id"]))  # engineering closes its own
+    wake.wake(who)
+    return {"ticket_id": t["id"], "ref": t["ref"], "assignee": actors.get(conn, who)["name"]}
+
+
+def _fallback(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, reason: str, record: bool = True) -> dict:
+    """Over a cap: the SRE (the CTO) gets the incident as code-built text, no Hlídač run."""
     mid = monitor_id(conn)
     asker = Ctx(mid or actors.assistant_id(conn), via="sentinel")
     rec = RECOMMEND.get(str(inc.get("kind")), "Projít paket níže a rozhodnout.")
     sev = str(inc.get("severity") or "medium")
     level = inc.get("level", 0)
-    out = asks.ask(conn, asker, title=f"Incident: {(event.get('title') or '')[:150]}",
-                   why=f"sentinel hlásí incident a {reason}, takže ti ho posílám jako text bez třídění agentem",
-                   details=_wrapped(event)[:5000], options=["Podívám se na to", "Ignorovat: přechodné"],
-                   recommendation=rec, blocking=False, kind="decision",
-                   topic=f"sentinel incident {inc.get('incident_id')} {level}",
-                   priority=1 if sev in ("high", "critical") else 2)
+    out = platform_ticket(conn, asker, title=f"Incident: {(event.get('title') or '')[:150]}",
+                          why=f"sentinel hlásí incident a {reason}, takže ho posílám jako text bez třídění Hlídačem",
+                          details=_wrapped(event)[:5000], recommendation=rec,
+                          topic=f"sentinel incident {inc.get('incident_id')} {level}",
+                          priority=1 if sev in ("high", "critical") else 2)
     if record:
         _record(conn, ctx, event, out["ticket_id"], f"fallback:{reason}")
         _insert(conn, inc, event, ticket_id=out["ticket_id"], skipped=True)
@@ -473,7 +599,7 @@ def _fallback(conn: sqlite3.Connection, ctx: Ctx, event: dict, inc: dict, reason
                      "WHERE incident_id = ?", (out["ticket_id"], inc.get("incident_id")))
     audit.log(conn, asker, "sentinel_fallback", "task", out["ticket_id"], incident=inc.get("incident_id"), reason=reason)
     conn.commit()
-    return {"task_id": out["ticket_id"], "task_ref": out["ref"], "fallback": reason, "assignee": "owner"}
+    return {"task_id": out["ticket_id"], "task_ref": out["ref"], "fallback": reason, "assignee": out["assignee"]}
 
 
 # ------------------------------------------------------------------ the Monitor's tools
@@ -658,21 +784,18 @@ def watch(conn: sqlite3.Connection) -> dict:
     age = (_utcnow() - datetime.fromisoformat(hb["received_at"])).total_seconds()
     if age <= HEARTBEAT_STALE_S or _state(conn, "heartbeat_alert"):
         return {}
-    from . import asks
-
     since = hb["received_at"]
     _set_state(conn, "heartbeat_alert", {"since": since})
     mid = monitor_id(conn)
     asker = Ctx(mid or actors.assistant_id(conn), via="sentinel")
-    out = asks.ask(conn, asker, title="Sentinel neposílá heartbeat: aplikace teď nikdo nehlídá",
-                   why=f"poslední heartbeat přišel {since} (před {int(age // 60)} min)",
-                   details="Sentinel (ops/sentinel) měří každou minutu zdraví PersonalOS, knowlage, Nexu, LiteLLM "
-                           "a Langfuse. Když neběží, incidenty nikdo nezachytí.",
-                   options=["Restartovat sentinel", "Nechat vypnutý"],
-                   recommendation="V /opt/server/personalos/app spustit `docker compose -f docker-compose.yml -f "
-                                  "deploy/prod/docker-compose.prod.yml --profile sentinel up -d sentinel docker-proxy` "
-                                  "a podívat se do `docker compose logs --tail 50 sentinel`.",
-                   blocking=False, kind="decision", topic=f"sentinel heartbeat {since[:16]}", priority=1)
+    out = platform_ticket(conn, asker, title="Sentinel neposílá heartbeat: aplikace teď nikdo nehlídá",
+                          why=f"poslední heartbeat přišel {since} (před {int(age // 60)} min)",
+                          details="Sentinel (ops/sentinel) měří každou minutu zdraví PersonalOS, knowlage, Nexu, "
+                                  "LiteLLM a Langfuse. Když neběží, incidenty nikdo nezachytí.",
+                          recommendation="V /opt/server/personalos/app spustit `docker compose -f docker-compose.yml "
+                                         "-f deploy/prod/docker-compose.prod.yml --profile sentinel up -d sentinel "
+                                         "docker-proxy` a podívat se do `docker compose logs --tail 50 sentinel`.",
+                          topic=f"sentinel heartbeat {since[:16]}", priority=1)
     audit.log(conn, asker, "sentinel_heartbeat_lost", "task", out["ticket_id"], since=since)
     conn.commit()
     return {"alerted": out["ref"]}

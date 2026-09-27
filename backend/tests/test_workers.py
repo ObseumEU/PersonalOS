@@ -423,3 +423,34 @@ def test_a_remote_agent_whose_bridge_is_off_goes_to_the_project_manager(db, tmp_
     assert f"dál: {pm['name']}" in reply[0]["body"] and _chat_task(conn, kb["id"]) is None
     assert "za Vzdálený analytik" in _chat_task(conn, pm["id"])["title"]
     assert "spojení se vzdálenou aplikací je vypnuté" in workers.worker_down(conn, kb)
+
+
+def test_an_unanswered_chat_incident_resolves_once_the_agent_answers(watched):
+    conn, owner, mid, aid = watched
+    msg = chat.send_dm(conn, owner, aid, "Stav faktur?")
+    old = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat(timespec="seconds")
+    conn.execute("UPDATE chat_messages SET created_at = ? WHERE id = ?", (old, msg["id"]))
+    conn.commit()
+    _seen_now(conn, aid)
+    assert workers.watch(conn)["unanswered"]
+    inc = _incidents(conn, "chat_unanswered")[0]
+    assert workers.watch(conn)["answered"] == []                      # still no answer
+    chat.send(conn, Ctx(aid), msg["channel_id"], "Faktury jsou hotové.", reply_to=msg["id"])
+    out = workers.watch(conn)
+    assert out["answered"] == [{"message": msg["id"], "agent": "Fakturant", "why": "answered"}]
+    row = conn.execute("SELECT resolved_at FROM sentinel_incidents WHERE kind = 'chat_unanswered'").fetchone()
+    assert row["resolved_at"]
+    assert tasks.get(conn, owner, inc["id"])["status"] == "done"      # untouched: closed without a model run
+    assert workers.watch(conn)["answered"] == []                      # once
+
+
+def test_a_message_to_a_service_is_no_unanswered_incident(watched):
+    conn, owner, mid, aid = watched
+    dep = actors.find_by_name(conn, "Deployer")
+    assert dep["runtime"] == "service"
+    msg = chat.send_dm(conn, owner, dep["id"], "Nasadíš to?")
+    old = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat(timespec="seconds")
+    conn.execute("UPDATE chat_messages SET created_at = ? WHERE id = ?", (old, msg["id"]))
+    conn.commit()
+    assert workers.watch(conn)["unanswered"] == []
+    assert _incidents(conn, "chat_unanswered") == []

@@ -306,8 +306,9 @@ def _owner_messages(conn: sqlite3.Connection, since: str, until: str) -> list[tu
         else:
             targets = json.loads(m["mentions"] or "[]")
         for aid in targets:
-            row = conn.execute("SELECT kind, archived_at FROM actors WHERE id = ?", (aid,)).fetchone()
-            if row and row["kind"] != "human" and not row["archived_at"]:
+            row = conn.execute("SELECT kind, archived_at, runtime FROM actors WHERE id = ?", (aid,)).fetchone()
+            # services (the Deployer, knowlage, Nexus) never answer: the chat's code reply covers them
+            if row and row["kind"] != "human" and not row["archived_at"] and row["runtime"] != "service":
                 out.append((m, aid))
     return out
 
@@ -426,5 +427,38 @@ def watch(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
         audit.log(conn, Ctx(actors.owner_id(conn), via="personalos-watch"), "chat_unanswered", "chat_message",
                   m["id"], agent=aid)
         out["unanswered"].append({"message": m["id"], "agent": agent["name"]})
+    out["answered"] = resolve_answered(conn)
     conn.commit()
     return out
+
+
+def resolve_answered(conn: sqlite3.Connection) -> list[dict]:
+    """An unanswered-chat incident ends once the agent has answered (or the message went
+    to a service, which never answers): the incident is resolved, so its untouched task
+    or ticket closes (pos.monitor)."""
+    from . import audit
+    from .core import Ctx
+
+    done = []
+    rows = conn.execute(
+        """SELECT l.entity_id AS message_id, json_extract(l.detail, '$.agent') AS agent_id FROM audit_log l
+           WHERE l.action = 'chat_unanswered' AND l.entity = 'chat_message' AND NOT EXISTS (
+               SELECT 1 FROM audit_log r WHERE r.action = 'chat_unanswered_resolved' AND r.entity = 'chat_message'
+                 AND r.entity_id = l.entity_id AND json_extract(r.detail, '$.agent') = json_extract(l.detail, '$.agent'))
+           ORDER BY l.id LIMIT 200""").fetchall()
+    for r in rows:
+        m = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (r["message_id"],)).fetchone()
+        agent = conn.execute("SELECT * FROM actors WHERE id = ?", (r["agent_id"],)).fetchone()
+        if m is None or agent is None:
+            continue
+        why = ("service" if agent["runtime"] == "service" else "archived" if agent["archived_at"]
+               else "answered" if answered(conn, m, agent["id"]) else None)
+        if why is None:
+            continue
+        _incident(conn, iid=f"chat-unanswered-{m['id']}-{agent['id']}", kind="chat_unanswered",
+                  key=f"chat:{slug(agent['name'])}", title=f"{agent['name']} už majiteli odpověděl",
+                  body="", detail={"agent": agent["name"], "message": m["id"], "why": why}, resolved=True)
+        audit.log(conn, Ctx(actors.owner_id(conn), via="personalos-watch"), "chat_unanswered_resolved",
+                  "chat_message", m["id"], agent=agent["id"], why=why)
+        done.append({"message": m["id"], "agent": agent["name"], "why": why})
+    return done
