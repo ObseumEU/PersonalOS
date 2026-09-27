@@ -183,7 +183,7 @@ def test_access_manager_owner_only_items_and_the_company_cap(app):
     assert not any("creates follow-ups" in b for b in _team(conn))
 
 
-def test_outbound_can_be_granted_but_each_action_still_needs_approval(app):
+def test_outbound_is_granted_ordinary_sends_go_out_money_still_needs_approval(app):
     conn, am, agent = app["conn"], app["am"], app["agent"]
     access.revoke(conn, am, agent, "outbound:*", "only e-mail from now on")
     payload = {"to": "a@b.c", "subject": "Hi", "body": "Hello"}
@@ -191,7 +191,9 @@ def test_outbound_can_be_granted_but_each_action_still_needs_approval(app):
         outbound.request(conn, Ctx(agent), "email.send", payload)
     access.grant(conn, am, agent, "outbound:email.send", "answers customers")
     a = outbound.request(conn, Ctx(agent), "email.send", payload)
-    assert a["status"] == "pending" and approvals.get(conn, a["id"])["status"] == "pending"
+    assert a["kind"] == "ordinary" and a["status"] in ("sent", "not_configured") and "id" not in a
+    b = outbound.request(conn, Ctx(agent), "email.send", {**payload, "body": "We will purchase the licence."})
+    assert b["status"] == "pending" and approvals.get(conn, b["id"])["details"]["kind"] == "money"
     with pytest.raises(Forbidden):
         outbound.request(conn, Ctx(agent), "discord.post", {"content": "x"})
 
@@ -342,6 +344,22 @@ def test_a_young_agent_is_measured_against_its_own_hours_and_its_daily_budget(ap
     access.set_budget(conn, app["owner"], agent, "usd_day", 100.0, "test")
     assert access.watch(conn)["paused"] == ["Writer"]
 
+
+def test_company_cap_ping_goes_to_the_ceo_not_the_owner(app, tmp_path):
+    conn, agent = app["conn"], app["agent"]
+    ceo = agents.create_agent(conn, app["owner"], name="CEO", purpose="runs the company", lifetime="long_lived",
+                              permissions=["tasks:read"], data_dir=tmp_path)["agent"]["id"]
+    access.set_budget(conn, app["owner"], None, "usd_day", 50.0, "company cap")
+    access.set_budget(conn, app["owner"], None, "usd_month", 1000.0, "company cap")
+    assert access.limit(conn, None, "usd_day") == 50.0 and access.limit(conn, None, "usd_month") == 1000.0
+    from pos import integrations
+
+    assert integrations.company_cap(conn)["usd_month"]["cap"] == 1000.0  # the hourly budget check reports it
+    for _ in range(9):
+        _usage(conn, agent, 4.5, hours_ago=2)  # $40.50 today: 81 % of the daily cap, no spike
+    assert "usd_day" in access.watch(conn)["cap_alerts"]
+    assert any("Strop firmy" in b for b in _dms(conn, ceo))
+    assert not any("Strop firmy" in b for b in _dms(conn, actors.owner_id(conn)))
 
 def test_company_cap_ping_at_80_percent_once_and_daily_digest(app):
     conn, agent, am = app["conn"], app["agent"], app["am"]

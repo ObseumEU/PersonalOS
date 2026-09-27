@@ -12,13 +12,16 @@ and payment sites always ask first. Everything is in the audit log, with a
 screenshot of each action; page content reaches the agent as untrusted data.
 Typed text is never stored (it may be a password).
 
-The owner's rule of 2026-09-27 adds the outbound gate (constitution Ú1): on a
-site that is not one of the agent's action hosts, *submitting* something
-(a form's submit or send button, Enter in a form field, uploading a file,
-posting) asks first; reading, searching, logging in and filling in stay free.
-An agent's action hosts are its `scope:browser:<host[:port]>` grants (the
-owner's; e.g. the Home Assistant Specialist's own HA UI, the company's LAN
-apps): there it acts freely. Banking sites always ask.
+The constitution as amended on 2026-09-27 (Ú1): ordinary outbound work goes out
+without approval and is audited (every action has a screenshot), so submitting,
+replying, commenting, posting and uploading on ordinary sites are free. Approval
+stays only for the three kinds the constitution keeps for the owner: money (paying,
+buying, ordering, transferring, payment details), commitments (signing a contract,
+accepting an offer) and posting on the owner's personal channels (LinkedIn,
+personal social networks). Deleting and changing account or security settings
+still ask (the owner's rule of 2026-09-25). An agent's action hosts are its
+`scope:browser:<host[:port]>` grants (the owner's; e.g. the Home Assistant
+Specialist's own HA UI): there it acts freely. Banking sites always ask.
 
 The same check covers computer use (`computer_*` tools, the desktop sandbox):
 `tool:computer` instead of `tool:browser` / `browser:use`.
@@ -41,22 +44,33 @@ APPROVAL_DOMAINS = (
     "mbank.cz", "unicreditbank.cz", "creditas.cz", "equabank.cz", "trinitybank.cz", "revolut.com", "wise.com",
     "paypal.com", "stripe.com", "gopay.com", "comgate.cz", "thepay.cz", "coinbase.com", "binance.com",
 )
-RISKY_ACTION = re.compile(
-    r"\b(buy|purchase|order now|place order|checkout|check out|pay|payment|pay now|subscribe|donate|transfer|"
-    r"send|send now|delete|remove|erase|close account|deactivate|change password|reset password|two-factor|2fa|"
-    r"security settings|zaplatit|platba|zaplaťte|koupit|objednat|odeslat|poslat|převést|převod|smazat|odstranit|"
-    r"zrušit účet|změnit heslo|zabezpečení)\b",
+# Ú1 money: paying, buying, ordering, transferring.
+MONEY_ACTION = re.compile(
+    r"\b(buy|buy now|purchase|order now|place order|checkout|check out|pay|payment|pay now|subscribe|upgrade plan|"
+    r"donate|transfer|send money|add funds|top up|zaplatit|platba|zaplaťte|koupit|objednat|objednávka|předplatit|"
+    r"převést|převod|dobít)\b",
     re.IGNORECASE,
 )
-MESSAGE_FIELD = re.compile(
-    r"message|compose|reply|comment|chat|post|tweet|e-?mail body|zpráv|komentář|odpověď|napište|napiš", re.IGNORECASE)
+# Ú1 commitments: signing, accepting a binding offer.
+COMMIT_ACTION = re.compile(
+    r"\b(sign contract|sign agreement|e-?sign|sign and submit|sign now|accept offer|accept quote|accept proposal|"
+    r"podepsat|podepsat smlouvu|přijmout nabídku|potvrdit objednávku)\b",
+    re.IGNORECASE,
+)
+# The owner's rule of 2026-09-25 (not outbound): deleting and account or security settings.
+DESTRUCTIVE_ACTION = re.compile(
+    r"\b(delete|remove|erase|close account|deactivate|change password|reset password|two-factor|2fa|"
+    r"security settings|smazat|odstranit|zrušit účet|změnit heslo|zabezpečení)\b",
+    re.IGNORECASE,
+)
+# Kept for callers that ask "is this risky at all".
+RISKY_ACTION = re.compile("|".join(r.pattern for r in (MONEY_ACTION, COMMIT_ACTION, DESTRUCTIVE_ACTION)),
+                          re.IGNORECASE)
 RISKY_SCRIPT = re.compile(r"fetch\(|XMLHttpRequest|sendBeacon|\.submit\(|\.click\(|window\.open\(|navigator\.", re.I)
-# Submitting / posting: outbound on a host that is not one of the agent's action hosts.
+# Submitting / posting: free on ordinary sites (Ú1), asks on the owner's personal channels.
 SUBMIT_ACTION = re.compile(
-    r"\b(submit|send|post|publish|reply|comment|tweet|share|upload|sign up|signup|register|create account|"
-    r"create|confirm|apply|book|reserve|vote|save|update|invite|request|order|"
-    r"odeslat|poslat|zveřejnit|publikovat|uložit|potvrdit|registrovat|vytvořit|rezervovat|objednat|sdílet|"
-    r"nahrát|komentovat|přidat)\b", re.IGNORECASE)
+    r"\b(submit|send|post|publish|reply|comment|tweet|share|upload|repost|like|follow|connect|endorse|"
+    r"odeslat|poslat|zveřejnit|publikovat|sdílet|nahrát|komentovat|přidat|sledovat)\b", re.IGNORECASE)
 # ... except these, which only read: searching, filtering, logging in.
 READ_ONLY_ACTION = re.compile(
     r"\b(search|find|filter|go|lookup|look up|hledat|vyhledat|najít|filtr|log ?in|sign ?in|přihlásit|"
@@ -110,12 +124,19 @@ def approval_domains() -> tuple[str, ...]:
     return APPROVAL_DOMAINS + extra
 
 
+def personal_channel(host: str) -> bool:
+    """One of the owner's personal channels (LinkedIn, personal socials): posting there is his call."""
+    from .guard.policy import PERSONAL_CHANNEL_HOSTS
+
+    return bool(host) and _matches(host, PERSONAL_CHANNEL_HOSTS)
+
+
 def decide(tool: str, args: dict, *, url: str | None = None, last_field: str | None = None,
            allow_hosts: list[str] | None = None, action_hosts: list[str] | None = None,
            element: str | None = None) -> tuple[str, str]:
     """("allow" | "approval", reason) for one browser (or computer) tool call.
     `url` is the page the agent is on; `last_field` the element it typed into last;
-    `action_hosts` where the agent may submit freely; `element` what a computer
+    `action_hosts` where the agent may do anything; `element` what a computer
     click lands on (the desktop inspects it)."""
     target = args.get("url") if tool in ("browser_navigate", "computer_open_url") else url
     host = _host(target)
@@ -129,51 +150,63 @@ def decide(tool: str, args: dict, *, url: str | None = None, last_field: str | N
     if tool == "browser_navigate" and allow_hosts and host and not _matches(host, allow_hosts):
         return "approval", f"{host} is outside this agent's usual sites"
     element = str(args.get("element") or args.get("name") or "")
-    if tool in ("browser_click", "browser_select_option") and RISKY_ACTION.search(element):
-        return "approval", f"'{element[:80]}' looks like paying, sending, deleting or changing account settings"
-    if tool == "browser_type" and args.get("submit") and (MESSAGE_FIELD.search(element) or RISKY_ACTION.search(element)):
-        return "approval", f"submitting '{element[:80]}' would send something on the owner's behalf"
-    if tool == "browser_press_key" and str(args.get("key", "")).lower() == "enter" and last_field \
-            and MESSAGE_FIELD.search(last_field):
-        return "approval", f"Enter in '{last_field[:80]}' would send a message"
+    if tool in ("browser_click", "browser_select_option"):
+        risk = _risky(element)
+        if risk:
+            return "approval", risk
     if tool == "browser_fill_form":
         names = " ".join(str(f.get("name", "")) for f in args.get("fields") or [])
         if re.search(r"card number|cvv|cvc|číslo karty|iban", names, re.IGNORECASE):
-            return "approval", "the form asks for payment details"
+            return "approval", "the form asks for payment details (money, Ú1)"
     if tool == "browser_evaluate" and RISKY_SCRIPT.search(str(args.get("function") or "")):
         return "approval", "the script sends requests or clicks by itself"
-    # Ú1: submitting or posting on a site that is not one of the agent's action hosts.
-    where = host or "this site"
-    if tool == "browser_click" and _submits(element):
-        return "approval", f"'{element[:80]}' submits or posts on {where} (outbound, not an action host)"
-    if tool == "browser_type" and args.get("submit") and not READ_ONLY_ACTION.search(element):
-        return "approval", f"submitting '{element[:80]}' on {where} sends it out (not an action host)"
-    if tool == "browser_press_key" and str(args.get("key", "")).lower() == "enter" and last_field \
-            and not READ_ONLY_ACTION.search(last_field):
-        return "approval", f"Enter in '{last_field[:80]}' submits a form on {where} (not an action host)"
-    if tool == "browser_file_upload" and args.get("paths"):
-        return "approval", f"uploading files to {where} sends them out (not an action host)"
+    # Ú1: posting on the owner's personal channels asks; on any other site it is ordinary work.
+    if personal_channel(host):
+        where = host
+        if tool == "browser_click" and _submits(element):
+            return "approval", f"'{element[:80]}' posts on {where}, one of the owner's personal channels"
+        if tool == "browser_type" and args.get("submit") and not READ_ONLY_ACTION.search(element):
+            return "approval", f"submitting '{element[:80]}' posts on {where}, one of the owner's personal channels"
+        if tool == "browser_press_key" and str(args.get("key", "")).lower() == "enter" and last_field \
+                and not READ_ONLY_ACTION.search(last_field):
+            return "approval", f"Enter in '{last_field[:80]}' posts on {where}, one of the owner's personal channels"
+        if tool == "browser_file_upload" and args.get("paths"):
+            return "approval", f"uploading to {where} posts on one of the owner's personal channels"
     return "allow", "ok"
+
+
+def _risky(label: str) -> str | None:
+    """Why a click on this label asks first (money, a commitment, deleting or account settings), or None."""
+    if not label:
+        return None
+    if MONEY_ACTION.search(label):
+        return f"'{label[:80]}' looks like paying or buying (money, Ú1)"
+    if COMMIT_ACTION.search(label):
+        return f"'{label[:80]}' looks like signing or accepting a binding offer (commitment, Ú1)"
+    if DESTRUCTIVE_ACTION.search(label):
+        return f"'{label[:80]}' looks like deleting or changing account settings"
+    return None
 
 
 def _decide_computer(tool: str, args: dict, *, url: str | None, last_field: str | None,
                      action_hosts: list[str] | None, element: str | None) -> tuple[str, str]:
-    """The desktop sandbox: the same outbound rule, with what the desktop's browser tells
+    """The desktop sandbox: the same rule, with what the desktop's browser tells
     about the page (its URL, the element under the pointer, the field typed into)."""
     if tool == "computer_open_url" or on_action_host(url, action_hosts):
         return "allow", "ok"
-    where = _host(url) or "the desktop"
+    host = _host(url)
     label = element or ""
     if tool in ("computer_left_click", "computer_double_click", "computer_triple_click") and label:
-        if RISKY_ACTION.search(label):
-            return "approval", f"'{label[:80]}' looks like paying, sending, deleting or changing account settings"
-        if _submits(label):
-            return "approval", f"'{label[:80]}' submits or posts on {where} (outbound, not an action host)"
-    if tool == "computer_key":
+        risk = _risky(label)
+        if risk:
+            return "approval", risk
+        if personal_channel(host) and _submits(label):
+            return "approval", f"'{label[:80]}' posts on {host}, one of the owner's personal channels"
+    if tool == "computer_key" and personal_channel(host):
         keys = str(args.get("text") or "").lower().replace(" ", "")
         if any(k in ("return", "enter", "kp_enter") for k in keys.split("+")) and last_field \
                 and not READ_ONLY_ACTION.search(last_field):
-            return "approval", f"Enter in '{last_field[:80]}' submits a form on {where} (not an action host)"
+            return "approval", f"Enter in '{last_field[:80]}' posts on {host}, one of the owner's personal channels"
     return "allow", "ok"
 
 
@@ -265,9 +298,10 @@ def screenshot_path(data_dir: Path, rel: str) -> Path | None:
 # ------------------------------------------------------------------ grants (tool:browser, tool:computer)
 
 # Capabilities for the worker's own MCP servers (not pos tools); pos.access knows them.
-WORKER_TOOLS = {"browser": "a headless browser (Playwright MCP behind the guard; submitting on other sites asks)",
+WORKER_TOOLS = {"browser": "a headless browser (Playwright MCP behind the guard; paying, signing, deleting "
+                           "and posting on the owner's personal channels ask)",
                 "computer": "a desktop sandbox (screen, mouse, keyboard) for tasks that need a real GUI"}
-# scope:browser:<host[:port]>: submitting there needs no approval (owner only).
+# scope:browser:<host[:port]>: the agent does anything there, deleting included (owner only).
 # scope:browser-profile:<name>: a persistent browser profile, logins kept between runs (owner only).
 SCOPES = ("browser", "browser-profile")
 

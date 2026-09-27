@@ -6,8 +6,8 @@ Three kinds of traffic, each with one owner:
 |---|---|---|
 | **Incoming events** → tasks | PersonalOS core (`pos.routing`) | Connector agents call MCP `emit_event`; GitHub calls `/api/hooks/github`; you can post a test event on the Connectors screen. |
 | **Knowledge** (e-mails, threads, repos into the knowledge base) | knowlage-agent | knowlage ingests e-mail with its own Gmail connector and syncs GitHub itself. Agents may still push other material with their own KB key (`/ingest/mcp`), but the Mail agent does not. PersonalOS does not copy data. See `apps/knowlage-agent/docs/INGEST.md`. |
-| **New mail → the Mail agent** | PersonalOS core (`pos.routing`, `pos.mailfilter`) | One `gmail` event per new message or thread (`POST /api/events`, or `emit_event`). A rule-based prefilter (no model) drops mailing lists (List-Unsubscribe, List-Id), Precedence bulk/list, no-reply/notification senders, Gmail's Promotions/Social/Updates/Forums and auto-submitted mail; they are stored and counted (Connectors), never run. Rules: `POS_MAIL_PREFILTER` (a JSON file, or `off`). The rest becomes a task for the Mail agent, which only reacts; replies go through the approval queue. |
-| **Outbound actions** (e-mail, GitHub comment, Discord post) | PersonalOS core (`pos.outbound`) | Agents call MCP `request_outbound`; it runs only after you approve it in Approvals (constitution U1). |
+| **New mail → the Mail agent** | PersonalOS core (`pos.routing`, `pos.mailfilter`) | One `gmail` event per new message or thread (`POST /api/events`, or `emit_event`). A rule-based prefilter (no model) drops mailing lists (List-Unsubscribe, List-Id), Precedence bulk/list, no-reply/notification senders, Gmail's Promotions/Social/Updates/Forums and auto-submitted mail; they are stored and counted (Connectors), never run. Rules: `POS_MAIL_PREFILTER` (a JSON file, or `off`). The rest becomes a task for the Mail agent, which only reacts; replies go out directly (audited, reviewed daily by the CEO). |
+| **Outbound actions** (e-mail, GitHub comment, Discord post) | PersonalOS core (`pos.outbound`) | Agents call MCP `request_outbound`; ordinary sends run at once (audited, daily review digest to the CEO); money, commitments and posts on your personal channels run only after you approve them in Approvals (constitution Ú1). |
 
 ## Routing rules
 
@@ -31,7 +31,7 @@ The same `(source, ref)` is only processed once.
 ## Outbound providers
 
 Each one is off until you give it credentials (in `.env`, restart `api`).
-While off, an approved action becomes a task for you with the prepared
+While off, a sent (or approved) action becomes a task for you with the prepared
 content, so nothing is sent silently and nothing is lost.
 
 | Action | Settings |

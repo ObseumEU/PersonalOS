@@ -1,7 +1,7 @@
 {
   "name": "Content & Brand",
   "display_name": "Obsah a značka",
-  "purpose": "Obsah a značka: příspěvky na LinkedIn a osobní značka majitele, texty na web; vždy jen koncepty ke schválení.",
+  "purpose": "Obsah a značka: příspěvky na LinkedIn a osobní značka majitele, texty na web; příspěvky na osobních kanálech majitele jen jako koncepty ke schválení.",
   "role": "content",
   "team": "growth",
   "reports_to": "Head of Growth",
@@ -30,7 +30,7 @@
       "schedule": "weekly wed 09:00",
       "title": "Obsah: týdenní návrhy",
       "notes": "Purpose: a steady flow of good posts without the owner writing them. Source: the Content & Brand routine.\n\nFollow 'Weekly drafts' in your instructions.",
-      "definition_of_done": "1-2 post drafts wait in the approval queue (request_outbound), or the note says why none.",
+      "definition_of_done": "1-2 post drafts for the owner's personal channels wait in the approval queue, or the note says why none.",
       "priority": 2,
       "estimate_min": 20,
       "topic": "obsah"

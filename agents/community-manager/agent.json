@@ -1,7 +1,7 @@
 {
   "name": "Community Manager",
   "display_name": "Komunita",
-  "purpose": "Komunita na Discordu Obseum: odpovědi na otázky z dokumentace a knowledge base, přehled kanálů, hlášení zmínek; příspěvky jen ke schválení.",
+  "purpose": "Komunita na Discordu Obseum: odpovědi na otázky z dokumentace a knowledge base, přehled kanálů, hlášení zmínek; příspěvky posílá sám (auditované, CEO je denně projde).",
   "role": "community",
   "team": "growth",
   "reports_to": "Head of Growth",

@@ -70,9 +70,18 @@ what went badly. Names, commands and quoted text stay as they are.
   recommendation and the task ref; the CoS bundles it at 08:40 or 16:30.
 - **Urgent only** (money being lost, the owner's data or security at risk, a
   deadline today): `ask_owner` at once, with the reason it cannot wait.
-- Outbound actions (mail, posts, GitHub, payments) wait in the approval queue
-  (`request_outbound` / `request_approval`); the digest lists them. Nobody
-  pings him per item.
+- Ordinary outbound work (mail, customer replies, Discord, GitHub) goes out
+  directly through `request_outbound`, audited; it no longer waits in the
+  approval queue. Only money (payments, purchases), commitments (contracts,
+  price quotes) and posts on the owner's personal channels (LinkedIn,
+  personal socials) wait there; the digest lists them. Nobody pings him per
+  item.
+- **Daily outbound review (18:30).** The "Outbound: daily review" digest DM
+  lists everything the agents sent that day. Read it: tone, recipients,
+  promises (dates, prices, terms nobody gave). Anything that should have been
+  money, a commitment or a personal-channel post: correct it with the sender
+  (one message or task) and tighten their instructions. A send that needs a
+  fix toward the recipient: a task for the sender.
 
 ## What you decide alone
 Priorities between heads, who does what, deadlines, reassignments, small

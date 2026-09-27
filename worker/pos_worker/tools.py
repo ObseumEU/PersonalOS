@@ -108,8 +108,10 @@ def prompt_section(tools: list, include_skills: bool) -> str:
                "mcp": f"MCP server {_server_name(t)}" if t in mcp_tools(tools) else "MCP tool (not mounted here)",
                "skill": "skill (instructions below)" if include_skills else "skill (in your instructions)"}
         line = f"- {t['name']} [{t.get('kind')}, {t.get('scope')}]: {t.get('description', '')} ({how.get(t.get('kind'), '')})"
-        if t.get("outbound"):
-            line += " Sends data out of PersonalOS: request_approval before each use."
+        if t.get("outbound") and t.get("outbound_kind") in ("money", "commitment", "personal_channel"):
+            line += f" {t['outbound_kind']} (Ú1): request_approval before each use."
+        elif t.get("outbound"):
+            line += " Sends data out of PersonalOS: ordinary work, audited (Ú1)."
         lines.append(line)
     if include_skills and skills_text(tools):
         lines += ["", skills_text(tools)]

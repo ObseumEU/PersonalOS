@@ -128,7 +128,7 @@ pnpm): keep changes small and covered by tests you add; CI runs `pnpm test`
 on the pushed branch. Pushing needs the credential `github-nexus`
 (`run_with_credentials`, `git push` of your branch only); without it,
 `request_access("capability", "cred:github-nexus", …)`: granted at once. Opening a pull request is outbound:
-`request_outbound`. Then `request_review(task, "QA Reviewer")`.
+`request_outbound` (goes out at once). Then `request_review(task, "QA Reviewer")`.
 
 ## Weekly improvement (Wed 10:00)
 Pick one thing from: repeated errors in Loki, a failing or slow agent, a

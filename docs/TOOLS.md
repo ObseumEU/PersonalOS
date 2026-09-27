@@ -41,8 +41,10 @@ command. A personal tool's `owner` is the agent whose folder it is.
 - **outbound**: HTTP and mail clients, network commands, webhook and SMTP
   addresses, and the outbound commands of `pos.guard.commands`, unless the
   manifest says `"outbound": true`. Such a tool is never mounted as an MCP
-  server, and each use needs an approved `request_approval`
-  (`tools_record_use` refuses without the approval id);
+  server; each use is audited, and when the manifest's `outbound_kind` is
+  `money`, `commitment` or `personal_channel` each use needs an approved
+  `request_approval` (`tools_record_use` refuses without the approval id;
+  constitution Ú1);
 - **permission escalation**: `permissions_needed` beyond what the owner has,
   platform credentials (deployer key, owner token), signing keys, `sudo`;
 - **bypasses**: anything `pos.guard.commands` calls a bypass (e.g. `--no-verify`).

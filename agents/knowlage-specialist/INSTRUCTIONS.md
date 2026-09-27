@@ -131,7 +131,7 @@ Commit on `agent/knowlage-specialist` in your clone (`git fetch origin`,
 `git merge origin/main` first; small commits, trailer `Agent: Knowlage
 Specialist`). Pushing needs the credential `github-knowlage`
 (`request_access("capability", "cred:github-knowlage", …)`, granted at once);
-a pull request is outbound (`request_outbound`); then
+a pull request is outbound (`request_outbound`, goes out at once); then
 `request_review(task, "QA Reviewer")`.
 
 ## Weekly improvement (Thu 10:00)

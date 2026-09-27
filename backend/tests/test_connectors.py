@@ -95,13 +95,13 @@ def test_rules_are_versioned_data(conn, me):
         routing.create_rule(conn, me, {"name": "bad", "source": "fax"})
 
 
-def test_outbound_waits_for_approval_then_runs(conn, me, monkeypatch):
+def test_ordinary_outbound_goes_out_at_once_and_is_audited(conn, me, monkeypatch):
+    """Ú1 (2026-09-27): a customer reply or a Discord post needs no approval."""
     mail_agent = Ctx(actors.find_by_name(conn, "Head of Customer Success")["id"], via="mcp")
+    # Not configured: nothing is sent, nothing waits, the agent is told.
     a = outbound.request(conn, mail_agent, "email.send", {"to": "jan@acme.cz", "subject": "Re: Lunch", "body": "Yes"})
-    assert a["status"] == "pending"
-    # Not configured: approving turns it into a task for the owner, nothing is sent.
-    done = approvals.decide(conn, me, a["id"], True)
-    assert done["result"]["status"] == "not_configured" and done["result"]["owner_task"]
+    assert a["status"] == "not_configured" and a["sent"] is False and a["kind"] == "ordinary"
+    assert approvals.pending(conn) == []
 
     sent = []
     monkeypatch.setenv("POS_DISCORD_WEBHOOK_URL", "https://discord.example/webhook")
@@ -113,17 +113,65 @@ def test_outbound_waits_for_approval_then_runs(conn, me, monkeypatch):
             return None
 
     monkeypatch.setattr(outbound.httpx, "post", lambda url, **kw: sent.append((url, kw["json"])) or R())
-    b = outbound.request(conn, mail_agent, "discord.post", {"content": "Release notes"})
-    assert sent == []  # nothing leaves before approval
-    rejected = approvals.decide(conn, me, b["id"], False)
-    assert rejected["status"] == "rejected" and sent == []
-    c = outbound.request(conn, mail_agent, "discord.post", {"content": "Release notes v2"})
-    assert approvals.decide(conn, me, c["id"], True)["result"]["status"] == "sent"
-    assert sent == [("https://discord.example/webhook", {"content": "Release notes v2"})]
+    b = outbound.request(conn, mail_agent, "discord.post", {"content": "Release notes"}, why="release day")
+    assert b["status"] == "sent" and b["sent"] is True
+    assert sent == [("https://discord.example/webhook", {"content": "Release notes"})]
+    assert approvals.pending(conn) == []
+    row = conn.execute("SELECT * FROM audit_log WHERE action = 'outbound:discord.post'").fetchone()
+    detail = json.loads(row["detail"])
+    assert row["actor_id"] == mail_agent.actor_id and detail["kind"] == "ordinary" and detail["status"] == "sent"
+    assert detail["summary"] == "Release notes" and detail["why"] == "release day"
     with pytest.raises(tasks.Invalid):
         outbound.request(conn, mail_agent, "sms.send", {"to": "x"})
     with pytest.raises(tasks.Invalid):
         outbound.request(conn, mail_agent, "email.send", {"to": "x"})
+    with pytest.raises(tasks.Invalid):
+        outbound.request(conn, mail_agent, "discord.post", {"content": "x"}, kind="urgent")
+
+
+def test_money_commitments_and_personal_channels_wait_for_approval(conn, me, monkeypatch):
+    mail_agent = Ctx(actors.find_by_name(conn, "Head of Customer Success")["id"], via="mcp")
+    sent = []
+    monkeypatch.setattr(outbound, "PROVIDERS", {**outbound.PROVIDERS,
+                                                "email.send": lambda p: sent.append(p) or {"sent_to": p["to"]}})
+    monkeypatch.setattr(outbound, "configured", lambda: {a: True for a in outbound.ACTIONS})
+    quote = outbound.request(conn, mail_agent, "email.send",
+                             {"to": "jan@acme.cz", "subject": "Cenová nabídka", "body": "Cena je 12 000 Kč měsíčně."})
+    assert quote["status"] == "pending" and quote["sent"] is False and quote["kind"] == "commitment"
+    assert sent == []  # nothing leaves before approval
+    labelled = outbound.request(conn, mail_agent, "email.send",
+                                {"to": "jan@acme.cz", "subject": "Hi", "body": "See you"}, kind="money")
+    assert labelled["status"] == "pending" and labelled["details"]["kind"] == "money"
+    li = outbound.request(conn, mail_agent, "web.post", {"url": "https://www.linkedin.com/feed/", "content": "Hi"})
+    assert li["details"]["kind"] == "personal_channel"
+    assert approvals.decide(conn, me, labelled["id"], False)["status"] == "rejected" and sent == []
+    done = approvals.decide(conn, me, quote["id"], True)
+    assert done["result"]["status"] == "sent" and sent[0]["subject"] == "Cenová nabídka"
+    row = conn.execute("SELECT detail FROM audit_log WHERE action = 'outbound:email.send' AND entity = 'approval'"
+                       ).fetchone()
+    assert json.loads(row["detail"])["kind"] == "commitment"
+
+
+def test_the_ceo_gets_a_daily_digest_of_everything_sent(conn, me, monkeypatch, tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from pos import business
+
+    ceo = agents.create_agent(conn, me, name="CEO", purpose="runs the company", lifetime="long_lived",
+                              permissions=["tasks:read"], data_dir=tmp_path)["agent"]["id"]
+    conn.execute("UPDATE actors SET role = 'ceo' WHERE id = ?", (ceo,))
+    assert business.ceo_id(conn) == ceo
+    mail_agent = Ctx(actors.find_by_name(conn, "Head of Customer Success")["id"], via="mcp")
+    monkeypatch.setattr(outbound, "PROVIDERS", {**outbound.PROVIDERS, "email.send": lambda p: {"sent_to": p["to"]}})
+    monkeypatch.setattr(outbound, "configured", lambda: {a: True for a in outbound.ACTIONS})
+    outbound.request(conn, mail_agent, "email.send", {"to": "jan@acme.cz", "subject": "Re: login", "body": "Fixed."})
+    later = datetime.now(timezone.utc) + timedelta(seconds=2)
+    out = outbound.digest(conn, now=later)
+    assert out == {"sent": True, "items": 1, "to": ceo}
+    body = conn.execute("SELECT m.body FROM chat_inbox i JOIN chat_messages m ON m.id = i.message_id "
+                        "WHERE i.actor_id = ? ORDER BY m.id DESC LIMIT 1", (ceo,)).fetchone()["body"]
+    assert "Odchozí za poslední den" in body and "jan@acme.cz" in body and "Re: login" in body
+    assert outbound.digest(conn, now=later + timedelta(seconds=1))["sent"] is False  # quiet: nothing new
 
 
 def test_github_webhook(tmp_path, monkeypatch):
@@ -256,7 +304,7 @@ def test_github_issue_and_owner_only_actions(conn, me, monkeypatch):
     monkeypatch.setattr(outbound.httpx, "post", lambda url, **kw: calls.append((url, kw["json"])) or R())
     mail = Ctx(actors.find_by_name(conn, "Head of Customer Success")["id"])
     ap = outbound.request(conn, mail, "github.issue", {"repo": "ObseumEU/PersonalOS", "title": "Bug", "body": "x"})
-    approvals.decide(conn, me, ap["id"], True)
+    assert ap["status"] == "sent" and ap["number"] == 9  # ordinary work: straight out (Ú1)
     assert calls[0][0].endswith("/repos/ObseumEU/PersonalOS/issues") and calls[0][1]["title"] == "Bug"
     pay = outbound.request(conn, mail, "payment", {"to": "CZ65 0800", "amount": "1200 CZK", "reason": "invoice 7"})
     out = approvals.decide(conn, me, pay["id"], True)

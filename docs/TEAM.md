@@ -49,8 +49,9 @@ cannot, by the same rule.
   the Chief of Staff sends him one Czech digest at most twice a day (08:40
   and 16:30): numbered items, a one-line recommendation each, the task refs. Only urgent things (money being lost, the owner's data
   or security at risk, a deadline today) go at once, with the reason.
-- **Owner-only items stay the owner's:** outbound approvals (constitution
-  rule 1) and credential grants. They wait in their queues (Approvals,
+- **Owner-only items stay the owner's:** approvals of money, commitments and
+  posts on his personal channels (constitution rule 1; ordinary sends go out
+  directly and the CEO reviews them daily) and credential grants. They wait in their queues (Approvals,
   Přístupy) and the digest lists them; nobody pings him per item.
 - **Narrow exceptions**, each written in the agent's instructions: the
   Hlídač for critical incidents (severity critical, or the owner's data or

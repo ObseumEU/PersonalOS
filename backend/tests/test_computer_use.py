@@ -36,7 +36,7 @@ REF = "op://PersonalOS Agents/Router/password"
 
 # ------------------------------------------------------------------ the policy (Ú1)
 
-def test_submitting_on_a_foreign_site_asks_first_but_reading_searching_and_logging_in_do_not():
+def test_submitting_on_a_foreign_site_is_ordinary_work_paying_and_personal_channels_ask():
     d = browser.decide
     url = "https://forum.example.com/thread/1"
     assert d("browser_navigate", {"url": url})[0] == "allow"
@@ -44,13 +44,19 @@ def test_submitting_on_a_foreign_site_asks_first_but_reading_searching_and_loggi
     assert d("browser_click", {"element": "Search"}, url=url)[0] == "allow"
     assert d("browser_click", {"element": "Log in"}, url=url)[0] == "allow"
     assert d("browser_click", {"element": "Next page"}, url=url)[0] == "allow"
-    assert d("browser_click", {"element": "Post comment"}, url=url)[0] == "approval"
-    assert d("browser_click", {"element": "Submit"}, url=url)[0] == "approval"
-    assert d("browser_click", {"element": "Uložit"}, url=url)[0] == "approval"
-    assert d("browser_type", {"element": "Title", "text": "x", "submit": True}, url=url)[0] == "approval"
-    assert d("browser_press_key", {"key": "Enter"}, url=url, last_field="Your name")[0] == "approval"
+    # Ú1 (2026-09-27): posting, submitting and uploading on an ordinary site go out, audited
+    assert d("browser_click", {"element": "Post comment"}, url=url)[0] == "allow"
+    assert d("browser_click", {"element": "Submit"}, url=url)[0] == "allow"
+    assert d("browser_click", {"element": "Uložit"}, url=url)[0] == "allow"
+    assert d("browser_type", {"element": "Title", "text": "x", "submit": True}, url=url)[0] == "allow"
+    assert d("browser_press_key", {"key": "Enter"}, url=url, last_field="Your name")[0] == "allow"
     assert d("browser_press_key", {"key": "Enter"}, url=url, last_field="Search the forum")[0] == "allow"
-    assert d("browser_file_upload", {"paths": ["/work/a.pdf"]}, url=url)[0] == "approval"
+    assert d("browser_file_upload", {"paths": ["/work/a.pdf"]}, url=url)[0] == "allow"
+    # money, commitments, deleting and the owner's personal channels still ask
+    assert d("browser_click", {"element": "Place order"}, url=url)[0] == "approval"
+    assert d("browser_click", {"element": "Přijmout nabídku"}, url=url)[0] == "approval"
+    assert d("browser_click", {"element": "Delete thread"}, url=url)[0] == "approval"
+    assert d("browser_file_upload", {"paths": ["/work/a.png"]}, url="https://x.com/compose")[0] == "approval"
 
 
 def test_on_an_action_host_the_agent_acts_freely_except_banking():
@@ -60,7 +66,7 @@ def test_on_an_action_host_the_agent_acts_freely_except_banking():
     assert d("browser_click", {"element": "Delete automation"}, url="http://192.168.1.56:8123/x",
              action_hosts=ha)[0] == "allow"
     # the port is part of an entry that names one; another port on the same host is not the HA UI
-    assert d("browser_click", {"element": "Save"}, url="http://192.168.1.56:9000/", action_hosts=ha)[0] == "approval"
+    assert d("browser_click", {"element": "Delete"}, url="http://192.168.1.56:9000/", action_hosts=ha)[0] == "approval"
     # a host entry without a port covers subdomains
     assert browser.on_action_host("https://app.nexus.obseum.cloud/x", ["nexus.obseum.cloud"])
     assert not browser.on_action_host("https://nexus.obseum.cloud.evil.com/", ["nexus.obseum.cloud"])
@@ -71,9 +77,11 @@ def test_computer_actions_use_the_page_and_the_element_under_the_pointer():
     d = browser.decide
     url = "https://shop.example.com/cart"
     assert d("computer_left_click", {"coordinate": [5, 5]}, url=url, element="a Read more")[0] == "allow"
-    assert d("computer_left_click", {"coordinate": [5, 5]}, url=url, element="button[submit] Send")[0] == "approval"
+    assert d("computer_left_click", {"coordinate": [5, 5]}, url=url, element="button[submit] Send")[0] == "allow"
     assert d("computer_left_click", {"coordinate": [5, 5]}, url=url, element="button Buy now")[0] == "approval"
-    assert d("computer_key", {"text": "Return"}, url=url, last_field="textarea[textarea] Message")[0] == "approval"
+    assert d("computer_key", {"text": "Return"}, url=url, last_field="textarea[textarea] Message")[0] == "allow"
+    assert d("computer_key", {"text": "Return"}, url="https://www.linkedin.com/feed/",
+             last_field="textarea[textarea] Message")[0] == "approval"
     assert d("computer_key", {"text": "Return"}, url=url, last_field="input[search] Search")[0] == "allow"
     assert d("computer_left_click", {}, url="http://192.168.1.56:8123/", element="button Save",
              action_hosts=["192.168.1.56:8123"])[0] == "allow"
@@ -143,10 +151,11 @@ def test_check_endpoint_needs_the_right_grant_and_uses_the_action_hosts(app):
     browser.ensure_grants(conn)
     assert client.post("/api/worker/browser/check", json=body, headers=h).json()["decision"] == "allow"
     foreign = client.post("/api/worker/browser/check", headers=h, json={
-        **body, "url": "https://forum.example.com", "dry_run": False, "screenshot": PNG}).json()
+        **body, "args": {"element": "Delete post"}, "url": "https://forum.example.com", "dry_run": False,
+        "screenshot": PNG}).json()
     assert foreign["decision"] == "approval" and approvals.get(conn, foreign["approval_id"])["status"] == "pending"
     comp = {"tool": "computer_left_click", "args": {"coordinate": [1, 2]}, "url": "https://x.example",
-            "element": "button Send", "dry_run": True}
+            "element": "button Pay now", "dry_run": True}
     assert client.post("/api/worker/browser/check", json=comp, headers=h).json()["decision"] == "approval"
     policy = client.get("/api/worker/browser/policy", headers=h).json()
     assert policy["browser"] and policy["computer"] and "192.168.1.56:8123" in policy["action_hosts"]

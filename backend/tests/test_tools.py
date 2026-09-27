@@ -217,7 +217,7 @@ def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root):
     assert pw.fetch(Broken(), root) == []  # a missing tool list never crashes a worker
 
 
-def test_usage_counting_and_outbound_needs_approval(app, root):
+def test_usage_counting_and_outbound_needs_approval_only_for_money(app, root):
     client, conn, owner, dev, _, _ = app
     make(root, "shared/tools/fmt", manifest("fmt", visibility="team"))
     tools.record_use(conn, dev, "fmt", ok=True)
@@ -227,13 +227,18 @@ def test_usage_counting_and_outbound_needs_approval(app, root):
     assert tools.tools_usage(conn)["shared/fmt"]["users"] == 1
     assert next(t for t in client.get("/api/tools").json()["tools"] if t["id"] == "shared/fmt")["usage"]["uses"] == 2
 
+    # Ú1: an ordinary outbound tool (posting a report) is used without approval, audited.
     make(root, "shared/tools/poster", manifest("poster", visibility="team", outbound=True),
          {"main.py": "import httpx\n", "test_main.py": "pass\n"})
+    assert tools.record_use(conn, dev, "poster")["uses"] == 1
+    # ... one that pays needs an approval per use.
+    make(root, "shared/tools/payer", manifest("payer", visibility="team", outbound=True, outbound_kind="money"),
+         {"main.py": "import httpx\n", "test_main.py": "pass\n"})
     with pytest.raises(Exception, match="request_approval"):
-        tools.record_use(conn, dev, "poster")
-    ap = approvals.request(conn, dev, "tool:poster", {"why": "post the report"})
+        tools.record_use(conn, dev, "payer")
+    ap = approvals.request(conn, dev, "tool:payer", {"why": "pay the invoice"})
     approvals.decide(conn, owner, ap["id"], True)
-    assert tools.record_use(conn, dev, "poster", approval_id=ap["id"])["uses"] == 1
+    assert tools.record_use(conn, dev, "payer", approval_id=ap["id"])["uses"] == 1
 
 
 def _call(result):

@@ -1,7 +1,7 @@
 {
   "name": "Head of Growth",
   "display_name": "Obchod a marketing",
-  "purpose": "Růst: obchod a marketing; sám vede obchodní pipeline (leady a follow-upy zákazníků z pošty v knowlage, jen koncepty), řídí obsah a komunitu.",
+  "purpose": "Růst: obchod a marketing; sám vede obchodní pipeline (leady a follow-upy zákazníků z pošty v knowlage; e-maily posílá sám, nabídky a smlouvy jen ke schválení), řídí obsah a komunitu.",
   "role": "growth",
   "team": "growth",
   "reports_to": "CEO",
@@ -32,13 +32,13 @@
       "schedule": "weekly tue 10:00",
       "title": "Růst: týdenní pipeline",
       "notes": "Purpose: no lead or customer follow-up is forgotten. Source: the Head of Growth's routine.\n\nFollow 'Weekly pipeline' in your instructions.",
-      "definition_of_done": "The pipeline note is current; each follow-up due this week is a draft waiting for approval or a task.",
+      "definition_of_done": "The pipeline note is current; each follow-up due this week is sent, waits for approval (a quote or offer), or is a task.",
       "priority": 2,
       "estimate_min": 15,
       "topic": "obchod"
     }
   ],
-  "note": "Sales / Business Development is merged into this role (docs/REORG.md): one lean seat, drafts only, outbound through the approval queue.",
+  "note": "Sales / Business Development is merged into this role (docs/REORG.md): one lean seat; sales mail goes out directly, quotes, offers, contracts and the owner's personal channels through the approval queue.",
   "grants": [
     "tool:knowledge"
   ]

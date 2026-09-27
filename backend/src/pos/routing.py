@@ -375,6 +375,13 @@ def _comment_on_parked(conn: sqlite3.Connection, ctx: Ctx, event: dict, title: s
     ours = any((json.loads(a["details"] or "{}").get("payload") or {}).get("body", "").strip() == body
                for a in conn.execute("SELECT details FROM approvals WHERE task_id = ? AND action = 'github.comment'",
                                      (parent["task_id"],)))
+    if not ours and body:  # sent directly (Ú1): the audit log keeps a hash of the text
+        from .outbound import body_hash
+
+        h = body_hash({"body": body})
+        ours = any(json.loads(a["detail"] or "{}").get("body_sha256") == h
+                   for a in conn.execute("SELECT detail FROM audit_log WHERE action = 'outbound:github.comment' "
+                                         "AND entity = 'task' AND entity_id = ?", (parent["task_id"],)))
     rule = get_rule(conn, parent["rule_id"])
 
     def record(task_id):

@@ -15,9 +15,10 @@ What stays the owner's (hard limits, checked in `_authorize` for every change):
   grant tools themselves;
 - the Access manager never grants or raises anything for itself.
 
-Outbound (`outbound:<action>`) may be granted, but each outbound action still
-goes through the owner's approval queue (pos.outbound, request_approval;
-constitution rule 1, unchanged).
+Outbound (`outbound:<action>`) may be granted. With it, ordinary sends go out at
+once (constitution Ú1 as amended 2026-09-27: audited, the CEO reviews them daily);
+money, commitments and the owner's personal channels still wait for his approval
+(pos.outbound, pos.guard.policy.classify_outbound).
 """
 
 import json
@@ -65,7 +66,7 @@ DEFAULT_SETTINGS = {
     "spike_floor_tokens": 6_000_000,
     "spike_budget_share": 0.5,    # ... and above this share of the agent's own daily budget in one hour
     "spike_cooldown_h": 1.0,      # no second pause within this long after a resume
-    "cap_alert_ratio": 0.8,       # ping the owner when the company cap is this full
+    "cap_alert_ratio": 0.8,       # ping the CEO when the company cap is this full
 }
 
 
@@ -133,8 +134,8 @@ def autonomy_caps() -> list[str]:
     """What every active agent holds by default: every permission group of the platform's
     tools except access:manage (the grant tools stay the owner's), plus a tool grant for each
     pos tool whose group is not a permission (e.g. tool:ha_ssh; its credentials are checked
-    inside), and the headless browser (tool:browser). Not here: outbound (constitution rule 1
-    keeps each send in the approval queue) and the one shared desktop sandbox (tool:computer,
+    inside), and the headless browser (tool:browser). Not here: outbound (granted per agent
+    by the Access manager, Ú1) and the one shared desktop sandbox (tool:computer,
     host capacity; granted at once on request)."""
     from .. import agents, mcp_server
 
@@ -393,7 +394,8 @@ def grants(conn: sqlite3.Connection, agent_id: int, include_ended: bool = False,
 
 
 def require_outbound(conn: sqlite3.Connection, ctx: Ctx, action: str) -> None:
-    """request_outbound needs an outbound grant (the approval queue still decides each action)."""
+    """request_outbound needs an outbound grant (the guard then decides: ordinary goes out, money,
+    commitments and personal channels wait for the owner)."""
     if actors.get(conn, ctx.actor_id)["kind"] == "human":
         return
     have = effective(conn, ctx.actor_id)
@@ -782,7 +784,8 @@ def grant(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, capability: str, re
     name = actors.get(conn, agent_id)["name"]
     audit.log(conn, ctx, "access_grant", "actor", agent_id, grant=gid, capability=capability, kind=kind,
               hours=hours, expires_at=row["expires_at"], reason=reason, request=request_id)
-    note = " Každou odchozí akci dál schvaluje majitel." if kind == "outbound" else ""
+    note = (" Běžné odchozí jde ven hned (auditované, CEO denně kontroluje); peníze, závazky a osobní kanály "
+            "majitele dál schvaluje majitel.") if kind == "outbound" else ""
     _post_team(conn, ctx, f"dostal `{capability}` {_duration(hours, row['expires_at'])}.{note} Důvod: {reason}",
                subject=name)
     conn.commit()
@@ -993,7 +996,7 @@ def expire(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
 
 def watch(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     """Every 15 minutes: spend spikes (pause first, then the Access manager
-    reviews) and the company cap (ping the owner at 80 %)."""
+    reviews) and the company cap (ping the CEO at 80 %)."""
     if not store.ready(conn):
         return {}
     now = now or utcnow()
@@ -1064,9 +1067,10 @@ def _cap_alert(conn: sqlite3.Connection, metric: str, u: float, cap: float, now:
     owner = actors.owner_id(conn)
     settings_store.put(conn, Ctx(owner, via="system"), "access.cap_alerts", (sent + [key])[-50:])
     pct = int(100 * u / cap) if cap else 100
-    _dm_owner(conn, f"Strop firmy {METRICS[metric]}: {_fmt(metric, u)} z {_fmt(metric, cap)} ({pct} %)."
-              + (" Agenti teď nepoběží, dokud strop nezvedneš." if full else
-                 " Hlídám to; strop zvedáš jen ty (stránka Správce přístupů)."))
+    # Chain of command (docs/REORG.md): the CEO hears it and decides whether to ask the owner.
+    _dm_ceo(conn, f"Strop firmy {METRICS[metric]}: {_fmt(metric, u)} z {_fmt(metric, cap)} ({pct} %)."
+            + (" Agenti teď nepoběží, dokud majitel strop nezvedne; když je to potřeba, požádej ho (ask_owner)."
+               if full else " Hlídám to; strop zvedá jen majitel (ask_owner, když je potřeba víc)."))
     audit.log(conn, Ctx(manager_id(conn) or owner, via="system"), "access_cap_alert", None, None, metric=metric,
               used=u, cap=cap, full=full)
     return True

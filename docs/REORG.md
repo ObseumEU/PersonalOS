@@ -75,8 +75,10 @@ and tools). The old files are in `agents/_archive/`.
 ## Chain of command
 Report to your lead (`org_chart`), not the owner. The lead decides what it
 can and passes up only what it cannot. Only the CEO contacts the owner;
-replying to the owner when he wrote to you is always fine. Outbound actions
-wait in the approval queue (the CoS lists them in the digest). A rule in the
+replying to the owner when he wrote to you is always fine. Ordinary outbound
+work goes out directly (audited, the CEO reviews it daily); money,
+commitments and the owner's personal channels wait in the approval queue (the
+CoS lists them in the digest). A rule in the
 instructions, not a gate in code (docs/TEAM.md).
 
 ## Workers and memory
@@ -140,8 +142,8 @@ invoice|rechnung`) → CFO (was the disabled Nexus rule; now on); Discord →
 Community Manager; sentinel incident and Grafana alert → Hlídač.
 
 **Grants**: new members get their `agent.json` permissions as grants (plus
-`outbound:*` for those with `approvals:request`; every send still waits for
-approval). Owner-only grants done in the migration as the owner, per his
+`outbound:*` for those with `approvals:request`; ordinary sends go out at
+once, money, commitments and personal channels wait for approval). Owner-only grants done in the migration as the owner, per his
 request: the CFO `tool:access_usage` and the Security Engineer
 `tool:access_audit` (read-only numbers); the Executive Assistant loses
 `agents:create`. Credentials stay the owner's: `cred:home-assistant` stays
@@ -192,7 +194,7 @@ also possible: `restore` an archived agent on its page.
 
 ## Service deploys (knowlage, Nexus)
 The specialists commit on their branch and, with the credential, push it and
-open a pull request (outbound: approved). There is no agent deploy lane on
+open a pull request (outbound, goes out directly). There is no agent deploy lane on
 svr03 yet: a deploy is a task with the exact commands, reviewed by the SRE
 and run by a person. Next step (a Software Engineer task): a second deployer
 instance per app (the same `pos.selfdeploy` with the app's repository, test

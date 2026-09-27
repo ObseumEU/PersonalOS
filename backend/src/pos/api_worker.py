@@ -269,8 +269,8 @@ VERDICTS = ("clear", "unclear", "too_big", "wrong_repo")
 @router.post("/tasks/{task_id}/triage")
 def triage(task_id: str, body: TriageIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """The worker's cheap check before a full run. clear: run it. unclear: one
-    clarifying question goes out through the approval queue (a GitHub comment
-    on the issue, else an approval for the owner) and the task waits.
+    clarifying question goes out (a GitHub comment on the issue, sent directly under
+    Ú1, else an approval for the owner) and the task waits.
     too_big, wrong_repo: back to the owner. Either way no full run for a day."""
     from . import audit, outbound
 
@@ -287,19 +287,19 @@ def triage(task_id: str, body: TriageIn, conn=Depends(get_db), ctx: Ctx = Depend
     elif body.verdict == "unclear":
         question = (body.question or "What exactly should change, and how will we know it is done?").strip()[:1000]
         issue = _github_issue(conn, tid)
-        if issue:
-            a = outbound.request(conn, rctx, "github.comment",
-                                 {"repo": issue[0], "number": issue[1], "body": question}, tid)
-        else:
+        a = outbound.request(conn, rctx, "github.comment",
+                             {"repo": issue[0], "number": issue[1], "body": question}, tid) if issue else {}
+        if not a.get("id") and a.get("status") != "sent":  # no issue, or the GitHub connector is off
             a = approvals.request(conn, rctx, "clarify", {"question": question}, tid)
+        where = f"approval #{a['id']}" if a.get("id") else f"asked on {issue[0]}#{issue[1]}"
         tasks.update(conn, rctx, tid, {"status": "waiting",
-                                       "progress_note": f"Needs clarification (approval #{a['id']}): {question}"[:500]})
+                                       "progress_note": f"Needs clarification ({where}): {question}"[:500]})
         back_off(conn, tid)
         from . import owner_notice
 
         owner_notice.notify(conn, tid, ctx.actor_id, "blocked",
-                            f"potřebuje upřesnění (schválení #{a['id']}): {question}")
-        out.update(action="parked", approval_id=a["id"])
+                            f"potřebuje upřesnění ({where}): {question}")
+        out.update(action="parked", approval_id=a.get("id"))
     elif body.verdict in ("too_big", "wrong_repo"):
         why = {"too_big": "too big for one run; please split it",
                "wrong_repo": "not about a repository this agent works on"}[body.verdict]

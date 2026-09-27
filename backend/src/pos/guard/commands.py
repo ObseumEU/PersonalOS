@@ -4,7 +4,9 @@ Agents have direct system access; this is a "common sense" check the runner
 applies before executing a command an agent asked for. It is not a sandbox.
 
 - ``bypass``: turns off or dodges a safeguard. Refused for agents (U4).
-- ``outbound``: sends something out of PersonalOS. Needs approval (U1).
+- ``outbound``: sends something out of PersonalOS. Ordinary work (U1 since 2026-09-27):
+  allowed and audited with the run; money and commitments go through request_approval,
+  which a shell command cannot tell, so agents send those through request_outbound.
 - ``irreversible``: destroys data with no way back (force-push, DROP DATABASE,
   mkfs). Always goes to the owner as a task (U3).
 - ``destructive``: deletes or overwrites data (rm -rf, DELETE without WHERE,
@@ -101,7 +103,8 @@ def evaluate(command: str, actor: Actor, trigger: Trigger) -> Decision:
     if c.category == "bypass":
         return Decision(Outcome.DENY, "U4", f"Refused: {c.reason}.", details)
     if c.category == "outbound":
-        return Decision(Outcome.NEEDS_OWNER, "U1", f"Needs approval: {c.reason}.", details)
+        # Ú1: e-mail, GitHub comments and PRs are ordinary work; the run's audit trail records it.
+        return Decision(Outcome.ALLOW, "U1", f"Outbound, audited: {c.reason}.", details)
     if c.category == "irreversible":
         return Decision(Outcome.NEEDS_OWNER, "U3", f"Irreversible: {c.reason}.", details)
     if trigger is Trigger.EXTERNAL:

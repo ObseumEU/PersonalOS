@@ -79,12 +79,43 @@ def test_permission_grant_never_exceeds_granter():
     assert policy.check_permission_grant(OWNER, set(), {"anything"}).allowed
 
 
-def test_outbound_needs_approval():
-    assert policy.check_outbound(AGENT, "email.send").outcome is Outcome.NEEDS_OWNER
-    assert policy.check_outbound(AGENT, "email.send", approval_id="ap_1").allowed
+def test_ordinary_outbound_goes_out_money_commitments_and_personal_channels_need_approval():
+    reply = {"to": "customer@example.com", "subject": "Re: login", "body": "Reset the password from the link."}
+    assert policy.check_outbound(AGENT, "email.send", payload=reply).allowed
+    assert policy.check_outbound(AGENT, "github.comment", payload={"body": "Fixed in #12"}).allowed
+    assert policy.check_outbound(AGENT, "discord.post", payload={"content": "Release 1.4 is out"}).allowed
+    assert policy.check_outbound(AGENT, "payment", payload={"to": "x", "amount": 5}).outcome is Outcome.NEEDS_OWNER
+    assert policy.check_outbound(AGENT, "payment", approval_id="ap_1").allowed
     assert policy.check_outbound(AGENT, "tasks.update").allowed
+    # the sender's own label moves toward approval, never away from it
+    assert policy.check_outbound(AGENT, "email.send", payload=reply, kind="commitment").outcome is Outcome.NEEDS_OWNER
+    quote = {"to": "c@example.com", "subject": "Cenová nabídka", "body": "Posíláme cenovou nabídku."}
+    d = policy.check_outbound(AGENT, "email.send", payload=quote, kind="ordinary")
+    assert d.outcome is Outcome.NEEDS_OWNER and d.details["kind"] == "commitment" and d.rule == "U1"
     policy.register_outbound_action("sms.send")
-    assert policy.check_outbound(AGENT, "sms.send").rule == "U1"
+    assert policy.check_outbound(AGENT, "sms.send", kind="money").rule == "U1"
+
+
+@pytest.mark.parametrize("action,payload,kind", [
+    ("email.send", {"subject": "Re: invoice question", "body": "Your invoice is attached, thanks!"}, "ordinary"),
+    ("email.send", {"subject": "Re: bug", "body": "You're signed in again after the fix."}, "ordinary"),
+    ("github.issue", {"title": "Crash on login", "body": "Steps to reproduce..."}, "ordinary"),
+    ("payment", {"to": "ACME", "amount": 10, "reason": "licence"}, "money"),
+    ("email.send", {"subject": "Order", "body": "We will purchase 3 licences today."}, "money"),
+    ("email.send", {"subject": "Objednávka", "body": "Závazně objednáváme 2 kusy."}, "money"),
+    ("email.send", {"subject": "Offer", "body": "Our quote: the setup costs 12 000 Kč."}, "commitment"),
+    ("email.send", {"subject": "Smlouva", "body": "V příloze je smlouva k podpisu."}, "commitment"),
+    ("email.send", {"subject": "Pricing", "body": "The price is €450 per month."}, "commitment"),
+    ("web.post", {"url": "https://www.linkedin.com/feed/", "content": "Hello"}, "personal_channel"),
+    ("web.post", {"url": "https://blog.example.com/new", "content": "Hello"}, "ordinary"),
+])
+def test_outbound_classification(action, payload, kind):
+    assert policy.classify_outbound(action, payload)[0] == kind
+
+
+def test_outbound_kind_must_be_known():
+    with pytest.raises(ValueError):
+        policy.classify_outbound("email.send", {}, "urgent")
 
 
 def test_private_stays_private():
@@ -157,8 +188,8 @@ def test_scan_leaves_normal_mail_alone():
         ("rm -rf /", commands.Trigger.MEMBER, Outcome.NEEDS_OWNER, "U3"),
         ("rm -rf ~", commands.Trigger.MEMBER, Outcome.NEEDS_OWNER, "U3"),
         ("psql -c 'DROP DATABASE pos'", commands.Trigger.MEMBER, Outcome.NEEDS_OWNER, "U3"),
-        ("gh pr comment 5 --body hi", commands.Trigger.MEMBER, Outcome.NEEDS_OWNER, "U1"),
-        ("sendmail boss@example.com < draft.txt", commands.Trigger.MEMBER, Outcome.NEEDS_OWNER, "U1"),
+        ("gh pr comment 5 --body hi", commands.Trigger.MEMBER, Outcome.ALLOW, "U1"),
+        ("sendmail boss@example.com < draft.txt", commands.Trigger.MEMBER, Outcome.ALLOW, "U1"),
         ("pos unfreeze", commands.Trigger.MEMBER, Outcome.DENY, "U4"),
         ("git commit --no-verify -m x", commands.Trigger.MEMBER, Outcome.DENY, "U4"),
         ("vim docs/CONSTITUTION.md", commands.Trigger.MEMBER, Outcome.DENY, "U4"),

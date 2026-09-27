@@ -31,8 +31,12 @@ Tasks have a status (inbox, next, working, review, waiting, someday, done), a
 priority 1-3, a do_date and a deadline, and one assignee: a person, the AI
 assistant, an agent, or someone outside. As an agent: claim_task before you
 start, report_progress while you work, complete_task when done (the owner
-reviews it). Anything that leaves PersonalOS (e-mail, posts, payments) needs
-request_approval first. Chain of command: report to your lead, not the owner.
+reviews it). Ordinary outbound work (e-mail and customer replies, Discord, GitHub
+comments, issues, PRs) you send yourself with request_outbound: it goes out at once,
+audited, and the CEO reviews it daily. Only money (payments, purchases, anything
+costing money outside the approved budgets), commitments (contracts, price quotes)
+and posts on the owner's personal channels (LinkedIn, personal socials) wait for
+approval; request_outbound routes those itself. Chain of command: report to your lead, not the owner.
 Only the top of the chain (the CEO) contacts the owner; replying when the owner wrote to you is always fine.
 A decision you truly cannot make yourself goes to your lead (chat_send to=<lead>,
 a task or handoff_task); the top of the chain asks the owner with ask_owner (one
@@ -489,8 +493,11 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                     "messages": agents.take_messages(conn, c.actor_id),
                     "frozen": killswitch.is_frozen(conn), "paused": bool(me["paused_at"])}
 
-    @mcp.tool(description="Ask the owner to approve something that leaves PersonalOS: sending an e-mail, "
-                          "posting, a payment, a merge. why: one sentence on why it is needed. The owner is "
+    @mcp.tool(description="Ask the owner to approve what the constitution (Ú1) keeps for him: a payment, "
+                          "purchase or anything costing money outside the approved budgets; a contract, price "
+                          "quote or other legal or financial commitment; a post on his personal channels "
+                          "(LinkedIn, personal socials). Ordinary e-mail, customer replies, Discord and GitHub "
+                          "you send yourself with request_outbound (no approval). why: one sentence on why it is needed. The owner is "
                           "pinged in #team, so do not ping him again in chat: the Chief of Staff lists "
                           "pending approvals in its digest for him. Returns the approval id. A decision, "
                           "confirmation or input goes to your lead (or, at the top of the chain, ask_owner).")
@@ -517,7 +524,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "when the owner answers; finish the run then. links: URLs or refs worth opening. "
                           "topic: a short key; the same task and topic is never asked twice (you get the "
                           "existing ticket back). The owner's comments and resolution reach your inbox. "
-                          "Outbound actions still go through request_outbound / request_approval.")
+                          "Outbound work goes through request_outbound (ordinary sends go out at once).")
     def ask_owner(ctx: Context, title: str, why: str, details: str = "", options: list[str] | None = None,
                   recommendation: str = "", kind: str = "decision", task_id: str | None = None,
                   blocking: bool = True, links: list[str] | None = None, topic: str | None = None,
@@ -770,18 +777,28 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                                             "ref": ref, "url": url, "author": author,
                                             "meta": {"labels": labels or []}})
 
-    @mcp.tool(description="Ask the owner to approve an outbound action; it runs automatically once approved. "
-                          "action: email.send {to, subject, body, in_reply_to?}, github.comment {repo, number, "
-                          "body}, discord.post {content}.")
+    @mcp.tool(description="Send something out of PersonalOS (constitution Ú1). Ordinary work (e-mail and "
+                          "customer replies, Discord, GitHub comments, issues and reviews) goes out at once, "
+                          "is audited and lands in the CEO's daily review: no approval, no waiting. Money "
+                          "(payment, purchase, anything costing money outside the approved budgets), commitments "
+                          "(contract, price quote, other legal or financial promise) and posts on the owner's "
+                          "personal channels (LinkedIn, personal socials) go to the owner's approval queue "
+                          "instead and run once approved. action: email.send {to, subject, body, in_reply_to?}, "
+                          "github.comment {repo, number, body}, github.issue {repo, title, body, labels?}, "
+                          "github.review {repo, number, body, event?}, discord.post {content}, payment {to, "
+                          "amount, reason}, web.post {url, content}. kind (optional): ordinary | money | "
+                          "commitment | personal_channel; say it when you know it. It only ever moves a send "
+                          "toward approval: rules that see money, a quote or a personal channel win. Returns "
+                          "status sent | not_configured | failed, or the approval (sent: false).")
     def request_outbound(ctx: Context, action: str, payload: dict[str, Any], task_id: str | None = None,
-                         why: str = "") -> dict:
+                         why: str = "", kind: str | None = None) -> dict:
         from . import outbound
 
         with session(ctx, "request_outbound", action=action, task_id=task_id) as (conn, c):
             tid = tasks.parse_id(task_id) if task_id else None
             if tid:
                 tasks.get(conn, c, tid)
-            return outbound.request(conn, c, action, payload, tid, why=why)
+            return outbound.request(conn, c, action, payload, tid, why=why, kind=kind)
 
     @mcp.tool(description="The event routing rules (which events go to which member).")
     def list_routes(ctx: Context) -> list[dict]:
@@ -816,7 +833,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "'every 30m', 'every 2h', 'every 4d', 'every 4d 09:00', 'daily 07:00', 'weekdays 07:00', 'weekly fri 15:00' "
                           "(Europe/Prague; agents at most every 15 min, max 5 active). visibility 'personal' "
                           "(for yourself, the default) or 'team' (shared; may be assigned to another member "
-                          "if you have tasks:write). Outbound actions in the task still need approval each time. "
+                          "if you have tasks:write). Outbound in the task follows Ú1 each time (money, commitments, personal channels ask). "
                           "Give notes (what each firing is for and what done looks like) and definition_of_done.")
     def schedule_create(ctx: Context, name: str, schedule: str, title: str | None = None, notes: str | None = None,
                         definition_of_done: str | None = None, priority: int | None = None,

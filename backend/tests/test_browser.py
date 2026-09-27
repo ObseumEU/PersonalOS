@@ -37,18 +37,24 @@ mcp.run()
 '''
 
 
-def test_policy_lets_reading_and_forms_through_and_stops_paying_sending_deleting():
+def test_policy_lets_reading_forms_and_sending_through_and_stops_paying_signing_deleting():
     d = browser.decide
     assert d("browser_navigate", {"url": "https://news.example.com"})[0] == "allow"
     assert d("browser_type", {"element": "Search box", "text": "x", "submit": True})[0] == "allow"
     assert d("browser_fill_form", {"fields": [{"name": "Name", "value": "x"}]})[0] == "allow"
     assert d("browser_click", {"element": "Log in button"})[0] == "allow"
     assert d("browser_click", {"element": "Pay now"})[0] == "approval"
-    assert d("browser_click", {"element": "Odeslat zprávu"})[0] == "approval"
+    assert d("browser_click", {"element": "Odeslat zprávu"})[0] == "allow"  # ordinary work (Ú1)
+    assert d("browser_click", {"element": "Sign contract"})[0] == "approval"
     assert d("browser_click", {"element": "Delete repository"})[0] == "approval"
     assert d("browser_navigate", {"url": "https://ib.fio.cz/login"})[0] == "approval"  # banking
-    assert d("browser_type", {"element": "Reply message", "text": "hi", "submit": True})[0] == "approval"
-    assert d("browser_press_key", {"key": "Enter"}, last_field="Chat message")[0] == "approval"
+    assert d("browser_type", {"element": "Reply message", "text": "hi", "submit": True})[0] == "allow"
+    assert d("browser_press_key", {"key": "Enter"}, last_field="Chat message")[0] == "allow"
+    # the owner's personal channels: posting asks, reading does not
+    li = "https://www.linkedin.com/feed/"
+    assert d("browser_navigate", {"url": li})[0] == "allow"
+    assert d("browser_click", {"element": "Post"}, url=li)[0] == "approval"
+    assert d("browser_press_key", {"key": "Enter"}, url=li, last_field="Write a comment")[0] == "approval"
     assert d("browser_fill_form", {"fields": [{"name": "Card number", "value": "4111"}]})[0] == "approval"
     assert d("browser_navigate", {"url": "https://other.example"}, allow_hosts=["example.com"])[0] == "approval"
     red = browser.redact("browser_type", {"element": "Password", "text": "hunter2"})

@@ -28,13 +28,15 @@ PERMISSIONS = {
     "tasks:write": "create and change tasks",
     "tasks:claim": "take tasks from the queue, report progress, hand in results",
     "tasks:review": "review colleagues' results (accept or return) where you are the reviewer or their lead",
-    "approvals:request": "ask the owner to approve outbound actions",
+    "approvals:request": "send outbound work (request_outbound) and ask the owner to approve money, commitments "
+                         "and posts on his personal channels",
     "agents:create": "create new agents (within limits, never with more permissions)",
     "messages:send": "message other members",
     "events:emit": "report incoming events from a connector (e-mail, Discord, GitHub)",
     "routes:write": "change event routing rules",
     "hr:read": "read HR's roster, scores and proposals (hr_overview)",
-    "browser:use": "drive a web browser (paying, sending, deleting and account settings still need approval)",
+    "browser:use": "drive a web browser (paying, signing, deleting, account settings and the owner's personal channels "
+                  "still need approval)",
     "access:manage": "decide other agents' grants and budgets (the Access manager; only the owner grants it)",
     "ops:monitor": "read the sentinel's incident logs and close incidents (the Monitor agent)",
     "ops:observe": "query Loki logs (<=1 h, <=200 lines, redacted) and a Prometheus metrics snapshot (the Monitor agent)",

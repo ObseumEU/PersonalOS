@@ -1,7 +1,7 @@
 {
   "name": "Head of Customer Success",
   "display_name": "Péče o zákazníky",
-  "purpose": "Zákazníci a podpora: třídí došlou poštu, která může potřebovat akci, připravuje koncepty odpovědí ke schválení, hlídá spokojenost a follow-upy zákazníků.",
+  "purpose": "Zákazníci a podpora: třídí došlou poštu, která může potřebovat akci, odpovídá zákazníkům sám (cenové nabídky a závazky jen ke schválení), hlídá spokojenost a follow-upy zákazníků.",
   "role": "customer_success",
   "team": "customers",
   "reports_to": "CEO",
@@ -32,7 +32,7 @@
       "schedule": "weekly thu 09:30",
       "title": "Zákazníci: týdenní follow-up",
       "notes": "Purpose: no customer waits for an answer we promised. Source: the Head of Customer Success's routine.\n\nFollow 'Weekly follow-up' in your instructions.",
-      "definition_of_done": "Every overdue customer thread has a draft reply waiting for approval or a task with an owner.",
+      "definition_of_done": "Every overdue customer thread has a sent reply or a task with an owner.",
       "priority": 2,
       "estimate_min": 15,
       "topic": "zakaznici"

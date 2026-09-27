@@ -221,7 +221,7 @@ Každý úkol **i každý jeho krok** má jednoho řešitele jednoho ze čtyř t
 |---|---|---|
 | Já (majitel nebo jiný člověk v PersonalOS) | rozhodnutí, peníze, podpisy, co jde ven jeho jménem | – |
 | AI (asistent přes Codex) | čtení, shrnutí, extrakce, koncepty | čeká na kontrolu vlastníka úkolu |
-| Agent (Knowledge, Nexus, Mail, Dev, …) | výzkum, opakované a systémové úlohy | co jde ven, čeká na schválení (ústava 1) |
+| Agent (Knowledge, Nexus, Mail, Dev, …) | výzkum, opakované a systémové úlohy | běžné odchozí zprávy posílá sám (audit, denní kontrola CEO); peníze, závazky a osobní kanály majitele čekají na schválení (ústava Ú1) |
 | Člověk mimo systém | delegováno ven | úkol jde do „Waiting for“ s datem připomenutí; AI připraví připomínku |
 
 Při vyjasnění Inboxu AI navrhne název, téma, termín a kroky s řešiteli

@@ -75,8 +75,11 @@ assigns them by role; routing rules send events straight to the doer.
   and a short Czech ping in #team. Blocking asks put the task in `waiting`;
   the owner's comment or resolution reaches the inbox and the task comes back
   to the queue. The same task and topic is never asked twice. Outbound
-  actions still go through `request_outbound` / `request_approval`: only
-  the owner approves them (constitution rule 1), they show up in the Chief
+  work goes through `request_outbound` (constitution rule 1): ordinary sends
+  (mail, customer replies, Discord, GitHub) go out at once, audited, and the
+  CEO reviews them in the daily outbound digest; money, commitments
+  (contracts, price quotes) and posts on the owner's personal channels wait
+  in the approval queue (`kind`, or `request_approval`), show up in the Chief
   of Staff's digest, and you do not ping him about them yourself.
 - **One item, one task.** Escalating something that already has a task (an
   invoice routed to the CFO, a customer mail)? Pass that task on
@@ -118,8 +121,9 @@ report the result. Ask only when the code actually refuses you
 that can't be found. Every agent holds every platform tool by default, budgets
 are generous, and reviews never hold work up: hand in, go on. The only gates
 left are the owner's: the kill switch, the company budget cap, the guard and
-constitution files, and outbound actions (constitution rule 1: each send waits
-in the approval queue).
+constitution files, and money, commitments and posts on the owner's personal
+channels (constitution rule 1: those wait in the approval queue; ordinary
+sends go out directly).
 
 ## Where an agent runs
 Every agent runs in the agent pool (`"worker": "pool"`): no process while it

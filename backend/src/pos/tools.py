@@ -86,7 +86,7 @@ class Tool:
             "kind": m.get("kind"), "description": m.get("description", ""), "owner": m.get("owner", ""),
             "visibility": m.get("visibility"), "version": m.get("version"), "entry": self.entry,
             "tests": m.get("tests"), "permissions_needed": list(m.get("permissions_needed") or []),
-            "outbound": bool(m.get("outbound")), "valid": not self.errors, "errors": self.errors,
+            "outbound": bool(m.get("outbound")), "outbound_kind": m.get("outbound_kind"), "valid": not self.errors, "errors": self.errors,
         }
 
 
@@ -143,6 +143,10 @@ def validate(manifest: dict, files: dict[str, str], *, folder_name: str, shared:
             errs.append(f"unknown permissions: {', '.join(unknown)}")
     if not isinstance(m.get("outbound", False), bool):
         errs.append("outbound must be true or false")
+    from .guard.policy import OUTBOUND_KINDS
+
+    if m.get("outbound_kind") is not None and m.get("outbound_kind") not in OUTBOUND_KINDS:
+        errs.append(f"outbound_kind must be one of {', '.join(OUTBOUND_KINDS)}")
     return errs
 
 
@@ -413,18 +417,24 @@ def _current_run(conn: sqlite3.Connection, actor_id: int) -> int | None:
 
 def record_use(conn: sqlite3.Connection, ctx: Ctx, name: str, ok: bool = True,
                approval_id: int | None = None) -> dict:
-    """Count one use of a tool. An outbound tool needs an approved approval per use."""
+    """Count one use of a tool. An outbound tool is ordinary work (Ú1: audited, no approval),
+    unless its manifest says outbound_kind money, commitment or personal_channel: then it
+    needs an approved approval per use."""
+    from .guard.policy import APPROVAL_KINDS
+
     tool = find(name, _agent_slug(conn, ctx.actor_id))
-    if tool.manifest.get("outbound") and not actors.get(conn, ctx.actor_id)["is_owner"]:
+    needs = tool.manifest.get("outbound") and tool.manifest.get("outbound_kind") in APPROVAL_KINDS
+    if needs and not actors.get(conn, ctx.actor_id)["is_owner"]:
         row = conn.execute("SELECT status, requested_by FROM approvals WHERE id = ?",
                            (approval_id or 0,)).fetchone()
         if row is None or row["status"] != "approved" or row["requested_by"] != ctx.actor_id:
-            raise Forbidden(f"{name} sends data out of PersonalOS: request_approval before each use "
-                            "and pass the approved approval_id")
+            raise Forbidden(f"{name} is {tool.manifest['outbound_kind']} (constitution Ú1): request_approval "
+                            "before each use and pass the approved approval_id")
     run_id = ctx.run_id or _current_run(conn, ctx.actor_id)
     cur = conn.execute("INSERT INTO tool_usage (tool, actor_id, run_id, at, ok) VALUES (?, ?, ?, ?, ?)",
                        (tool.id, ctx.actor_id, run_id, now_iso(), 1 if ok else 0))
-    audit.log(conn, ctx, "tool_use", "tool", cur.lastrowid, tool=tool.id, ok=ok, approval_id=approval_id)
+    audit.log(conn, ctx, "tool_use", "tool", cur.lastrowid, tool=tool.id, ok=ok, approval_id=approval_id,
+              **({"outbound": True} if tool.manifest.get("outbound") else {}))
     return {"tool": tool.id, "recorded": True, **tools_usage(conn).get(tool.id, {})}
 
 
@@ -636,7 +646,8 @@ def register_mcp(mcp, session) -> None:
             return _wrap(lambda: publish(conn, c, name))
 
     @mcp.tool(description="Record that you used a tool and whether it helped (ok). HR and the retrospective "
-                          "read these counts. A tool with outbound: true needs an approved approval_id per use.")
+                          "read these counts. A tool with outbound: true is audited; one whose outbound_kind is money, "
+                          "commitment or personal_channel needs an approved approval_id per use.")
     def tools_record_use(ctx: Context, name: str, ok: bool = True, approval_id: int | None = None) -> dict:
         with session(ctx, "tools_record_use", name=name, ok=ok) as (conn, c):
             return _wrap(lambda: record_use(conn, c, name, ok, approval_id))

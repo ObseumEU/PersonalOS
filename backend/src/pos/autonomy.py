@@ -8,7 +8,7 @@ the loosened defaults); this script brings the agents that already exist along:
     python -m pos.autonomy --apply      # do it
 
 1. grants    every active agent gets every autonomy capability (all the platform's tool
-             groups except access:manage; outbound stays as it is, constitution rule 1),
+             groups except access:manage; outbound grants stay as they are, Ú1),
              also those ended earlier.
 2. budgets   every agent's permanent own budget 20x (usd_run 5x); once (marked in the
              settings, a second run does not scale again).

@@ -170,7 +170,20 @@ def budget_check(conn: sqlite3.Connection) -> dict:
                 "topic": "rozpocet", "assignee": "me",
             })
     conn.commit()
-    return {"level": report.level, "actions": report.actions}
+    return {"level": report.level, "actions": report.actions, "company_cap": company_cap(conn)}
+
+
+def company_cap(conn: sqlite3.Connection) -> dict:
+    """The owner's company-wide spend cap next to what is used (the Access manager's gate
+    enforces it before every run; the hourly check reports it)."""
+    from .access import service as access
+
+    out = {}
+    for metric in ("usd_day", "usd_month"):
+        cap = access.limit(conn, None, metric)
+        if cap is not None:
+            out[metric] = {"cap": cap, "used": round(access.used(conn, None, metric), 2)}
+    return out
 
 
 async def hr_loop(db_path, interval_min: int = 30) -> None:

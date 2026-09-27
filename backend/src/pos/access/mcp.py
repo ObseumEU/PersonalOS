@@ -35,7 +35,8 @@ def register(mcp, session) -> None:
                           "scope:connector:<name>, cred:<name> for a credential: the owner decides those) or 'budget' (metric usd_day, usd_month, tokens_day, tokens_month, "
                           "usd_run, runs_day; amount). hours: how long (empty = permanent). why: what for, in a "
                           "sentence or two. task_id: your task (T-12); blocking parks it in waiting until the "
-                          "decision, which comes to your inbox. Outbound actions still need approval each time.")
+                          "decision, which comes to your inbox. With outbound:<action>, ordinary sends go out at once; "
+                          "money, commitments and the owner's personal channels still need approval (Ú1).")
     def request_access(ctx: Context, what: str, why: str, capability: str | None = None, metric: str | None = None,
                        amount: float | None = None, hours: float | None = None, task_id: str | None = None,
                        blocking: bool = False) -> dict:

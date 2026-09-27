@@ -121,13 +121,14 @@ def follow_ups(conn: sqlite3.Connection) -> dict:
     made = []
     for t in due:
         step = tasks.create(conn, owner, {
-            "title": f"Draft a friendly reminder to {t['assignee_name'] or 'them'} about: {t['title']}",
+            "title": f"Send a friendly reminder to {t['assignee_name'] or 'them'} about: {t['title']}",
             "parent_id": t["id"], "assignee": "ai", "status": "next",
             "notes": f"Purpose: {t['assignee_name'] or 'someone'} has not delivered {tasks.display_id(t['id'])} "
                      f"by its follow-up date; a friendly nudge keeps it moving.\n"
                      "Source: the daily follow-up routine.\n\n"
-                     "Draft only. Sending needs the owner's approval (request_outbound).",
-            "definition_of_done": "A short reminder draft is ready and waits for the owner's approval.",
+                     "Send it yourself with request_outbound (ordinary work, constitution Ú1: no approval; "
+                     "audited, the CEO reviews it daily).",
+            "definition_of_done": "A short, friendly reminder went out (request_outbound status sent).",
         })
         tasks.update(conn, owner, t["id"], {"follow_up": (today() + timedelta(days=3)).isoformat()})
         made.append(step["ref"])
@@ -185,7 +186,8 @@ def nightly_retrospective(conn: sqlite3.Connection) -> dict:
 def budget_check(conn: sqlite3.Connection) -> dict:
     from .integrations import budget_check as run
 
-    return {"level": run(conn)["level"]}
+    out = run(conn)
+    return {"level": out["level"], **({"company_cap": out["company_cap"]} if out.get("company_cap") else {})}
 
 
 def reap_runs(conn: sqlite3.Connection, silent_minutes: int = 20) -> dict:
@@ -334,6 +336,12 @@ def github_triage(conn: sqlite3.Connection) -> dict:
     return routing.github_poll(conn)
 
 
+def outbound_digest(conn: sqlite3.Connection) -> dict:
+    from . import outbound
+
+    return outbound.digest(conn)
+
+
 def weekly_publish_overdue(conn: sqlite3.Connection) -> dict:
     from . import weekly
 
@@ -345,6 +353,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "idle_agents": idle_agents,
     "github_triage": github_triage,
     "weekly_publish_overdue": weekly_publish_overdue,
+    "outbound_digest": outbound_digest,
     "agents_watch": agents_watch,
     "grafana_watch": grafana_watch,
     "sentinel_watch": sentinel_watch,
@@ -387,6 +396,8 @@ DEFAULT_JOBS = [
     ("Access: end temporary grants and raises", "every 5m", "access_expire"),
     ("Access: spend spikes and the company cap", "every 15m", "access_watch"),
     ("Access: daily digest for the owner", "daily 18:00", "access_digest"),
+    # Ú1: ordinary outbound goes out without approval; the CEO reviews everything sent, daily.
+    ("Outbound: daily review of everything sent (CEO)", "daily 18:30", "outbound_digest"),
     ("Access: weekly budget review (Access manager)", "weekly mon 07:30", "access_weekly"),
     # The Chief of Staff's weekly report and meeting (pos.weekly); the time is editable on Automations.
     ("Weekly company report and meeting (Asistent vedení)",

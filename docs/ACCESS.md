@@ -23,7 +23,9 @@ approvals); `actors.permissions` stays as a mirror of the active grants.
 
 ## Enforcement (code)
 - MCP: `agents.has_permission` reads the active grants; `tool:<name>` opens one tool.
-- `request_outbound` needs an outbound grant; every send still waits for approval.
+- `request_outbound` needs an outbound grant; ordinary sends go out at once
+  (audited), money, commitments and the owner's personal channels wait for
+  approval (constitution Ú1).
 - Every run (`start_run` and internal runs) passes `budget_gate`: the company
   cap first, then the agent's limits. `usd_run` is returned by `start_run`;
   the worker uses the tighter of it and `WORKER_CLAUDE_MAX_USD`.

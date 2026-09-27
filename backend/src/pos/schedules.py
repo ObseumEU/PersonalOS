@@ -4,8 +4,8 @@
 A schedule is a recurring task template. Each firing creates an ordinary task,
 created as the schedule's creator, so everything that guards tasks guards
 schedules too: the creator's permissions (a schedule never grants more), the
-budget gate and the approval queue when the task is worked on (outbound actions
-still need approval per firing), the kill switch (nothing fires while frozen).
+budget gate and the outbound rule when the task is worked on (Ú1: money, commitments
+and personal channels need approval per firing), the kill switch (nothing fires while frozen).
 
 - personal: the creator's own routine, assigned to itself;
 - team: shared work, e.g. the HR agent's daily review of all agents; it shows

@@ -54,8 +54,9 @@ Then `complete_task`.
 - The guard and constitution files, `access:manage` and the grant tools are
   owner-only. Credentials are not: they are granted on request like the
   rest, and their use stays limited to the credential's hosts and commands.
-- Outbound actions still wait in the owner's approval queue (constitution
-  rule 1).
+- Outbound: ordinary sends go out directly (audited, the CEO reviews them
+  daily); only money, commitments and posts on the owner's personal channels
+  wait in the owner's approval queue (constitution rule 1).
 - Every decision is logged with your reason and posted in #system for you.
 
 ## Working with others

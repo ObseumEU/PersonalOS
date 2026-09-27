@@ -1,4 +1,6 @@
-"""The approval queue: everything that waits for the owner (constitution rule 1).
+"""The approval queue: what waits for the owner (constitution Ú1 as amended 2026-09-27:
+money, commitments and posts on his personal channels; ordinary outbound goes out
+directly through pos.outbound).
 
 Agents call `request` (MCP `request_approval`); the owner decides in the UI
 (step 2 adds the screens). The approval id is what pos.guard.policy

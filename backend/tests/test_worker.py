@@ -539,7 +539,7 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
     stable = stable_prompt(me)
     # Its instructions say how to report, chat and hand off; it sees no schedule tool.
     assert "schedule_create" not in stable and "team chat" not in stable and "you need not call" not in stable
-    assert "request_approval first" in stable and "definition_of_done" in stable
+    assert "request_outbound" in stable and "definition_of_done" in stable
     a = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [], include_guardrails=False, include_stable=False)
     b = build_task_prompt({**me, "feedback": []}, {"ref": "T-002", "title": "Two"}, [], include_guardrails=False,
                           include_stable=False)
@@ -584,8 +584,21 @@ def test_triage_parks_an_unclear_issue_with_one_question_and_a_comment_requeues_
                                                                                    monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
     client, conn, owner, agent_id, key = setup
-    from pos import routing, tasks
+    from pos import outbound, routing, tasks
 
+    monkeypatch.setenv("POS_GITHUB_TOKEN", "t")
+    sent = []
+
+    class R:
+        status_code = 201
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"html_url": "https://gh/5#c1"}
+
+    monkeypatch.setattr(outbound.httpx, "post", lambda url, **kw: sent.append((url, kw["json"])) or R())
     ref = _issue(conn, owner)["task_ref"]
     sessions = []
     worker = worker_for(client, key, fake_claude, tmp_path)
@@ -594,9 +607,12 @@ def test_triage_parks_an_unclear_issue_with_one_question_and_a_comment_requeues_
     assert worker.step() == "triaged" and calls == [ref] and sessions == []  # no full run
     t = tasks.get(conn, owner, tasks.parse_id(ref))
     assert t["status"] == "waiting" and t["retry_after"] and "Which page is slow?" in t["progress_note"]
-    a = conn.execute("SELECT * FROM approvals WHERE task_id = ?", (t["id"],)).fetchone()
-    assert a["action"] == "github.comment" and a["status"] == "pending"
-    assert '"repo": "ObseumEU/PersonalOS"' in a["details"] and '"number": 5' in a["details"]
+    # Ú1: the clarifying question is ordinary work, sent at once (audited), no approval
+    assert sent and sent[0][0].endswith("/repos/ObseumEU/PersonalOS/issues/5/comments")
+    assert conn.execute("SELECT COUNT(*) FROM approvals WHERE task_id = ?", (t["id"],)).fetchone()[0] == 0
+    a = conn.execute("SELECT * FROM audit_log WHERE action = 'outbound:github.comment' AND entity_id = ?",
+                     (t["id"],)).fetchone()
+    assert '"kind": "ordinary"' in a["detail"] and "ObseumEU/PersonalOS#5" in a["detail"]
     run = conn.execute("SELECT * FROM runs WHERE task_id = ?", (t["id"],)).fetchone()
     assert run["status"] == "ok" and "triage: unclear" in run["detail"] and run["cost_usd"] == 0.002
     assert "task" not in client.get("/api/worker/next?wait=0", headers={"Authorization": f"Bearer {key}"}).json()
@@ -607,7 +623,7 @@ def test_triage_parks_an_unclear_issue_with_one_question_and_a_comment_requeues_
             "issue": {"number": 5, "title": "Make it better", "labels": [{"name": "agent"}]},
             "comment": {"id": cid, "body": body, "html_url": "https://gh/5#c", "user": {"login": "eva"}}})[0])
 
-    own = comment(1, "Which page is slow?")  # our own question, once the owner approved it
+    own = comment(1, "Which page is slow?")  # our own question, as it comes back from GitHub
     assert own["own_comment"] and tasks.get(conn, owner, t["id"])["status"] == "waiting"
     answer = comment(2, "The agenda page, since v0.4")
     assert answer["requeued"] and answer["task_id"] == t["id"]
