@@ -402,6 +402,19 @@ export default function TaskDetail({
               <option value="3">P3 · Could</option>
             </select>
           </Field>
+          <Field label="HODNOTA">
+            <select
+              className={input}
+              value={task.value_kind ?? ""}
+              title="Byznys = práce s hodnotou pro tebe; platforma = provoz firmy agentů. Automaticky podle zdroje a role."
+              onChange={(e) => save({ value_kind: e.target.value || null })}
+            >
+              <option value="">auto ({task.value_kind_effective === "business" ? "byznys" : task.value_kind_effective === "demo" ? "demo" : "platforma"})</option>
+              <option value="business">byznys</option>
+              <option value="platform">platforma</option>
+              <option value="demo">demo (mimo reporty)</option>
+            </select>
+          </Field>
           <Field label="ENERGY">
             <select className={input} value={task.energy ?? ""} onChange={(e) => save({ energy: e.target.value || null })}>
               <option value="">not set</option>

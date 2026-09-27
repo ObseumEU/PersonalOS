@@ -1,5 +1,5 @@
 import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, Minus, Printer, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Bar,
@@ -35,7 +35,50 @@ const KPIS: { key: string; label: string; good: "up" | "down" | "none"; fmt?: (v
   { key: "commits", label: "Commity", good: "up" },
   { key: "deploys", label: "Deploye", good: "up" },
   { key: "communication", label: "Komunikace", good: "none" },
+  { key: "business_outcomes", label: "Byznys výsledky", good: "up" },
+  { key: "usd_per_business_outcome", label: "$ za byznys výsledek", good: "down", fmt: (v) => `$${v.toFixed(2)}` },
+  { key: "owner_minutes", label: "Čas majitele (min)", good: "down" },
+  { key: "customer_threads_open", label: "Otevřená zákaznická vlákna", good: "down" },
+  { key: "drafts_in_approvals", label: "Koncepty ke schválení", good: "up" },
+  { key: "invoices_sent", label: "Vydané faktury", good: "up" },
 ];
+
+function money(d: Record<string, number> | undefined) {
+  const parts = Object.entries(d ?? {}).map(([c, v]) => `${Math.round(v).toLocaleString("cs-CZ")} ${c}`);
+  return parts.length ? parts.join(", ") : "—";
+}
+
+/** Business value: money, customers, pipeline, what the company spends on business vs platform, the owner's time. */
+function Business({ p }: { p: Packet }) {
+  const b = p.business;
+  if (!b) return <p className="cap p-4">Tento report ještě nemá byznys čísla.</p>;
+  const split = b.cost_split;
+  const share = split.business_share === null ? "—" : `${Math.round(split.business_share * 100)} %`;
+  const rows: [string, string][] = [
+    ["Faktury vydané", b.invoices.available ? `${b.invoices.sent ?? 0} · ${money(b.invoices.totals?.sent)}` : "—"],
+    ["Faktury přijaté", b.invoices.available ? `${b.invoices.received ?? 0} · ${money(b.invoices.totals?.received)}` : "—"],
+    ["Zákaznická vlákna otevřená", String(b.customer_threads.open)],
+    ["Pipeline (Growth)", `otevřeno ${b.pipeline.open} · nové ${b.pipeline.new} · uzavřeno ${b.pipeline.done}`],
+    ["Koncepty ke schválení", `${b.drafts_in_approvals.total} (schváleno ${b.drafts_in_approvals.approved})`],
+    ["Byznys / platforma", `$${split.business_usd.toFixed(2)} / $${split.platform_usd.toFixed(2)} · byznys ${share}`],
+    ["$ za byznys výsledek", split.usd_per_business_outcome === null ? "—" : `$${split.usd_per_business_outcome.toFixed(2)} (${split.business_outcomes} výsledků)`],
+    ["Cíle", b.goals.active ? `${b.goals.active} aktivních · průměr ${b.goals.avg_progress ?? 0} %` : "—"],
+  ];
+  return (
+    <div className="flex flex-col gap-2 p-4 text-[13px]">
+      <p className="text-ink">{b.owner_time.line}</p>
+      <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1">
+        {rows.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="text-ink-2">{k}</dt>
+            <dd className="text-right font-mono text-xs text-ink">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {b.invoices.available && <p className="cap">{b.invoices.note}</p>}
+    </div>
+  );
+}
 
 function fmtDelta(d: number, fmt?: (v: number) => string) {
   if (fmt) {
@@ -362,6 +405,9 @@ function ReportView({ r }: { r: Report }) {
         </Panel>
         <Panel fig="6" title="Vývoj, komunikace, incidenty">
           <Signals p={p} />
+        </Panel>
+        <Panel fig="8" title="Byznys: peníze, zákazníci, čas majitele" right={p.business ? `byznys $${p.business.cost_split.business_usd.toFixed(2)}` : undefined}>
+          <Business p={p} />
         </Panel>
         <Panel title="Největší hotové věci" right={`${p.tasks.highlights.length}`}>
           <TaskList items={p.tasks.highlights} empty="Nic hotového." extra={(i) => {

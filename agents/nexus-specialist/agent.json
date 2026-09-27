@@ -17,9 +17,9 @@
   "lifetime": "long_lived",
   "runtime": "codex_worker",
   "worker": "pool",
-  "engine": "auto",
+  "engine": "claude",
   "model": "claude-opus-5-5",
-  "effort": "low",
+  "effort": "medium",
   "profile": {
     "workdir": "/work/nexus-specialist/nexus-process-pilot",
     "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
@@ -27,9 +27,9 @@
     "max_steps": 60
   },
   "budget": {
-    "usd_day": 6.0,
-    "usd_month": 60.0,
-    "usd_run": 3.0,
+    "usd_day": 9.0,
+    "usd_month": 90,
+    "usd_run": 4.5,
     "runs_day": 15
   },
   "schedules": [
@@ -54,5 +54,8 @@
       "topic": "nexus"
     }
   ],
-  "note": "Pool worker with its own clone of ObseumEU/nexus-process-pilot in /work/nexus-specialist (set up in REORG phase B). It commits on agent/nexus-specialist; pushing needs the owner's cred grant; deploys follow docs/REORG.md 'Service deploys'."
+  "note": "Pool worker with its own clone of ObseumEU/nexus-process-pilot in /work/nexus-specialist (set up in REORG phase B). It commits on agent/nexus-specialist; pushing needs the owner's cred grant; deploys follow docs/REORG.md 'Service deploys'.",
+  "grants": [
+    "tool:knowledge"
+  ]
 }

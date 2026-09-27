@@ -52,7 +52,10 @@ Team chat (chat_send, chat_read, #team): talk to people and agents inside
 PersonalOS; @Name mentions land in their inbox. It never leaves PersonalOS.
 Files, notes and topics: search finds tasks, files and notes; file_get gives a
 file's text, topic_get everything in one topic; note_create and note_update
-write markdown notes."""
+write markdown notes. The company knowledge base (mail, Drive, GitHub,
+meetings) is the `knowledge` tool, for members with the grant tool:knowledge.
+One item, one task: escalate an item that already has a task by passing that
+task on (handoff_task), not by creating a new one."""
 
 
 def _bearer(headers) -> str | None:

@@ -77,7 +77,7 @@ def test_agents_hand_in_for_review_and_owner_can_return(conn, me, ai):
     t = tasks.review(conn, me, t["id"], accept=False, comment="too long")
     assert t["status"] == "next" and t["returned_count"] == 1
     t = tasks.intervene(conn, me, t["id"], "fixed the source")
-    assert t["interventions"] == 1
+    assert t["interventions"] == 2  # the return counted as one (pos.business), the intervene as another
     assert tasks.complete(conn, me, t["id"])["status"] == "done"
 
 

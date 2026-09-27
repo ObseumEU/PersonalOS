@@ -38,5 +38,8 @@
       "estimate_min": 15,
       "topic": "engineering"
     }
+  ],
+  "grants": [
+    "tool:knowledge"
   ]
 }

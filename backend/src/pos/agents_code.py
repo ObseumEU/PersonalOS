@@ -124,6 +124,7 @@ def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None
         if _adopt_worker(conn, owner, row, s):
             placed.append(f"{s['name']} (worker)")
         _budget_from_file(conn, owner, row, s)
+        _grants_from_file(conn, owner, row, s)
         _schedules_from_file(conn, owner, row, s)
     if over:
         log.warning("over the HR limit (hr.max_active_agents), not created yet: %s", ", ".join(over))
@@ -162,6 +163,56 @@ def _budget_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s:
             access._insert_budget(conn, row["id"], metric, float(amount), owner.actor_id, "platform",
                                   f"{s['name']}: výchozí rozpočet z agent.json; mění Správce přístupů nebo majitel")
     audit.log(conn, owner, "access_budget", "actor", row["id"], budget="agent.json", **budget)
+
+
+# What agent.json "grants" may hand out: single pos tools only (tool:<name>), never an owner-only
+# capability (credentials, access, the guard), never a permission group or outbound.
+FILE_GRANT_KINDS = ("tool",)
+
+
+def _grants_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s: dict) -> list[str]:
+    """agent.json "grants" (e.g. ["tool:knowledge"]): each is granted once, by the platform. A grant the
+    agent had before (active, revoked or expired) is never given again: a revoke stays a revoke."""
+    from .access import service as access
+    from .access import store as access_store
+
+    wanted = [str(c).strip() for c in s.get("grants") or [] if str(c).strip()]
+    if not wanted or row["archived_at"] or not access_store.ready(conn) or not access_store.seeded(conn, row["id"]):
+        return []
+    made = []
+    for cap in wanted:
+        try:
+            if access.kind_of(cap) not in FILE_GRANT_KINDS:
+                log.warning("%s: agent.json grant %s is not a tool grant; ignored", s["name"], cap)
+                continue
+        except access.AccessError as e:
+            log.warning("%s: agent.json grant %s: %s", s["name"], cap, e)
+            continue
+        if conn.execute("SELECT 1 FROM access_grants WHERE agent_id = ? AND capability = ?",
+                        (row["id"], cap)).fetchone():
+            continue
+        access._insert_grant(conn, row["id"], cap, owner.actor_id, "platform",
+                             f"{s['name']}: z agent.json (role potřebuje tento nástroj); odebírá majitel "
+                             "nebo Správce přístupů")
+        made.append(cap)
+    if made:
+        access.refresh_cache(conn, row["id"])
+        audit.log(conn, owner, "access_grant", "actor", row["id"], capabilities=made, source="agent.json")
+    return made
+
+
+def grants_from_repo(conn: sqlite3.Connection, base: Path | None = None) -> dict:
+    """Every agent's agent.json "grants", once each (after pos.access has seeded the agents)."""
+    if os.environ.get("POS_AGENTS_AS_CODE", "1") == "0":
+        return {}
+    owner = Ctx(actors.owner_id(conn), via="agents-as-code")
+    out = {}
+    for s in specs(base):
+        row = conn.execute("SELECT * FROM actors WHERE name = ?", (s["name"],)).fetchone()
+        if row is not None and (made := _grants_from_file(conn, owner, row, s)):
+            out[s["name"]] = made
+    conn.commit()
+    return out
 
 
 def _lead_set_by_hand(conn: sqlite3.Connection, actor_id: int) -> bool:
@@ -211,7 +262,7 @@ def is_dormant(name: str) -> bool:
 # What agent.json "profile" may set for the agent's worker (pos_worker reads it from /api/worker/me);
 # it overrides the worker's environment for this agent only (the agent pool serves many agents).
 PROFILE_KEYS = {"pos_tools", "claude_tools", "claude_builtin", "claude_disallowed", "max_usd_run", "max_steps",
-                "workdir"}
+                "max_steps_owner", "workdir"}
 WORKDIR_ROOTS = ("/work/", "/repos/")
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 

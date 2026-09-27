@@ -86,7 +86,7 @@ def test_every_agent_in_the_default_seed_has_a_worker_or_is_a_service(seeded):
     assert actors.find_by_name(conn, "Knowledge agent")["a2a_url"]   # still reachable over A2A (ask_agent)
     hr = actors.find_by_name(conn, "Head of People")
     assert workers.reply_path(conn, hr) == {"kind": "pool", "name": "pool/head-of-people"}
-    assert hr["runtime"] == "codex_worker" and hr["engine"] == "claude" and hr["model"] == "claude-haiku-4-5"
+    assert hr["runtime"] == "codex_worker" and hr["engine"] == "claude" and hr["model"] == "claude-opus-5-5"
     assert agents.has_permission(conn, hr["id"], "messages:send")    # it can answer in chat
 
 

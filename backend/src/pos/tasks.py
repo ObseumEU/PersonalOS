@@ -21,6 +21,7 @@ OPEN = ("inbox", "next", "working", "review", "waiting", "someday")
 EDITABLE = {
     "title", "notes", "status", "priority", "do_date", "deadline", "estimate_min", "energy", "topic",
     "definition_of_done", "visibility", "follow_up", "position", "progress", "progress_note",
+    "value_kind",  # business | platform | demo, or empty for automatic (pos.business)
 }
 
 VIEWS = ("inbox", "today", "upcoming", "next", "agents", "waiting", "review", "to_review", "someday", "done")
@@ -64,6 +65,13 @@ def _validate(fields: dict) -> None:
                 raise Invalid(f"{k} must be YYYY-MM-DD") from e
     if "title" in fields and not str(fields["title"]).strip():
         raise Invalid("title is empty")
+    if "value_kind" in fields:
+        from .business import VALUE_KINDS
+
+        if fields["value_kind"] in ("", "auto"):
+            fields["value_kind"] = None
+        if fields["value_kind"] not in (None, *VALUE_KINDS):
+            raise Invalid(f"value_kind must be one of {VALUE_KINDS} (or empty for automatic)")
 
 
 def resolve_assignee(conn: sqlite3.Connection, ctx: Ctx, value) -> dict:
@@ -107,6 +115,7 @@ def _row(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> sqlite3.Row:
 def to_dict(row: sqlite3.Row | dict) -> dict:
     d = dict(row)
     d["ref"] = display_id(d["id"])
+    d.setdefault("value_kind", None)
     d["suggestion"] = json.loads(d["suggestion"]) if d.get("suggestion") else None
     return d
 
@@ -135,6 +144,9 @@ def get(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
            FROM runs WHERE task_id = ? AND status != 'blocked'""", (task_id,)).fetchone()
     task["usage"] = {"runs": u["runs"], "tokens": u["tokens"], "cache_read_tokens": u["cached"],
                      "cost_usd": round(u["cost"], 4)}
+    from . import business
+
+    task["value_kind_effective"] = business.classify(conn, row)  # business | platform | demo
     if row["parent_id"]:
         p = conn.execute("SELECT id, title FROM tasks WHERE id = ?", (row["parent_id"],)).fetchone()
         task["parent"] = {"id": p["id"], "ref": display_id(p["id"]), "title": p["title"]}
@@ -259,6 +271,10 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     if unknown:
         raise Invalid(f"unknown fields: {sorted(unknown)}")
     _validate(fields)
+    if "value_kind" in fields:
+        from . import business
+
+        business.ensure_schema(conn)
     if parent_id is not None:
         parent = _row(conn, ctx, parse_id(parent_id))
         fields.setdefault("topic", parent["topic"])
@@ -292,6 +308,17 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         values["project_id"] = parent["project_id"]  # a step belongs to its task's project
     if values.get("topic"):
         values["topic"] = values["topic"].lower().lstrip("#")
+    from . import business
+
+    dup = business.find_duplicate_escalation(conn, ctx, values)
+    if dup is not None:
+        # The same item escalated again (one invoice, three tasks): link it to the open escalation.
+        business.link_duplicate(conn, ctx, dup, values)
+        out = get(conn, ctx, dup)
+        out["deduplicated"] = True
+        out["note"] = (f"Not created: {display_id(dup)} already escalates this item; your note is a comment there. "
+                       "Pass it on with handoff_task if it should move.")
+        return out
     if values["assignee_type"] == "external":
         values["status"] = "waiting" if values["status"] in ("inbox", "next") else values["status"]
         values.setdefault("follow_up", (today() + timedelta(days=3)).isoformat())
@@ -333,6 +360,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     if unknown:
         raise Invalid(f"unknown fields: {sorted(unknown)}")
     _validate(changes)
+    if "value_kind" in changes:
+        from . import business
+
+        business.ensure_schema(conn)
     if "visibility" in changes and changes["visibility"] != row["visibility"]:
         from .integrations import check_visibility_change
 
@@ -358,14 +389,30 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         elif not may_finish(conn, ctx, row):
             changes["status"] = "review"
     handed_in = changes.get("status") == "review" and row["status"] != "review"
+    triaged = None
     if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
         extra["reviewer_id"] = reviewer_of(conn, row)
+        if extra["reviewer_id"] == actors.owner_id(conn):
+            # The owner's reviews go to the CEO first; it leaves him only what truly needs him.
+            from . import business
+
+            triaged = business.review_triage_target(conn, row)
+            if triaged:
+                extra["reviewer_id"] = triaged
     if "status" in changes:
         if changes["status"] == "done" and row["status"] != "done":
             extra["completed_at"] = now_iso()
         elif changes["status"] != "done":
             extra["completed_at"] = None
     versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra}, action="accept" if accepted else "update")
+    if triaged:
+        from . import audit
+
+        audit.log(conn, ctx, "review_triage", ENTITY, task_id, ceo=triaged)
+    if not accepted and set(changes) - {"status", "progress", "progress_note", "position", "value_kind"}:
+        from . import business
+
+        business.record_intervention(conn, ctx, task_id, "edit", ", ".join(sorted(changes)))
     out = get(conn, ctx, task_id)
     if out["status"] == "done" and row["status"] != "done":
         from . import asks
@@ -547,9 +594,10 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
         "returned_count": row["returned_count"] + 1,
         "progress_note": f"Returned: {comment}" if comment else "Returned",
     }, action="return")
-    from . import comments
+    from . import business, comments
 
     comments.log(conn, ctx, task_id, f"Returned: {comment}" if comment else "Returned", "return")
+    business.record_intervention(conn, ctx, task_id, "return", comment or "")
     return get(conn, ctx, task_id)
 
 

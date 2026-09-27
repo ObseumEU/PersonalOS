@@ -72,7 +72,7 @@ def test_stats_come_from_tasks_runs_and_budget(conn):
     now = service.utcnow() + timedelta(minutes=1)
     s = CorePlatform(conn, owner).agent_stats(str(mail), now - timedelta(days=14), now)
     assert (s.tasks_completed, s.tasks_completed_unassisted, s.tasks_returned) == (3, 1, 1)
-    assert (s.tasks_failed, s.tasks_open, s.owner_interventions, s.tokens_used) == (1, 2, 1, 1500)
+    assert (s.tasks_failed, s.tasks_open, s.owner_interventions, s.tokens_used) == (1, 2, 2, 1500)  # the return counts as an intervention too (pos.business)
 
 
 def test_daily_review_archives_idle_agents_only(conn):

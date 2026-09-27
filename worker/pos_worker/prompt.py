@@ -136,6 +136,8 @@ def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardra
     ]
     if me.get("size_hint"):
         parts.append(me["size_hint"])
+    if me.get("nudges"):
+        parts += ["# Platform notes", "\n".join(f"- {n}" for n in me["nudges"][:3])]
     if me.get("feedback"):
         lines = "\n".join(f"- {f['kind']} from {f.get('from_name') or 'a colleague'}"
                           + (f" ({f['task_ref']})" if f.get("task_ref") else "") + f": {f['body']}"

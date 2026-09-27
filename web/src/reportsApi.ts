@@ -99,6 +99,29 @@ export type Packet = {
     engine_limit_hits: number;
   };
   goals: PacketGoal[];
+  /** Business value (pos.business): money, customers, pipeline, cost split, the owner's time. */
+  business?: {
+    invoices: {
+      available: boolean;
+      note: string;
+      sent?: number;
+      received?: number;
+      totals?: { sent: Record<string, number>; received: Record<string, number> };
+    };
+    customer_threads: { open: number; oldest: { ref: string; title: string; since: string }[] };
+    pipeline: { open: number; new: number; done: number };
+    drafts_in_approvals: { total: number; by_action: Record<string, number>; approved: number };
+    cost_split: {
+      business_usd: number;
+      platform_usd: number;
+      total_usd: number;
+      business_outcomes: number;
+      usd_per_business_outcome: number | null;
+      business_share: number | null;
+    };
+    owner_time: { interventions: number; minutes: number; by_kind: Record<string, number>; line: string };
+    goals: { active: number; avg_progress: number | null };
+  };
   last_meeting: { week: string; status: string; decisions: string[]; tasks: TaskLine[]; tasks_done: number } | null;
 };
 

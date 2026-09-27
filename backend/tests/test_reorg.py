@@ -47,7 +47,7 @@ def test_the_company_comes_from_the_files_with_leads_routines_and_profiles(compa
     assert agents_code.is_dormant("Legal & Compliance") and not agents_code.is_dormant("CEO")
     # each agent's worker settings come from its file (the pool serves many agents)
     hl = agents_code.worker_profile("Hlídač")
-    assert hl["effort"] == "low" and "incident_close" in hl["pos_tools"] and hl["max_steps"] == 20
+    assert hl["effort"] == "medium" and "incident_close" in hl["pos_tools"] and hl["max_steps"] == 20
     assert agents_code.worker_profile("Software Engineer")["workdir"] == "/work/PersonalOS"
     # the routing rules name the new roles
     rules = {r["name"]: r["assignee"] for r in routing.list_rules(conn)}
@@ -61,7 +61,7 @@ def test_worker_me_serves_the_profile(company):
     hl = actors.find_by_name(conn, "Hlídač")
     key = agents.rotate_key(conn, Ctx(actors.owner_id(conn)), hl["id"])
     me = client.get("/api/worker/me", headers={"Authorization": f"Bearer {key}"}).json()
-    assert me["profile"]["effort"] == "low" and me["profile"]["claude_tools"] == " "
+    assert me["profile"]["effort"] == "medium" and me["profile"]["claude_tools"] == " "
 
 
 def test_profile_workdir_only_under_work_or_repos(tmp_path):

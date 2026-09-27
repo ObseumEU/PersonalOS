@@ -560,6 +560,7 @@ def task_notes(week: str, packet: dict) -> str:
 def weekly_job(conn: sqlite3.Connection) -> dict:
     """Build the week's packet and give the Chief of Staff its task (no tokens here)."""
     ensure_schema(conn)
+    publish_overdue(conn)  # an earlier week left as a draft (e.g. W39) is published first
     cos = agent_id(conn)
     week = weekly_packet.current_week()
     row = _row(conn, week)
@@ -637,6 +638,111 @@ def meeting_timeouts(conn: sqlite3.Connection) -> dict:
     if nudged:
         out["nudged"] = nudged
     return out
+
+
+# ------------------------------------------------------------------ the report always gets published
+
+# The Chief of Staff has this long after the Friday job to publish; then the core publishes the report
+# from the packet itself (a code-written narrative), so a week never stays an empty draft. The W39
+# draft stayed empty because the job was created on Saturday (after its Friday slot) and the draft
+# came from a packet read with nobody asked to write it; publish_overdue closes that gap too.
+AUTO_PUBLISH_HOURS = 20
+
+
+def _fmt_delta(k: dict) -> str:
+    d = k.get("delta")
+    return "" if d in (None, 0) else (f" ({'+' if d > 0 else ''}{d:g})" if isinstance(d, (int, float)) else "")
+
+
+def auto_narrative(packet: dict) -> tuple[str, str]:
+    """(headline, Markdown narrative) from the packet's numbers, in Czech. No tokens."""
+    k = packet.get("kpis", {})
+    t = packet.get("tasks", {})
+    a = packet.get("agents", {})
+    biz = packet.get("business") or {}
+    split = biz.get("cost_split") or {}
+    owner = biz.get("owner_time") or {}
+    inv = biz.get("invoices") or {}
+    val = lambda key: (k.get(key) or {}).get("value")  # noqa: E731
+    lines = ["_Report napsal automaticky PersonalOS z čísel týdne (Chief of Staff ho včas nezveřejnil)._", "",
+             "## Co se stalo",
+             f"- Hotovo **{val('tasks_done')}** úkolů{_fmt_delta(k.get('tasks_done', {}))}, nových {val('tasks_new')}, "
+             f"čeká {val('waiting')}, po termínu {val('overdue')}.",
+             f"- Agenti: {a.get('runs', 0)} běhů, úspěšnost "
+             f"{'—' if a.get('success_rate') is None else str(round(a['success_rate'] * 100)) + ' %'}, "
+             f"náklady ${a.get('cost_usd', 0):.2f}."]
+    if split:
+        per = split.get("usd_per_business_outcome")
+        lines.append(f"- Byznys vs. platforma: ${split.get('business_usd', 0):.2f} / ${split.get('platform_usd', 0):.2f}; "
+                     f"{split.get('business_outcomes', 0)} byznys výsledků"
+                     + (f", ${per:.2f} za výsledek." if per is not None else "."))
+    if owner.get("line"):
+        lines.append(f"- {owner['line']}.")
+    if inv.get("available"):
+        tot = inv.get("totals") or {}
+        money = lambda d: ", ".join(f"{v:,.0f} {c}".replace(",", " ") for c, v in d.items()) or "—"  # noqa: E731
+        lines.append(f"- Faktury: vydané {inv.get('sent', 0)} ({money(tot.get('sent', {}))}), přijaté "
+                     f"{inv.get('received', 0)} ({money(tot.get('received', {}))}) — odhad z knowlage.")
+    ct = biz.get("customer_threads") or {}
+    pl = biz.get("pipeline") or {}
+    if ct or pl:
+        lines.append(f"- Otevřená zákaznická vlákna {ct.get('open', 0)}; pipeline (Growth) otevřeno {pl.get('open', 0)}, "
+                     f"nových {pl.get('new', 0)}, uzavřeno {pl.get('done', 0)}.")
+    hl = t.get("highlights") or []
+    if hl:
+        lines += ["", "## Co se povedlo"] + [f"- {h['ref']} {h['title']} ({h.get('assignee') or '—'})" for h in hl[:6]]
+    probs = [f"- {o['ref']} {o['title']} (termín {o['deadline']})" for o in (t.get("overdue_list") or [])[:5]]
+    probs += [f"- {w['ref']} {w['title']} čeká od {w['since']}" for w in (t.get("waiting_list") or [])[:3]]
+    if probs:
+        lines += ["", "## Problémy a rizika"] + probs
+    goals = packet.get("goals") or []
+    if goals:
+        lines += ["", "## Kam míříme"] + [f"- {g['title']}: {g.get('progress') or 0} %" for g in goals[:6]]
+    headline = f"Týden {packet.get('week')}: " + summary_or_blank(packet)
+    return headline[:300], "\n".join(lines)
+
+
+def summary_or_blank(packet: dict) -> str:
+    try:
+        return weekly_packet.summary_line(packet)
+    except (KeyError, TypeError):
+        return ""
+
+
+def publish_overdue(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """Drafts nobody published: a past week's draft, or the current one AUTO_PUBLISH_HOURS after the
+    Chief of Staff got its task. Published by the core from the packet; the Chief of Staff can still
+    rewrite the text or open the meeting (report_publish) while its task is open."""
+    ensure_schema(conn)
+    now = now or datetime.now(timezone.utc)
+    done = []
+    for row in conn.execute("SELECT * FROM weekly_reports WHERE status = 'draft' ORDER BY week").fetchall():
+        try:
+            _, end = weekly_packet.bounds(row["week"])
+        except ValueError:
+            continue
+        created = None
+        if row["task_id"]:
+            t = conn.execute("SELECT created_at FROM tasks WHERE id = ?", (row["task_id"],)).fetchone()
+            created = datetime.fromisoformat(t["created_at"]) if t else None
+        due = (created is not None and now - created >= timedelta(hours=AUTO_PUBLISH_HOURS)) or \
+              (created is None and now >= end)
+        if not due or (row["narrative"] or "").strip():
+            continue
+        packet = packet_for(conn, row["week"], refresh=now < end + timedelta(days=2))
+        headline, narrative = auto_narrative(packet)
+        _set(conn, row["week"], narrative=narrative, headline=headline, status="published",
+             published_at=now.isoformat(timespec="seconds"))
+        ctx = Ctx(agent_id(conn) or actors.owner_id(conn), via="scheduler")
+        audit.log(conn, ctx, "weekly_report_auto_publish", "weekly_report", row["id"], week=row["week"])
+        try:
+            _post(conn, ctx, channel_id(conn), f"Týdenní report {row['week']} je zveřejněný (automaticky z čísel): "
+                                               f"[{row['week']}]({report_url(row['week'])}). {headline}")
+        except Exception:  # noqa: BLE001 - the report is published either way
+            log.exception("could not announce the report %s", row["week"])
+        done.append(row["week"])
+    conn.commit()
+    return {"published": done} if done else {}
 
 
 def schedule() -> str:

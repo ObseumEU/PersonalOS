@@ -1,4 +1,4 @@
-import { Archive, ArrowLeft, AtSign, Eye, Hash, MessageSquare, Pencil, Plus, Send, SmilePlus, X } from "lucide-react";
+import { Archive, ArrowLeft, AtSign, Eye, Hash, MessageSquare, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, type TypingEntry, chatApi } from "../chatApi";
@@ -387,7 +387,7 @@ function NewChannel({ members, me, onCreated, onClose }: { members: ChatMember[]
   );
 }
 
-function RailItem({ c, active, working, typing, onClick }: { c: Channel; active: boolean; working: Set<number>; typing?: TypingEntry[]; onClick: () => void }) {
+function RailItem({ c, active, working, typing, onClick, pinned }: { c: Channel; active: boolean; working: Set<number>; typing?: TypingEntry[]; onClick: () => void; pinned?: boolean }) {
   const others = c.members.filter((m) => !m.is_owner);
   const busy = c.kind === "dm" && others.some((m) => working.has(m.id));
   return (
@@ -398,7 +398,8 @@ function RailItem({ c, active, working, typing, onClick }: { c: Channel; active:
       }`}
     >
       {c.kind === "group" ? <Hash size={14} className="shrink-0 text-ink-3" /> : <WorkingDot on={busy} />}
-      <span className={`truncate ${c.unread ? "font-medium" : ""}`}>{c.kind === "group" ? c.name : c.title}</span>
+      <span className={`truncate ${c.unread || pinned ? "font-medium" : ""}`}>{c.kind === "group" ? c.name : c.title}</span>
+      {pinned && <Pin size={12} className="shrink-0 text-accent" aria-label="Připnuto: CEO je tvůj kanál do firmy" />}
       {typing && typing.length > 0 && (
         <span className="shrink-0 text-accent" title={typingLabel(typing)} aria-label={typingLabel(typing)}><TypingDots /></span>
       )}
@@ -449,13 +450,20 @@ export default function Chat() {
     }, (e) => setError(e.message));
   }, [params, setParams]);
 
-  // Default to #team on desktop when nothing is selected.
+  // The CEO is the owner's single channel: its DM is pinned first and opens by default on desktop
+  // ("Zeptej se CEO"); without a CEO, #team.
+  const ceo = members.find((m) => m.is_ceo);
+  const ceoDm = ceo ? channels.find((c) => c.kind === "dm" && c.member && c.members.some((m) => m.id === ceo.id)) : undefined;
   useEffect(() => {
-    if (!current && !params.get("dm") && channels.length && window.matchMedia("(min-width: 768px)").matches) {
-      const team = channels.find((c) => c.name === "team") ?? channels[0];
-      setParams({ c: String(team.id) }, { replace: true });
+    if (!current && !params.get("dm") && channels.length && members.length && window.matchMedia("(min-width: 768px)").matches) {
+      if (ceoDm) setParams({ c: String(ceoDm.id) }, { replace: true });
+      else if (ceo) setParams({ dm: String(ceo.id) }, { replace: true });
+      else {
+        const team = channels.find((c) => c.name === "team") ?? channels[0];
+        setParams({ c: String(team.id) }, { replace: true });
+      }
     }
-  }, [current, channels, params, setParams]);
+  }, [current, channels, members.length, params, setParams, ceo, ceoDm]);
 
   const scrollDown = () => requestAnimationFrame(() => listRef.current?.scrollTo({ top: listRef.current.scrollHeight }));
   const markRead = useCallback((id: number, upTo?: number) => {
@@ -527,7 +535,8 @@ export default function Chat() {
   }, [loadChannels, markRead]);
 
   const groups = channels.filter((c) => c.kind === "group");
-  const dms = channels.filter((c) => c.kind === "dm" && c.member);
+  const isCeoDm = (c: Channel) => !!ceo && c.members.some((m) => m.id === ceo.id);
+  const dms = channels.filter((c) => c.kind === "dm" && c.member).sort((a, b) => Number(isCeoDm(b)) - Number(isCeoDm(a)));
   const oversight = channels.filter((c) => c.kind === "dm" && !c.member);
   const typingHere = (presence.typing[String(current)] ?? []).filter((e) => e.id !== me);
   const typingIds = new Set(typingHere.map((e) => e.id));
@@ -580,7 +589,17 @@ export default function Chat() {
             </span>
             {groups.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} typing={presence.typing[String(c.id)]} onClick={() => setParams({ c: String(c.id) })} />)}
             <span className="cap px-2.5 pt-3 pb-1">DIRECT MESSAGES</span>
-            {dms.map((c) => <RailItem key={c.id} c={c} active={c.id === current} working={working} typing={presence.typing[String(c.id)]} onClick={() => setParams({ c: String(c.id) })} />)}
+            {ceo && !ceoDm && (
+              <button
+                onClick={() => setParams({ dm: String(ceo.id) })}
+                className="flex h-[34px] w-full items-center gap-2 rounded px-2.5 text-left text-[13px] text-ink hover:bg-raised"
+                title="Ředitel: tvůj jediný kanál do firmy"
+              >
+                <Pin size={13} className="shrink-0 text-accent" />
+                <span className="truncate font-medium">Zeptej se CEO</span>
+              </button>
+            )}
+            {dms.map((c) => <RailItem key={c.id} c={c} pinned={isCeoDm(c)} active={c.id === current} working={working} typing={presence.typing[String(c.id)]} onClick={() => setParams({ c: String(c.id) })} />)}
             {dmWith.length > 0 && (
               <select
                 value=""
@@ -638,7 +657,12 @@ export default function Chat() {
                   </div>
                 )}
                 {channel.member || channel.kind === "group" ? (
-                  <Composer channel={channel} members={members} onSent={scrollDown} />
+                  <Composer
+                    channel={channel}
+                    members={members}
+                    onSent={scrollDown}
+                    placeholder={isCeoDm(channel) ? "Zeptej se CEO… (úkol, otázka, rozhodnutí; zbytek firmy zařídí on)" : undefined}
+                  />
                 ) : null}
               </>
             )}

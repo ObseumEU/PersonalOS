@@ -78,6 +78,25 @@ assigns them by role; routing rules send events straight to the doer.
   actions still go through `request_outbound` / `request_approval`: only
   the owner approves them (constitution rule 1), they show up in the Chief
   of Staff's digest, and you do not ping him about them yourself.
+- **One item, one task.** Escalating something that already has a task (an
+  invoice routed to the CFO, a customer mail)? Pass that task on
+  (`handoff_task`) or comment on it; do not open a new one. PersonalOS links
+  a second escalation of the same item (same source task ref) to the open one
+  instead of creating it, and tells you so.
+- **Reviews have a 24 h SLA.** A result waiting over 24 h moves to the
+  reviewer's lead; results that would wait for the owner go to the CEO first,
+  who hands him only what truly needs him.
+- **Company knowledge.** Agents with the grant `tool:knowledge` (the CEO,
+  Chief of Staff, CFO, Growth, Customer Success, CTO, the specialists, the
+  SRE) search the company knowledge base (mail, Drive, GitHub, meetings) with
+  the `knowledge` tool: `mode: search` (cheap, effort 1-2) before asking a
+  colleague, `mode: ask` for a researched answer with citations. Others ask
+  for it with `request_access`.
+- **Business vs platform.** Every task is labelled `business` or `platform`
+  (automatically by source, topic, repository and role; the owner can
+  override it). Reports show what the company spends on each and the cost per
+  business outcome; the owner's interventions (his DMs, edits, returns and
+  approvals on your task) count as his time.
 - Every task you create has a description in `notes`: what it is for, where
   it came from (your task ref, the message or event) and what done looks like,
   plus a `definition_of_done`. Without notes PersonalOS writes a generic one
@@ -97,7 +116,12 @@ Every agent runs in the agent pool (`"worker": "pool"`): no process while it
 has no work, at most `POOL_MAX_RUNNING` at once. Its worker settings come
 from its `agent.json`: `effort` and `profile` (`pos_tools`, `claude_tools`,
 `claude_builtin`, `claude_disallowed`, `max_usd_run`, `max_steps`,
-`workdir` under `/work` or `/repos`). `schedules` in the file are created
+`max_steps_owner` (the cap on a task the owner asked for himself; default
+twice `max_steps`), `workdir` under `/work` or `/repos`). Every agent runs on
+Claude Opus 5.5 at medium effort (the owner's decision, 2026-09-27); the chat
+fast lane and the triage check stay on Haiku. `grants` (e.g.
+`["tool:knowledge"]`) are single-tool grants given once by the platform; a
+revoke stays. `schedules` in the file are created
 once as team schedules; `dormant: true` marks a role that waits for tasks
 (HR does not propose to archive it for being idle).
 

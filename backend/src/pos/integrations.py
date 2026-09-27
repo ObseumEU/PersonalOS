@@ -143,6 +143,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import observability
 
     observability.register_mcp(mcp, session)  # loki_query, metrics_snapshot (ops:observe)
+    from . import knowledge_tool
+
+    knowledge_tool.register_mcp(mcp, session)  # knowledge: the company knowledge base (grant tool:knowledge)
     from .credentials import mcp as credentials_mcp
 
     credentials_mcp.register(mcp, session)  # credentials_list, credential_http (values never shown)

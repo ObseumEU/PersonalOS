@@ -221,6 +221,10 @@ DEFAULT_BUDGETS = {
     "normal": {"usd_day": 3.0, "usd_month": 45.0, "usd_run": 1.5, "runs_day": 60},
 }
 MODELS = {"claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5-5"}
+# Every agent thinks with Claude Opus 5.5 at medium effort (the owner's decision, 2026-09-27); a hire may
+# still name another model explicitly. The fast lane and the triage checks stay on Haiku (micro-calls).
+DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_EFFORT = "medium"
 
 
 def may_hire(conn: sqlite3.Connection, actor_id: int) -> bool:
@@ -309,8 +313,7 @@ def hire(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, job_des
         sets["role"] = role.strip().lower().replace(" ", "_")
     if team:
         sets["team"] = team.strip().lower()
-    if model:
-        sets.update({"engine": "claude", "model": model})
+    sets.update({"engine": "claude", "model": model or DEFAULT_MODEL})
     versioning.update(conn, owner, "actor", aid, sets, action="hired")
     if access_store.ready(conn) and not conn.execute(
             "SELECT 1 FROM access_budgets WHERE agent_id = ?", (aid,)).fetchone():
@@ -354,7 +357,7 @@ def _commit_agent_files(conn: sqlite3.Connection, ctx: Ctx, aid: int, name: str,
     spec = {"name": name, "purpose": purpose, "role": sets.get("role"), "team": sets.get("team"),
             "reports_to": lead_row["name"], "permissions": perms, "budget_class": budget_class,
             "lifetime": "long_lived", "runtime": "codex_worker", "worker": "pool",
-            **({"engine": "claude", "model": sets["model"]} if sets.get("model") else {})}
+            "engine": "claude", "model": sets.get("model") or DEFAULT_MODEL, "effort": DEFAULT_EFFORT}
     spec = {k: v for k, v in spec.items() if v is not None}
     t = tasks.create(conn, ctx, {
         "title": f"Soubory nového agenta {name} do gitu",

@@ -8,6 +8,8 @@ export type ChatMember = {
   name: string;
   kind: "human" | "ai" | "agent";
   is_owner: boolean;
+  /** The CEO: the owner's single channel into the company (pinned first in the chat). */
+  is_ceo?: boolean;
   role?: "owner" | "member";
   working: boolean;
   /** The task a busy agent's live run works on (the chat's "pracuje na T-046 · 12 min"). */

@@ -95,8 +95,14 @@ def _has(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _not_excluded(alias: str = "t") -> str:
+    """Chat answers, and the seed/demo tasks of the first days (pos.business: the made-up Acme and house
+    examples, or value_kind 'demo'), are not work the report counts."""
+    from .business import DEMO_TITLES
+
     marks = ",".join(f"'{t}'" for t in EXCLUDED_TOPICS)
-    return f"COALESCE({alias}.topic, '') NOT IN ({marks})"
+    demo = ",".join("'" + t.replace("'", "''") + "'" for t in sorted(DEMO_TITLES))
+    return (f"COALESCE({alias}.topic, '') NOT IN ({marks}, 'acme') AND LOWER({alias}.title) NOT IN ({demo}) "
+            f"AND LOWER({alias}.title) NOT LIKE '%acme%' AND COALESCE({alias}.value_kind, '') != 'demo'")
 
 
 def _delta(value, prev) -> dict:
@@ -466,6 +472,9 @@ def build(conn: sqlite3.Connection, week: str | None = None, *, now: datetime | 
     prev_row = _stored(conn, previous_week(week))
     prev_packet = json.loads(prev_row["packet"]) if prev_row and prev_row["packet"] else None
 
+    from . import business
+
+    business.ensure_schema(conn)  # tasks.value_kind (the demo filter reads it)
     tasks = _tasks(conn, start, until, prev_start, prev_until)
     agents = _agents(conn, s, u, ps, pu)
     dev = _dev(conn, s, u, ps, pu) if outside else {"available": False, "note": "skipped", "repos": [], "commits": 0,
@@ -487,6 +496,24 @@ def build(conn: sqlite3.Connection, week: str | None = None, *, now: datetime | 
     }
     if comm.get("available"):
         kpis["communication"] = _delta(comm["items"], comm.get("prev_items"))
+    biz = business.week_section(conn, s, u, outside=outside)
+    prev_biz = (prev_packet or {}).get("business") or {}
+    prev_split = prev_biz.get("cost_split") or {}
+    kpis.update({
+        "business_outcomes": _delta(biz["cost_split"]["business_outcomes"], prev_split.get("business_outcomes")),
+        "usd_per_business_outcome": _delta(biz["cost_split"]["usd_per_business_outcome"],
+                                           prev_split.get("usd_per_business_outcome")),
+        "business_cost_share": _delta(biz["cost_split"]["business_share"], prev_split.get("business_share")),
+        "owner_minutes": _delta(biz["owner_time"]["minutes"], (prev_biz.get("owner_time") or {}).get("minutes")),
+        "customer_threads_open": _delta(biz["customer_threads"]["open"],
+                                        (prev_biz.get("customer_threads") or {}).get("open")),
+        "drafts_in_approvals": _delta(biz["drafts_in_approvals"]["total"],
+                                      (prev_biz.get("drafts_in_approvals") or {}).get("total")),
+    })
+    if biz["invoices"].get("available"):
+        kpis["invoices_sent"] = _delta(biz["invoices"]["sent"], (prev_biz.get("invoices") or {}).get("sent"))
+        kpis["invoices_received"] = _delta(biz["invoices"]["received"],
+                                           (prev_biz.get("invoices") or {}).get("received"))
 
     last_day = min(end - timedelta(seconds=1), until).astimezone(TZ).date()
     return {
@@ -500,6 +527,7 @@ def build(conn: sqlite3.Connection, week: str | None = None, *, now: datetime | 
         "agents": agents,
         "dev": dev,
         "communication": comm,
+        "business": biz,
         "incidents": _incidents(conn, s, u),
         "goals": _goals(conn, prev_packet),
         "last_meeting": _last_meeting(conn, prev_row),
@@ -513,4 +541,8 @@ def summary_line(packet: dict) -> str:
              f"čeká {k['waiting']['value']}", f"po termínu {k['overdue']['value']}"]
     if k["agent_cost_usd"]["value"]:
         parts.append(f"agenti ${k['agent_cost_usd']['value']:.2f}")
+    if (k.get("business_outcomes") or {}).get("value"):
+        parts.append(f"byznys výsledky {k['business_outcomes']['value']}")
+    if (k.get("owner_minutes") or {}).get("value") is not None:
+        parts.append(f"majitel ~{k['owner_minutes']['value']} min")
     return " · ".join(parts)

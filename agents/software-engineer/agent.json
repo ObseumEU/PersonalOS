@@ -16,7 +16,7 @@
   "lifetime": "long_lived",
   "runtime": "codex_worker",
   "worker": "pool",
-  "engine": "auto",
+  "engine": "claude",
   "model": "claude-opus-5-5",
   "effort": "medium",
   "profile": {
@@ -25,7 +25,8 @@
     "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
     "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(python -m pytest:*)|Bash(python -m pip install:*)|Bash(backend/.venv/bin/python -m pytest:*)|Bash(npm run build:*)|Bash(npm ci:*)",
     "max_usd_run": 6,
-    "max_steps": 90
+    "max_steps": 120,
+    "max_steps_owner": 200
   },
   "budget": {
     "usd_day": 15.0,

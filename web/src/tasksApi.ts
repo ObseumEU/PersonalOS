@@ -55,6 +55,9 @@ export type Task = {
   progress_note: string | null;
   returned_count: number;
   interventions: number;
+  /** business | platform | demo set by hand; null = automatic (value_kind_effective says which). */
+  value_kind?: "business" | "platform" | "demo" | null;
+  value_kind_effective?: "business" | "platform" | "demo";
   suggestion: Suggestion | null;
   reviewer_id?: number | null;
   reviewer_effective_id?: number;

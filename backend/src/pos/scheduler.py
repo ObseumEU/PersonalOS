@@ -316,7 +316,35 @@ def grafana_watch(conn: sqlite3.Connection) -> dict:
     return observability.watch(conn)
 
 
+def review_sla(conn: sqlite3.Connection) -> dict:
+    from . import business
+
+    return business.review_sla(conn)
+
+
+def idle_agents(conn: sqlite3.Connection) -> dict:
+    from . import business
+
+    return business.idle_agents_job(conn)
+
+
+def github_triage(conn: sqlite3.Connection) -> dict:
+    from . import routing
+
+    return routing.github_poll(conn)
+
+
+def weekly_publish_overdue(conn: sqlite3.Connection) -> dict:
+    from . import weekly
+
+    return weekly.publish_overdue(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "review_sla": review_sla,
+    "idle_agents": idle_agents,
+    "github_triage": github_triage,
+    "weekly_publish_overdue": weekly_publish_overdue,
     "agents_watch": agents_watch,
     "grafana_watch": grafana_watch,
     "sentinel_watch": sentinel_watch,
@@ -374,6 +402,13 @@ DEFAULT_JOBS = [
     ("Agents: workers running, the owner's messages answered", "every 2m", "agents_watch"),
     # A routine more than an hour late (its loop stopped, the scheduler was off): an incident for the SRE.
     ("Routines: alert when one is more than an hour late", "every 10m", "routines_overdue"),
+    # Business value (pos.business): reviews never wait over 24 h (the owner's go to the CEO first),
+    # idle agents are flagged to the CEO, the company's GitHub issues and PRs reach the CTO's triage,
+    # and a weekly report nobody published is published from its numbers.
+    ("Reviews: over 24 h to the reviewer's lead, the owner's to the CEO", "every 60m", "review_sla"),
+    ("Agents without input for 7 days → the CEO", "weekly mon 07:45", "idle_agents"),
+    ("GitHub: new issues and PRs in the company's repositories → triage", "every 30m", "github_triage"),
+    ("Weekly report: publish a draft nobody published", "every 60m", "weekly_publish_overdue"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on
@@ -462,10 +497,11 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
     )
     if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "routines_overdue", "knowlage_files",
                              "access_expire",
-                             "access_watch", "sentinel_watch", "sentinel_digest", "grafana_watch") or result.get("sent") \
+                             "access_watch", "sentinel_watch", "sentinel_digest", "grafana_watch", "review_sla",
+                             "github_triage", "weekly_publish_overdue") or result.get("sent") \
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
             or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
-            or result.get("alerted"):
+            or result.get("alerted") or result.get("moved") or result.get("tasks") or result.get("published"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result

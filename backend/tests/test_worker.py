@@ -381,7 +381,7 @@ def test_step_cap_stops_a_runaway_run_and_hands_the_task_back(setup, fake_codex,
     t = tasks.create(conn, owner, {"title": "Refactor everything", "assignee": {"type": "agent", "id": agent_id}})
     conn.commit()
     worker = worker_for(client, key, fake_codex, tmp_path)
-    worker.max_steps = 2
+    worker.base_max_steps = 1  # the owner asked for it himself: twice the cap (pos_worker.loop.step_cap)
     assert worker.step() == "error"
     run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
     assert run["status"] == "error" and "step limit reached (2 steps)" in run["detail"]

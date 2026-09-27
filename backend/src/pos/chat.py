@@ -380,6 +380,15 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     audit.log(conn, ctx, "chat_send", "chat_message", mid, channel=channel_id, priority=priority,
               mentions=mentioned, inbox=sorted(inbox))
 
+    platform_note = None
+    if not system and author["kind"] != "human":
+        from . import business
+
+        owner = actors.owner_id(conn)
+        platform_note = business.owner_contact_note(
+            conn, ctx, channel_id, owner in (others if ch["kind"] == "dm" else mentioned))
+    if not system and author["is_owner"]:
+        _owner_dm_interventions(conn, ctx, ch, targets, atts)
     if not system and author["kind"] == "human" and priority != "stop":
         for aid in targets:
             _ask_to_answer(conn, ctx, ch, aid, mid, body, priority)
@@ -409,7 +418,29 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     dm_target = others[0] if ch["kind"] == "dm" and others else None
     out["delivered_to_run"] = runs.get(dm_target) if dm_target else None
     out["inbox"] = sorted(inbox)
+    if platform_note:
+        out["platform_note"] = platform_note
     return out
+
+
+def _owner_dm_interventions(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, targets: list[int],
+                            atts: list[dict]) -> None:
+    """The owner wrote to an agent about its work: an intervention on the task he named (T-123),
+    else on the task the agent is working on now (pos.business)."""
+    from . import business
+
+    for aid in targets:
+        a = actors.get(conn, aid)
+        if a["kind"] == "human":
+            continue
+        named = [x["id"] for x in atts if x.get("type") == "task" and conn.execute(
+            "SELECT 1 FROM tasks WHERE id = ? AND assignee_id = ?", (x["id"], aid)).fetchone()]
+        if not named:
+            cur = conn.execute("SELECT id FROM tasks WHERE assignee_id = ? AND status = 'working' AND archived_at IS NULL "
+                               "AND COALESCE(topic, '') != 'chat' ORDER BY updated_at DESC LIMIT 1", (aid,)).fetchone()
+            named = [cur["id"]] if cur else []
+        for tid in named[:3]:
+            business.record_intervention(conn, ctx, tid, "dm")
 
 
 def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int, message_id: int, body: str,
@@ -461,8 +492,13 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
                  f"Source: chat channel {ch['id']} ({where}), message {message_id}.\n\n{said}\n\n"
              f"Answer with chat_send(channel={ch['id']}, reply_to={message_id}), in the language they wrote "
              f"in (Czech unless they wrote otherwise); read the thread with chat_read if you need context. "
-             f"Use your tools (tasks, files, the knowledge base via ask_agent 'Knowledge agent') to answer "
-             f"well; create tasks when asked to, or delegate to the agent whose job it is.")
+             f"Use your tools (tasks, files, the company knowledge base with the `knowledge` tool when you "
+             f"have it) to answer well; create tasks when asked to, or delegate to the agent whose job it is.")
+    if author_row["is_owner"] and target["role"] != "ceo":
+        notes += ("\n\nChain of command: the owner talks to the CEO. If this is really a company-level request "
+                  "(new work across teams, priorities, money, customers, anything beyond your own job), answer "
+                  "briefly that the CEO takes it over and hand it to the CEO (send_message to CEO with the "
+                  "message id, or handoff_task); do only what is clearly your own job yourself.")
     if path["kind"] == "a2a":  # a remote app: it gets the message itself; pos.a2a posts its answer here
         notes = f"{author} asks in chat ({where}); answer them directly, in the language they wrote in.\n\n{body}"
     t = tasks.create(conn, ctx, {
@@ -842,7 +878,7 @@ def members_overview(conn: sqlite3.Connection) -> list[dict]:
     working, current = set(working_ids(conn)), fastlane.current_work(conn)
     return [{"id": r["id"], "name": r["name"], "kind": r["kind"], "is_owner": bool(r["is_owner"]),
              "remote": bool(r["a2a_url"]), "paused": bool(r["paused_at"]), "working": r["id"] in working,
-             "current": current.get(r["id"])}
+             "current": current.get(r["id"]), "is_ceo": r["role"] == "ceo" and r["kind"] != "human"}
             for r in conn.execute("SELECT * FROM actors WHERE archived_at IS NULL AND runtime != 'service' "
                                   "ORDER BY is_owner DESC, name")]  # services are no one to chat with
 

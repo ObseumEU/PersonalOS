@@ -49,6 +49,7 @@ BUILTIN_PERMISSIONS = {
     roles.COO: ["approvals:request", "messages:send", "tasks:claim", "tasks:read", "tasks:write"],
 }
 DEFAULT_AGENT_PERMISSIONS = ["tasks:read", "tasks:claim", "approvals:request"]
+DEFAULT_AGENT_MODEL = "claude-opus-5-5"  # every new agent (pos.hiring.DEFAULT_MODEL too)
 # HR edits anyone's instructions except these (and the owner-only areas).
 HR_HANDS_OFF = (roles.CEO, roles.ACCESS_MANAGER)
 LIFETIMES = ("one_shot", "long_lived")
@@ -232,7 +233,11 @@ def _insert_agent(conn: sqlite3.Connection, ctx: Ctx, creator: sqlite3.Row, deci
     from .hr import service as hr
 
     now = now_iso()
+    # An agent that thinks in a worker uses Claude Opus 5.5 when it runs on Claude (the owner's decision,
+    # 2026-09-27: hires and agent.json set engine claude too); a remote (A2A) member has no model here.
+    model = {"model": DEFAULT_AGENT_MODEL} if runtime == "codex_worker" and not a2a_url else {}
     row = versioning.insert(conn, ctx, "actor", {
+        **model,
         "kind": "agent", "name": name, "is_owner": 0, "created_at": now, "updated_at": now,
         "created_by": ctx.actor_id, "runtime": runtime, "a2a_url": a2a_url,
         "permissions": json.dumps(requested),
@@ -476,7 +481,8 @@ def send_message(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, t
     audit.log(conn, ctx, "message", "actor", to_actor, message_id=out["id"], task_id=task_id, priority=priority)
     conn.commit()
     return {"id": out["id"], "priority": priority, "delivered_to_run": out["delivered_to_run"],
-            "channel_id": out["channel_id"]}
+            "channel_id": out["channel_id"], **({"platform_note": out["platform_note"]}
+                                                if out.get("platform_note") else {})}
 
 
 def check_inbox(conn: sqlite3.Connection, actor_id: int, mark_read: bool = True, run_id: int | None = None) -> list[dict]:

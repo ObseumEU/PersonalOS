@@ -94,6 +94,25 @@ def tool_of(ev: dict) -> str:
     return ""
 
 
+OWNER_STEP_FACTOR = 2  # an owner-assigned task without max_steps_owner gets twice the agent's cap
+
+
+def step_cap(profile: dict, task: dict, default: int) -> int:
+    """This task's step cap: the agent's own (agent.json profile.max_steps, else the worker's
+    WORKER_MAX_STEPS); a task the owner asked for himself gets profile.max_steps_owner, else twice
+    that. 0 = no cap."""
+    try:
+        base = int(profile.get("max_steps") or default or 0)
+    except (TypeError, ValueError):
+        base = default or 0
+    if not base or not task.get("owner_request"):
+        return base
+    try:
+        return max(base, int(profile.get("max_steps_owner") or base * OWNER_STEP_FACTOR))
+    except (TypeError, ValueError):
+        return base * OWNER_STEP_FACTOR
+
+
 class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
                  max_resumes: int = 12, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
@@ -110,6 +129,7 @@ class Worker:
         self.poll_wait = poll_wait
         self.max_resumes = max_resumes
         self.max_steps = max_steps  # 0 = no cap; else a runaway run stops and the task goes back
+        self.base_max_steps = max_steps  # the worker's default (WORKER_MAX_STEPS); each task sets its own cap
         self.sleep = sleep
         self.tools_dir = Path(tools_dir) if tools_dir else Path.cwd()  # where tool files are found
         self.context: list[dict] = []  # messages received while idle, used in the next task
@@ -195,11 +215,7 @@ class Worker:
         except Exception:  # noqa: BLE001 - PersonalOS hiccup: the last known one will do
             if not self.me:
                 raise
-        # The agent's own step cap from its profile (agents/<slug>/agent.json) wins over the worker's.
-        try:
-            self.max_steps = int((self.me.get("profile") or {}).get("max_steps") or self.max_steps)
-        except (TypeError, ValueError):
-            pass
+        self.max_steps = step_cap(self.me.get("profile") or {}, task, self.base_max_steps)
         ref = task["ref"]
         # Ask for the run first: if the kill switch or the budget says no, the
         # task stays in the queue untouched instead of hanging in "working".

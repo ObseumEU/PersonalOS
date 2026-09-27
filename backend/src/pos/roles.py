@@ -12,6 +12,7 @@ CEO = "CEO"
 CHIEF_OF_STAFF = "Chief of Staff"
 COO = "COO"  # the code role "project manager": unrouted team work, the standup, the default lead
 CTO = "CTO"
+GROWTH = "Head of Growth"
 ENGINEER = "Software Engineer"
 QA = "QA Reviewer"
 SRE = "SRE"

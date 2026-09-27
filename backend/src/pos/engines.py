@@ -284,12 +284,13 @@ def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str, up
          u["cost_usd"], u["cache_read_tokens"], u["cache_creation_tokens"]),
     )
     if update_run:
-        conn.execute("UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cost_usd = ? "
-                     "WHERE id = ?", (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"],
-                                      round(u["cost_usd"], 6), run_row["id"]))
-    else:
-        conn.execute("UPDATE runs SET cost_usd = COALESCE(cost_usd, 0) + ? WHERE id = ?",
-                     (round(u["cost_usd"], 6), run_row["id"]))
+        conn.execute("UPDATE runs SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ? WHERE id = ?",
+                     (u["input_tokens"], u["output_tokens"], u["cache_read_tokens"], run_row["id"]))
+    # engine_usage is the one cost ledger; the run's cost is derived from it (every Claude call of the
+    # run: the triage check, the run itself, a fast-lane answer), never kept apart (pos.business).
+    from . import business
+
+    business.run_cost(conn, run_row["id"])
     rl = u["rate_limit"] or {}
     resets = (datetime.fromtimestamp(int(rl["resetsAt"]), timezone.utc).isoformat(timespec="seconds")
               if rl.get("resetsAt") else None)

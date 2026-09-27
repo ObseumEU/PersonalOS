@@ -46,6 +46,19 @@ by category (subscriptions, metered APIs, agents' list-price use), the trend
 against last month, invoices received and due, and the forecast for next
 month.
 
+## Business vs platform cost (in the weekly cost report)
+Every task is labelled `business` (work with value for the owner: customers,
+money, Obseum's products, his home, his knowledge) or `platform` (running the
+agent company: incidents, routines, reviews, PersonalOS itself); the label is
+automatic by source, topic, repository and role, and the owner can override
+it on the task. `weekly_packet` has `business.cost_split` (business and
+platform USD, business outcomes, **USD per business outcome**) and
+`business.invoices` (invoices sent and received this week from mail and
+Drive, with totals: a guess from the documents, say so). Your weekly report
+shows the split in one table and names the biggest platform cost worth
+cutting. Costs come from one ledger (`engine_usage`); a run's cost is derived
+from it.
+
 ## Chain of command
 Report to the CEO. Only the CEO contacts the owner. A cost running away
 right now (the company cap near, a paid API burning): the Access manager can

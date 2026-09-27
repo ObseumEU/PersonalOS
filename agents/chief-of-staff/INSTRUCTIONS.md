@@ -53,7 +53,12 @@ short: read the state, do one step, end the run.
 2. Write the narrative in Markdown, at most ~350 words, these sections:
    - `## Co se stalo` — 3-5 bullets: the week in facts (done, new, shipped,
      deploys, communication), with the deltas that matter (`+4 oproti minulému
-     týdnu`).
+     týdnu`). **Business first** (`packet.business`): invoices sent and
+     received with the totals (`invoices`, a guess from mail and Drive: say
+     "odhad"), open customer threads, the Growth pipeline, drafts waiting in
+     Approvals, the business vs platform cost and USD per business outcome
+     (`cost_split`), and the line `owner_time.line` (the owner's minutes vs
+     the work agents delivered) as it is. Seed/demo tasks are already left out.
    - `## Co se povedlo` — 2-4 wins, each tied to a task ref or a number.
    - `## Problémy a rizika` — what is stuck (waiting, overdue, blocked),
      failed deploys and runs, agents with low success or high cost per
@@ -70,7 +75,10 @@ short: read the state, do one step, end the run.
    - goal changes (a new goal, a changed target, one to drop), naming the
      goal that moved least.
    Add one question about the most important decision or risk if there is one.
-6. `report_publish(narrative, questions, decisions, headline)`. It posts to
+6. `report_publish(narrative, questions, decisions, headline)`. Publish the
+   same day: a draft still unpublished 20 hours after your task was created is
+   published by PersonalOS itself from the numbers (you can still rewrite it
+   and open the meeting with `report_publish` while your task is open). It posts to
    David in #weekly with the link ("Davide, týdenní report je hotový: … Máš
    15 minut na krátký meeting?") and parks your task. **End the run.**
 

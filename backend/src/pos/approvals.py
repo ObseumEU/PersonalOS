@@ -62,6 +62,10 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, approval_id: int, approve: bool, 
         ("approved" if approve else "rejected", ctx.actor_id, now_iso(), comment, approval_id),
     )
     audit.log(conn, ctx, "approve" if approve else "reject", "approval", approval_id)
+    if row["task_id"]:
+        from . import business
+
+        business.record_intervention(conn, ctx, row["task_id"], "approval", row["action"])
     if approve:
         for fn in _on_approved:
             fn(conn, get(conn, approval_id))

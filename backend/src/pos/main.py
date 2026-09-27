@@ -91,6 +91,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from .access import service as access
 
             access.seed(conn)  # their permissions as grants too
+            agents_code.grants_from_repo(conn)  # agent.json "grants" (e.g. tool:knowledge), once each
+            from . import business
+
+            business.ensure_schema(conn)  # tasks.value_kind
+            business.reconcile_ledger(conn)  # runs.cost_usd derived from engine_usage (one ledger)
+            from . import routing
+
+            routing.ensure_business_rules(conn)  # mail leads → Growth, ObseumEU GitHub → CTO triage
             from . import monitor
 
             monitor.ensure(conn)  # the Monitor agent's routing rule and budget (the sentinel's incidents)

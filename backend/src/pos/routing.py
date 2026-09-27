@@ -46,6 +46,48 @@ DEFAULT_RULES = [
     (f"Discord mention or question → {roles.COMMUNITY}", "discord", {"kind": "mention"}, roles.COMMUNITY, 3,
      "community"),
 ]
+# Business inputs (added 2026-09-27, pos.business): leads and opportunities in mail go to the Head of
+# Growth (before the Customer Success catch-all); issues and pull requests of the company's product
+# repositories (GitHub org, not only PersonalOS) go to the CTO for triage, who delegates to the Software
+# Engineer. Created once by ensure_business_rules; a rule the owner archived is not created again.
+LEADS_RULE = f"Lead or opportunity e-mail → {roles.GROWTH}"
+LEADS_REGEX = (r"poptávk|poptáv[áa]m|zájem o (spoluprác|služb|vaš|nabídk)|spoluprác|cenov\w* nabídk|\bRFQ\b|"
+               r"request for (a )?(quote|proposal)|partnership|\bleads?\b|obchodní příležitost|"
+               r"\bdemo\b|schůzk\w* ohledně")
+TRIAGE_RULE = f"GitHub issue or pull request (company repos) → {roles.CTO} triage"
+
+
+def triage_org() -> str:
+    return os.environ.get("POS_TRIAGE_GITHUB_ORG") or os.environ.get("POS_REPORT_GITHUB_ORG") or "ObseumEU"
+
+
+BUSINESS_RULES = [
+    # name, source, match, assignee, priority, topic, position
+    (LEADS_RULE, "gmail", {"text_regex": LEADS_REGEX}, roles.GROWTH, 2, "leads", 2),
+    (TRIAGE_RULE, "github", {"kind": ["issue", "pull_request"], "org": None}, roles.CTO, 3, "triage", 1),
+]
+
+
+def ensure_business_rules(conn: sqlite3.Connection) -> list[str]:
+    """The business routing rules, once each, when their member exists (an archived one stays archived)."""
+    made = []
+    ctx = Ctx(actors.owner_id(conn), via="system")
+    for name, source, match, assignee, priority, topic, position in BUSINESS_RULES:
+        if conn.execute("SELECT 1 FROM routing_rules WHERE name = ?", (name,)).fetchone():
+            continue
+        if actors.find_by_name(conn, assignee) is None:
+            continue
+        if "org" in match:
+            match = {**match, "org": triage_org()}
+        create_rule(conn, ctx, {"name": name, "source": source, "match": match, "assignee": assignee,
+                                "priority": priority, "topic": topic, "position": position})
+        made.append(name)
+    if made:
+        audit.log(conn, ctx, "routes_business", None, None, created=made)
+    conn.commit()
+    return made
+
+
 # Off until the Software Engineer can act on it (GitHub write access, repositories other
 # than PersonalOS); until then every review request is a wasted run.
 OFF_BY_DEFAULT = {DEV_RULES[1]}
@@ -169,8 +211,12 @@ def matches(rule: dict, event: dict) -> bool:
     if rule["source"] not in ("any", event["source"]):
         return False
     m = rule["match"]
-    if m.get("kind") and m["kind"] != event.get("kind"):
+    if m.get("kind") and event.get("kind") not in ([m["kind"]] if isinstance(m["kind"], str) else m["kind"]):
         return False
+    if m.get("org"):  # every repository of a GitHub organisation
+        repo = str((event.get("meta") or {}).get("repo") or "").lower()
+        if not repo.startswith(str(m["org"]).lower().rstrip("/") + "/"):
+            return False
     labels = [str(x).lower() for x in (event.get("meta") or {}).get("labels", [])]
     if m.get("label") and m["label"].lower() not in labels:
         return False
@@ -389,6 +435,14 @@ def github_events(kind: str, payload: dict) -> list[dict]:
             "url": issue.get("html_url"), "author": (issue.get("user") or {}).get("login"),
             "meta": {"labels": [lbl["name"] for lbl in issue.get("labels", [])], "repo": repo},
         })
+    elif kind == "pull_request" and payload.get("action") == "opened" and not _own_pull(payload["pull_request"]):
+        pr = payload["pull_request"]
+        out.append({
+            "source": "github", "kind": "pull_request", "ref": f"{repo}!{pr['number']}",
+            "title": f"{repo}!{pr['number']}: {pr['title']}", "body": pr.get("body") or "",
+            "url": pr.get("html_url"), "author": (pr.get("user") or {}).get("login"),
+            "meta": {"labels": [lbl["name"] for lbl in pr.get("labels", [])], "repo": repo},
+        })
     elif kind == "pull_request" and payload.get("action") == "review_requested":
         pr = payload["pull_request"]
         out.append({
@@ -406,6 +460,94 @@ def github_events(kind: str, payload: dict) -> list[dict]:
             "meta": {"labels": [lbl["name"] for lbl in issue.get("labels", [])], "repo": repo},
         })
     return out
+
+
+def _own_pull(pr: dict) -> bool:
+    """Our own agents' pull requests (branches agent/...) and bots': not something to triage."""
+    head = str(((pr.get("head") or {}).get("ref")) or "")
+    user = pr.get("user") or {}
+    return head.startswith("agent/") or user.get("type") == "Bot" or str(user.get("login", "")).endswith("[bot]")
+
+
+# ------------------------------------------------------------------ GitHub polling (the whole organisation)
+
+POLL_KEY = "github_triage_cursor"
+POLL_MAX_REPOS = 30
+POLL_FIRST_LOOKBACK_H = 24
+# Outside reads, replaceable in tests: (url, params) -> parsed JSON.
+github_get = None
+
+
+def _gh(url: str, params: dict) -> object:
+    if github_get is not None:
+        return github_get(url, params)
+    import httpx
+
+    token = os.environ.get("POS_GITHUB_TOKEN", "")
+    r = httpx.get(url, params=params, timeout=20,
+                  headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+    r.raise_for_status()
+    return r.json()
+
+
+def github_poll(conn: sqlite3.Connection, now=None) -> dict:
+    """New issues and pull requests in the organisation's repositories since the last poll become
+    events (the same refs as the webhook, so nothing arrives twice); the routing rules take them
+    from there (label `agent` → Software Engineer, the rest → the CTO's triage). Needs
+    POS_GITHUB_TOKEN; the first poll looks back 24 hours, not at the whole backlog."""
+    from datetime import datetime, timedelta, timezone
+
+    if not os.environ.get("POS_GITHUB_TOKEN") and github_get is None:
+        return {"skipped": "no POS_GITHUB_TOKEN"}
+    now = now or datetime.now(timezone.utc)
+    row = conn.execute("SELECT value FROM system_state WHERE key = ?", (POLL_KEY,)).fetchone()
+    since = row["value"] if row else (now - timedelta(hours=POLL_FIRST_LOOKBACK_H)).isoformat(timespec="seconds")
+    org = triage_org()
+    ctx = Ctx(actors.owner_id(conn), via="github-poll")
+    made, seen = [], 0
+    try:
+        listed = _gh(f"https://api.github.com/orgs/{org}/repos",
+                     {"sort": "pushed", "direction": "desc", "per_page": 100, "type": "all"}) or []
+        repos = [r for r in listed if isinstance(r, dict) and not r.get("archived")
+                 and (r.get("pushed_at") or r.get("updated_at") or "") >= since[:19]]
+        for repo in repos[:POLL_MAX_REPOS]:
+            name = repo["full_name"]
+            items = _gh(f"https://api.github.com/repos/{name}/issues",
+                        {"state": "open", "since": since, "sort": "created", "direction": "desc",
+                         "per_page": 50}) or []
+            for it in items:
+                if not isinstance(it, dict) or (it.get("created_at") or "") < since[:19]:
+                    continue
+                seen += 1
+                pr = "pull_request" in it
+                user = it.get("user") or {}
+                if user.get("type") == "Bot":
+                    continue
+                if pr:
+                    try:
+                        full = _gh(f"https://api.github.com/repos/{name}/pulls/{it['number']}", {})
+                        if isinstance(full, dict) and _own_pull(full):
+                            continue
+                    except Exception:  # noqa: BLE001 - without the branch name it is triaged like any PR
+                        pass
+                mark = "!" if pr else "#"
+                labels = [lbl["name"] for lbl in it.get("labels", []) if isinstance(lbl, dict)]
+                ev = {"source": "github", "kind": "pull_request" if pr else "issue",
+                      "ref": f"{name}{mark}{it['number']}",
+                      "title": f"{name}{mark}{it['number']}: {it.get('title') or ''}",
+                      "body": it.get("body") or "", "url": it.get("html_url"), "author": user.get("login"),
+                      "meta": {"labels": labels, "repo": name}}
+                out = ingest(conn, ctx, ev)
+                if out.get("task_id") and not out.get("duplicate"):
+                    made.append(out.get("task_ref") or out["task_id"])
+    except Exception as e:  # noqa: BLE001 - GitHub down: try again next time from the same cursor
+        conn.rollback()
+        return {"error": f"GitHub: {str(e)[:200]}"}
+    conn.execute("INSERT INTO system_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE "
+                 "SET value = excluded.value, updated_at = excluded.updated_at",
+                 (POLL_KEY, now.isoformat(timespec="seconds"), now_iso()))
+    conn.commit()
+    return {"tasks": made} if made else {"seen": seen}
 
 
 def get_rule(conn: sqlite3.Connection, rule_id: int) -> dict:
