@@ -110,7 +110,7 @@ def _prompt(conn: sqlite3.Connection, task: dict) -> str:
         "description": (task.get("notes") or "")[:4000], "result_or_progress": (task.get("progress_note") or "")[:2000],
     }
     return (
-        "Napiš shrnutí úkolu pro majitele firmy, který není programátor. Přesně 2 až 3 krátké věty česky, "
+        "Napiš shrnutí úkolu pro majitele firmy, který není programátor; oslovuj ho v druhé osobě (ty), nikdy jménem. Přesně 2 až 3 krátké věty česky, "
         "bez nadpisů, odrážek a Markdownu, bez technického žargonu (žádné 'run', 'grant', 'capability', ID běhů). "
         "1. věta: o co jde. 2. věta: kde to teď stojí. 3. věta (jen když je co): co bude dál nebo co je potřeba "
         "od majitele. Stavy: inbox=nezpracované, next=na řadě, working=probíhá, review=čeká na kontrolu, "

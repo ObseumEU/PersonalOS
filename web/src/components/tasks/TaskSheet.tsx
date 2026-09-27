@@ -123,7 +123,7 @@ function Sheet({
         role="dialog"
         aria-modal="true"
         aria-labelledby={labelledBy}
-        className="sheet-in relative flex h-full w-full flex-col border-l border-line bg-surface shadow-2xl lg:w-[78vw] lg:max-w-[1360px]"
+        className="sheet-in relative flex h-full w-full flex-col border-l border-line bg-surface shadow-2xl lg:w-[78vw] lg:max-w-[1800px]"
       >
         {children}
       </div>
@@ -708,7 +708,7 @@ function TaskPanel({
     <>
       {top}
       <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div className="mx-auto flex max-w-[1240px] flex-col gap-6 px-4 py-5 sm:px-8 sm:py-7">
+        <div className="mx-auto flex max-w-[1400px] flex-col gap-6 px-4 py-5 sm:px-8 sm:py-7">
           {/* Header */}
           <header className="flex flex-col gap-3">
             {task.parent && (
