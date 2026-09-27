@@ -28,20 +28,21 @@ def ingest_logs(s: Store, t: dict, service: str, container: str, lines: list[tup
     spiking against its baseline, and the status-code rules."""
     now = now or time.time()
     batch: dict[str, dict] = {}
+    fresh = {"req": 0, "5xx": 0, "429": 0, "401": 0, "quota": 0}  # this batch's new events, per status rule
     for at, line in lines:
         at = at or now
         c = fpmod.classify(line)
         m = _minute(at)
         if c["status"] is not None:
             s.stat(container, "req", m, 1)
-            if c["status"] >= 500:
-                s.stat(container, "5xx", m, 1)
-            elif c["status"] == 429:
-                s.stat(container, "429", m, 1)
-            elif c["status"] == 401:
-                s.stat(container, "401", m, 1)
+            fresh["req"] += 1
+            code = "5xx" if c["status"] >= 500 else str(c["status"]) if c["status"] in (429, 401) else None
+            if code:
+                s.stat(container, code, m, 1)
+                fresh[code] += 1
         if fpmod.QUOTA.search(line):
             s.stat(container, "quota", m, 1)
+            fresh["quota"] += 1
             _quota_sample(s, container, line, at)
             reset = fpmod.quota_reset(line, at)
             if reset is not None:  # the newest line says when the quota comes back
@@ -65,7 +66,7 @@ def ingest_logs(s: Store, t: dict, service: str, container: str, lines: list[tup
         if not learning:
             out += judge_fp(s, t, fp, service, container, b["key"], b["n"], now)
     if not learning:
-        out += judge_status(s, t, service, container, now)
+        out += judge_status(s, t, service, container, now, fresh=fresh)
     return out
 
 
@@ -112,30 +113,47 @@ def quota_until(s: Store, container: str, now: float) -> float | None:
     return q["until"] if q.get("until", 0) > now else None
 
 
-def judge_status(s: Store, t: dict, service: str, container: str, now: float) -> list[Obs]:
+def judge_status(s: Store, t: dict, service: str, container: str, now: float,
+                 fresh: dict | None = None) -> list[Obs]:
+    """The status-code rules over the last window. The window is re-read every
+    tick, so an observation counts only the events new in this batch (`fresh`);
+    without new events there is nothing new to observe. The window's own count
+    goes into detail.window_count, which escalation compares (a rising rate,
+    not a steady one: Incidents.due)."""
     w = int(t["window_min"])
     end = _minute(now) + 1
     n = {m: s.stat_sum(container, m, end - w, end) for m in ("req", "5xx", "429", "401", "quota")}
+
+    def new(metric: str) -> int:
+        """What an observation adds: the whole window when it opens an incident, then only new events."""
+        kind = {"5xx": "http_5xx", "429": "rate_limited", "quota": "quota", "401": "auth_flood"}[metric]
+        if fresh is None or not s.one("SELECT 1 FROM incidents WHERE status = 'open' AND service = ? AND kind = ? "
+                                      "AND key = ?", service, kind, container):
+            return n[metric] if fresh is None or fresh.get(metric) else 0
+        return int(fresh.get(metric, 0))
+
     out = []
-    if n["5xx"] >= t["http_5xx_min"] and n["5xx"] >= t["http_5xx_ratio"] * max(n["req"], 1):
+    if n["5xx"] >= t["http_5xx_min"] and n["5xx"] >= t["http_5xx_ratio"] * max(n["req"], 1) and new("5xx"):
         out.append(Obs(service, "http_5xx", container, "high", f"{container}: {n['5xx']} of {n['req']} requests "
-                       f"answered 5xx in {w} min", n["5xx"], {"requests": n["req"], "5xx": n["5xx"]}, container))
-    if n["429"] >= t["http_429_min"]:
+                       f"answered 5xx in {w} min", new("5xx"),
+                       {"requests": n["req"], "5xx": n["5xx"], "window_count": n["5xx"]}, container))
+    if n["429"] >= t["http_429_min"] and new("429"):
         out.append(Obs(service, "rate_limited", container, "medium", f"{container}: {n['429']}× HTTP 429 in {w} min",
-                       n["429"], {"requests": n["req"], "429": n["429"]}, container))
-    if n["quota"] >= t["quota_min"]:
+                       new("429"), {"requests": n["req"], "429": n["429"], "window_count": n["429"]}, container))
+    if n["quota"] >= t["quota_min"] and new("quota"):
         until = quota_until(s, container, now)
         if until:  # one ongoing incident until the reset, not a new one every time the caller retries
             iso = datetime.fromtimestamp(until, timezone.utc)
             out.append(Obs(service, "quota", container, "high", f"{container}: quota exhausted until "
-                           f"{iso.strftime('%Y-%m-%d %H:%M')} UTC", n["quota"],
+                           f"{iso.strftime('%Y-%m-%d %H:%M')} UTC", new("quota"),
                            {"quota_lines": n["quota"], "quota_until": iso.isoformat(timespec="seconds")}, container))
         else:
             out.append(Obs(service, "quota", container, "high", f"{container}: usage limit / quota errors "
-                           f"({n['quota']} in {w} min)", n["quota"], {"quota_lines": n["quota"]}, container))
-    if n["401"] >= t["auth_401_min"]:
+                           f"({n['quota']} in {w} min)", new("quota"),
+                           {"quota_lines": n["quota"], "window_count": n["quota"]}, container))
+    if n["401"] >= t["auth_401_min"] and new("401"):
         out.append(Obs(service, "auth_flood", container, "medium", f"{container}: {n['401']}× HTTP 401 in {w} min",
-                       n["401"], {"401": n["401"], "requests": n["req"]}, container))
+                       new("401"), {"401": n["401"], "requests": n["req"], "window_count": n["401"]}, container))
     return out
 
 

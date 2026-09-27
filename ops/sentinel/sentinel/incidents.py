@@ -4,7 +4,8 @@ An incident is keyed by (service, kind, key); the key is the error
 fingerprint or the check's name. While it is open every further observation
 is absorbed (count, last seen, the higher severity). PersonalOS hears about
 it once (level 0) and again only on escalation: a higher severity or ten
-times the count it was last told about. After a quiet period without
+times the count it was last told about (a rate incident: three times the
+rate in its window, never a steady rate). After a quiet period without
 observations it resolves itself; PersonalOS hears that too if it was told
 about the incident.
 
@@ -23,6 +24,9 @@ from .store import Store, sev_rank
 
 HEALTH_KINDS = ("health", "unhealthy", "container_down")
 RESET_GRACE_S = 300  # after a quota's reset, this long without a new error resolves it
+# A rate incident (detail.window_count: the events in the rule's window) escalates when the
+# rate rises this many times over the rate PersonalOS was told about, never on a steady rate.
+RATE_ESCALATE = 3
 
 
 def quota_until(row) -> float | None:
@@ -110,13 +114,28 @@ class Incidents:
                 if r["remediated_at"] and r["last_seen"] < (r["escalate_after"] or 0):
                     continue  # the restart fixed it (so far)
                 out.append(("incident", dict(r)))
-            elif sev_rank(r["severity"]) > sev_rank(r["notified_severity"]) or (
-                    r["notified_count"] and r["count"] >= 10 * r["notified_count"] and quota_until(r) is None):
+            elif sev_rank(r["severity"]) > sev_rank(r["notified_severity"]) or self._grew(r):
                 out.append(("incident_escalated", dict(r)))
         return out
 
+    @staticmethod
+    def _grew(r) -> bool:
+        """Ten times the count it was told about; a rate incident: its window rate rose RATE_ESCALATE times."""
+        if quota_until(r) is not None:
+            return False
+        detail = json.loads(r["detail"] or "{}") or {}
+        if detail.get("window_count") is not None:
+            told = detail.get("notified_window") or 0
+            return bool(told) and detail["window_count"] >= RATE_ESCALATE * told
+        return bool(r["notified_count"]) and r["count"] >= 10 * r["notified_count"]
+
     def mark_notified(self, incident_id: int, now: float | None = None) -> int:
         r = self.get(incident_id)
+        detail = json.loads(r["detail"] or "{}") or {}
+        if detail.get("window_count") is not None:  # the rate PersonalOS is told about
+            self.s.x("UPDATE incidents SET detail = ? WHERE id = ?",
+                     json.dumps({**detail, "notified_window": detail["window_count"]}, default=str)[:4000],
+                     incident_id)
         level = r["notified_level"] + 1
         self.s.x("UPDATE incidents SET notified_level = ?, notified_count = ?, notified_severity = ?, "
                  "escalated_at = COALESCE(escalated_at, ?) WHERE id = ?",

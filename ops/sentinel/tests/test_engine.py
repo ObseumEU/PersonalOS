@@ -320,3 +320,30 @@ def test_quota_without_a_reset_keeps_the_quiet_rule(sen, clock):
     clock.advance(31 * 60)
     sen.tick()
     assert [e["kind"] for e in sen.pos.events] == ["incident", "incident_resolved"]
+
+
+def test_a_steady_5xx_rate_counts_each_event_once_and_never_escalates(cfg, clock):
+    s = Store(":memory:")
+    t = cfg["thresholds"]
+    inc = Incidents(s, t, clock)
+    real, told = 0, []
+    for tick in range(20):  # 5 answers 500 a minute: 25 in the 5-minute window (threshold 20)
+        now = clock()
+        lines = [(now - 60 + i * 12, '1.2.3.4 - - "GET /api/x HTTP/1.1" 500 12') for i in range(5)]
+        real += 5
+        for o in detect.ingest_logs(s, t, "api", "api", lines, now):
+            inc.observe(o, now)
+        for kind, row in inc.due(now):
+            if row["kind"] == "http_5xx":  # (the 500 lines are also an error fingerprint of their own)
+                told.append(kind)
+            inc.mark_notified(row["id"], now)
+        clock.advance(60)
+    row = s.one("SELECT * FROM incidents WHERE kind = 'http_5xx'")
+    assert row["count"] == real
+    assert told == ["incident"]
+    # the rate rises three times: now it escalates
+    now = clock()
+    lines = [(now - 60 + i * 0.5, '1.2.3.4 - - "GET /api/x HTTP/1.1" 500 12') for i in range(100)]
+    for o in detect.ingest_logs(s, t, "api", "api", lines, now):
+        inc.observe(o, now)
+    assert [k for k, r in inc.due(now) if r["kind"] == "http_5xx"] == ["incident_escalated"]

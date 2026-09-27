@@ -2,8 +2,8 @@
 
 A fingerprint is the hash of the line with everything that varies between
 two occurrences of "the same" error replaced by a placeholder: timestamps,
-UUIDs, hex ids, e-mail addresses, IPs, URLs' query strings, paths, quoted
-values and numbers. 10,000 identical errors become one fingerprint with a
+UUIDs, hex ids (short ones too), e-mail addresses, IPs, URLs' query strings, paths, quoted
+values and numbers (also a counter glued to a word, retry3). 10,000 identical errors become one fingerprint with a
 count.
 """
 
@@ -23,10 +23,14 @@ _SUBS = [
     (re.compile(r"https?://[^\s\"'<>]+"), "<url>"),
     (re.compile(r"(?<![\w.])(?:/[\w@.+-]+){2,}/?"), "<path>"),
     (re.compile(r"\b(?:0x)?[0-9a-f]{12,}\b", re.I), "<hex>"),
+    # short hex ids (git shas, request and job ids): 7-11 hex characters with a digit and a letter
+    (re.compile(r"\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,11}\b", re.I), "<hex>"),
     (re.compile(r"\b[A-Za-z0-9_-]{24,}\b"), "<id>"),
     (re.compile(r"'[^']{0,200}'"), "'<v>'"),
     (re.compile(r'"[^"]{0,200}"'), '"<v>"'),
     (re.compile(r"(?<![A-Za-z])-?\d+(?:\.\d+)?"), "<n>"),
+    # a counter glued to a word (retry3, worker12, shard07) is the same id as retry4
+    (re.compile(r"\b([A-Za-z]{2,})\d+\b"), r"\1<n>"),
     (re.compile(r"\s+"), " "),
 ]
 

@@ -67,3 +67,14 @@ def test_redaction_of_secrets_and_personal_data():
 
 def test_redaction_truncates():
     assert len(redact("x " * 500, limit=300)) == 300
+
+
+def test_short_hex_ids_and_counters_glued_to_words_share_a_fingerprint():
+    same = [("ERROR request 3f2a9c1 failed", "ERROR request 9b8e7d6 failed"),
+            ("ERROR job a1b2c3d4 failed", "ERROR job e5f6a7b8 failed"),
+            ("ERROR retry3 failed", "ERROR retry4 failed")]
+    for a, b in same:
+        assert fp.fingerprint("s", a) == fp.fingerprint("s", b), (a, b)
+    # plain words made of hex letters stay words
+    assert "decade" in fp.normalize("ERROR decade facade failed")
+    assert fp.fingerprint("s", "ERROR cache failed") != fp.fingerprint("s", "ERROR table failed")
