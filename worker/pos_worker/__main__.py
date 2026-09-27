@@ -33,6 +33,9 @@ Environment:
     WORKER_TOOLS_DIR PersonalOS checkout with agents/*/tools and shared/tools (default: WORKER_WORKDIR)
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
                      GitHub, Gmail, Discord) with their own tokens in env vars
+    WORKER_DEPLOYER_REPO the deployer's git data, mounted read-only: added as the git
+                     remote `deployer` of WORKER_WORKDIR and of each clone in WORKER_DEPLOYER_CLONES
+                     (comma-separated; the agent pool's /work/PersonalOS): fetch main without credentials
 
 The agent's own "profile" and "effort" in agents/<slug>/agent.json (served in /api/worker/me)
 override WORKER_POS_TOOLS, WORKER_CLAUDE_TOOLS, WORKER_CLAUDE_BUILTIN, WORKER_CLAUDE_DISALLOWED,
@@ -131,6 +134,30 @@ def agent_key(wait_s: float = 120) -> str:
     return key
 
 
+def deployer_remote(workdir: str) -> None:
+    """Point the remote `deployer` at the deployer's checkout (WORKER_DEPLOYER_REPO,
+    mounted read-only) so the agent can `git fetch deployer main` without GitHub
+    credentials. Does nothing when the mount or the git repository is missing."""
+    import subprocess
+
+    repo = os.environ.get("WORKER_DEPLOYER_REPO", "").strip()
+    clones = [workdir] + [c.strip() for c in os.environ.get("WORKER_DEPLOYER_CLONES", "").split(",") if c.strip()]
+    clones = [c for c in dict.fromkeys(clones) if os.path.isdir(os.path.join(c, ".git"))]
+    if not repo or not os.path.isdir(repo) or not clones:
+        return
+
+    def git(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+    safe = git("config", "--global", "--get-all", "safe.directory").stdout.split()
+    if repo not in safe and "*" not in safe:
+        git("config", "--global", "--add", "safe.directory", repo)
+    url = "file://" + repo
+    for clone in clones:
+        if git("remote", "set-url", "deployer", url, cwd=clone).returncode != 0:
+            git("remote", "add", "deployer", url, cwd=clone)
+
+
 def main() -> None:
     if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
         open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
@@ -140,6 +167,7 @@ def main() -> None:
     mcp_url = os.environ.get("POS_MCP_URL", url.rstrip("/") + "/mcp")
     workdir = os.environ.get("WORKER_WORKDIR", "/work")
     os.makedirs(workdir, exist_ok=True)
+    deployer_remote(workdir)
 
     client = PosClient(url, key)
 
