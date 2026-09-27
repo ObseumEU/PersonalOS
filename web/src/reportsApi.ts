@@ -65,6 +65,9 @@ export type Packet = {
     handbacks: number;
     returned: number;
     per_agent: {
+      id?: number;
+      /** An archived agent (hidden in the cost table unless "zobrazit archivované"). */
+      archived?: boolean;
       name: string;
       runs: number;
       ok: number;

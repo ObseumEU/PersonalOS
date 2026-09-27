@@ -266,7 +266,7 @@ def _agent_numbers(conn: sqlite3.Connection, aid: int, s: str, u: str) -> dict:
 
 
 def _agents(conn: sqlite3.Connection, s: str, u: str, ps: str, pu: str) -> dict:
-    rows = conn.execute("SELECT id, name FROM actors WHERE kind IN ('ai', 'agent') ORDER BY id").fetchall()
+    rows = conn.execute("SELECT id, name, archived_at FROM actors WHERE kind IN ('ai', 'agent') ORDER BY id").fetchall()
     per, tot, prev = [], Counter(), Counter()
     for r in rows:
         n = _agent_numbers(conn, r["id"], s, u)
@@ -276,7 +276,8 @@ def _agents(conn: sqlite3.Connection, s: str, u: str, ps: str, pu: str) -> dict:
             prev[k] += p[k]
         if n["runs"] or n["accepted"] or n["handbacks"]:
             rate = n["ok"] / (n["ok"] + n["errors"]) if (n["ok"] + n["errors"]) else None
-            per.append({"name": r["name"], **n, "success_rate": round(rate, 3) if rate is not None else None,
+            per.append({"id": r["id"], "name": r["name"], "archived": bool(r["archived_at"]), **n,
+                        "success_rate": round(rate, 3) if rate is not None else None,
                         "cost_per_accepted": round(n["cost_usd"] / n["accepted"], 3) if n["accepted"] else None})
     per.sort(key=lambda x: (-x["cost_usd"], -x["runs"]))
 
