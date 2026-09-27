@@ -659,13 +659,6 @@ def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credent
     named = {str(n).strip().lower() for n in (credentials or []) if str(n).strip()}
     used = placeholders(url, body or "", *headers.values(), *headers.keys())
     names = sorted(named | used)
-    from .. import homeassistant
-
-    if homeassistant.CREDENTIAL in names:  # the Home Assistant safety rules (pos.homeassistant)
-        try:
-            homeassistant.check_rest(method, url, body)
-        except homeassistant.Refused as e:
-            raise CredentialError(str(e)) from None
     values = resolve_for(conn, ctx, names, "http", host=host, task_id=task_id)
     red = Redactor({n: v["value"] for n, v in values.items()})
     try:

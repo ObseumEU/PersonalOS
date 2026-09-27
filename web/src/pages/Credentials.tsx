@@ -70,14 +70,14 @@ export function GrantRows({ items, act, byAgent = true }: { items: CredGrant[]; 
           </span>
           {g.active ? (
             <button
-              className="ml-auto text-ink-3 hover:text-red-400"
-              title="Odebrat"
+              className="btn ml-auto h-6! px-2! hover:text-red-400"
+              title={`Odebrat ${g.credential} agentovi ${g.agent_name}`}
               onClick={() => {
-                const why = window.prompt(`Proč odebrat ${g.credential} agentovi ${g.agent_name}?`)?.trim();
+                const why = window.prompt(`Proč odebrat ${g.credential} agentovi ${g.agent_name}? (nepovinné)`)?.trim();
                 if (why !== undefined) act(credentialsApi.revoke(g.id, why || "odebráno majitelem"));
               }}
             >
-              <X size={13} />
+              <X size={12} /> Odebrat
             </button>
           ) : g.end_kind === "paused" ? (
             <button className="btn ml-auto h-6! px-2!" title="Obnovit přístup" onClick={() => act(credentialsApi.resume(g.id))}>
@@ -133,12 +133,96 @@ function VaultPicker({ onPick }: { onPick: (f: VaultField, item: VaultItem) => v
 
 const EMPTY = { name: "", op_ref: "", description: "", env_var: "", header: "", hosts: "", commands: "", tools: "", max: "60", notes: "" };
 
-function slug(s: string) {
-  return s.toLowerCase().normalize("NFKD").replace(/[^\w\s.-]/g, "").trim().replace(/[\s_]+/g, "-").slice(0, 60);
+/** "SSH HomeAssistant" + "password" -> "ssh-homeassistant-password" (a-z0-9 and dashes only). */
+export function slug(s: string) {
+  return s
+    .normalize("NFKD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)
+    .replace(/-+$/, "");
+}
+
+/** "ssh-homeassistant-password" -> "SSH_HOMEASSISTANT_PASSWORD". */
+const envOf = (name: string) => name.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+/** Tick one or more agents (chips). */
+export function AgentMultiPick({ agents, value, onChange }: { agents: Agent[]; value: number[]; onChange: (ids: number[]) => void }) {
+  if (agents.length === 0) return <span className="cap">Žádní agenti.</span>;
+  return (
+    <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto">
+      {agents.map((a) => {
+        const on = value.includes(a.id);
+        return (
+          <button
+            key={a.id}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(on ? value.filter((x) => x !== a.id) : [...value, a.id])}
+            className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/15 text-accent" : "border-line text-ink-2 hover:border-accent"}`}
+          >
+            {on ? "✓ " : ""}
+            {a.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Scope picker: vše / jen příkazy / jen HTTP / one host (from the credential's allowed hosts or typed). */
+function ScopePick({ hosts, value, onChange }: { hosts: string[]; value: string; onChange: (v: string) => void }) {
+  const preset = value === "" || value === "command" || value === "http" || hosts.includes(value);
+  const [custom, setCustom] = useState(!preset);
+  return (
+    <span className="flex items-center gap-1">
+      <select
+        aria-label="Rozsah"
+        value={custom ? "__host" : value}
+        onChange={(e) => {
+          if (e.target.value === "__host") {
+            setCustom(true);
+            onChange("");
+          } else {
+            setCustom(false);
+            onChange(e.target.value);
+          }
+        }}
+        className={field}
+      >
+        <option value="">vše povolené</option>
+        <option value="command">jen příkazy</option>
+        <option value="http">jen HTTP</option>
+        {hosts.map((h) => (
+          <option key={h} value={h}>
+            jen {h}
+          </option>
+        ))}
+        <option value="__host">jiný host…</option>
+      </select>
+      {custom && <input aria-label="Host" placeholder="host, např. api.example.com" value={value} onChange={(e) => onChange(e.target.value.trim())} className={`${field} w-48`} />}
+    </span>
+  );
+}
+
+/** Grant one credential to several agents, one after another; returns the names that failed. */
+async function grantMany(ids: number[], name: string, reason: string, hours: number | null, scope: string | null, agents: Agent[]) {
+  const failed: string[] = [];
+  for (const id of ids) {
+    try {
+      await credentialsApi.grant(id, name, reason, hours, scope);
+    } catch (e) {
+      failed.push(`${agents.find((a) => a.id === id)?.name ?? `#${id}`}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (failed.length) throw new Error(`Přidělení selhalo — ${failed.join("; ")}`);
 }
 
 /** Add (or edit) a registry entry. */
-function CredentialForm({ initial, onSave, onCancel }: { initial?: Credential; onSave: (c: CredentialIn) => void; onCancel?: () => void }) {
+function CredentialForm({ initial, agents = [], onSave, onCancel }: { initial?: Credential; agents?: Agent[]; onSave: (c: CredentialIn, agentIds: number[]) => void; onCancel?: () => void }) {
+  const [pick, setPick] = useState<number[]>([]);
   const [f, setF] = useState(
     initial
       ? {
@@ -156,16 +240,30 @@ function CredentialForm({ initial, onSave, onCancel }: { initial?: Credential; o
       op_ref: f.op_ref.trim(), description: f.description, env_var: f.env_var.trim(), header: f.header.trim(),
       allowed_hosts: list(f.hosts), allowed_commands: list(f.commands.replace(/,/g, "\n")), allowed_tools: list(f.tools),
       max_uses_hour: Number(f.max) || 60, notes: f.notes,
-    });
+    }, initial ? [] : pick);
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-2 p-4 text-xs">
       {!initial && (
         <VaultPicker
-          onPick={(fld, it) =>
-            setF({ ...f, op_ref: fld.op_ref, name: f.name || slug(`${it.title}`), description: f.description || `${it.title} (${fld.title})` })
-          }
+          onPick={(fld, it) => {
+            const name = slug(`${it.title} ${fld.section ? `${fld.section} ` : ""}${fld.title}`);
+            setF({
+              ...f,
+              op_ref: fld.op_ref,
+              name,
+              // keep what the owner typed; replace what an earlier pick filled in
+              env_var: !f.env_var || f.env_var === envOf(f.name) ? envOf(name) : f.env_var,
+              tools: "",
+              description: !f.description || /^.+ \(.+\)$/.test(f.description) ? `${it.title} (${fld.title})` : f.description,
+            });
+          }}
         />
+      )}
+      {!initial && f.op_ref && (
+        <p className="cap">
+          Vybráno: <span className="font-mono text-accent!">{f.op_ref}</span> → název <span className="font-mono">{f.name || "—"}</span>
+        </p>
       )}
       <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
         <label className="flex flex-col gap-1">
@@ -209,9 +307,15 @@ function CredentialForm({ initial, onSave, onCancel }: { initial?: Credential; o
         <span className="cap">Poznámky majitele (Markdown)</span>
         <textarea value={f.notes} onChange={set("notes")} rows={2} className={`${field} h-auto! py-1`} />
       </label>
+      {!initial && (
+        <div className="flex flex-col gap-1">
+          <span className="cap">Přidělit agentům (nepovinné; natrvalo, lze kdykoli odebrat)</span>
+          <AgentMultiPick agents={agents} value={pick} onChange={setPick} />
+        </div>
+      )}
       <div className="flex gap-2">
         <button className="btn">
-          <Check size={13} /> {initial ? "Uložit" : "Přidat do registru"}
+          <Check size={13} /> {initial ? "Uložit" : pick.length ? `Přidat a přidělit (${pick.length})` : "Přidat do registru"}
         </button>
         {onCancel && (
           <button type="button" className="btn" onClick={onCancel}>
@@ -224,45 +328,40 @@ function CredentialForm({ initial, onSave, onCancel }: { initial?: Credential; o
   );
 }
 
-/** Grant one credential to an agent (owner only). */
-function GrantForm({ cred, agents, act }: { cred: Credential; agents: Agent[]; act: (p: Promise<unknown>) => void }) {
-  const [agent, setAgent] = useState("");
+/** Grant one credential to one or more agents (owner only). */
+function GrantForm({ cred, agents, act, onDone }: { cred: Credential; agents: Agent[]; act: (p: Promise<unknown>, ok?: string) => void; onDone?: () => void }) {
+  const [pick, setPick] = useState<number[]>([]);
   const [hours, setHours] = useState("");
   const [scope, setScope] = useState("");
   const [reason, setReason] = useState("");
+  const has = new Set((cred.grants ?? []).filter((g) => g.active).map((g) => g.agent_id));
+  const free = agents.filter((a) => !has.has(a.id));
   return (
     <form
-      className="flex flex-wrap items-end gap-2 px-4 py-2"
+      className="flex flex-col gap-2 px-4 py-2 text-xs"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!agent || !reason.trim()) return;
-        act(credentialsApi.grant(Number(agent), cred.name, reason.trim(), hours ? Number(hours) : null, scope || null));
+        if (pick.length === 0) return;
+        const names = pick.map((id) => agents.find((a) => a.id === id)?.name ?? `#${id}`).join(", ");
+        act(
+          grantMany(pick, cred.name, reason.trim() || "přiděleno majitelem", hours ? Number(hours) : null, scope || null, agents),
+          `${cred.name} přiděleno: ${names}`,
+        );
+        setPick([]);
         setReason("");
+        onDone?.();
       }}
     >
-      <select aria-label="Agent" value={agent} onChange={(e) => setAgent(e.target.value)} className={field}>
-        <option value="">agent…</option>
-        {agents.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </select>
-      <select aria-label="Rozsah" value={scope} onChange={(e) => setScope(e.target.value)} className={field}>
-        <option value="">jakékoli povolené použití</option>
-        <option value="command">jen příkaz</option>
-        <option value="http">jen HTTP</option>
-        {cred.allowed_hosts.map((h) => (
-          <option key={h} value={h}>
-            jen {h}
-          </option>
-        ))}
-      </select>
-      <input aria-label="Hodiny" placeholder="hodin (prázdné = natrvalo)" value={hours} onChange={(e) => setHours(e.target.value.replace(/[^0-9.]/g, ""))} className={`${field} w-44`} />
-      <input aria-label="Důvod" placeholder="důvod" value={reason} onChange={(e) => setReason(e.target.value)} className={`${field} min-w-40 flex-1`} />
-      <button className="btn">
-        <Plus size={13} /> Udělit
-      </button>
+      <span className="cap">Komu přidělit {cred.name}</span>
+      <AgentMultiPick agents={free} value={pick} onChange={setPick} />
+      <div className="flex flex-wrap items-end gap-2">
+        <ScopePick hosts={cred.allowed_hosts} value={scope} onChange={setScope} />
+        <input aria-label="Hodiny" placeholder="hodin (prázdné = natrvalo)" value={hours} onChange={(e) => setHours(e.target.value.replace(/[^0-9.]/g, ""))} className={`${field} w-44`} />
+        <input aria-label="Důvod" placeholder="důvod (nepovinné)" value={reason} onChange={(e) => setReason(e.target.value)} className={`${field} min-w-40 flex-1`} />
+        <button className="btn" disabled={pick.length === 0}>
+          <Plus size={13} /> Přidělit{pick.length > 1 ? ` (${pick.length})` : ""}
+        </button>
+      </div>
     </form>
   );
 }
@@ -273,20 +372,48 @@ function CredentialCard({ c, agents, act, open, setOpen }: { c: Credential; agen
   useEffect(() => {
     if (open) credentialsApi.detail(c.id).then(setDetail, () => setDetail(null));
   }, [open, c.id, c.updated_at, c.grants?.length]);
+  const [granting, setGranting] = useState(false);
+  const active = (c.grants ?? []).filter((g) => g.active);
   const reAct = (p: Promise<unknown>, ok?: string) => {
-    act(p.then((x) => (credentialsApi.detail(c.id).then(setDetail), x)), ok);
+    act(p.finally(() => credentialsApi.detail(c.id).then(setDetail, () => undefined)), ok);
   };
   return (
     <div className="border-b border-line">
-      <button className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-[13px] hover:bg-line/30" onClick={() => setOpen(!open)}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-left text-[13px] hover:bg-line/30"
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}
+      >
         <KeyRound size={14} className="text-accent" />
         <span className="font-mono">{c.name}</span>
-        <span className="cap truncate">{c.op_ref}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-2">
-          {(c.grants ?? []).length > 0 && <Pill>{`${c.grants!.length} agent${c.grants!.length === 1 ? "" : "i"}`}</Pill>}
+        <span className="cap min-w-0 flex-1 truncate">{c.op_ref}</span>
+        <span className="flex shrink-0 flex-wrap items-center gap-2">
+          {active.length === 0 ? (
+            <span className="cap">nikdo nemá přístup</span>
+          ) : (
+            active.map((g) => <Pill key={g.id}>{g.scope ? `${g.agent_name} · ${g.scope}` : g.agent_name}</Pill>)
+          )}
           <span className="cap">{c.uses_24h ?? 0}× / 24 h</span>
+          <button
+            className="btn h-6! px-2!"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(true);
+              setGranting(true);
+            }}
+          >
+            <Plus size={12} /> Přidělit
+          </button>
         </span>
-      </button>
+      </div>
+      {open && granting && (
+        <div className="mx-4 mb-3 rounded border border-accent/50">
+          <GrantForm cred={c} agents={agents} act={reAct} onDone={() => setGranting(false)} />
+        </div>
+      )}
       {open && (
         <div className="grid grid-cols-1 gap-3 px-4 pb-4 lg:grid-cols-2">
           <div className="flex flex-col gap-2 text-xs">
@@ -318,7 +445,7 @@ function CredentialCard({ c, agents, act, open, setOpen }: { c: Credential; agen
           <div className="flex flex-col rounded border border-line">
             <span className="cap border-b border-line px-4 py-1.5">Přístupy agentů</span>
             <GrantRows items={detail?.grants ?? c.grants ?? []} act={reAct} />
-            <GrantForm cred={c} agents={agents} act={reAct} />
+            {!granting && <GrantForm cred={c} agents={agents} act={reAct} />}
             <span className="cap border-t border-b border-line px-4 py-1.5">Použití</span>
             <div className="max-h-56 overflow-y-auto">
               <UseLog items={detail?.uses ?? []} showCredential={false} />
@@ -376,9 +503,16 @@ export default function Credentials() {
           </div>
           {adding && (
             <CredentialForm
+              agents={agents}
               onCancel={() => setAdding(false)}
-              onSave={(c) => {
-                act(credentialsApi.add(c).then(() => setAdding(false)));
+              onSave={(c, ids) => {
+                act(
+                  credentialsApi.add(c).then(async (saved) => {
+                    setAdding(false);
+                    if (ids.length) await grantMany(ids, saved.name ?? c.name ?? "", "přiděleno majitelem při registraci", null, null, agents);
+                  }),
+                  ids.length ? `${c.name} přidáno a přiděleno (${ids.length})` : `${c.name} přidáno do registru`,
+                );
               }}
             />
           )}
@@ -432,24 +566,69 @@ export default function Credentials() {
   );
 }
 
-/** On an agent's page: its credential grants and uses. */
+/** On an agent's page: its credential grants and uses, and the owner grants another registered credential here. */
 export function AgentCredentialsPanel({ agentId }: { agentId: number }) {
   const [v, setV] = useState<Awaited<ReturnType<typeof credentialsApi.agent>> | null>(null);
+  const [creds, setCreds] = useState<Credential[]>([]);
   const load = useCallback(() => {
     credentialsApi.agent(agentId).then(setV, () => setV(null));
+    credentialsApi.overview().then((o) => setCreds(o.credentials), () => setCreds([]));
   }, [agentId]);
   useEffect(load, [load]);
-  const { error, act } = useAct(load);
-  if (!v || (v.grants.length === 0 && v.uses.length === 0)) return null;
+  const { error, note, act } = useAct(load);
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState("");
+  const [hours, setHours] = useState("");
+  const [reason, setReason] = useState("");
+  if (!v) return null;
+  const held = new Set(v.grants.filter((g) => g.active).map((g) => g.credential));
+  const choices = creds.filter((c) => !held.has(c.name));
+  const chosen = creds.find((c) => c.name === name);
+  const grant = (e: FormEvent) => {
+    e.preventDefault();
+    if (!name) return;
+    act(credentialsApi.grant(agentId, name, reason.trim() || "přiděleno majitelem", hours ? Number(hours) : null, scope || null), `${name} přiděleno`).then(() => {
+      setName("");
+      setScope("");
+      setHours("");
+      setReason("");
+    });
+  };
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-      <Panel fig="PŘÍSTUPY" title="Hesla a tokeny" right={v.enabled ? "jen názvy, nikdy hodnoty" : "1Password vypnuto"} className="lg:col-span-5" bodyClassName="max-h-[300px] overflow-y-auto">
+      <Panel fig="PŘÍSTUPY" title="Hesla a tokeny" right={v.enabled ? "jen názvy, nikdy hodnoty" : "1Password vypnuto"} className="lg:col-span-5" bodyClassName="max-h-[380px] overflow-y-auto">
         <GrantRows items={v.grants} act={act} byAgent={false} />
+        <form onSubmit={grant} className="flex flex-col gap-2 border-t border-line p-3 text-xs">
+          <span className="cap">Přidat přístup</span>
+          {creds.length === 0 ? (
+            <span className="cap">
+              Registr je prázdný — nejdřív přidej položku na stránce <a href="/credentials" className="text-accent underline">Přístupy</a>.
+            </span>
+          ) : (
+            <div className="flex flex-wrap items-end gap-2">
+              <select aria-label="Přístup" value={name} onChange={(e) => { setName(e.target.value); setScope(""); }} className={field}>
+                <option value="">vyber přístup…</option>
+                {choices.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <ScopePick key={name} hosts={chosen?.allowed_hosts ?? []} value={scope} onChange={setScope} />
+              <input aria-label="Hodiny" placeholder="hodin (prázdné = natrvalo)" value={hours} onChange={(e) => setHours(e.target.value.replace(/[^0-9.]/g, ""))} className={`${field} w-44`} />
+              <input aria-label="Důvod" placeholder="důvod (nepovinné)" value={reason} onChange={(e) => setReason(e.target.value)} className={`${field} min-w-32 flex-1`} />
+              <button className="btn" disabled={!name}>
+                <Plus size={13} /> Přidat přístup
+              </button>
+            </div>
+          )}
+        </form>
       </Panel>
-      <Panel fig="AUDIT" title="Použití" className="lg:col-span-7" bodyClassName="max-h-[300px] overflow-y-auto">
+      <Panel fig="AUDIT" title="Použití" className="lg:col-span-7" bodyClassName="max-h-[380px] overflow-y-auto">
         <UseLog items={v.uses} />
       </Panel>
       {error && <p className="cap text-red-400! lg:col-span-12">{error}</p>}
+      {note && <p className="cap text-accent! lg:col-span-12">{note}</p>}
     </div>
   );
 }

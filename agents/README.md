@@ -10,6 +10,15 @@ tests, health) and reverts it automatically if anything fails. The
 constitution itself (`docs/CONSTITUTION.md`), permissions, limits and budget
 change only in commits the owner signs.
 
+## Memory
+
+Every agent has one pinned Markdown memory (pos.agent_memory, the `memories`
+table, max 8000 characters, versioned). It keeps it with `memory_get` and
+`memory_update` (the whole text), and the worker reads it fresh for every run
+and puts it into the prompt ("Your memory", before the task). It is for facts
+that save the next run from exploring again, not for a diary: longer logs go
+in notes. The agent's page shows it.
+
 ## Routines
 
 Agents can schedule recurring work for themselves over MCP (`schedule_create`,

@@ -130,7 +130,10 @@ def register_mcp_tools(mcp, session) -> None:
     weekly.register_mcp(mcp, session)  # the weekly report, the meeting and goals (the Chief of Staff)
     from . import homeassistant
 
-    homeassistant.register_mcp(mcp, session)  # the Home Assistant Specialist's WebSocket tool
+    homeassistant.register_mcp(mcp, session)  # the Home Assistant Specialist's WebSocket and SSH tools
+    from . import agent_memory
+
+    agent_memory.register_mcp(mcp, session)  # every agent's pinned memory (memory_get, memory_update)
     from . import monitor
 
     monitor.register_mcp(mcp, session)  # the Hlídač: incident_logs, incident_close

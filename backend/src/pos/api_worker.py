@@ -147,6 +147,14 @@ async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Se
             await wake.wait(woken, min(POLL_FALLBACK_S, remaining))
 
 
+@router.get("/memory")
+def my_memory(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """This agent's pinned memory, for the prompt of its next run."""
+    from . import agent_memory
+
+    return agent_memory.get(conn, ctx.actor_id)
+
+
 @router.get("/feedback")
 def my_feedback(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """Open feedback for this agent, for the prompt of its next run."""

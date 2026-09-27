@@ -94,6 +94,11 @@ TOOL_PERMISSIONS = {
     "hire_agent": "tasks:write",
     # Home Assistant's WebSocket API (pos.homeassistant); the cred:home-assistant grant is checked inside.
     "ha_ws": "tasks:claim",
+    # SSH on the Home Assistant host (pos.homeassistant): only with an owner grant tool:ha_ssh (nobody has
+    # the group), plus cred:ha-ssh and cred:ha-ssh-user checked inside.
+    "ha_ssh": "homeassistant:ssh",
+    # Every agent's own pinned memory (pos.agent_memory).
+    "memory_get": "tasks:read", "memory_update": "tasks:read",
     "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
     # Pausing or stopping an agent: people and its leads (checked in pos.agents).
     "manage_agent": "tasks:claim",

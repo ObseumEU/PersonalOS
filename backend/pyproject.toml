@@ -16,6 +16,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     # Home Assistant's WebSocket API (pos.homeassistant); uvicorn[standard] brings it too.
     "websockets>=13",
+    # SSH to the Home Assistant host with a password from 1Password (pos.homeassistant.ha_ssh).
+    "paramiko>=3.4",
 ]
 
 [project.optional-dependencies]

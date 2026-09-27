@@ -38,6 +38,15 @@ web page **Přístupy** (`/credentials`) and a panel on each agent's page.
      or URL. HTTPS to the credential's allowed hosts only, no redirects; the
      response comes back redacted and marked as untrusted.
 
+A dedicated tool can also use credentials inside the API. `ha_ssh(command)`
+(pos.homeassistant) runs one shell command on the Home Assistant host over SSH
+with `ha-ssh` (the password) and `ha-ssh-user` (the user name), both from the
+1Password item "SSH HomeAssistant". Both credentials allow only the pseudo
+command `ha_ssh` and the hosts 192.168.1.56 and homeassistant.local, so they
+work nowhere else: not over HTTP and not in `run_with_credentials`. The tool
+itself needs the owner's grant `tool:ha_ssh`. The host key is pinned on first
+use in `<data>/ha_ssh_known_hosts`.
+
 The worker mounts the runner only for agents holding a credential grant; its
 run-bound session token (`/api/worker/credentials/session`, valid while the
 run is live) goes to that one MCP server, not to the model.

@@ -100,6 +100,21 @@ def stable_prompt(me: dict) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+MEMORY_HEAD = ("# Your memory (your own pinned notes from earlier runs: trust them, do not explore again what "
+               "they say; keep them current with memory_update, the whole text, max {max} characters)")
+
+
+def memory_section(me: dict) -> str:
+    """The agent's pinned memory, read fresh for every run (in the task part: it changes,
+    the stable part must not). Missing on an older PersonalOS: nothing."""
+    if "memory" not in me:
+        return ""
+    body = (me.get("memory") or "").strip()[:12000]
+    head = MEMORY_HEAD.format(max=8000)
+    return f"{head}\n\n{body}" if body else (
+        f"{head}\n\n(empty: write down with memory_update what the next run should not have to find out again)")
+
+
 def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardrails: bool = True,
                       include_stable: bool = True) -> str:
     """The prompt for a run. Claude gets the guardrails and the stable part as
@@ -112,6 +127,7 @@ def build_task_prompt(me: dict, task: dict, context: list[dict], include_guardra
         me.get("guardrails", "") if include_guardrails else "",
         "---" if include_guardrails else "",
         stable_prompt(me) if include_stable else "",
+        memory_section(me),
         f"# Your task {task['ref']}: {task['title']}",
         task.get("notes") or "",
         f"Definition of done: {task['definition_of_done']}" if task.get("definition_of_done") else "",

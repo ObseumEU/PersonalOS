@@ -31,6 +31,13 @@ class PosClient:
         except Exception:  # noqa: BLE001 - feedback is context, never a reason not to work
             return []
 
+    def memory(self) -> str:
+        """The agent's pinned memory (empty on an older PersonalOS)."""
+        try:
+            return str((self._get("/api/worker/memory") or {}).get("body") or "")
+        except Exception:  # noqa: BLE001 - memory is context, never a reason not to work
+            return ""
+
     def me(self) -> dict:
         return self._get("/api/worker/me")
 

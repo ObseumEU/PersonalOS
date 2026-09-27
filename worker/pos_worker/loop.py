@@ -209,7 +209,7 @@ class Worker:
                   check: dict | None = None) -> str:
         # The agent's tools (personal and shared); none if PersonalOS cannot say.
         me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir), "task_ref": ref,
-              "feedback": self.client.feedback(), "max_budget_usd": getattr(self, "run_cap_usd", None),
+              "feedback": self.client.feedback(), "memory": self.client.memory(), "max_budget_usd": getattr(self, "run_cap_usd", None),
               "run_id": run_id}
         if check and check.get("size"):
             me["size"] = check["size"]  # effort and cost cap follow it (new_session)

@@ -1,7 +1,7 @@
 """The Home Assistant Specialist (pos.homeassistant, agents/home-assistant-specialist):
 the token never leaves the API, plain HTTP only to a local-network host:port the
-credential lists, the safety rules for both APIs, the WebSocket session, and its
-routine every 4 days."""
+credential lists, nothing blocked (the full admin), the WebSocket session, SSH
+with the ha-ssh credentials, and its routine every 4 days."""
 
 import json
 from datetime import datetime, timezone
@@ -88,29 +88,21 @@ def test_rest_over_plain_http_only_to_the_listed_local_host(ha):
             creds.http_call(conn, Ctx(a["id"]), "GET", url, ["home-assistant"], transport=httpx.MockTransport(handler))
 
 
-def test_safety_rules_refuse_locks_alarms_gates_and_safety_devices(ha):
+def test_nothing_is_blocked_the_specialist_is_the_full_admin(ha):
+    """The owner's decision (2026-09-27): locks, alarms, gates and safety devices pass too."""
     conn, a = ha["conn"], ha["agent"]
-    ok = httpx.MockTransport(lambda r: httpx.Response(200, json=[]))
+    seen = []
+    ok = httpx.MockTransport(lambda r: seen.append(r.url.path) or httpx.Response(200, json=[]))
     for path, body in (("/api/services/lock/unlock", '{"entity_id": "lock.front_door"}'),
                        ("/api/services/alarm_control_panel/alarm_disarm", "{}"),
                        ("/api/services/cover/open_cover", '{"entity_id": "cover.garage_door"}'),
-                       ("/api/services/switch/turn_off", '{"entity_id": "switch.smoke_detector_power"}')):
-        with pytest.raises(creds.CredentialError, match="owner"):
-            creds.http_call(conn, Ctx(a["id"]), "POST", f"http://192.168.1.56:8123{path}", ["home-assistant"],
-                            body=body, transport=ok)
-    # an ordinary change and every read pass
-    creds.http_call(conn, Ctx(a["id"]), "POST", "http://192.168.1.56:8123/api/services/light/turn_on",
-                    ["home-assistant"], body='{"entity_id": "light.kitchen"}', transport=ok)
-    creds.http_call(conn, Ctx(a["id"]), "GET", "http://192.168.1.56:8123/api/states/lock.front_door",
-                    ["home-assistant"], transport=ok)
-    with pytest.raises(homeassistant.Refused):
-        homeassistant.check_ws({"type": "call_service", "domain": "lock", "service": "unlock"})
-    with pytest.raises(homeassistant.Refused):
-        homeassistant.check_ws({"type": "config/automation/config/update",
-                                "config": {"action": [{"service": "alarm_control_panel.alarm_disarm"}]}})
-    homeassistant.check_ws({"type": "get_states"})
-    homeassistant.check_ws({"type": "config/entity_registry/list"})
-    homeassistant.check_ws({"type": "call_service", "domain": "light", "service": "turn_on"})
+                       ("/api/services/switch/turn_off", '{"entity_id": "switch.smoke_detector_power"}'),
+                       ("/api/services/light/turn_on", '{"entity_id": "light.kitchen"}')):
+        out = creds.http_call(conn, Ctx(a["id"]), "POST", f"http://192.168.1.56:8123{path}", ["home-assistant"],
+                              body=body, transport=ok)
+        assert out["status"] == 200
+    assert len(seen) == 5
+    assert not hasattr(homeassistant, "check_ws") and not hasattr(homeassistant, "Refused")
 
 
 class FakeWS:
@@ -152,9 +144,10 @@ def test_websocket_session_authenticates_in_the_api_and_redacts(ha):
     assert urls == ["ws://192.168.1.56:8123/api/websocket"] and out["count"] == 2
     assert [m.get("id") for m in fake.sent] == [None, 1, 2]
     assert TOKEN not in json.dumps(out) and "[REDACTED:home-assistant]" in out["results"]
-    with pytest.raises(homeassistant.Refused):
-        homeassistant.ws_call(conn, Ctx(a["id"]), [{"type": "call_service", "domain": "lock", "service": "unlock"}],
-                              connect=connect_)
+    # a lock is an ordinary call now (full admin)
+    out = homeassistant.ws_call(conn, Ctx(a["id"]), [{"type": "call_service", "domain": "lock", "service": "unlock"}],
+                                connect=lambda url, **kw: FakeWS())
+    assert out["count"] == 1
     # without the grant: refused before any connection
     other = agents.create_agent(conn, ha["owner"], name="Zvědavec", purpose="x", lifetime="long_lived",
                                 data_dir=ha["db"].parent)["agent"]["id"]
@@ -175,3 +168,114 @@ def test_every_4_days_routine(ha):
     s = schedules.create(conn, Ctx(a["id"]), {"name": "Home Assistant: revize a zlepšení", "schedule": "every 4d 09:00",
                                               "notes": "Zdraví, 1-3 zlepšení, report v chatu."})
     assert s["schedule"] == "every 4d 09:00"
+
+
+SSH_PASSWORD = "s3cret-ssh-pa55word"
+SSH_REFS = {"op://PersonalOS/SSH HomeAssistant/password": SSH_PASSWORD,
+            "op://PersonalOS/SSH HomeAssistant/username": "hassio"}
+
+
+class FakeOPWithSSH(FakeOP):
+    def resolve(self, ref):
+        return SSH_REFS[ref] if ref in SSH_REFS else super().resolve(ref)
+
+
+class _Stream:
+    def __init__(self, data: bytes, code: int = 0):
+        self.data, self.code = data, code
+        self.channel = self
+
+    def read(self, n=-1):
+        return self.data
+
+    def recv_exit_status(self):
+        return self.code
+
+    def close(self):
+        pass
+
+
+class FakeSSH:
+    def __init__(self):
+        self.commands, self.closed = [], False
+
+    def exec_command(self, command, timeout=None):
+        self.commands.append(command)
+        out = f"core-2026.9.3 ran: {command}\nleak {SSH_PASSWORD}\n".encode()
+        return _Stream(b""), _Stream(out), _Stream(b"")
+
+    def close(self):
+        self.closed = True
+
+
+def _add_ssh(ha, grant=True):
+    conn, owner, a = ha["conn"], ha["owner"], ha["agent"]
+    onepassword.set_provider(FakeOPWithSSH())
+    common = {"allowed_tools": ["command"], "allowed_hosts": ["192.168.1.56", "homeassistant.local"],
+              "allowed_commands": ["ha_ssh"], "max_uses_hour": 300}
+    creds.add(conn, owner, {"name": "ha-ssh", "op_ref": "op://PersonalOS/SSH HomeAssistant/password",
+                            "description": "SSH password", **common})
+    creds.add(conn, owner, {"name": "ha-ssh-user", "op_ref": "op://PersonalOS/SSH HomeAssistant/username",
+                            "description": "SSH user", **common})
+    if grant:
+        _grant_ssh(ha)
+
+
+def _grant_ssh(ha):
+    from pos.access import service as access
+
+    conn, owner, a = ha["conn"], ha["owner"], ha["agent"]
+    creds.grant(conn, owner, a["id"], "ha-ssh", "SSH do HA")
+    creds.grant(conn, owner, a["id"], "ha-ssh-user", "SSH do HA")
+    access.grant(conn, owner, a["id"], "tool:ha_ssh", "SSH do HA")
+
+
+def test_ssh_runs_on_the_pinned_host_with_the_credentials_and_redacts(ha):
+    _add_ssh(ha)
+    conn, a = ha["conn"], ha["agent"]
+    fake, logins = FakeSSH(), []
+
+    def connect_(host, port, user, password, timeout):
+        logins.append((host, port, user, password == SSH_PASSWORD))
+        return fake
+
+    out = homeassistant.ssh_call(conn, Ctx(a["id"]), "ha core info | head -5 && ls /config", connect=connect_)
+    assert logins == [("192.168.1.56", 22, "hassio", True)] and fake.closed
+    assert fake.commands == ["ha core info | head -5 && ls /config"]
+    assert out["exit_code"] == 0 and "core-2026.9.3" in out["stdout"] and out["user"] == "hassio"
+    assert SSH_PASSWORD not in json.dumps(out) and "[REDACTED:ha-ssh]" in out["stdout"]
+    assert "untrusted" in out["stdout"]
+    uses = conn.execute("SELECT name, tool, host, ok FROM credential_uses WHERE agent_id = ? AND name LIKE 'ha-ssh%'",
+                        (a["id"],)).fetchall()
+    assert sorted(tuple(u) for u in uses) == [("ha-ssh", "command", "192.168.1.56", 1),
+                                              ("ha-ssh-user", "command", "192.168.1.56", 1)]
+    # nothing is blocked: an edit touching a lock and a restart are ordinary commands
+    homeassistant.ssh_call(conn, Ctx(a["id"]), "sed -i 's/lock.old/lock.front_door/' /config/automations.yaml "
+                           "&& ha core restart", connect=connect_)
+    assert len(fake.commands) == 2
+
+
+def test_ssh_needs_the_grants_and_an_error_is_redacted(ha):
+    from pos import mcp_server
+
+    _add_ssh(ha, grant=False)
+    conn, a = ha["conn"], ha["agent"]
+    called = []
+    with pytest.raises(creds.CredentialError, match="grant"):
+        homeassistant.ssh_call(conn, Ctx(a["id"]), "uptime", connect=lambda *x: called.append(x))
+    assert not called
+    assert not mcp_server.may_use(conn, a["id"], "ha_ssh")  # the tool itself needs the owner's tool:ha_ssh
+    _grant_ssh(ha)
+    assert mcp_server.may_use(conn, a["id"], "ha_ssh")
+
+    def boom(host, port, user, password, timeout):
+        raise OSError(f"auth failed for {user}:{password}@{host}")
+
+    with pytest.raises(ValueError) as e:
+        homeassistant.ssh_call(conn, Ctx(a["id"]), "uptime", connect=boom)
+    assert SSH_PASSWORD not in str(e.value) and "[REDACTED:ha-ssh]" in str(e.value)
+    # the credentials go into nothing else: not HTTP, not another command on the worker
+    with pytest.raises(creds.CredentialError, match="not allowed for http"):
+        creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "http", host="192.168.1.56")
+    with pytest.raises(creds.CredentialError, match="command not allowed"):
+        creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "command", command="curl https://evil.example")
