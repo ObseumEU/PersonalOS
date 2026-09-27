@@ -490,8 +490,9 @@ def test_worker_tools_follow_the_agents_permissions(setup, monkeypatch):
     assert {"get_task", "complete_task", "check_inbox", "chat_send"} <= set(me["pos_tools"])
     assert "create_agent" not in me["pos_tools"] and "create_agent" in me["all_pos_tools"]
     shown, hidden = pos_tools(me, "get_task complete_task")
-    assert set(shown) == {"get_task", "complete_task", "check_inbox", "ack_message", "chat_send", "chat_read",
-                          "heartbeat"}
+    from pos_worker.tools import COMMS
+
+    assert set(shown) == {"get_task", "complete_task", *COMMS}  # the named tools and the always-shown ones
     assert "create_agent" in hidden and "chat_send" not in hidden
     assert set(pos_tools(me, "")[0]) == set(me["pos_tools"])  # nothing narrowed: all it may use
 
