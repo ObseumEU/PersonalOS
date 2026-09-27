@@ -1,0 +1,20 @@
+{
+  "name": "Kniha Lead",
+  "purpose": "Vede projekt Kniha (business s rodinnou audioknihou): produkt, plán a priority, jen tento projekt.",
+  "role": "product_lead",
+  "team": "kniha",
+  "reports_to": "CEO",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium"
+}
