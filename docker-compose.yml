@@ -34,6 +34,12 @@ services:
       - ./agents:/repo-agents:ro
       - ./agents:/repo-tools/agents:ro
       - ./shared:/repo-tools/shared:ro
+    # web's nginx proxies to this unique name: plain "api" is ambiguous on shared
+    # networks (Nexus has an "api" too) and nginx would round-robin between them.
+    networks:
+      default:
+        aliases:
+          - pos-api
     restart: unless-stopped
 
   web:

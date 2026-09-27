@@ -39,6 +39,8 @@ services:
       POS_PROMETHEUS_URL: ${POS_PROMETHEUS_URL:-http://192.168.1.186:9090}
     networks:
       default:
+        aliases:
+          - pos-api  # web's nginx upstream (web/nginx.conf); "api" is ambiguous on proxy
       proxy:
     security_opt:
       - no-new-privileges:true
