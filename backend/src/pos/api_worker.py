@@ -9,13 +9,13 @@ import json
 import sqlite3
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from . import actors, agents, agents_code, approvals, chat, killswitch, mcp_server, runner, tasks
 from .api_tasks import get_db
 from .config import Settings, get_settings
-from .core import Ctx, now_iso
+from .core import Ctx, Forbidden, now_iso
 from .db import connect
 
 router = APIRouter(prefix="/api/worker", tags=["worker"])
@@ -502,9 +502,59 @@ def browser_check(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ct
     st = _state(conn, ctx.actor_id)
     if st["frozen"] or st["paused"] or st["archived"]:
         return {"decision": "refuse", "reason": "the kill switch is on or this agent is paused"}
-    if not agents.has_permission(conn, ctx.actor_id, "browser:use"):
-        return {"decision": "refuse", "reason": "this agent lacks browser:use"}
+    if str(body.get("tool") or "").startswith("computer_"):
+        if not browser.may_use_computer(conn, ctx.actor_id):
+            return {"decision": "refuse", "reason": "this agent lacks tool:computer"}
+    elif not browser.may_browse(conn, ctx.actor_id):
+        return {"decision": "refuse", "reason": "this agent lacks tool:browser (or browser:use)"}
     return browser.check(conn, ctx, settings.data_dir, body)
+
+
+@router.get("/browser/policy")
+def browser_policy(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """What the guard needs at start: the agent's action hosts and its persistent profiles."""
+    from . import agents, browser
+
+    have = agents.permissions_of(conn, ctx.actor_id)
+    return {"browser": browser.may_browse(conn, ctx.actor_id), "computer": browser.may_use_computer(conn, ctx.actor_id),
+            "action_hosts": browser.action_hosts(conn, ctx.actor_id),
+            "profiles": sorted(p.split(":", 2)[2] for p in have if p.startswith("scope:browser-profile:"))}
+
+
+@router.post("/browser/credential")
+def browser_credential(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                       x_pos_cred_session: str = Header(default="")):
+    """browser_login: one credential value for the guard to fill into a form field on the page's host.
+    Needs the run's credential session (only the worker's MCP servers hold it), a grant for the
+    credential and the page's host among the credential's allowed hosts. Logged like every use."""
+    from urllib.parse import urlparse
+
+    from . import browser
+    from .credentials import service as creds
+
+    if not browser.may_browse(conn, ctx.actor_id):
+        raise HTTPException(403, "this agent lacks tool:browser")
+    try:
+        s = creds.check_session(conn, ctx, int(body.get("run_id") or 0), x_pos_cred_session)
+    except Forbidden as e:
+        raise HTTPException(403, str(e)) from e
+    u = urlparse(str(body.get("url") or ""))
+    if u.scheme not in ("https", "http") or not u.hostname:
+        raise HTTPException(422, "open the login page first (an http(s) URL)")
+    try:
+        port = u.port
+    except ValueError:
+        port = None
+    host = f"{u.hostname.lower()}:{port}" if port else u.hostname.lower()
+    if u.scheme == "http" and not creds.private_host(u.hostname):
+        raise HTTPException(403, "a credential goes only over HTTPS (plain HTTP only on the local network)")
+    try:
+        values = creds.resolve_for(conn, ctx, [str(body.get("name") or "")], "browser", host=host,
+                                   run_id=s["run_id"], task_id=s["task_id"])
+    except creds.CredentialError as e:
+        raise HTTPException(403, str(e)) from e
+    (name, v), = values.items()
+    return {"name": name, "value": v["value"]}
 
 
 @router.post("/browser/log")

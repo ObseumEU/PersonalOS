@@ -11,6 +11,17 @@ owner's behalf, deleting, and changing account or security settings. Banking
 and payment sites always ask first. Everything is in the audit log, with a
 screenshot of each action; page content reaches the agent as untrusted data.
 Typed text is never stored (it may be a password).
+
+The owner's rule of 2026-09-27 adds the outbound gate (constitution Ú1): on a
+site that is not one of the agent's action hosts, *submitting* something
+(a form's submit or send button, Enter in a form field, uploading a file,
+posting) asks first; reading, searching, logging in and filling in stay free.
+An agent's action hosts are its `scope:browser:<host[:port]>` grants (the
+owner's; e.g. the Home Assistant Specialist's own HA UI, the company's LAN
+apps): there it acts freely. Banking sites always ask.
+
+The same check covers computer use (`computer_*` tools, the desktop sandbox):
+`tool:computer` instead of `tool:browser` / `browser:use`.
 """
 
 import base64
@@ -40,6 +51,19 @@ RISKY_ACTION = re.compile(
 MESSAGE_FIELD = re.compile(
     r"message|compose|reply|comment|chat|post|tweet|e-?mail body|zpráv|komentář|odpověď|napište|napiš", re.IGNORECASE)
 RISKY_SCRIPT = re.compile(r"fetch\(|XMLHttpRequest|sendBeacon|\.submit\(|\.click\(|window\.open\(|navigator\.", re.I)
+# Submitting / posting: outbound on a host that is not one of the agent's action hosts.
+SUBMIT_ACTION = re.compile(
+    r"\b(submit|send|post|publish|reply|comment|tweet|share|upload|sign up|signup|register|create account|"
+    r"create|confirm|apply|book|reserve|vote|save|update|invite|request|order|"
+    r"odeslat|poslat|zveřejnit|publikovat|uložit|potvrdit|registrovat|vytvořit|rezervovat|objednat|sdílet|"
+    r"nahrát|komentovat|přidat)\b", re.IGNORECASE)
+# ... except these, which only read: searching, filtering, logging in.
+READ_ONLY_ACTION = re.compile(
+    r"\b(search|find|filter|go|lookup|look up|hledat|vyhledat|najít|filtr|log ?in|sign ?in|přihlásit|"
+    r"přihlášení|next page|další|more|zobrazit|show)\b", re.IGNORECASE)
+COMPUTER_TOOLS = {"computer_left_click", "computer_right_click", "computer_middle_click", "computer_double_click",
+                  "computer_triple_click", "computer_left_click_drag", "computer_type", "computer_key",
+                  "computer_scroll", "computer_mouse_move", "computer_open_url"}
 ACTION_TOOLS = {"browser_click", "browser_type", "browser_fill_form", "browser_select_option", "browser_press_key",
                 "browser_navigate", "browser_evaluate", "browser_file_upload", "browser_drag", "browser_handle_dialog"}
 
@@ -52,19 +76,56 @@ def _matches(host: str, domains) -> bool:
     return any(host == d or host.endswith("." + d) for d in domains)
 
 
+def _hostport(url: str | None) -> str:
+    p = urlparse(url or "")
+    try:
+        port = p.port
+    except ValueError:
+        port = None
+    return f"{(p.hostname or '').lower()}:{port}" if port else (p.hostname or "").lower()
+
+
+def on_action_host(url: str | None, action_hosts) -> bool:
+    """Is this page on one of the agent's action hosts? An entry with a port matches that
+    host:port exactly; one without matches the host and its subdomains on any port."""
+    host, hp = _host(url), _hostport(url)
+    for h in action_hosts or ():
+        h = str(h).strip().lower()
+        if not h or not host:
+            continue
+        if ":" in h:
+            if hp == h:
+                return True
+        elif host == h or host.endswith("." + h):
+            return True
+    return False
+
+
+def _submits(label: str) -> bool:
+    return bool(label) and bool(SUBMIT_ACTION.search(label)) and not READ_ONLY_ACTION.search(label)
+
+
 def approval_domains() -> tuple[str, ...]:
     extra = tuple(d.strip().lower() for d in os.environ.get("POS_BROWSER_APPROVAL_DOMAINS", "").split(",") if d.strip())
     return APPROVAL_DOMAINS + extra
 
 
 def decide(tool: str, args: dict, *, url: str | None = None, last_field: str | None = None,
-           allow_hosts: list[str] | None = None) -> tuple[str, str]:
-    """("allow" | "approval", reason) for one browser tool call.
-    `url` is the page the agent is on; `last_field` the element it typed into last."""
-    target = args.get("url") if tool == "browser_navigate" else url
+           allow_hosts: list[str] | None = None, action_hosts: list[str] | None = None,
+           element: str | None = None) -> tuple[str, str]:
+    """("allow" | "approval", reason) for one browser (or computer) tool call.
+    `url` is the page the agent is on; `last_field` the element it typed into last;
+    `action_hosts` where the agent may submit freely; `element` what a computer
+    click lands on (the desktop inspects it)."""
+    target = args.get("url") if tool in ("browser_navigate", "computer_open_url") else url
     host = _host(target)
     if host and _matches(host, approval_domains()):
         return "approval", f"{host} is a banking or payment site"
+    if tool.startswith("computer_"):
+        return _decide_computer(tool, args, url=url, last_field=last_field, action_hosts=action_hosts,
+                                element=element)
+    if on_action_host(target, action_hosts):
+        return "allow", "one of this agent's action hosts"
     if tool == "browser_navigate" and allow_hosts and host and not _matches(host, allow_hosts):
         return "approval", f"{host} is outside this agent's usual sites"
     element = str(args.get("element") or args.get("name") or "")
@@ -81,6 +142,38 @@ def decide(tool: str, args: dict, *, url: str | None = None, last_field: str | N
             return "approval", "the form asks for payment details"
     if tool == "browser_evaluate" and RISKY_SCRIPT.search(str(args.get("function") or "")):
         return "approval", "the script sends requests or clicks by itself"
+    # Ú1: submitting or posting on a site that is not one of the agent's action hosts.
+    where = host or "this site"
+    if tool == "browser_click" and _submits(element):
+        return "approval", f"'{element[:80]}' submits or posts on {where} (outbound, not an action host)"
+    if tool == "browser_type" and args.get("submit") and not READ_ONLY_ACTION.search(element):
+        return "approval", f"submitting '{element[:80]}' on {where} sends it out (not an action host)"
+    if tool == "browser_press_key" and str(args.get("key", "")).lower() == "enter" and last_field \
+            and not READ_ONLY_ACTION.search(last_field):
+        return "approval", f"Enter in '{last_field[:80]}' submits a form on {where} (not an action host)"
+    if tool == "browser_file_upload" and args.get("paths"):
+        return "approval", f"uploading files to {where} sends them out (not an action host)"
+    return "allow", "ok"
+
+
+def _decide_computer(tool: str, args: dict, *, url: str | None, last_field: str | None,
+                     action_hosts: list[str] | None, element: str | None) -> tuple[str, str]:
+    """The desktop sandbox: the same outbound rule, with what the desktop's browser tells
+    about the page (its URL, the element under the pointer, the field typed into)."""
+    if tool == "computer_open_url" or on_action_host(url, action_hosts):
+        return "allow", "ok"
+    where = _host(url) or "the desktop"
+    label = element or ""
+    if tool in ("computer_left_click", "computer_double_click", "computer_triple_click") and label:
+        if RISKY_ACTION.search(label):
+            return "approval", f"'{label[:80]}' looks like paying, sending, deleting or changing account settings"
+        if _submits(label):
+            return "approval", f"'{label[:80]}' submits or posts on {where} (outbound, not an action host)"
+    if tool == "computer_key":
+        keys = str(args.get("text") or "").lower().replace(" ", "")
+        if any(k in ("return", "enter", "kp_enter") for k in keys.split("+")) and last_field \
+                and not READ_ONLY_ACTION.search(last_field):
+            return "approval", f"Enter in '{last_field[:80]}' submits a form on {where} (not an action host)"
     return "allow", "ok"
 
 
@@ -125,24 +218,40 @@ def check(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, body: dict) -> dic
     tool = str(body.get("tool") or "")
     args = body.get("args") or {}
     decision, reason = decide(tool, args, url=body.get("url"), last_field=body.get("last_field"),
-                              allow_hosts=body.get("allow_hosts") or None)
+                              allow_hosts=body.get("allow_hosts") or None,
+                              action_hosts=action_hosts(conn, ctx.actor_id),
+                              element=str(body.get("element") or "") or None)
     out = {"decision": decision, "reason": reason}
     if decision == "approval" and not body.get("dry_run"):
         shot = save_screenshot(data_dir, ctx.actor_id, tool, body.get("screenshot"))
         a = approvals.request(conn, ctx, f"browser: {tool.removeprefix('browser_')}", {
             "why": reason, "url": body.get("url"), "tool": tool, "args": redact(tool, args), "screenshot": shot,
+            **({"element": str(body["element"])[:200]} if body.get("element") else {}),
         }, task_id=body.get("task_id"))
         out["approval_id"] = a["id"]
     conn.commit()
     return out
 
 
+def _run_ctx(conn: sqlite3.Connection, ctx: Ctx, run_id) -> Ctx:
+    """The audit entry belongs to the run (the agent page's trace shows it), when it is this agent's."""
+    try:
+        rid = int(run_id or 0)
+    except (TypeError, ValueError):
+        return ctx
+    row = conn.execute("SELECT actor_id FROM runs WHERE id = ?", (rid,)).fetchone() if rid else None
+    return Ctx(ctx.actor_id, via=ctx.via, run_id=rid) if row and row["actor_id"] == ctx.actor_id else ctx
+
+
 def record(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, body: dict) -> dict:
     tool = str(body.get("tool") or "")
     shot = save_screenshot(data_dir, ctx.actor_id, tool, body.get("screenshot"))
-    audit.log(conn, ctx, f"browser:{tool.removeprefix('browser_')}", "task" if body.get("task_id") else None,
+    kind = "computer" if tool.startswith("computer_") else "browser"
+    extra = {k: str(body[k])[:300] for k in ("download", "note") if body.get(k)}
+    audit.log(conn, _run_ctx(conn, ctx, body.get("run_id")), f"{kind}:{tool.removeprefix(kind + '_')}",
+              "task" if body.get("task_id") else None,
               body.get("task_id"), url=body.get("url"), args=redact(tool, body.get("args") or {}),
-              ok=bool(body.get("ok", True)), screenshot=shot, approval_id=body.get("approval_id"))
+              ok=bool(body.get("ok", True)), screenshot=shot, approval_id=body.get("approval_id"), **extra)
     conn.commit()
     return {"screenshot": shot}
 
@@ -151,3 +260,91 @@ def screenshot_path(data_dir: Path, rel: str) -> Path | None:
     base = shots_dir(data_dir).resolve()
     p = (base / rel).resolve()
     return p if p.is_file() and base in p.parents and p.suffix == ".png" else None
+
+
+# ------------------------------------------------------------------ grants (tool:browser, tool:computer)
+
+# Capabilities for the worker's own MCP servers (not pos tools); pos.access knows them.
+WORKER_TOOLS = {"browser": "a headless browser (Playwright MCP behind the guard; submitting on other sites asks)",
+                "computer": "a desktop sandbox (screen, mouse, keyboard) for tasks that need a real GUI"}
+# scope:browser:<host[:port]>: submitting there needs no approval (owner only).
+# scope:browser-profile:<name>: a persistent browser profile, logins kept between runs (owner only).
+SCOPES = ("browser", "browser-profile")
+
+
+def may_browse(conn: sqlite3.Connection, actor_id: int) -> bool:
+    from . import agents
+
+    return agents.has_permission(conn, actor_id, "tool:browser") or agents.has_permission(conn, actor_id, "browser:use")
+
+
+def may_use_computer(conn: sqlite3.Connection, actor_id: int) -> bool:
+    from . import agents
+
+    return agents.has_permission(conn, actor_id, "tool:computer")
+
+
+def action_hosts(conn: sqlite3.Connection, actor_id: int) -> list[str]:
+    """The hosts where this agent submits without approval: its scope:browser:<host> grants."""
+    from . import agents
+
+    return sorted(p.split(":", 2)[2] for p in agents.permissions_of(conn, actor_id)
+                  if p.startswith("scope:browser:") and len(p.split(":", 2)) == 3)
+
+
+# The owner's decision of 2026-09-27 (who gets what on day one; the Access manager grants more).
+SEED_BROWSER = ("CEO", "Chief of Staff", "CTO", "SRE", "Home Assistant Specialist", "Nexus Specialist",
+                "Knowlage Specialist", "Security Engineer", "Head of Growth", "Content & Brand",
+                "Head of Customer Success", "CFO")
+SEED_COMPUTER = ("Home Assistant Specialist", "SRE")
+# Action hosts: the HA Specialist's own Home Assistant (full admin, the owner's decision) and
+# the company's LAN apps for the specialists who run them.
+SEED_ACTION_HOSTS = {
+    "Home Assistant Specialist": ("192.168.1.56:8123", "homeassistant.local:8123"),
+    "SRE": ("192.168.1.108", "192.168.1.186", "grafana.obseum.cloud"),
+    "Nexus Specialist": ("nexus.obseum.cloud", "nexus-api.obseum.cloud"),
+    "Knowlage Specialist": ("knowlage.obseum.cz",),
+}
+SEED_STATE = "browser.grants_seeded"
+
+
+def seed_plan() -> list[tuple[str, str, str]]:
+    out = [(n, "tool:browser", "prohlížeč pro weby bez API (rozhodnutí majitele 2026-09-27)") for n in SEED_BROWSER]
+    out += [(n, "tool:computer", "desktop sandbox pro úkoly s GUI (rozhodnutí majitele 2026-09-27)")
+            for n in SEED_COMPUTER]
+    out += [(n, f"scope:browser:{h}", "vlastní aplikace: odeslání formuláře bez schválení (rozhodnutí majitele)")
+            for n, hosts in SEED_ACTION_HOSTS.items() for h in hosts]
+    return out
+
+
+def ensure_grants(conn: sqlite3.Connection) -> list[str]:
+    """Day one of browser and computer use: the grants above, once each (a grant the owner or
+    the Access manager revokes later stays revoked). An agent that does not exist yet is
+    skipped and gets its grants on a later start."""
+    from . import actors, settings_store
+    from .access import service as access
+    from .access import store
+
+    store.ensure_schema(conn)
+    done_before = set(settings_store.get(conn, SEED_STATE) or [])
+    owner = actors.owner_id(conn)
+    done = []
+    for name, cap, why in seed_plan():
+        key = f"{name}|{cap}"
+        if key in done_before:
+            continue
+        row = actors.find_by_name(conn, name)
+        if row is None:
+            continue
+        if not store.seeded(conn, row["id"]):
+            access.seed_agent(conn, row["id"], owner)
+        if conn.execute(f"SELECT 1 FROM access_grants WHERE agent_id = ? AND capability = ? AND {store.ACTIVE}",
+                        (row["id"], cap, access.now_iso())).fetchone() is None:
+            access._insert_grant(conn, row["id"], cap, owner, "platform", why)
+            access.refresh_cache(conn, row["id"])
+        done.append(key)
+    if done:
+        settings_store.put(conn, Ctx(owner, via="system"), SEED_STATE, sorted(done_before | set(done)))
+        audit.log(conn, Ctx(owner, via="system"), "access_grant", None, None, source="platform", granted=done)
+    conn.commit()
+    return done

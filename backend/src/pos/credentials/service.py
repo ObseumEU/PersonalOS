@@ -33,7 +33,7 @@ from .redact import Redactor
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{1,62}$")
 ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
 PLACEHOLDER = re.compile(r"\{\{\s*cred:([a-z0-9][a-z0-9_.-]*)\s*\}\}")
-TOOLS = ("command", "http")
+TOOLS = ("command", "http", "browser")  # browser: browser_login fills it into a form field (pos.browser)
 PREFIX = "cred:"
 MAX_BODY = 20_000
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
@@ -294,7 +294,7 @@ def _clean(conn: sqlite3.Connection, data: dict, partial: bool = False) -> dict:
         tools = tools if isinstance(tools, list) else re.split(r"[,\s]+", str(tools))
         tools = sorted({t.strip() for t in tools if t.strip()})
         if set(tools) - set(TOOLS):
-            raise CredentialError(f"allowed_tools: any of {TOOLS} (empty = both)")
+            raise CredentialError(f"allowed_tools: any of {TOOLS} (empty = all)")
         out["allowed_tools"] = json.dumps(tools)
     if "allowed_commands" in data or not partial:
         cmds = data.get("allowed_commands") or []
@@ -679,7 +679,7 @@ def resolve_for(conn: sqlite3.Connection, ctx: Ctx, names: list[str], tool: str,
             problem = command_problem(c, command or "")
             if problem:
                 refuse(c, name, problem)
-        if tool == "http":
+        if tool in ("http", "browser"):
             if not c["allowed_hosts"]:
                 refuse(c, name, "no allowed hosts for HTTP use: the owner sets them on the credential")
             if not host or not _host_ok(host, c["allowed_hosts"]):

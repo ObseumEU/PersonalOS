@@ -73,3 +73,17 @@ be copied into `.env`. A key set in `.env` still wins.
 The deployer does them: whatever the Dev agent commits on `agent/dev` is merged
 into main after the checks, pushed and deployed. Manual update:
 `git pull && docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml up -d --build api web`.
+
+## Browser and computer use (docs/BROWSER.md)
+
+```bash
+cd /opt/server/personalos/app
+# the desktop sandbox's shared token (never printed)
+grep -q '^POS_DESKTOP_TOKEN=' .env || echo "POS_DESKTOP_TOKEN=$(openssl rand -hex 24)" >> .env
+docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml --profile agents \
+  up -d --build api agent-pool desktop
+```
+
+The api start seeds `tool:browser` / `tool:computer` and the action hosts once.
+Memory: `agent-pool` is capped at `POS_POOL_MEM` (3g: 4 runs + 2 browsers),
+`desktop` at `POS_DESKTOP_MEM` (1g; idle ~15 MB, one session ~220 MB).

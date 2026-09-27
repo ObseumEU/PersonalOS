@@ -76,3 +76,8 @@ MCP: `tools_list(scope)`, `tools_get(name)` (tasks:read), `tools_publish(name)`,
 API: `GET /api/tools`, `GET /api/tools/{name}`,
 `POST /api/tools/publications/{id}/decide` (owner). The API reads the repo at
 `POS_TOOLS_REPO_DIR` (compose mounts `agents/` and `shared/` there).
+
+## Browser and computer
+
+Not library tools but the worker's own MCP servers, mounted with the grants
+`tool:browser` and `tool:computer`: see [BROWSER.md](BROWSER.md).

@@ -80,8 +80,15 @@ def kind_of(capability: str) -> str:
         return "owner_only"  # the grant tools, one by one too
     if cap in agents.PERMISSIONS:
         return "permission"
+    if cap.startswith(("scope:browser:", "scope:browser-profile:")):
+        # Where an agent submits without approval, and a browser profile that keeps logins (pos.browser).
+        return "owner_only"
     if head == "tool":
         name = cap[5:]
+        from ..browser import WORKER_TOOLS
+
+        if name in WORKER_TOOLS:  # the worker's own MCP servers: the browser, the desktop sandbox
+            return "tool"
         if name not in mcp_server.tool_names():
             raise AccessError(f"no pos tool called {name!r}")
         return "tool"
@@ -96,7 +103,8 @@ def kind_of(capability: str) -> str:
             raise AccessError("a scope is scope:repo:<owner/name> or scope:connector:<name>")
         return "scope"
     raise AccessError(f"unknown capability {cap!r}: a permission ({', '.join(sorted(agents.PERMISSIONS))}), "
-                      "tool:<pos tool>, outbound:<action>, or scope:repo:<x> / scope:connector:<x>")
+                      "tool:<pos tool> (or tool:browser / tool:computer), outbound:<action>, or "
+                      "scope:repo:<x> / scope:connector:<x> / scope:browser:<host>")
 
 
 def _fmt(metric: str, amount) -> str:

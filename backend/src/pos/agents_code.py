@@ -26,7 +26,9 @@ from .core import Ctx
 
 log = logging.getLogger(__name__)
 # The owner grants these (access:manage: the Access manager's own, created by pos.access).
-NEVER_FROM_FILE = {"agents:create", "browser:use", "access:manage"}
+NEVER_FROM_FILE = {"agents:create", "browser:use", "access:manage",
+                   # the browser and the desktop come from grants (pos.browser.ensure_grants, the Access manager)
+                   "tool:browser", "tool:computer"}
 
 
 def repo_dir() -> Path | None:
@@ -87,7 +89,8 @@ def ensure_from_repo(conn: sqlite3.Connection, data_dir: Path, base: Path | None
         if hr.room_for_agents(conn) <= 0:  # no HR decision (no approval per agent, no replacement)
             over.append(s["name"])
             continue
-        perms = sorted(set(s.get("permissions") or agents.DEFAULT_AGENT_PERMISSIONS) - NEVER_FROM_FILE)
+        perms = sorted(p for p in set(s.get("permissions") or agents.DEFAULT_AGENT_PERMISSIONS) - NEVER_FROM_FILE
+                       if not str(p).startswith("scope:browser"))
         # A role from git never makes HR archive someone else to fit under the limit: over it, the
         # agent is not created (the owner raises hr.max_active_agents; docs/REORG.md).
         made = agents.create_agent(conn, owner, name=s["name"], purpose=s.get("purpose") or s["name"],
@@ -181,6 +184,9 @@ def _grants_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s:
         return []
     made = []
     for cap in wanted:
+        if cap in NEVER_FROM_FILE:  # the browser and the desktop: pos.browser seeds them, then the Access manager
+            log.warning("%s: agent.json grant %s is never given from a file; ignored", s["name"], cap)
+            continue
         try:
             if access.kind_of(cap) not in FILE_GRANT_KINDS:
                 log.warning("%s: agent.json grant %s is not a tool grant; ignored", s["name"], cap)

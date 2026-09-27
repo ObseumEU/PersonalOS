@@ -28,6 +28,8 @@ Environment:
     WORKER_MAX_STEPS     stop a run after this many completed steps and hand the task back (0 = no cap)
     WORKER_EXIT_IDLE_S   end the worker after this many seconds without a task (the agent pool's lazy mode)
     WORKER_CLAUDE_MCP    more MCP servers for Claude, as JSON
+    BROWSER_*, PLAYWRIGHT_MCP   the guarded browser (tool:browser; pos_worker.browser_guard)
+    DESKTOP_URL, DESKTOP_TOKEN  the desktop sandbox (tool:computer; pos_worker.computer, ops/desktop)
     WORKER_TOOLS_DIR PersonalOS checkout with agents/*/tools and shared/tools (default: WORKER_WORKDIR)
     WORKER_CODEX_CONFIG  extra `-c key=value` lines: more MCP servers (knowlage ingest,
                      GitHub, Gmail, Discord) with their own tokens in env vars
@@ -47,6 +49,7 @@ from .claude import DEFAULT_TOOLS, ClaudeSession
 from .client import PosClient
 from .codex import CodexSession
 from .loop import Worker
+from . import mounts
 from . import tools as tool_library
 from . import triage
 from .tools import COMMS, pos_tools, tool_list  # noqa: F401 - COMMS and pos_tools are this module's API too
@@ -156,14 +159,10 @@ def main() -> None:
         return me["_cred_env"]
 
     def browser(me: dict) -> dict:
-        """The guarded browser (pos_worker.browser_guard) for agents with browser:use."""
-        if "browser:use" not in (me.get("permissions") or []):
-            return {}
-        return {"browser": {"type": "stdio", "command": sys.executable, "args": ["-m", "pos_worker.browser_guard"],
-                            "env": {"POS_URL": url, "POS_AGENT_KEY": key,
-                                    # the task the browser acts for: approvals and logs name it
-                                    **({"POS_TASK_ID": me["task_ref"]} if me.get("task_ref") else {}),
-                                    **{k: v for k, v in os.environ.items() if k.startswith(("BROWSER_", "PLAYWRIGHT"))}}}}
+        """The guarded browser (pos_worker.browser_guard) with tool:browser (or browser:use) and the
+        desktop sandbox (pos_worker.computer) with tool:computer: only with the grant (pos_worker.mounts)."""
+        return {**mounts.browser_server(me, url, key, workdir, credential_runner(me)),
+                **mounts.computer_server(me, url, key, workdir)}
 
     def new_session(engine: str, model: str | None, me: dict):
         tools = me.get("tools") or []  # the tool library: skills, MCP tools, scripts
@@ -193,7 +192,7 @@ def main() -> None:
                                                  "args": ["-m", "pos_worker.credentials"],
                                                  "env": credential_runner(me)}} if credential_runner(me) else {})},
                 allowed_tools=allowed + tool_library.claude_allowed(tools)
-                + (["mcp__browser"] if browser(me) and allowed else [])
+                + (mounts.claude_allowed(me) if allowed else [])
                 + (["mcp__credentials"] if credential_runner(me) else []),
                 builtin_tools=[t for t in setting(me, "claude_builtin", "WORKER_CLAUDE_BUILTIN").split(",") if t],
                 disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
@@ -213,10 +212,7 @@ def main() -> None:
                     *([f"mcp_servers.pos.enabled_tools={json.dumps(pos_tools(me)[0])}"] if me.get("pos_tools") else []),
                     *([f'model="{model}"'] if model else []), *extra_config(), *codex_effort(me),
                     *tool_library.codex_config(tools),
-                    *([f'mcp_servers.browser.command="{sys.executable.replace(chr(92), "/")}"',
-                       'mcp_servers.browser.args=["-m","pos_worker.browser_guard"]',
-                       'mcp_servers.browser.env_vars=["POS_URL","POS_AGENT_KEY","POS_TASK_ID","BROWSER_CDP","BROWSER_ALLOW",'
-                       '"BROWSER_HEADED","BROWSER_MAX_MINUTES","BROWSER_APPROVAL_WAIT","PLAYWRIGHT_MCP"]'] if browser(me) else []),
+                    *mounts.codex_config(browser(me)),
                     *([f'mcp_servers.credentials.command="{sys.executable.replace(chr(92), "/")}"',
                        'mcp_servers.credentials.args=["-m","pos_worker.credentials"]']
                       + [f"mcp_servers.credentials.env.{k}={json.dumps(v)}" for k, v in credential_runner(me).items()]

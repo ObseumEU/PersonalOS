@@ -306,7 +306,15 @@ export default function AgentDetail() {
                 <span className="text-ink-3">{new Date(e.at).toLocaleTimeString("en-GB")}</span>
                 <span className="truncate text-accent">{e.action.replace(/^mcp:/, "")}</span>
                 <span className="text-ink-3">{e.via}</span>
-                <span className="truncate text-ink-2">{e.entity ? `${e.entity} ${e.entity_id ?? ""}` : ""} {Object.keys(e.detail).length ? JSON.stringify(e.detail) : ""}</span>
+                <span className="truncate text-ink-2">
+                  {typeof e.detail.screenshot === "string" && (
+                    // Browser / computer use: the screenshot of this step (pos.browser, the run's artifacts).
+                    <a href={`/api/browser/screenshots/${e.detail.screenshot}`} target="_blank" rel="noreferrer" className="mr-1.5 text-accent! hover:underline">
+                      [screenshot]
+                    </a>
+                  )}
+                  {e.entity ? `${e.entity} ${e.entity_id ?? ""}` : ""} {Object.keys(e.detail).length ? JSON.stringify(e.detail) : ""}
+                </span>
               </div>
             ))}
           </div>

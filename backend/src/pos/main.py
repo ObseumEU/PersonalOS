@@ -99,6 +99,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from . import routing
 
             routing.ensure_business_rules(conn)  # mail leads → Growth, ObseumEU GitHub → CTO triage
+            from . import browser as browser_use
+
+            browser_use.ensure_grants(conn)  # tool:browser / tool:computer on day one (docs/BROWSER.md)
             from . import monitor
 
             monitor.ensure(conn)  # the Monitor agent's routing rule and budget (the sentinel's incidents)

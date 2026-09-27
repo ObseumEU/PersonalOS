@@ -90,6 +90,19 @@ services:
       WORKER_CLAUDE_EFFORT: medium
       WORKER_CLAUDE_MAX_USD: "1"
       WORKER_MAX_STEPS: "40"
+      # Browser use (tool:browser, docs/BROWSER.md): Chromium starts on a run's first browser call; at most
+      # BROWSER_MAX_CONCURRENT at once in this container, each closed above BROWSER_MAX_MB.
+      BROWSER_MAX_CONCURRENT: ${POS_BROWSER_MAX_CONCURRENT:-2}
+      BROWSER_MAX_MB: ${POS_BROWSER_MAX_MB:-700}
+      BROWSER_MAX_SCREENSHOTS: ${POS_BROWSER_MAX_SCREENSHOTS:-10}
+      # Computer use (tool:computer): the desktop sandbox below, one session at a time.
+      DESKTOP_URL: http://desktop:8100
+      DESKTOP_TOKEN: ${POS_DESKTOP_TOKEN:-}
+    # 4 runs (~220 MiB each) + 2 browsers (~350 MiB each) with room to spare.
+    mem_limit: ${POS_POOL_MEM:-3g}
+    networks:
+      default:
+      desktop:
     volumes:
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - agent-pool-work:/work
@@ -97,6 +110,27 @@ services:
       # reads it (its profile allows only read tools). Same path as before, so its venv keeps working.
       - ${POS_DEV_WORK:-./data/dev-work}/PersonalOS:/work/PersonalOS
       - ./data/worker-keys/pool:/run/pos-keys:ro
+    restart: unless-stopped
+
+  # The desktop sandbox for computer use (ops/desktop): idle one small process; a run's session starts
+  # Xvfb + fluxbox + Chromium and removes them at the end. Reached only by the agent pool (its own network).
+  desktop:
+    profiles: ["agents"]
+    build: ./ops/desktop
+    environment:
+      DESKTOP_TOKEN: ${POS_DESKTOP_TOKEN:-}
+      DESKTOP_IDLE_S: "300"
+      DESKTOP_MAX_S: "1800"
+    init: true  # reaps Chromium's helper processes after a session
+    mem_limit: ${POS_DESKTOP_MEM:-1g}
+    pids_limit: 512
+    shm_size: 64m
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=256m
+    networks:
+      - desktop
     restart: unless-stopped
 
   docker-proxy:
@@ -126,6 +160,9 @@ services:
       - sentinel-state:/state
       - ./.git:/repos/personalos:ro
     restart: unless-stopped
+
+networks:
+  desktop:
 
 volumes:
   pos-data:

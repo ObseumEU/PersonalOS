@@ -7,7 +7,9 @@ Code: `backend/src/pos/access/`. Agent: `agents/access-manager/` (Správce pří
   `granted_by`, `source` (seed, platform, owner, access_manager), `reason`,
   `created_at` and an optional `expires_at`. Capabilities: a permission group
   (`tasks:write`, …), one pos tool (`tool:<name>`), `outbound:<action>` or
-  `outbound:*`, `scope:repo:<owner/name>`, `scope:connector:<name>`.
+  `outbound:*`, `scope:repo:<owner/name>`, `scope:connector:<name>`; the worker's own
+  servers `tool:browser` and `tool:computer`, and the owner-only `scope:browser:<host>`
+  (submitting there needs no approval) and `scope:browser-profile:<name>` ([BROWSER.md](BROWSER.md)).
 - **Budgets** (`access_budgets`): `usd_day`, `usd_month`, `tokens_day`,
   `tokens_month`, `usd_run`, `runs_day` per agent; `agent_id` NULL is the
   company-wide cap. A temporary row sits on top of the permanent one and
