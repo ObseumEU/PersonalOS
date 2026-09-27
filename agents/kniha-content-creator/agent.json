@@ -1,0 +1,20 @@
+{
+  "name": "Kniha Content Creator",
+  "purpose": "Obsah pro Knihu: posty, scénáře videí, e-maily a sociální sítě.",
+  "role": "content",
+  "team": "kniha",
+  "reports_to": "Kniha Marketing Lead",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium"
+}
