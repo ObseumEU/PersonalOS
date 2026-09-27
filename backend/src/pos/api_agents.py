@@ -161,7 +161,7 @@ class HireIn(BaseModel):
     reason: str = ""
 
 
-class DecideIn(BaseModel):
+class HireDecideIn(BaseModel):
     approve: bool
     note: str = ""
 
@@ -183,7 +183,7 @@ def request_hire(body: HireIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
 
 
 @router.post("/hires/{hire_id}/decide")
-def decide_hire(hire_id: int, body: DecideIn, conn=Depends(get_db), ctx=Depends(get_ctx),
+def decide_hire(hire_id: int, body: HireDecideIn, conn=Depends(get_db), ctx=Depends(get_ctx),
                 settings: Settings = Depends(get_settings)):
     from . import hiring
 

@@ -197,6 +197,23 @@ export default {
   "audit.access_owner_permissions": "oprávnění od majitele",
   "audit.access_report": "report přístupů",
 
+  "audit.claim": "vzal si úkol",
+  "audit.wait": "čeká",
+  "audit.update": "upravil",
+  "audit.complete": "dokončil",
+  "audit.progress": "nahlásil postup",
+  "audit.review": "zkontroloval",
+  "audit.return": "vrátil k přepracování",
+  "audit.comment": "okomentoval",
+  "entity.task": "úkol",
+  "entity.task_comment": "komentář",
+  "entity.chat_message": "zpráva",
+  "entity.approval": "schválení",
+  "entity.actor": "člen",
+  "entity.channel": "kanál",
+  "entity.file": "soubor",
+  "entity.note": "poznámka",
+
   // subsystems in the rail
   "subsys.Knowledge base": "Znalosti",
   "subsys.Nexus": "Nexus",

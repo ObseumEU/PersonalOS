@@ -338,7 +338,7 @@ function traceText(e: TraceEntry) {
     .filter(([, v]) => v !== null && v !== "" && typeof v !== "object")
     .map(([k, v]) => `${k}: ${v}`)
     .join(", ");
-  return { act: label("audit", act), raw: act, what: [e.entity ? `${e.entity} ${e.entity_id ?? ""}`.trim() : "", detail].filter(Boolean).join(" · ") };
+  return { act: label("audit", act), raw: act, what: [e.entity ? `${label("entity", e.entity)} ${e.entity_id ?? ""}`.trim() : "", detail].filter(Boolean).join(" · ") };
 }
 
 function Overview({ a, messages, onChange }: { a: Full; messages: Message[]; onChange: () => void }) {

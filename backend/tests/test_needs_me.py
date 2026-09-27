@@ -75,3 +75,19 @@ def test_endpoint(tmp_path):
         assert r.status_code == 200
         body = r.json()
         assert set(body) == {"count", "counts", "items"} and body["count"] == 0
+
+
+def test_approval_decided_over_http_leaves_the_list(tmp_path):
+    from pos.main import create_app
+
+    settings = Settings(data_dir=tmp_path)
+    with TestClient(create_app(settings)) as client:
+        conn = connect(settings.db_path)
+        ai = Ctx(actors.assistant_id(conn), via="mcp")
+        ap = approvals.request(conn, ai, "email_send", {"why": "invoice"})
+        conn.commit()
+        conn.close()
+        assert client.get("/api/needs-me").json()["counts"]["approval"] == 1
+        r = client.post(f"/api/approvals/{ap['id']}/decide", json={"approve": False, "comment": "not now"})
+        assert r.status_code == 200 and r.json()["status"] == "rejected"
+        assert client.get("/api/needs-me").json()["counts"]["approval"] == 0
