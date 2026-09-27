@@ -433,7 +433,7 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     conn.execute("UPDATE channel_members SET last_read_message_id = ? WHERE channel_id = ? AND actor_id = ?",
                  (mid, channel_id, ctx.actor_id))
     audit.log(conn, ctx, "chat_send", "chat_message", mid, channel=channel_id, priority=priority,
-              mentions=mentioned, inbox=sorted(inbox))
+              mentions=mentioned, inbox=sorted(inbox), **({"system": True} if system else {}))
 
     platform_note = None
     if not system and author["kind"] != "human":
@@ -451,6 +451,10 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
             from . import weekly
 
             weekly.on_owner_message(conn, ctx, ch, mid)  # the weekly meeting's task comes back to its agent
+    if not system and author["is_owner"]:
+        from . import asks
+
+        asks.on_owner_chat(conn, ctx, channel_id, mid, reply_to, body)  # answers a blocking chat question
 
     if priority == "stop":
         for aid in targets:

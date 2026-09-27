@@ -305,7 +305,7 @@ def owner_request(conn: sqlite3.Connection, row) -> bool:
 
 _REF_RE = re.compile(r"\bT-(\d{1,6})\b")
 ESCALATION_TOPICS = {"digest"}
-DEDUP_DAYS = 14
+DEDUP_DAYS = 7
 
 
 def _text(row) -> str:
@@ -363,29 +363,61 @@ def is_escalation(conn: sqlite3.Connection, creator_id: int, assignee_id: int | 
     return False
 
 
+# The source item behind an escalation without a T-ref: the mail/Drive link it quotes, or a document
+# code (an offer or invoice number such as TKP-N-0088). T-147 -> T-148 -> T-149 was one invoice.
+# Only links that name one item (a mail thread, a Drive file, an external block's ref), never a
+# generic one (a repository, a dashboard) that unrelated escalations share.
+_ITEM_URL_RE = re.compile(r"https?://(?:mail|drive|docs)\.google\.com/[^\s\"'<>)\]]+")
+_EXT_REF_RE = re.compile(r"<external [^>]*\bref=\"([^\"]+)\"")
+_CODE_RE = re.compile(r"\b(?!T-\d)[A-Z]{2,6}(?:-[A-Z0-9]{1,6})*-\d{3,}\b")
+
+
+def _source_keys(conn: sqlite3.Connection, text: str, roots: set[int]) -> set[str]:
+    """What identifies the item outside the task graph: item links and document codes in the text
+    and in the source tasks behind it."""
+    texts = [text] + [_text(r) for r in (conn.execute("SELECT title, notes FROM tasks WHERE id = ?", (t,)).fetchone()
+                                         for t in roots) if r is not None]
+    keys: set[str] = set()
+    for t in texts:
+        keys |= {u.rstrip(".,;") for u in _ITEM_URL_RE.findall(t or "")}
+        keys |= {u.rstrip(".,;") for u in _EXT_REF_RE.findall(t or "")}
+        keys |= set(_CODE_RE.findall(t or ""))
+    return keys
+
+
 def find_duplicate_escalation(conn: sqlite3.Connection, ctx: Ctx, values: dict) -> int | None:
-    """An open escalation of the same item (same source task behind the refs), or None."""
+    """An open escalation (last DEDUP_DAYS) of the same item: it is named directly, both go back to
+    the same source task, or both carry the same source link or document code. None otherwise."""
     me = conn.execute("SELECT kind FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
     if not me or me["kind"] not in ("ai", "agent") or values.get("parent_id"):
         return None
-    refs = _refs(f"{values.get('title') or ''}\n{values.get('notes') or ''}")
-    if not refs or not is_escalation(conn, ctx.actor_id, values.get("assignee_id"), values.get("topic")):
+    text = f"{values.get('title') or ''}\n{values.get('notes') or ''}"
+    refs = _refs(text)
+    if not is_escalation(conn, ctx.actor_id, values.get("assignee_id"), values.get("topic")):
         return None
-    roots = _roots(conn, refs)
+    roots = _roots(conn, refs) if refs else set()
+    keys = _source_keys(conn, text, roots)
+    if not refs and not keys:
+        return None
     since = (datetime.now(timezone.utc) - timedelta(days=DEDUP_DAYS)).isoformat(timespec="seconds")
     for c in conn.execute(
             """SELECT * FROM tasks WHERE archived_at IS NULL AND status NOT IN ('done', 'someday') AND created_at >= ?
                AND parent_id IS NULL AND created_by IN (SELECT id FROM actors WHERE kind IN ('ai', 'agent'))
-               AND (notes LIKE '%T-%' OR title LIKE '%T-%') ORDER BY id""", (since,)).fetchall():
+               ORDER BY id""", (since,)).fetchall():
         if not is_escalation(conn, c["created_by"], c["assignee_id"], c["topic"]):
             continue
-        # It names an open escalation directly, or both go back to the same source item.
-        if c["id"] in refs or _roots(conn, _refs(_text(c))) & roots:
+        c_refs = _refs(_text(c))
+        c_roots = _roots(conn, c_refs) if c_refs else set()
+        # It names an open escalation directly, both go back to the same source item, or the same link/code.
+        if c["id"] in refs or c_roots & roots or (keys and _source_keys(conn, _text(c), c_roots) & keys):
             return c["id"]
     return None
 
 
 def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: dict) -> None:
+    """The same item escalated again: a comment on the open escalation. When the one escalating it
+    holds that task, the task itself moves on to the new assignee (a handoff: reassign + comment),
+    so one item stays one task up the chain."""
     from . import comments, tasks
 
     who = actors.get(conn, ctx.actor_id)["name"]
@@ -393,8 +425,21 @@ def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: di
             f"new task.\n\n{(values.get('notes') or '')[:1500]}")
     comments.log(conn, ctx, existing, body, "comment")
     audit.log(conn, ctx, "escalation_dedup", "task", existing, title=values.get("title", "")[:200])
-    if values.get("assignee_id") and values["assignee_id"] != conn.execute(
-            "SELECT assignee_id FROM tasks WHERE id = ?", (existing,)).fetchone()[0]:
+    row = conn.execute("SELECT assignee_id, status FROM tasks WHERE id = ?", (existing,)).fetchone()
+    target = values.get("assignee_id")
+    if target and row["assignee_id"] == ctx.actor_id and target != ctx.actor_id \
+            and not actors.get(conn, target)["is_owner"]:
+        from . import org, versioning
+
+        try:
+            org.handoff(conn, ctx, existing, int(target),
+                        note=f"passed up instead of a new task: {values.get('title', '')[:200]}")
+            if row["status"] == "review":
+                versioning.update(conn, ctx, tasks.ENTITY, existing, {"status": "next"}, action="handoff")
+            return
+        except Exception:  # noqa: BLE001 - the comment is there either way
+            log.exception("could not pass %s up", existing)
+    if target and target != row["assignee_id"]:
         try:
             from . import chat
 
@@ -410,6 +455,13 @@ def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: di
 # ------------------------------------------------------------------ review SLA
 
 REVIEW_SLA_HOURS = 24
+
+
+def system_ctx(conn: sqlite3.Connection) -> Ctx:
+    """The platform's own voice for reminders it sends by itself: the Executive Assistant (the
+    system identity, docs/REORG.md), never the owner. A reminder sent as "Owner" counted as the
+    owner's unanswered message in the chat watch (T-194/T-195)."""
+    return Ctx(actors.assistant_id(conn), via="system")
 
 
 def review_triage_target(conn: sqlite3.Connection, row) -> int | None:
@@ -453,11 +505,11 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
             last = conn.execute("""SELECT MAX(at) FROM audit_log WHERE action = 'review_reminder' AND entity = 'task'
                                    AND entity_id = ?""", (row["id"],)).fetchone()[0]
             if not last or last < cutoff:
-                sys_ctx = Ctx(owner, via="system")
+                sys_ctx = system_ctx(conn)
                 chat.send_dm(conn, sys_ctx, ceo, f"{ref} '{row['title']}' waits for your review over "
                                                  f"{REVIEW_SLA_HOURS} h: accept it, return it, or hand it to the "
                                                  "owner only if it truly needs him (request_review).",
-                             attachments=[{"type": "task", "id": row["id"]}], system=True)
+                             priority="fyi", attachments=[{"type": "task", "id": row["id"]}], system=True)
                 audit.log(conn, sys_ctx, "review_reminder", "task", row["id"])
                 wake.wake(ceo)
                 reminded.append(ref)
@@ -478,7 +530,7 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
             why = f"no review in {REVIEW_SLA_HOURS} h: the reviewer's lead takes it over"
         if not target or target == reviewer:
             continue
-        sys_ctx = Ctx(owner, via="system")
+        sys_ctx = system_ctx(conn)
         versioning.update(conn, sys_ctx, tasks.ENTITY, row["id"], {"reviewer_id": target}, action="review_escalate")
         name = actors.get(conn, target)["name"]
         comments.log(conn, sys_ctx, row["id"], f"Review moved to {name}: {why}.", "system")
@@ -489,7 +541,7 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
                                             "return it with what should change (review_task)"
                      + ("; hand the owner only what truly needs him (request_review reviewer=Owner)."
                         if reviewer == owner else "."),
-                     attachments=[{"type": "task", "id": row["id"]}], system=True)
+                     priority="fyi", attachments=[{"type": "task", "id": row["id"]}], system=True)
         wake.wake(target)
         moved.append(f"{ref}→{name}")
     conn.commit()

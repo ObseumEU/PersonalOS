@@ -4,8 +4,10 @@ The Home inbox, the sidebar badge and the phone tab bar all read this, so the
 number is the same everywhere. Four kinds, newest first within each:
 
 - approval: a pending approval (only the owner decides them);
-- ask: an open ticket an agent raised for this member (`ask_owner`) or any
-  other open task an agent assigned to them;
+- ask: an open ticket an agent raised for this member (`ask_owner`, or a
+  blocking question in chat: `chat_send blocking=true`, with `source_ref`, the
+  task that waits, and `message_link`) or any other open task an agent
+  assigned to them;
 - review: a result handed in for this member's review (the Tasks view
   `to_review`, the same SQL);
 - mention: an unread chat message that @mentions them. Pings that only
@@ -56,8 +58,10 @@ def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
         (viewer["id"],)).fetchall()
     asker = {}
     if _has_table(conn, "owner_asks"):
-        for a in conn.execute("""SELECT o.ticket_id, o.kind, o.blocking, x.name, x.kind AS akind FROM owner_asks o
-                                 JOIN actors x ON x.id = o.asker_id WHERE o.status = 'open'"""):
+        for a in conn.execute("""SELECT o.ticket_id, o.kind, o.blocking, o.source_task_id, o.message_id, m.channel_id,
+                                        x.name, x.kind AS akind FROM owner_asks o
+                                 JOIN actors x ON x.id = o.asker_id LEFT JOIN chat_messages m ON m.id = o.message_id
+                                 WHERE o.status = 'open'"""):
             asker[a["ticket_id"]] = a
     out = []
     for r in rows:
@@ -68,6 +72,10 @@ def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
             "blocking": bool(a["blocking"]) if a else False,
             "from_name": a["name"] if a else r["from_name"], "from_kind": a["akind"] if a else r["from_kind"],
             "at": r["created_at"], "link": f"/tasks?task={tasks.display_id(r['id'])}",
+            # The task that waits for the answer, and the chat question it came from (a blocking chat ask).
+            "source_ref": tasks.display_id(a["source_task_id"]) if a and a["source_task_id"] else None,
+            "message_link": (f"/chat?c={a['channel_id']}&m={a['message_id']}"
+                             if a and a["message_id"] and a["channel_id"] else None),
         })
     return out
 

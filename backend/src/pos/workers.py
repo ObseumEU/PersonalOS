@@ -135,6 +135,34 @@ def working_on(conn: sqlite3.Connection, actor_id: int | None = None) -> dict[in
     return out
 
 
+STALE_WORKING_S = 600  # a task read "working" this long after its last change with no live run on it
+
+
+def reset_stale_working(conn: sqlite3.Connection, now: datetime | None = None) -> list[str]:
+    """A task is "working" only while a live run is on it (working_on). An agent's task left in
+    `working` with no live run (the run ended or died, or the task was backed off: T-167 read
+    "working" with no run and a back-off until the next morning) goes back to `next`; a back-off
+    (retry_after) stays. People's tasks are left alone: they work without runs."""
+    from datetime import timedelta
+
+    from . import tasks, versioning
+    from .core import Ctx
+
+    now = now or datetime.now(timezone.utc)
+    quiet = (now - timedelta(seconds=STALE_WORKING_S)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT t.id FROM tasks t JOIN actors a ON a.id = t.assignee_id
+           WHERE t.status = 'working' AND t.archived_at IS NULL AND a.kind != 'human' AND t.updated_at < ?
+             AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.status = 'running'
+                             AND COALESCE(r.heartbeat_at, r.started_at) >= ?)
+             AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id AND r.started_at >= ?)""",
+        (quiet, live_cutoff(now), quiet)).fetchall()
+    ctx = Ctx(actors.assistant_id(conn), via="system")
+    for r in rows:
+        versioning.update(conn, ctx, tasks.ENTITY, r["id"], {"status": "next"}, action="no_live_run")
+    return [tasks.display_id(r["id"]) for r in rows]
+
+
 def a2a_bridge_off(conn: sqlite3.Connection) -> bool:
     """The scheduler job that hands tasks to remote agents is switched off (Automations)."""
     job = conn.execute("SELECT enabled FROM jobs WHERE action = 'a2a_sync'").fetchone()
@@ -291,7 +319,9 @@ def _incident(conn: sqlite3.Connection, *, iid: str, kind: str, key: str, title:
 
 
 def _owner_messages(conn: sqlite3.Connection, since: str, until: str) -> list[tuple[sqlite3.Row, int]]:
-    """(message, agent) for the owner's plain messages to agents: DMs and @mentions."""
+    """(message, agent) for the owner's plain messages to agents: DMs and @mentions. What the
+    platform sends by itself under the owner's name (a system message: reminders, notices) is not
+    his message and waits for no answer (T-194/T-195: review reminders counted as unanswered)."""
     import json
 
     owner = actors.owner_id(conn)
@@ -299,7 +329,11 @@ def _owner_messages(conn: sqlite3.Connection, since: str, until: str) -> list[tu
     for m in conn.execute(
             """SELECT m.*, c.kind AS ch_kind FROM chat_messages m JOIN channels c ON c.id = m.channel_id
                WHERE m.author_id = ? AND m.archived_at IS NULL AND m.created_at >= ? AND m.created_at <= ?
-                 AND m.priority IS NULL ORDER BY m.id""", (owner, since, until)).fetchall():
+                 AND m.priority IS NULL AND NOT EXISTS (
+                   SELECT 1 FROM audit_log l WHERE l.action = 'chat_send' AND l.entity = 'chat_message'
+                   AND l.entity_id = m.id AND (l.via IN ('system', 'scheduler', 'personalos-watch')
+                                               OR json_extract(l.detail, '$.system') = 1))
+               ORDER BY m.id""", (owner, since, until)).fetchall():
         if m["ch_kind"] == "dm":
             targets = [r[0] for r in conn.execute(
                 "SELECT actor_id FROM channel_members WHERE channel_id = ? AND actor_id != ?", (m["channel_id"], owner))]
@@ -371,6 +405,9 @@ def watch(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
 
     now = now or datetime.now(timezone.utc)
     out: dict = {"pool": sync_pool_keys(conn), "down": [], "back": [], "unanswered": []}
+    stale = reset_stale_working(conn, now)  # "working" needs a live run
+    if stale:
+        out["no_live_run"] = stale
 
     # workers that are not running
     down_now = {}

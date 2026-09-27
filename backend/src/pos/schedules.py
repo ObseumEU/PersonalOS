@@ -19,6 +19,7 @@ Schedules are versioned (history, restore) and archived instead of deleted.
 """
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -294,3 +295,85 @@ def run_due(conn: sqlite3.Connection) -> dict:
             conn.rollback()
             fired[r["id"]] = {"error": str(e)[:300]}
     return {"fired": fired} if fired else {}
+
+
+# ------------------------------------------------------------------ routine checks close themselves
+
+# A daily check (the SRE's capacity check, the Nexus and knowlage health passes) handed in all green
+# is done: its one-line summary is the result, nobody reviews it (they were ~3 reviews a day for the
+# CEO, T-177..T-179). Only findings create work: a finding no task tracks yet becomes a task for the
+# checker's lead; a finding the summary already links (T-123) is tracked there.
+CHECK_RE = re.compile(r"kontrol|check|health|zdrav", re.IGNORECASE)
+FINDING_RE = re.compile(
+    r"⚠|❌|🔴|\bred\b|červen|nad prahem|over (the )?threshold|nález|finding|problém|problem|chyb[ay]|\berrors?\b"
+    r"|fail|selh|padá|neběží|nefunguj|\bdown\b|denied|neověřen|unverified|výpad|incident|kritick|critical",
+    re.IGNORECASE)
+_ZERO_RE = re.compile(r"\b0\s*(?:×\s*)?(?:error|chyb|fail|restart|oom)\w*(?:/\w+)?", re.IGNORECASE)
+_REF_RE = re.compile(r"\bT-(\d{1,6})\b")
+
+
+def _schedule_of(conn: sqlite3.Connection, row) -> sqlite3.Row | None:
+    source = (row["source"] or "")
+    if not source.startswith("schedule:") or not source[9:].isdigit():
+        return None
+    return conn.execute("SELECT * FROM schedules WHERE id = ?", (int(source[9:]),)).fetchone()
+
+
+def is_routine_check(conn: sqlite3.Connection, row) -> bool:
+    """A task from a daily routine check (a daily/weekday schedule whose name says check,
+    kontrola or health, or whose template sets auto_close)."""
+    s = _schedule_of(conn, row)
+    if s is None:
+        return False
+    template = json.loads(s["template"] or "{}")
+    if "auto_close" in template:
+        return bool(template["auto_close"])
+    daily = str(s["schedule"]).startswith(("daily", "weekdays"))
+    return daily and bool(CHECK_RE.search(f"{s['name']} {template.get('title', '')}"))
+
+
+def all_green(summary: str | None) -> bool:
+    """The hand-in summary reports nothing to act on. "0 errors" is not a finding."""
+    text = _ZERO_RE.sub(" ", summary or "")
+    return not FINDING_RE.search(text)
+
+
+def closes_itself(conn: sqlite3.Connection, ctx: Ctx, row) -> bool:
+    """The assignee hands in its own routine check: it is done without a review."""
+    return row["assignee_id"] == ctx.actor_id and row["status"] != "review" and is_routine_check(conn, row)
+
+
+def after_check(conn: sqlite3.Connection, ctx: Ctx, task_id: int, summary: str | None) -> dict:
+    """A routine check was closed without review: green is only a comment; a finding no linked
+    task tracks becomes one task for the checker's lead (never the owner)."""
+    from . import comments
+
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    summary = (summary or "").strip()
+    if all_green(summary):
+        comments.log(conn, ctx, task_id, "Routine check all green: closed without review.", "system")
+        return {"green": True}
+    linked = [int(x) for x in _REF_RE.findall(summary) if int(x) != task_id and conn.execute(
+        "SELECT 1 FROM tasks WHERE id = ? AND archived_at IS NULL", (int(x),)).fetchone()]
+    if linked:
+        comments.log(conn, ctx, task_id, "Routine check with findings, tracked in "
+                     + ", ".join(tasks.display_id(x) for x in linked) + ": closed without review.", "system")
+        return {"green": False, "tracked": [tasks.display_id(x) for x in linked]}
+    me = actors.get(conn, row["assignee_id"]) if row["assignee_id"] else None
+    lead = me["reports_to"] if me is not None else None
+    lead_row = actors.get(conn, lead) if lead else None
+    if lead_row is None or lead_row["archived_at"] or lead_row["is_owner"]:
+        from . import business
+
+        lead = business.ceo_id(conn)
+    t = tasks.create(conn, ctx, {
+        "title": f"Nález z rutiny: {row['title']}"[:200],
+        "notes": (f"Purpose: act on what the routine check {tasks.display_id(task_id)} found.\n"
+                  f"Source: {tasks.display_id(task_id)} ({row['title']}), by {me['name'] if me else '?'}.\n\n"
+                  f"{summary[:3000]}"),
+        "definition_of_done": "Each finding is fixed, or handed to whoever fixes it, or judged harmless with a note.",
+        "status": "next", "priority": 2, "topic": row["topic"] or "ops", "source": "routine_finding",
+        "assignee": {"type": "agent", "id": lead} if lead else "ai"})
+    comments.log(conn, ctx, task_id, f"Routine check with findings: {t['ref']} for the lead; closed without review.",
+                 "system")
+    return {"green": False, "task": t["ref"]}

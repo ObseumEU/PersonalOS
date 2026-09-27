@@ -37,6 +37,7 @@ class DeployIn(BaseModel):
     author: str = ""
     reverted_sha: str | None = None
     commits: int = 0
+    branch: str = ""  # the branch promoted (agent/dev), or main in follow mode; "" from an older deployer
 
 
 @router.get("/last")
@@ -51,6 +52,78 @@ def last_good(conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx)):
     return {"sha": row["sha"] if row else None}
 
 
+def responsible(conn: sqlite3.Connection, author: str) -> int | None:
+    """Who fixes a change that did not ship: its author when it is an active agent; an archived
+    author's successor (docs/REORG.md: Dev agent -> Software Engineer); anything else (a person,
+    an unknown name) the branch's owner, the Software Engineer. Never the owner: the SRE or the
+    CTO when there is no engineer; None only when none of them exists."""
+    from . import agents, monitor, roles
+
+    row = conn.execute("SELECT * FROM actors WHERE name = ? ORDER BY archived_at IS NOT NULL, id DESC LIMIT 1",
+                       (author,)).fetchone() if author else None
+    if row is not None and row["kind"] != "human" and row["name"] != DEPLOYER and row["runtime"] != "service":
+        aid = agents.successor_of(conn, row["id"]) if row["archived_at"] else row["id"]
+        if not actors.get(conn, aid)["is_owner"] and not actors.get(conn, aid)["archived_at"]:
+            return aid
+    eng = conn.execute("SELECT id FROM actors WHERE (name = ? OR role = 'developer') AND archived_at IS NULL "
+                       "AND kind != 'human' ORDER BY name = ? DESC, id LIMIT 1",
+                       (roles.ENGINEER, roles.ENGINEER)).fetchone()
+    return eng["id"] if eng else monitor.platform_owner_id(conn)
+
+
+def _open_refusal(conn: sqlite3.Connection, branch: str) -> sqlite3.Row | None:
+    """The open task for changes on this branch that did not ship (one per branch, not one per tip)."""
+    return conn.execute(
+        "SELECT * FROM tasks WHERE source = 'deployer' AND title != ? AND status != 'done' AND archived_at IS NULL "
+        "AND (notes LIKE ? OR (? = 'main' AND title LIKE 'Your change %' AND notes NOT LIKE '%Branch: %')) "
+        "ORDER BY id DESC LIMIT 1",
+        (RESTORE_TITLE, f"%Branch: {branch}\n%", branch)).fetchone()
+
+
+def _refusal_task(conn: sqlite3.Connection, ctx: Ctx, body: DeployIn) -> str:
+    """One open task per branch: a repeat (a new tip, the same conflict) is a comment on it, and
+    the task comes back to the queue of whoever fixes it."""
+    from . import comments, versioning, wake
+
+    branch = (body.branch or "main").strip()
+    what = {"reverted": "was reverted automatically", "rejected": "was refused and reverted",
+            "error": "failed and the redeploy needs a person"}[body.status]
+    rng = f"{body.old_sha[:8]}..{body.new_sha[:8]}"
+    fixer = responsible(conn, body.author)
+    open_ = _open_refusal(conn, branch)
+    if open_ is not None:
+        comments.log(conn, ctx, open_["id"],
+                     f"Again: {rng} {what} at stage {body.stage} (author {body.author or '?'}, "
+                     f"{body.commits} commit(s)).\n\nLog:\n{body.log[-2500:]}", "system")
+        changes: dict = {}
+        cur = actors.get(conn, open_["assignee_id"]) if open_["assignee_id"] else None
+        if fixer and (cur is None or cur["is_owner"] or cur["archived_at"] or cur["kind"] == "human"):
+            changes.update(tasks.resolve_assignee(conn, ctx, {"type": "agent", "id": fixer}))
+        if open_["status"] in ("review", "waiting", "inbox", "someday"):
+            changes.update(status="next", progress_note=f"The deployer refused {rng} again ({body.stage}).")
+        if changes:
+            versioning.update(conn, ctx, tasks.ENTITY, open_["id"], changes, action="deploy_again")
+        who = changes.get("assignee_id") or open_["assignee_id"]
+        if who and not actors.get(conn, who)["is_owner"]:
+            wake.wake(who)
+        return tasks.display_id(open_["id"])
+    t = tasks.create(conn, ctx, {
+        "title": f"Your change {rng} {what} ({body.stage})",
+        "notes": f"Purpose: find out why your change did not ship and fix it, so main deploys again.\n"
+                 f"Source: the self-deploy pipeline ({body.status} at stage {body.stage}).\n"
+                 f"Branch: {branch}\n\n"
+                 f"The deployer checked {body.commits} commit(s). Stage: {body.stage}. Author: {body.author or '?'}.\n"
+                 f"Revert commit: {body.reverted_sha or '-'}\n\nFurther refusals of this branch are comments here "
+                 f"(one open task per branch).\n\nLog:\n{body.log[-4000:]}",
+        "definition_of_done": "The cause is fixed and the change deploys with all checks green "
+                              "(or it is dropped with a note why).",
+        "priority": 1 if body.status == "error" else 2, "topic": "platform", "status": "next",
+        "source": "deployer",
+        "assignee": {"type": "agent", "id": fixer} if fixer else "ai",
+    })
+    return t["ref"]
+
+
 @router.post("", status_code=201)
 def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx)):
     if body.status not in ("ok", "reverted", "rejected", "error"):
@@ -58,23 +131,7 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
     task_ref = None
     own_revert = body.author == DEPLOYER  # the deployer's own revert failed: nobody's change to fix
     if body.status != "ok" and not own_revert:
-        member = actors.find_by_name(conn, body.author) if body.author else None
-        assignee = {"type": "agent" if member and member["kind"] != "human" else "human",
-                    "id": member["id"] if member else actors.owner_id(conn)}
-        what = {"reverted": "was reverted automatically", "rejected": "was refused and reverted",
-                "error": "failed and the redeploy needs a person"}[body.status]
-        t = tasks.create(conn, ctx, {
-            "title": f"Your change {body.old_sha[:8]}..{body.new_sha[:8]} {what} ({body.stage})",
-            "notes": f"Purpose: find out why your change did not ship and fix it, so main deploys again.\n"
-                     f"Source: the self-deploy pipeline ({body.status} at stage {body.stage}).\n\n"
-                     f"The deployer checked {body.commits} commit(s). Stage: {body.stage}.\n"
-                     f"Revert commit: {body.reverted_sha or '-'}\n\nLog:\n{body.log[-4000:]}",
-            "definition_of_done": "The cause is fixed and the change deploys with all checks green "
-                                  "(or it is dropped with a note why).",
-            "priority": 1 if body.status == "error" else 2, "topic": "platform", "status": "next",
-            "assignee": assignee,
-        })
-        task_ref = t["ref"]
+        task_ref = _refusal_task(conn, ctx, body)
     if body.status == "error":  # the platform may be down: the SRE restores it (one open ticket, not one per tick)
         task_ref = _restore_ticket(conn, ctx, body, task_ref) or task_ref
     cur = conn.execute(

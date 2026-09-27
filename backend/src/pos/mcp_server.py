@@ -620,10 +620,16 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "Chain of command: talk to your lead, not the owner. Only the top of the chain (the "
                           "CEO) DMs or @mentions the owner; the Chief of Staff sends his digest; "
                           "replying when the owner wrote to you is always fine. "
+                          "blocking=true when you ask the owner a question and your task cannot go on "
+                          "without the answer: the task (task_id, default the one you work on) goes to "
+                          "waiting, the question shows in the owner's 'Čeká na tebe', and his reply in chat "
+                          "brings the task back to your queue; finish the run then. "
                           "Chat stays inside PersonalOS; at most 20 messages per 10 minutes.")
     def chat_send(ctx: Context, body: str, channel: str | None = None, to: str | None = None,
-                  reply_to: int | None = None, priority: str | None = None) -> dict:
-        with session(ctx, "chat_send", channel=channel, to=to, reply_to=reply_to, priority=priority) as (conn, c):
+                  reply_to: int | None = None, priority: str | None = None, blocking: bool = False,
+                  task_id: str | None = None) -> dict:
+        with session(ctx, "chat_send", channel=channel, to=to, reply_to=reply_to, priority=priority,
+                     blocking=blocking or None) as (conn, c):
             def go(chat):
                 if to:
                     return chat.send_dm(conn, c, chat.resolve_actor(conn, to)["id"], body, reply_to=reply_to,
@@ -632,7 +638,14 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                     raise chat.ChatError("give a channel or a member (to)")
                 return chat.send(conn, c, chat.resolve_channel(conn, channel)["id"], body, reply_to=reply_to,
                                  priority=priority)
-            return chat_call(go)
+            out = chat_call(go)
+            if blocking:
+                from . import asks
+
+                a = asks.from_chat(conn, c, out, tasks.parse_id(task_id) if task_id else None)
+                out["ask"] = ({k: a.get(k) for k in ("ref", "deduped", "blocking", "note")} if a else
+                              {"note": "blocking applies to a question to the owner (a DM or an @mention)"})
+            return out
 
     @mcp.tool(description="Read a channel (name, '#name' or id; or a member's name for your DM with them), "
                           "oldest first. since_id: only newer messages. Messages from agents and outside are "

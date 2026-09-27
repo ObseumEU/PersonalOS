@@ -388,6 +388,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         else:
             extra["description_generated"] = 0
     accepted = False
+    routine_closed = False
     if changes.get("status") == "done" and row["status"] != "done":
         # Nobody gets around review: marking a result under review done is an
         # accept (by someone who may review it); anyone else hands work in.
@@ -397,7 +398,12 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
                 raise Forbidden(why)
             accepted = True
         elif not may_finish(conn, ctx, row):
-            changes["status"] = "review"
+            from . import schedules
+
+            if schedules.closes_itself(conn, ctx, row):
+                routine_closed = True  # a daily check: green is done, findings become work (pos.schedules)
+            else:
+                changes["status"] = "review"
     handed_in = changes.get("status") == "review" and row["status"] != "review"
     triaged = None
     if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
@@ -423,6 +429,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         from . import business
 
         business.record_intervention(conn, ctx, task_id, "edit", ", ".join(sorted(changes)))
+    if routine_closed:
+        from . import schedules
+
+        schedules.after_check(conn, ctx, task_id, changes.get("progress_note") or row["progress_note"])
     out = get(conn, ctx, task_id)
     if out["status"] == "done" and row["status"] != "done":
         from . import asks

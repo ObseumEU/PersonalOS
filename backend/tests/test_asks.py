@@ -143,3 +143,67 @@ def test_agent_detail_pending_gates_only_when_something_waits_on_the_owner(conn)
     assert [(g["kind"], g["ref"], g["link"]) for g in gates] == [("ask", out["ref"], f"/tasks?task={out['ref']}")]
     tasks.complete(conn, me, out["ticket_id"], "Minimal")
     assert agents.detail(conn, ai.actor_id)["pending_gates"] == []
+
+
+def test_a_blocking_chat_question_waits_shows_in_needs_me_and_the_reply_resumes(tmp_path):
+    """T-167/T-171: the agent asked the owner in a DM and its task could not go on, but nothing
+    showed in "Čeká na tebe" and the task read "working"."""
+    from pos import needs_me
+
+    db = tmp_path / "b.db"
+    c = connect(db)
+    migrate(c)
+    actors.ensure_builtin(c)
+    agents.seed_builtin_permissions(c)
+    ai = actors.assistant_id(c)
+    owner = actors.owner_id(c)
+    t = tasks.create(c, Ctx(owner), {"title": "Garage light automation", "assignee": "ai", "status": "next"})
+    tasks.claim(c, Ctx(ai, via="mcp"), t["id"])
+    c.commit()
+    c.close()
+    server = mcp_server.build(db, default_actor=lambda conn: ai)
+
+    async def scenario():
+        from mcp.client import Client
+
+        async with Client(server) as cl:
+            res = await cl.call_tool("chat_send", {"to": "Owner", "body": "Čím se spíná světlo v garáži? Bez toho "
+                                                   "nemůžu nasadit automatizaci.", "blocking": True,
+                                                   "task_id": t["ref"]})
+            assert not res.is_error, res.content
+            return res.structured_content or json.loads(res.content[0].text)
+
+    out = anyio.run(scenario)
+    c = connect(db)
+    me = Ctx(owner, via="api")
+    assert out["ask"]["ref"].startswith("T-") and out["ask"]["blocking"]
+    assert tasks.get(c, me, t["id"])["status"] == "waiting"
+    items = [i for i in needs_me.collect(c, me)["items"] if i["kind"] == "ask"]
+    assert len(items) == 1 and items[0]["source_ref"] == t["ref"] and items[0]["blocking"]
+    assert items[0]["message_link"] == f"/chat?c={out['channel_id']}&m={out['id']}"
+    assert items[0]["title"].startswith("Čím se spíná světlo v garáži")
+    assert not [i for i in needs_me.collect(c, me)["items"] if i["kind"] == "mention"]  # one item, not two
+    # the owner answers in the DM: the ticket is done and the task is back in the queue
+    chat.send(c, me, out["channel_id"], "Shelly relé na kanálu 2.")
+    assert tasks.get(c, me, t["id"])["status"] == "next"
+    assert not [i for i in needs_me.collect(c, me)["items"] if i["kind"] == "ask"]
+    c.close()
+
+
+def test_working_needs_a_live_run(conn):
+    from datetime import datetime, timedelta, timezone
+
+    from pos import workers
+
+    me, ai, t = _agent_task(conn)
+    later = datetime.now(timezone.utc) + timedelta(minutes=15)
+    run = conn.execute("INSERT INTO runs (actor_id, kind, status, task_id, started_at, heartbeat_at) "
+                       "VALUES (?, 'task', 'running', ?, ?, ?)",
+                       (ai.actor_id, t["id"], later.isoformat(timespec="seconds"),
+                        later.isoformat(timespec="seconds"))).lastrowid
+    assert workers.reset_stale_working(conn, later) == []  # a live run: working
+    conn.execute("UPDATE runs SET status = 'error' WHERE id = ?", (run,))
+    conn.execute("UPDATE runs SET started_at = ?, heartbeat_at = ? WHERE id = ?",
+                 ((later - timedelta(hours=1)).isoformat(timespec="seconds"),) * 2 + (run,))
+    assert workers.reset_stale_working(conn, later) == [t["ref"]]
+    assert tasks.get(conn, me, t["id"])["status"] == "next"

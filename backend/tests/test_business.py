@@ -330,20 +330,43 @@ def test_the_packet_has_business_numbers_and_skips_demo_tasks(conn, owner, compa
 # ------------------------------------------------------------------ the weekly report always gets published
 
 def test_a_draft_nobody_published_is_published_from_its_numbers(conn, owner, company):
-    past = weekly_packet.previous_week(weekly_packet.current_week())
-    weekly.packet_for(conn, past, outside=False)  # a draft made by reading the packet, no task (W39)
+    old = weekly_packet.current_week()
+    for _ in range(3):  # ended more than a week ago: too late to write it, published from its numbers
+        old = weekly_packet.previous_week(old)
+    weekly.packet_for(conn, old, outside=False)  # a draft made by reading the packet, no task
     conn.commit()
-    assert weekly.publish_overdue(conn) == {"published": [past]}
-    row = weekly.get_report(conn, past)
+    out = weekly.publish_overdue(conn)
+    assert out["published"] == [old]
+    row = weekly.get_report(conn, old)
     assert row["status"] == "published" and row["published_at"] and "## Co se stalo" in row["narrative"]
-    assert row["headline"].startswith(f"Týden {past}")
-    assert weekly.publish_overdue(conn) == {}
+    assert row["headline"].startswith(f"Týden {old}")
+    assert "published" not in weekly.publish_overdue(conn)
     # the current week: only when the Chief of Staff's task is over 20 h old
     out = weekly.weekly_job(conn)
-    week = out["week"]
-    assert weekly.publish_overdue(conn) == {}
+    week = out.get("week") or weekly_packet.current_week()
+    assert "published" not in weekly.publish_overdue(conn)
     later = datetime.now(timezone.utc) + timedelta(hours=21)
-    assert weekly.publish_overdue(conn, now=later) == {"published": [week]}
+    assert week in weekly.publish_overdue(conn, now=later)["published"]
+
+
+def test_a_missed_week_is_caught_up_by_the_chief_of_staff(conn, owner, company):
+    """W39: a draft with no author and no task (the Friday job missed it) gets the Chief of Staff's
+    task with a fresh packet, at startup or before the next job; it is not published from numbers."""
+    past = weekly_packet.previous_week(weekly_packet.current_week())
+    weekly.packet_for(conn, past, outside=False)  # the stuck draft: numbers only, nobody asked to write it
+    conn.commit()
+    _, end = weekly_packet.bounds(past)
+    out = weekly.catch_up(conn, now=end + timedelta(hours=2))
+    assert [s.split(":")[0] for s in out["started"]] == [past]
+    row = weekly.get_report(conn, past)
+    assert row["status"] == "draft" and row["task_id"]
+    t = tasks.get(conn, owner, row["task_id"])
+    assert t["assignee_name"] == "Chief of Staff" and past in t["title"]
+    assert weekly.catch_up(conn, now=end + timedelta(hours=3)) == {}  # once
+    # the Chief of Staff gets its 20 h; only then the numbers are published
+    assert "published" not in weekly.publish_overdue(conn, now=end + timedelta(hours=3))
+    # a week whose Friday slot has not come yet is not caught up
+    assert weekly.catch_up(conn, now=weekly._slot(weekly_packet.current_week()) - timedelta(hours=1)) == {}
 
 
 # ------------------------------------------------------------------ knowledge for agents
@@ -530,3 +553,49 @@ def test_rollout_script_applies_in_a_fresh_interpreter(conn, owner, tmp_path):
     assert r.returncode == 0, r.stderr
     a = conn.execute("SELECT engine, model FROM actors WHERE id = ?", (cfo.actor_id,)).fetchone()
     assert (a["engine"], a["model"]) == ("claude", "claude-opus-5-5")
+
+
+def test_review_reminders_come_from_the_system_not_the_owner(conn, owner, company):
+    """T-194/T-195: the SLA reminder was a DM from "Owner" with no priority, so the chat watch
+    counted it as the owner's unanswered message."""
+    from pos import workers
+
+    cto, ceo = company["cto"], company["ceo"]
+    t = tasks.create(conn, owner, {"title": "Porovnej hosting", "assignee": "CTO"})
+    tasks.claim(conn, cto, t["id"])
+    tasks.complete(conn, cto, t["id"], "hotovo")  # the CEO triages it
+    later = datetime.now(timezone.utc) + timedelta(hours=25)
+    assert t["ref"] in business.review_sla(conn, now=later)["reminded"]
+    m = conn.execute("SELECT * FROM chat_messages ORDER BY id DESC LIMIT 1").fetchone()
+    assert "waits for your review" in m["body"]
+    assert m["author_id"] == actors.assistant_id(conn) and m["priority"] == "fyi"
+    # whatever the platform sends under the owner's name is no message of his to answer
+    sys_msg = chat.send_dm(conn, Ctx(owner.actor_id, via="system"), ceo.actor_id, "Připomínka", system=True)
+    real = chat.send_dm(conn, owner, ceo.actor_id, "Jak to vypadá?")
+    since = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
+    until = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec="seconds")
+    ids = [m["id"] for m, _ in workers._owner_messages(conn, since, until)]
+    assert real["id"] in ids and sys_msg["id"] not in ids
+
+
+def test_the_same_item_without_a_ref_is_one_escalation_passed_up(conn, owner, company):
+    """T-147 -> T-148 -> T-149: one invoice, three tasks. The same document code (or mail link) is the
+    same item even without a T-ref, and whoever holds the escalation passes that task up."""
+    cfo, ceo, cos = company["cfo"], company["ceo"], company["cos"]
+    up = tasks.create(conn, cfo, {"title": "Digest: zálohová faktura TKP-N-0088", "assignee": "CEO", "topic": "digest",
+                                  "notes": "Neznámý dodavatel, potřeba rozhodnutí."})
+    assert not up.get("deduplicated")
+    again = tasks.create(conn, ceo, {"title": "Digest: potvrdit objednávku (nabídka TKP-N-0088)",
+                                     "assignee": "Chief of Staff", "topic": "digest", "notes": "Pro Davida."})
+    assert again["deduplicated"] and again["id"] == up["id"]
+    t = tasks.get(conn, owner, up["id"])
+    assert t["assignee_id"] == cos.actor_id and t["status"] == "next"  # passed up, not copied
+    assert conn.execute("SELECT 1 FROM handoffs WHERE task_id = ? AND from_actor = ? AND to_actor = ?",
+                        (up["id"], ceo.actor_id, cos.actor_id)).fetchone()
+    other = tasks.create(conn, cfo, {"title": "Digest: faktura FAK-2026-0107", "assignee": "CEO", "topic": "digest"})
+    assert not other.get("deduplicated")
+    # older than 7 days: a new escalation
+    old = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat(timespec="seconds")
+    conn.execute("UPDATE tasks SET created_at = ? WHERE id = ?", (old, other["id"]))
+    fresh = tasks.create(conn, cfo, {"title": "Digest: znovu FAK-2026-0107", "assignee": "CEO", "topic": "digest"})
+    assert not fresh.get("deduplicated")

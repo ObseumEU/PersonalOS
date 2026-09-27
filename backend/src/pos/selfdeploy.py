@@ -64,6 +64,7 @@ class Result:
     author: str = ""
     reverted_sha: str | None = None
     commits: list[str] = field(default_factory=list)
+    branch: str = ""  # what was deployed: main (follow mode) or the promoted branch
 
 
 def git(repo: Path, *args: str) -> str:
@@ -229,7 +230,7 @@ class Reporter:
         r = self.http.post("/api/deploys", headers=self.auth, json={
             "old_sha": res.old, "new_sha": res.new, "status": res.status, "stage": res.stage,
             "log": res.log[-8000:], "author": res.author, "reverted_sha": res.reverted_sha,
-            "commits": len(res.commits),
+            "commits": len(res.commits), "branch": res.branch,
         })
         r.raise_for_status()
         return r.json()
@@ -247,6 +248,7 @@ def tick(repo: Path, reporter: Reporter, *, remote: str, branch: str, test_cmd: 
         return Result(old, new, "nothing")
     res = deploy_range(repo, old, new, test_cmd=test_cmd, up_cmd=up_cmd, health_url=health_url,
                        remote=remote, branch=branch)
+    res.branch = branch
     reporter.report(res)
     return res
 
@@ -296,7 +298,7 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     if not _should_try(state, tip, base):
         return Result(base, tip, "nothing")  # already tried this commit; wait for a new one
     commits = [c for c in git(wt, "rev-list", f"{base}..{tip}").splitlines() if c]
-    res = Result(base, tip, "ok", author=author_of(wt, base, tip), commits=commits)
+    res = Result(base, tip, "ok", author=author_of(wt, base, tip), commits=commits, branch=source)
 
     def fail(stage: str, log: str) -> Result:
         res.status, res.stage, res.log = "rejected", stage, log

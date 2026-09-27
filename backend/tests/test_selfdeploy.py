@@ -294,3 +294,40 @@ def test_a_merge_rejection_is_retried_once_main_moves(tmp_path):
     assert not selfdeploy._should_try(state, "t1", "b2")      # failed tests need a new commit
     assert selfdeploy._should_try(state, "t2", "b1")
     assert json.loads(state.read_text())["stage"] == "tests"
+
+
+def test_refusals_of_one_branch_are_one_task_for_the_engineer_never_the_owner(reporter, tmp_path):
+    """T-184..T-196: every refused tip was a new task, and the archived Dev agent's landed on the owner."""
+    rep, client, conn = reporter
+    owner = Ctx(actors.owner_id(conn))
+    dev = agents.create_agent(conn, owner, name="Dev agent", purpose="old", lifetime="long_lived",
+                              permissions=["tasks:read"], data_dir=tmp_path)["agent"]["id"]
+    agents.archive(conn, owner, dev, "reorganisation")
+    se = actors.find_by_name(conn, "Software Engineer")["id"]
+
+    def refuse(tip: str, author: str) -> dict:
+        return rep.report(selfdeploy.Result("a" * 40, tip * 40, "rejected", stage="merge", log="CONFLICT (content)",
+                                            author=author, commits=["x", "y"], branch="dev/agent/dev"))
+
+    first = refuse("1", "Dev agent")
+    t = tasks.get(conn, owner, tasks.parse_id(first["task"]))
+    assert t["assignee_id"] == se  # the archived author's successor, not the owner
+    assert "Branch: dev/agent/dev" in t["notes"]
+    tasks.claim(conn, Ctx(se, via="mcp"), t["id"])
+    tasks.complete(conn, Ctx(se, via="mcp"), t["id"], "rebased")  # handed in, then refused again
+    assert refuse("2", "Software Engineer")["task"] == first["task"]
+    assert refuse("3", "David Rosko")["task"] == first["task"]  # a person's commit: still the branch's owner
+    t = tasks.get(conn, owner, t["id"])
+    assert t["status"] == "next" and t["assignee_id"] == se
+    again = [c for c in conn.execute("SELECT body FROM task_comments WHERE task_id = ?", (t["id"],))
+             if c["body"].startswith("Again:")]
+    assert len(again) == 2
+    open_ = conn.execute("SELECT COUNT(*) FROM tasks WHERE source = 'deployer' AND status != 'done'").fetchone()[0]
+    assert open_ == 1
+    # another branch is another task; an unknown author there goes to the engineer too
+    other = rep.report(selfdeploy.Result("a" * 40, "4" * 40, "rejected", stage="tests", author="someone",
+                                         branch="main"))
+    assert other["task"] != first["task"]
+    assert tasks.get(conn, owner, tasks.parse_id(other["task"]))["assignee_id"] == se
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'deployer' AND assignee_id = ?",
+                            (owner.actor_id,)).fetchone()

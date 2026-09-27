@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -111,6 +112,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             observability.ensure(conn)  # Grafana alerts → the Monitor, and its ops:observe grant
             if os.environ.get("POS_WORKER_KEYS_DIR"):
                 agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
+            if settings.scheduler:
+                from . import weekly
+
+                try:  # a weekly report the Friday job missed (W39) is written now, not next Friday
+                    weekly.catch_up(conn)
+                except Exception:  # noqa: BLE001 - never block the start on the report
+                    logging.getLogger(__name__).exception("weekly report catch-up failed")
         finally:
             conn.close()
         integrations.install()

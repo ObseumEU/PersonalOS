@@ -128,3 +128,41 @@ def test_team_schedule_for_another_agent_needs_tasks_write(conn, tmp_path):
     assert s in schedules.list_schedules(conn, actor_id=hr)
     res = schedules.fire(conn, s["id"])
     assert tasks.get(conn, Ctx(actors.owner_id(conn)), tasks.parse_id(res["task"]))["assignee_id"] == worker
+
+
+def test_a_green_daily_check_closes_itself_and_only_findings_make_work(conn, tmp_path):
+    """T-177..T-179: every daily check was a review for the CEO. Green: done with its summary;
+    a finding no task tracks: one task for the checker's lead; a tracked finding: just done."""
+    owner = Ctx(actors.owner_id(conn))
+    def member(name, perms):
+        return agents.create_agent(conn, owner, name=name, purpose=name, lifetime="long_lived", data_dir=tmp_path,
+                                   permissions=list(perms))["agent"]["id"]
+
+    lead = member("CTO", ("tasks:read", "tasks:write", "tasks:claim", "tasks:review"))
+    sre = member("SRE", ("tasks:read", "tasks:claim"))
+    conn.execute("UPDATE actors SET reports_to = ? WHERE id = ?", (lead, sre))
+    s = schedules.create(conn, owner, {"name": "SRE: denní kontrola kapacity", "schedule": "daily 07:20",
+                                       "assignee": {"type": "agent", "id": sre}, "visibility": "team"})
+    weekly = schedules.create(conn, owner, {"name": "SRE: týdenní revize", "schedule": "weekly mon 07:45",
+                                            "assignee": {"type": "agent", "id": sre}, "visibility": "team"})
+    ctx = Ctx(sre, via="mcp")
+
+    def run(schedule_id: int, note: str) -> dict:
+        fired = schedules.fire(conn, schedule_id)
+        assert "task" in fired, fired
+        t = tasks.parse_id(fired["task"])
+        tasks.claim(conn, ctx, t)
+        return tasks.complete(conn, ctx, t, note)
+
+    green = run(s["id"], "Disk 69 %, RAM 50 %, 0 restartů, 0 errors v Loki: vše v normě.")
+    assert green["status"] == "done"
+    before = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    tracked = run(s["id"], "**Nad prahem:** swap 80 % -> T-001 (CTO).")
+    assert tracked["status"] == "done" and conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == before + 1
+    found = run(s["id"], "Neověřeno: /api/health, chybí credential.")
+    assert found["status"] == "done"
+    work = conn.execute("SELECT * FROM tasks WHERE source = 'routine_finding'").fetchall()
+    assert len(work) == 1 and work[0]["assignee_id"] == lead and found["ref"] in work[0]["notes"]
+    # anything else from a schedule is still reviewed
+    assert run(weekly["id"], "Hotovo.")["status"] == "review"
+    assert schedules.all_green("0 error/warn, žádné restarty") and not schedules.all_green("registry: denied 12×")

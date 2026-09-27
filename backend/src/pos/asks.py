@@ -171,9 +171,12 @@ def _existing(conn: sqlite3.Connection, asker_id: int, source_id: int | None, ke
 def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: str = "",
         options: list[str] | None = None, recommendation: str = "", blocking: bool = True,
         task_id: int | None = None, kind: str = "decision", topic: str | None = None,
-        links: list[str] | None = None, after: str = "", priority: int | None = None) -> dict:
+        links: list[str] | None = None, after: str = "", priority: int | None = None,
+        chat_message_id: int | None = None) -> dict:
     """Create the owner's ticket, ping the owner in #team and (when blocking)
-    park the asking task. Returns {ticket, ref, message_id, deduped, blocking}."""
+    park the asking task. Returns {ticket, ref, message_id, deduped, blocking}.
+    chat_message_id: the question is already a chat message to the owner (from_chat); it is
+    the ticket's ping, so no second one is posted."""
     from . import comments, tasks, versioning
 
     title, why = (title or "").strip(), (why or "").strip()
@@ -233,10 +236,15 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
             versioning.update(conn, ctx, tasks.ENTITY, source["id"], {
                 "status": "waiting", "progress_note": f"Waiting for {owner['name']}: {ticket['ref']}"[:500]},
                 action="wait")
-    audit.log(conn, ctx, "ask_owner", "task", ticket["id"], source=task_id, topic=key, blocking=blocking)
-    # chat.send commits: the ticket, the bookkeeping and the ping land together.
-    mid = _post(conn, ctx, _chat_body(owner=owner["name"], ref=ticket["ref"], title=title, why=why, kind=kind,
-                                      blocking=blocking and source is not None, recommendation=recommendation or ""))
+    audit.log(conn, ctx, "ask_owner", "task", ticket["id"], source=task_id, topic=key, blocking=blocking,
+              chat_message=chat_message_id)
+    if chat_message_id is not None:
+        mid = chat_message_id  # the owner already has the question in chat
+    else:
+        # chat.send commits: the ticket, the bookkeeping and the ping land together.
+        mid = _post(conn, ctx, _chat_body(owner=owner["name"], ref=ticket["ref"], title=title, why=why, kind=kind,
+                                          blocking=blocking and source is not None,
+                                          recommendation=recommendation or ""))
     conn.execute("UPDATE owner_asks SET message_id = ? WHERE id = ?", (mid, ask_id))
     return {"ref": ticket["ref"], "ticket_id": ticket["id"], "title": ticket["title"], "status": ticket["status"],
             "message_id": mid, "deduped": False, "blocking": bool(blocking),
@@ -319,6 +327,69 @@ def on_task_changed(conn: sqlite3.Connection, ctx: Ctx, before: sqlite3.Row, aft
                             + (f": {answer[:3000]}" if answer else " (no comment; read the ticket).") + src)
         _resume(conn, ctx, a, f"{who} resolved {ref}")
         audit.log(conn, ctx, "ask_owner:answered", "task", before["id"], asker=a["asker_id"])
+
+
+# ------------------------------------------------------------------ a blocking question in chat
+
+def message_link(channel_id: int, message_id: int) -> str:
+    return f"/chat?c={channel_id}&m={message_id}"
+
+
+def current_task(conn: sqlite3.Connection, actor_id: int, run_id: int | None = None) -> int | None:
+    """The task the agent works on now: its run's task, else its live run's (pos.workers.working_on)."""
+    if run_id:
+        r = conn.execute("SELECT task_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if r is not None and r["task_id"]:
+            return r["task_id"]
+    from .workers import working_on
+
+    return (working_on(conn, actor_id).get(actor_id) or {}).get("task_id")
+
+
+def from_chat(conn: sqlite3.Connection, ctx: Ctx, message: dict, task_id: int | None = None) -> dict | None:
+    """An agent asked the owner a question in chat and its task cannot go on without the answer
+    (chat_send blocking=true): the same bookkeeping as ask_owner, without a second ping. The task
+    goes to `waiting`, the question shows in the owner's "Čeká na tebe" as an ask with the message
+    link, and the owner's reply in that DM (or thread) answers it. None when the message does not
+    reach the owner."""
+    owner = actors.owner_id(conn)
+    if owner not in (message.get("inbox") or []) or actors.get(conn, ctx.actor_id)["kind"] == "human":
+        return None
+    task_id = task_id or current_task(conn, ctx.actor_id, ctx.run_id)
+    row = conn.execute("SELECT id, channel_id, body FROM chat_messages WHERE id = ?", (message["id"],)).fetchone()
+    body = " ".join((row["body"] or "").split())
+    title = _sentence(body.replace(f"@{actors.get(conn, owner)['name']}", "").strip(), 160) or "Odpověz v chatu"
+    link = message_link(row["channel_id"], row["id"])
+    return ask(conn, ctx, title=title, why="agent čeká na tvou odpověď v chatu, bez ní úkol nepokračuje",
+               details=f"Otázka v chatu (zpráva {message['id']}): {body[:1500]}", kind="input",
+               blocking=True, task_id=task_id, topic=f"chat {message['id']}", links=[link],
+               after="Odpověz přímo v chatu (v DM nebo ve vlákně): ticket se tím uzavře a úkol pokračuje.",
+               chat_message_id=message["id"])
+
+
+def on_owner_chat(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, message_id: int, reply_to: int | None,
+                  body: str) -> list[int]:
+    """The owner answered in chat: an open ask whose question is a chat message is answered by his
+    reply in its thread, or by his next message in the same DM. Its ticket is done (the asker hears
+    it and a blocked task resumes, on_task_changed). Returns the tickets closed."""
+    from . import tasks
+
+    if not _has_table(conn):
+        return []
+    rows = conn.execute(
+        """SELECT a.*, m.channel_id, c.kind AS ch_kind FROM owner_asks a JOIN chat_messages m ON m.id = a.message_id
+           JOIN channels c ON c.id = m.channel_id JOIN tasks t ON t.id = a.ticket_id
+           WHERE a.status = 'open' AND t.status != 'done' AND t.archived_at IS NULL AND m.id < ?
+             AND (m.id = ? OR (m.channel_id = ? AND c.kind = 'dm'))""",
+        (message_id, reply_to or 0, channel_id)).fetchall()
+    closed = []
+    for a in rows:
+        if a["message_id"] != reply_to and a["ch_kind"] != "dm":
+            continue
+        tasks.update(conn, ctx, a["ticket_id"], {
+            "status": "done", "progress_note": f"Odpověď v chatu (zpráva {message_id}): {body[:400]}"})
+        closed.append(a["ticket_id"])
+    return closed
 
 
 # ------------------------------------------------------------------ approvals

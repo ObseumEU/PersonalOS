@@ -557,12 +557,15 @@ def task_notes(week: str, packet: dict) -> str:
     ])
 
 
-def weekly_job(conn: sqlite3.Connection) -> dict:
-    """Build the week's packet and give the Chief of Staff its task (no tokens here)."""
+def weekly_job(conn: sqlite3.Connection, week: str | None = None) -> dict:
+    """Build the week's packet and give the Chief of Staff its task (no tokens here). `week`: a
+    past week to catch up (catch_up); default the current one."""
     ensure_schema(conn)
-    publish_overdue(conn)  # an earlier week left as a draft (e.g. W39) is published first
+    if week is None:
+        catch_up(conn, include_current=False)  # a recent past week nobody wrote gets its task first
+        publish_overdue(conn)  # an older draft is published from its numbers
     cos = agent_id(conn)
-    week = weekly_packet.current_week()
+    week = (week or weekly_packet.current_week()).strip().upper()
     row = _row(conn, week)
     if row is not None and row["status"] in (OPEN_MEETING, "closed", "no_reply", "published"):
         return {"skipped": f"the report for {week} is already {row['status']}"}
@@ -640,6 +643,65 @@ def meeting_timeouts(conn: sqlite3.Connection) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ catching up a missed week
+
+CATCH_UP_DAYS = 7  # a past week that ended this recently still gets a written report, not only numbers
+
+
+def _slot(week: str) -> datetime:
+    """When the weekly job fires in this week (the Friday slot, POS_WEEKLY_REPORT_SCHEDULE)."""
+    from .scheduler import next_run
+
+    start, _ = weekly_packet.bounds(week)
+    return next_run(schedule(), start - timedelta(seconds=1))
+
+
+def catch_up(conn: sqlite3.Connection, now: datetime | None = None, *, include_current: bool = True) -> dict:
+    """The job missed a week (created after its Friday slot, the api was down at the time, or the
+    week was left a draft with no author and no task, W39): an unpublished week whose slot has
+    passed and that ended at most CATCH_UP_DAYS ago gets the Chief of Staff's task now, with a fresh
+    packet. Such a week is a draft nobody writes, or a week with no report at all whose slot passed
+    while the (enabled) job existed. Run at startup and before the hourly auto-publish; older drafts
+    are published from their numbers (publish_overdue)."""
+    ensure_schema(conn)
+    if agent_id(conn) is None:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    current = weekly_packet.current_week()
+    weeks = {r["week"] for r in conn.execute("SELECT week FROM weekly_reports WHERE status = 'draft'")}
+    job = conn.execute("SELECT enabled, created_at FROM jobs WHERE action = 'weekly_report'").fetchone()
+    if job is not None and job["enabled"]:
+        week = current
+        for _ in range(2):
+            week = weekly_packet.previous_week(week)
+            try:
+                if _row(conn, week) is None and _slot(week).isoformat(timespec="seconds") > job["created_at"]:
+                    weeks.add(week)
+            except ValueError:
+                pass
+        if (include_current and _row(conn, current) is None
+                and _slot(current).isoformat(timespec="seconds") > job["created_at"]):
+            weeks.add(current)
+    if not include_current:
+        weeks.discard(current)
+    started = []
+    for week in sorted(weeks):
+        try:
+            _, end = weekly_packet.bounds(week)
+            slot = _slot(week)
+        except ValueError:
+            continue
+        if now < slot or now - end > timedelta(days=CATCH_UP_DAYS):
+            continue
+        row = _row(conn, week)
+        if row is not None and (row["status"] != "draft" or (row["narrative"] or "").strip() or row["task_id"]):
+            continue  # written, or already given out (publish_overdue publishes it if nobody does)
+        out = weekly_job(conn, week)
+        if out.get("task"):
+            started.append(f"{week}: {out['task']}")
+    return {"started": started} if started else {}
+
+
 # ------------------------------------------------------------------ the report always gets published
 
 # The Chief of Staff has this long after the Friday job to publish; then the core publishes the report
@@ -715,6 +777,7 @@ def publish_overdue(conn: sqlite3.Connection, now: datetime | None = None) -> di
     rewrite the text or open the meeting (report_publish) while its task is open."""
     ensure_schema(conn)
     now = now or datetime.now(timezone.utc)
+    caught = catch_up(conn, now)  # a recent missed week is the Chief of Staff's to write first
     done = []
     for row in conn.execute("SELECT * FROM weekly_reports WHERE status = 'draft' ORDER BY week").fetchall():
         try:
@@ -742,7 +805,8 @@ def publish_overdue(conn: sqlite3.Connection, now: datetime | None = None) -> di
             log.exception("could not announce the report %s", row["week"])
         done.append(row["week"])
     conn.commit()
-    return {"published": done} if done else {}
+    out = {"published": done} if done else {}
+    return {**out, **caught}
 
 
 def schedule() -> str:
