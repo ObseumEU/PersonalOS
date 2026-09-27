@@ -47,7 +47,7 @@ def test_the_company_comes_from_the_files_with_leads_routines_and_profiles(compa
     assert agents_code.is_dormant("Legal & Compliance") and not agents_code.is_dormant("CEO")
     # each agent's worker settings come from its file (the pool serves many agents)
     hl = agents_code.worker_profile("Hlídač")
-    assert hl["effort"] == "medium" and "incident_close" in hl["pos_tools"] and hl["max_steps"] == 20
+    assert hl["effort"] == "medium" and "incident_close" in hl["pos_tools"] and hl["max_steps"] == 200
     assert agents_code.worker_profile("Software Engineer")["workdir"] == "/work/PersonalOS"
     # the routing rules name the new roles
     rules = {r["name"]: r["assignee"] for r in routing.list_rules(conn)}

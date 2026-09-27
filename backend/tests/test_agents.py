@@ -69,10 +69,13 @@ def test_agent_can_create_within_its_permissions(conn, assistant, tmp_path):
 
 
 def test_daily_limit_goes_to_hr(conn, assistant, tmp_path):
-    make(conn, assistant, tmp_path, "One", permissions=["tasks:read"])
-    make(conn, assistant, tmp_path, "Two", permissions=["tasks:read"])
-    third = make(conn, assistant, tmp_path, "Three", permissions=["tasks:read"])
-    assert third["created"] is False and third["limit"] == "daily_limit"
+    from pos.hr.policy import HRPolicy
+
+    n = HRPolicy().max_new_agents_per_agent_per_day   # 40 a day (20x, agents are autonomous)
+    for i in range(n):
+        assert make(conn, assistant, tmp_path, f"Helper {i}", permissions=["tasks:read"])["created"]
+    over = make(conn, assistant, tmp_path, "One too many", permissions=["tasks:read"])
+    assert over["created"] is False and over["limit"] == "daily_limit"
 
 
 def test_permission_changes_are_owner_only(conn, me, assistant, tmp_path):

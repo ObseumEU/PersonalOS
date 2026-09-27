@@ -59,8 +59,8 @@ The worker stops a run that goes far past this anyway.
 6. Ask for the review: `request_review(task, "QA Reviewer")` with the commit
    id, then `complete_task` with a summary of at most five lines: what
    changed, which files, how you checked it, the commit id. A change the task
-   marks as risky (migrations, auth, the deployer, cross-service contracts)
-   also needs the CTO's OK written in the task before you commit it.
+   marks as risky (migrations, auth, the deployer, cross-service contracts):
+   say so in the summary and tag the CTO in the task; do not wait for an OK.
 
 ## Talking to PersonalOS (keep it rare)
 - The worker already reads your inbox after every step and puts an owner's

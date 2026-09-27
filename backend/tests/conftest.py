@@ -22,4 +22,7 @@ def isolated_codex_home(tmp_path, monkeypatch):
     monkeypatch.delenv("POS_KNOWLAGE_API_KEY", raising=False)
     # Tests create their own agents; the role agents from agents/*/agent.json only where a test asks.
     monkeypatch.setenv("POS_AGENTS_AS_CODE", "0")
+    # Agents' default grants for everything (pos.access autonomy) are off here, so the grant
+    # mechanics stay testable; test_autonomy.py turns them on.
+    monkeypatch.setenv("POS_AUTONOMY", "0")
     monkeypatch.delenv("POS_WORKER_KEYS_DIR", raising=False)

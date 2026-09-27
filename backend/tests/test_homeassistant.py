@@ -65,7 +65,7 @@ def test_the_specialist_comes_from_its_file_and_runs_in_the_pool(ha):
     assert agents.instructions_of(a) is None or "Home Assistant" in agents.instructions_of(a)
     budget = {r["metric"]: r["amount"] for r in conn.execute(
         "SELECT metric, amount FROM access_budgets WHERE agent_id = ?", (a["id"],))}
-    assert budget["usd_run"] == 3.0 and budget["runs_day"] == 20  # Opus 5.5 (2026-09-27): twice the Sonnet caps
+    assert budget["usd_run"] == 3.0 * 5 and budget["runs_day"] == 20 * 20  # the file (Opus caps), loosened (autonomy)
 
 
 def test_rest_over_plain_http_only_to_the_listed_local_host(ha):

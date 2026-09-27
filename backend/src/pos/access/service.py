@@ -1,18 +1,23 @@
 """Grants, budgets, requests and the Access manager's decisions (see pos.access).
 
-Who may change what (hard limits, checked in `_authorize` for every change):
+Agents are autonomous (the owner, 2026-09-27: "allow really everything, right away,
+always"): every active agent holds every platform capability by default
+(`autonomy_caps`), and `request_access` is approved at once in code, with no model
+run and no waiting; the Access manager reviews after the fact (it can revoke
+abuse) and the owner sees it in the daily digest. Credentials are granted the same
+way (their use stays limited to the credential's allowed hosts and commands, and
+every use is logged and redacted).
 
-- the owner: everything;
-- the Access manager (an agent with `access:manage`): any capability and any
-  budget, permanent or temporary, for any *other* agent, except
-  * anything for itself (its own tools and budget are the owner's),
-  * the company-wide cap (it may use everything below it) and the kill switch,
-  * owner-only capabilities: guard/constitution, secrets and credentials, and
-    `access:manage` itself;
-- nobody else.
+What stays the owner's (hard limits, checked in `_authorize` for every change):
+
+- the kill switch and the company-wide cap;
+- owner-only capabilities: the guard/constitution files, `access:manage` and the
+  grant tools themselves;
+- the Access manager never grants or raises anything for itself.
 
 Outbound (`outbound:<action>`) may be granted, but each outbound action still
-goes through the owner's approval queue (pos.outbound, request_approval).
+goes through the owner's approval queue (pos.outbound, request_approval;
+constitution rule 1, unchanged).
 """
 
 import json
@@ -29,8 +34,11 @@ AM_PURPOSE = ("Správce přístupů: rozhoduje o oprávněních a rozpočtech os
               "strop firmy a nečekané skoky ve spotřebě.")
 PERM = "access:manage"
 AM_PERMISSIONS = ["access:manage", "approvals:request", "messages:send", "tasks:claim", "tasks:read"]
-# The Access manager's own small budget (owner only to change).
-AM_BUDGET = {"usd_day": 3.0, "usd_month": 40.0, "usd_run": 0.5, "runs_day": 40}
+# Budgets are 20x looser than before (the owner, 2026-09-27: "lower the bar to 5 %"); the
+# per-run cap 5x. BUDGET_SCALE applies to the numbers in agents/*/agent.json when they are set.
+BUDGET_SCALE, RUN_SCALE = 20, 5
+# The Access manager's own budget (owner only to change).
+AM_BUDGET = {"usd_day": 60.0, "usd_month": 800.0, "usd_run": 2.5, "runs_day": 800}
 AM_ENGINE, AM_MODEL = "claude", "claude-opus-5-5"
 
 METRICS = {
@@ -43,8 +51,10 @@ METRICS = {
 }
 # Checked before each run (usd_run is a cap the worker applies inside the run).
 GATED = ("usd_day", "usd_month", "tokens_day", "tokens_month", "runs_day")
-# cred:<name> is one 1Password credential (pos.credentials): the owner grants it, never the Access manager.
-OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials", "cred")
+# Only the guard, the constitution and raw secrets stay the owner's (with access:manage and the grant tools).
+# cred:<name> (one 1Password credential, pos.credentials) is granted on request like anything else.
+OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials")
+CRED_PREFIX = "cred"
 SCOPES = ("repo", "connector")
 
 SETTINGS_KEY = "access.settings"
@@ -81,6 +91,8 @@ def kind_of(capability: str) -> str:
     head = cap.split(":", 1)[0]
     if cap == PERM or head in OWNER_ONLY_PREFIXES or cap.startswith("tool:access_"):
         return "owner_only"  # the grant tools, one by one too
+    if head == CRED_PREFIX and len(cap) > len(CRED_PREFIX) + 1:
+        return "credential"
     if cap in agents.PERMISSIONS:
         return "permission"
     if cap.startswith(("scope:browser:", "scope:browser-profile:")):
@@ -108,6 +120,57 @@ def kind_of(capability: str) -> str:
     raise AccessError(f"unknown capability {cap!r}: a permission ({', '.join(sorted(agents.PERMISSIONS))}), "
                       "tool:<pos tool> (or tool:browser / tool:computer), outbound:<action>, or "
                       "scope:repo:<x> / scope:connector:<x> / scope:browser:<host>")
+
+
+def scaled(metric: str, amount: float | None) -> float | None:
+    """A budget number from before the autonomy switch, loosened (usd_run 5x, the rest 20x)."""
+    if amount is None:
+        return None
+    return float(amount) * (RUN_SCALE if metric == "usd_run" else BUDGET_SCALE)
+
+
+def autonomy_caps() -> list[str]:
+    """What every active agent holds by default: every permission group of the platform's
+    tools except access:manage (the grant tools stay the owner's), plus a tool grant for each
+    pos tool whose group is not a permission (e.g. tool:ha_ssh; its credentials are checked
+    inside). Outbound is not here: constitution rule 1 keeps each send in the approval queue."""
+    from .. import agents, mcp_server
+
+    perms = {p for p in agents.PERMISSIONS if p != PERM}
+    tools = {f"tool:{t}" for t, group in mcp_server.TOOL_PERMISSIONS.items()
+             if group not in agents.PERMISSIONS and not t.startswith("access_")}
+    return sorted(perms | tools)
+
+
+def autonomy_on() -> bool:
+    """Default grants for every agent (POS_AUTONOMY, on unless "0"; the test suite turns it off
+    to exercise the grant mechanics the Access manager still uses to revoke abuse)."""
+    import os
+
+    return os.environ.get("POS_AUTONOMY", "1") != "0"
+
+
+def grant_autonomy(conn: sqlite3.Connection, agent_id: int, granted_by: int, *, again: bool = False) -> list[str]:
+    """Give the agent every autonomy capability it does not hold. Without `again` only those it
+    never had (a grant the Access manager or the owner ended stays ended); `again` re-grants
+    those too (the owner's one-off switch to autonomy)."""
+    if not autonomy_on() and not again:
+        return []
+    now = now_iso()
+    added = []
+    for cap in autonomy_caps():
+        if conn.execute(f"SELECT 1 FROM access_grants WHERE agent_id = ? AND capability = ? AND {store.ACTIVE}",
+                        (agent_id, cap, now)).fetchone():
+            continue
+        if not again and conn.execute("SELECT 1 FROM access_grants WHERE agent_id = ? AND capability = ?",
+                                      (agent_id, cap)).fetchone():
+            continue
+        _insert_grant(conn, agent_id, cap, granted_by, "autonomy",
+                      "autonomie: agenti smí všechno, co platforma umí (majitel, 2026-09-27)")
+        added.append(cap)
+    if added:
+        refresh_cache(conn, agent_id)
+    return added
 
 
 def _fmt(metric: str, amount) -> str:
@@ -214,7 +277,8 @@ def seed(conn: sqlite3.Connection) -> dict:
     owner = actors.owner_id(conn)
     am = manager_id(conn)
     seeded, synced = [], []
-    for row in conn.execute("SELECT * FROM actors WHERE kind != 'human' AND is_owner = 0").fetchall():
+    for row in conn.execute("SELECT * FROM actors WHERE kind != 'human' AND is_owner = 0 "
+                            "AND archived_at IS NULL").fetchall():  # an archived member holds nothing
         perms = set(json.loads(row["permissions"] or "[]"))
         if not store.seeded(conn, row["id"]):
             caps = sorted(perms) + (["outbound:*"] if "approvals:request" in perms and row["id"] != am else [])
@@ -228,6 +292,8 @@ def seed(conn: sqlite3.Connection) -> dict:
                                 (row["id"], cap)).fetchone() is None:
                     _insert_grant(conn, row["id"], cap, owner, "platform", "přidáno platformou (kód PersonalOS)")
                     synced.append(f"{row['name']}: {cap}")
+        if row["runtime"] != "service":
+            synced += [f"{row['name']}: {cap}" for cap in grant_autonomy(conn, row["id"], owner)]
         refresh_cache(conn, row["id"])
     if seeded or synced:
         audit.log(conn, Ctx(owner, via="system"), "access_seed", None, None, seeded=seeded or None,
@@ -249,6 +315,9 @@ def seed_agent(conn: sqlite3.Connection, agent_id: int, granted_by: int) -> None
         _insert_grant(conn, agent_id, cap, granted_by, "owner" if who["is_owner"] else "seed",
                       f"založení agenta ({who['name']})")
     conn.execute("INSERT INTO access_agents (agent_id, seeded_at) VALUES (?, ?)", (agent_id, now_iso()))
+    if row["runtime"] != "service":
+        grant_autonomy(conn, agent_id, actors.owner_id(conn))
+    refresh_cache(conn, agent_id)
 
 
 def sync_owner_permissions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, permissions: list[str]) -> None:
@@ -515,7 +584,7 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
                 "note": f"You already hold `{capability}`; no request was created."}
     if what == "capability":
         kind = kind_of(capability or "")
-        if (capability or "").startswith("cred:"):
+        if kind == "credential":
             from ..credentials import service as credentials
 
             credentials.validate_request(conn, capability)
@@ -538,23 +607,22 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
     if dup:
         return {"request_id": dup["id"], "status": dup["status"], "deduped": True,
                 "note": "You already asked for this; the decision comes to your inbox."}
-    needs_owner = me["name"] == AM_NAME or kind == "owner_only"
+    needs_owner = kind == "owner_only"
     rid = _insert_request(conn, agent_id=ctx.actor_id, requested_by=ctx.actor_id, trigger="request", what=what,
                           capability=capability, metric=metric, amount=amount, hours=hours, why=why[:2000],
                           task_id=task_id, blocking=int(bool(blocking and source)), needs_owner=int(needs_owner))
     audit.log(conn, ctx, "access_request", "actor", ctx.actor_id, request=rid, what=what, capability=capability,
               metric=metric, amount=amount, hours=hours, task=task_id)
     label = capability if what == "capability" else f"{METRICS[metric]} {_fmt(metric, amount)}"
-    if what == "capability" and capability.startswith("cred:"):
-        from ..credentials import service as credentials
-
-        # A credential: the owner's ask_owner ticket (with the reason), approved with one click.
-        credentials.on_access_request(conn, ctx, rid, capability, why, task_id if source else None, hours)
-    elif needs_owner:
+    if not needs_owner:
+        granted = auto_approve(conn, rid)
+        conn.commit()
+        return {"request_id": rid, "status": "granted", "deduped": False, "needs_owner": False, **granted,
+                "note": "Approved at once (agents are autonomous): go on with your work. The Access manager "
+                        "reviews grants after the fact."}
+    if needs_owner:
         _dm_owner(conn, f"Žádost o přístup #{rid} od {me['name']}: `{label}`. Tohle smí rozhodnout jen majitel "
                         f"(stránka agenta → Přístupy). Důvod: {why[:300]}")
-    else:
-        _wake_manager(conn, f"#{rid}: {me['name']} žádá `{label}`")
     if source and blocking:
         comments.log(conn, ctx, source["id"], f"Asked for access (request #{rid}): `{label}`", "system")
         if source["status"] not in ("done", "waiting"):
@@ -566,6 +634,31 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
             "note": ("Only the owner decides this one; they were told." if needs_owner else
                      "The Access manager decides; the answer comes to your inbox")
             + (". Your task waits until then: finish this run with a short summary." if source and blocking else ".")}
+
+
+AUTO_NOTE = "Automaticky schváleno: agenti jsou autonomní (majitel, 2026-09-27); Správce přístupů kontroluje zpětně."
+
+
+def auto_approve(conn: sqlite3.Connection, request_id: int) -> dict:
+    """Grant a request at once, in code (no model run, no waiting): as the Access manager where
+    its hard limits allow, else as the owner's standing decision (its own requests, a budget
+    above the company cap: the cap still gates every run). Credentials register and grant the
+    same way (pos.credentials.decide_request). Logged like any decision; the Access manager
+    reviews after the fact and the owner sees it in the daily digest."""
+    r = conn.execute("SELECT * FROM access_requests WHERE id = ?", (request_id,)).fetchone()
+    owner = Ctx(actors.owner_id(conn), via="auto-access")
+    if (r["capability"] or "").startswith(CRED_PREFIX + ":"):
+        from ..credentials import service as credentials
+
+        out = credentials.decide_request(conn, owner, request_id, "grant", AUTO_NOTE, hours=r["hours"])
+        return {"granted": out}
+    am = manager_id(conn)
+    for ctx in ([Ctx(am, via="auto-access")] if am and am != r["agent_id"] else []) + [owner]:
+        try:
+            return {"granted": decide(conn, ctx, request_id, "grant", AUTO_NOTE)}
+        except Forbidden:  # refused before anything is written: try the next
+            continue
+    raise AccessError(f"request #{request_id} could not be approved")
 
 
 def requests(conn: sqlite3.Connection, status: str | None = "pending", agent_id: int | None = None,

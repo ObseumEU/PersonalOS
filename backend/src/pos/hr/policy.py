@@ -7,11 +7,12 @@ from datetime import timedelta
 
 @dataclass(frozen=True)
 class HRPolicy:
-    # The company of docs/REORG.md (the owner's request, 2026-09-26): ~21 role agents plus room to hire.
-    max_active_agents: int = 26
-    max_new_agents_per_agent_per_day: int = 2
+    # The company of docs/REORG.md (~21 role agents); 20x room to hire (the owner, 2026-09-27: agents
+    # are autonomous, "lower the bar to 5 %").
+    max_active_agents: int = 520
+    max_new_agents_per_agent_per_day: int = 40
     # Schedules an agent creates for itself or its team (pos.schedules).
-    max_active_schedules_per_agent: int = 5
+    max_active_schedules_per_agent: int = 100
     min_schedule_interval_minutes: int = 15
     # Review window for effectiveness numbers.
     window: timedelta = timedelta(days=14)

@@ -93,9 +93,12 @@ def test_agent_schedules_itself_over_mcp_and_a_firing_creates_its_task(db, conn,
 def test_limits_kill_switch_and_due_firing(conn, tmp_path):
     agent = _agent(conn, tmp_path)
     ctx = Ctx(agent, via="mcp")
-    for i in range(5):
+    from pos.hr.policy import HRPolicy
+
+    n = HRPolicy().max_active_schedules_per_agent  # 100 (20x, agents are autonomous)
+    for i in range(n):
         schedules.create(conn, ctx, {"name": f"Job {i}", "schedule": "every 1h"})
-    with pytest.raises(tasks.Invalid, match="limit of 5"):
+    with pytest.raises(tasks.Invalid, match=f"limit of {n}"):
         schedules.create(conn, ctx, {"name": "Job 6", "schedule": "every 1h"})
     s = schedules.list_schedules(conn, actor_id=agent)[0]
     conn.execute("UPDATE schedules SET next_run_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (s["id"],))

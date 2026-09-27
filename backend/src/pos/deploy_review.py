@@ -11,7 +11,9 @@ never created) the gate answers "approved" with a note, so deploys never
 hang on a missing member.
 """
 
+import os
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from . import actors, audit, roles, tasks
 from .core import Ctx, Forbidden, now_iso
@@ -32,6 +34,13 @@ CREATE TABLE IF NOT EXISTS deploy_reviews (
 VERDICTS = {"approve": "approved", "return": "returned"}
 
 
+def sla_minutes() -> float:
+    """How long a pending review holds the deployer (POS_REVIEW_SLA_MIN, default 30). After that
+    the work proceeds and the QA Reviewer reviews after the fact: a later "return" becomes a
+    fix task for the author (the owner, 2026-09-27: review never blocks work)."""
+    return float(os.environ.get("POS_REVIEW_SLA_MIN", "30"))
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(_SCHEMA)
 
@@ -50,8 +59,18 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, sha: str, *, base: str = "", author:
         raise Invalid("sha is a commit id")
     row = conn.execute("SELECT * FROM deploy_reviews WHERE sha = ?", (sha,)).fetchone()
     if row is not None:
-        return {"status": row["status"], "note": row["note"],
-                "task": tasks.display_id(row["task_id"]) if row["task_id"] else None}
+        ref = tasks.display_id(row["task_id"]) if row["task_id"] else None
+        if row["status"] in ("pending", "proceeded"):
+            since = datetime.fromisoformat(row["created_at"])
+            if row["status"] == "proceeded" or datetime.now(timezone.utc) - since >= timedelta(minutes=sla_minutes()):
+                if row["status"] == "pending":
+                    conn.execute("UPDATE deploy_reviews SET status = 'proceeded' WHERE sha = ?", (sha,))
+                    audit.log(conn, ctx, "deploy_review_sla", "task", row["task_id"], sha=sha[:12])
+                    conn.commit()
+                return {"status": "approved", "task": ref,
+                        "note": f"review pending past the SLA ({sla_minutes():g} min): proceeding; the "
+                                f"{roles.QA} reviews after the fact"}
+        return {"status": row["status"], "note": row["note"], "task": ref}
     qa = reviewer(conn)
     if qa is None:
         return {"status": "approved", "note": f"no active {roles.QA}: the review gate is open", "task": None}
@@ -98,6 +117,19 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, sha: str, verdict: str, note: str
     conn.execute("UPDATE deploy_reviews SET status = ?, note = ?, decided_by = ?, decided_at = ? WHERE sha = ?",
                  (status, (note or "").strip()[:4000], me["id"], now_iso(), row["sha"]))
     out = {"sha": row["sha"], "status": status}
+    if row["status"] == "proceeded" and status == "returned":
+        # it already shipped past the SLA: the return is a fix task for the author
+        author = actors.find_by_name(conn, row["author"]) if row["author"] else None
+        fix = tasks.create(conn, ctx, {
+            "title": f"Fix after review: agent/dev {row['sha'][:8]}",
+            "notes": f"Purpose: the {roles.QA} returned a change that already shipped (the review SLA had "
+                     f"passed). Fix what the review says in a new commit.\nSource: deploy review of "
+                     f"{row['sha'][:10]}.\n\n{(note or '').strip()[:3000]}",
+            "definition_of_done": "Every point of the review is fixed in a new commit on agent/dev.",
+            "assignee": {"type": "agent" if author and author["kind"] != "human" else "human",
+                         "id": author["id"] if author else actors.owner_id(conn)},
+            "status": "next", "priority": 2, "topic": "review", "source": "deployer"})
+        out["fix_task"] = fix["ref"]
     if row["task_id"]:
         t = tasks.get(conn, ctx, row["task_id"])
         if t["status"] != "done":

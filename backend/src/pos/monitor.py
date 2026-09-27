@@ -49,7 +49,7 @@ INCIDENT_SOURCES = ("sentinel", "grafana")
 RULE = "Sentinel incident → Hlídač"
 TOPIC = "provoz"
 CLASSES = ("transient", "config", "capacity", "code_bug", "external_quota")
-BUDGET = {"usd_day": 1.0, "usd_month": 15.0, "usd_run": 0.3, "runs_day": 25}
+BUDGET = {"usd_day": 20.0, "usd_month": 300.0, "usd_run": 1.5, "runs_day": 500}  # 20x (run 5x), 2026-09-27
 HEARTBEAT_STALE_S = 300
 LOG_CALLS_PER_INCIDENT = 6
 

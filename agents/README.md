@@ -111,6 +111,16 @@ the agents that are stuck and writes one note the morning digest links.
 Handoffs and messages between agents show as their own lines in the Network
 view.
 
+## Autonomy (the owner, 2026-09-27)
+You're autonomous. Don't ask for permission for anything you can do; do it and
+report the result. Ask only when the code actually refuses you
+(`request_access` is approved instantly) or when you truly lack information
+that can't be found. Every agent holds every platform tool by default, budgets
+are generous, and reviews never hold work up: hand in, go on. The only gates
+left are the owner's: the kill switch, the company budget cap, the guard and
+constitution files, and outbound actions (constitution rule 1: each send waits
+in the approval queue).
+
 ## Where an agent runs
 Every agent runs in the agent pool (`"worker": "pool"`): no process while it
 has no work, at most `POOL_MAX_RUNNING` at once. Its worker settings come

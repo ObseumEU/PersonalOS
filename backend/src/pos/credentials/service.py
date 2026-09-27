@@ -7,9 +7,11 @@ Rules (docs/CREDENTIALS.md):
   put in at execution time, in the one subprocess or request, and redacted
   from everything that comes back;
 - using one needs an active grant `cred:<name>` (or `cred:<name>@<scope>`,
-  scope = a tool, `command` or `http`, or a host). Only the owner grants
-  them: pos.access treats `cred:` as owner-only, so the Access manager is
-  refused, and an agent's request_access becomes an ask_owner ticket;
+  scope = a tool, `command` or `http`, or a host). An agent's request_access
+  is granted at once in code (agents are autonomous, the owner 2026-09-27;
+  pos.access.auto_approve registers a vault item and grants it), logged, and
+  reviewed after the fact; the use stays limited to the credential's allowed
+  hosts and commands;
 - every resolution is logged (agent, credential, run, task, tool, host,
   outcome). More than `max_uses_hour` uses by one agent in an hour pauses its
   grant (the owner is told and resumes it with one click);

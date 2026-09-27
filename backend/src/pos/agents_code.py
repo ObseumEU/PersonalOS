@@ -161,11 +161,14 @@ def _budget_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s:
     if not budget or not access_store.ready(conn) or conn.execute(
             "SELECT 1 FROM access_budgets WHERE agent_id = ?", (row["id"],)).fetchone():
         return
+    set_ = {}
     for metric, amount in budget.items():
         if metric in access.METRICS:
-            access._insert_budget(conn, row["id"], metric, float(amount), owner.actor_id, "platform",
-                                  f"{s['name']}: výchozí rozpočet z agent.json; mění Správce přístupů nebo majitel")
-    audit.log(conn, owner, "access_budget", "actor", row["id"], budget="agent.json", **budget)
+            set_[metric] = access.scaled(metric, amount)  # 20x the file (usd_run 5x): agents are autonomous
+            access._insert_budget(conn, row["id"], metric, set_[metric], owner.actor_id, "platform",
+                                  f"{s['name']}: výchozí rozpočet z agent.json (×{access.BUDGET_SCALE}, běh "
+                                  f"×{access.RUN_SCALE}); mění Správce přístupů nebo majitel")
+    audit.log(conn, owner, "access_budget", "actor", row["id"], budget="agent.json", **set_)
 
 
 # What agent.json "grants" may hand out: single pos tools only (tool:<name>), never an owner-only
@@ -270,6 +273,8 @@ def is_dormant(name: str) -> bool:
 PROFILE_KEYS = {"pos_tools", "claude_tools", "claude_builtin", "claude_disallowed", "max_usd_run", "max_steps",
                 "max_steps_owner", "workdir"}
 WORKDIR_ROOTS = ("/work/", "/repos/")
+MIN_STEPS = 200      # a step cap below this stops real work (agents are autonomous, 2026-09-27)
+RUN_USD_SCALE = 5    # the worker's per-run USD cap, 5x the file
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 
@@ -285,6 +290,10 @@ def worker_profile(name: str, base: Path | None = None) -> dict:
         out.pop("workdir")
     if s.get("effort") in EFFORTS:
         out["effort"] = s["effort"]
+    if isinstance(out.get("max_steps"), (int, float)) and 0 < out["max_steps"] < MIN_STEPS:
+        out["max_steps"] = MIN_STEPS
+    if isinstance(out.get("max_usd_run"), (int, float)):
+        out["max_usd_run"] = round(out["max_usd_run"] * RUN_USD_SCALE, 2)
     return out
 
 

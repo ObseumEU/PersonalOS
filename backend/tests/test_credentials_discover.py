@@ -187,15 +187,11 @@ def test_request_for_a_vault_item_registers_and_grants_on_approval(app):
     conn, owner, agent = app["conn"], app["owner"], app["ha"]
     t = tasks.create(conn, owner, {"title": "Fix the HA host", "assignee": {"type": "agent", "id": agent}})
     conn.commit()
+    assert creds.vault_match(conn, "ha-ssh", quiet=True)["title"] == "SSH HomeAssistant"  # not registered yet
     out = access.request_access(conn, Ctx(agent), what="capability", capability="cred:ha-ssh",
                                 why="I need to read the supervisor logs", task_id=t["id"], blocking=True)
-    assert out["needs_owner"]
-    req = creds.open_requests(conn)[0]
-    assert not req["registered"] and req["suggestion"]["title"] == "SSH HomeAssistant"
-    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] == "waiting"
-    res = app["client"].post(f"/api/credentials/requests/{req['id']}/decide", json={"decision": "grant", "note": ""})
-    assert res.status_code == 200, res.text
-    assert res.json()["registered"]["primary"] == "ha-ssh"
+    # granted at once: the vault item is registered and granted in code (agents are autonomous)
+    assert out["status"] == "granted" and out["granted"]["registered"]["primary"] == "ha-ssh"
     held = {g["credential"] for g in creds.grants(conn, agent_id=agent)}
     assert held == {"ha-ssh", "ha-ssh-user"} and "tool:ha_ssh" in access.effective(conn, agent)
     assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] == "next"

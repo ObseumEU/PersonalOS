@@ -151,13 +151,12 @@ def test_access_manager_cannot_grant_or_raise_anything_for_itself(app):
         access.grant(conn, am, am.actor_id, "tasks:write", "I need it")
     with pytest.raises(Forbidden, match="yourself"):
         access.set_budget(conn, am, am.actor_id, "usd_day", 50.0, "more for me")
-    rid = access.request_access(conn, am, what="budget", metric="usd_day", amount=10, why="busy week")["request_id"]
-    with pytest.raises(Forbidden):
-        access.decide(conn, am, rid, "grant", "approving my own")
-    assert access.requests(conn, "pending", am.actor_id)[0]["needs_owner"]
-    # The owner may.
-    access.decide(conn, app["owner"], rid, "grant", "fine for this week", hours=24 * 7)
+    # Its own request is approved at once too, as the owner's standing decision (autonomy), not by itself.
+    out = access.request_access(conn, am, what="budget", metric="usd_day", amount=10, why="busy week")
+    assert out["status"] == "granted" and not out["needs_owner"]
     assert access.limit(conn, am.actor_id, "usd_day") == 10
+    req = access.requests(conn, "granted", am.actor_id)[0]
+    assert req["decided_by"] == actors.owner_id(conn)
 
 
 def test_access_manager_owner_only_items_and_the_company_cap(app):
@@ -231,31 +230,28 @@ def test_request_decision_inbox_flow_over_mcp(app):
                 "blocking": True, "why": "I need to ask the PM about the newsletter topics"}))
 
     out = anyio.run(ask)
-    assert out["status"] == "pending" and not out["needs_owner"]
-    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] == "waiting"
-    queue = conn.execute("SELECT * FROM tasks WHERE assignee_id = ? AND source = 'access' AND status = 'next'",
-                         (am.actor_id,)).fetchall()
-    assert len(queue) == 1
+    # Approved at once in code: no waiting, no model run, the task goes on.
+    assert out["status"] == "granted" and not out["needs_owner"]
+    assert "messages:send" in access.effective(conn, agent)
+    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] != "waiting"
+    assert any("schválil" in b and "Automaticky schváleno" in b for b in _dms(conn, agent))
+    req = access.requests(conn, "granted", agent)[0]
+    assert req["grant_id"] and req["decided_by"] == am.actor_id
+    assert not conn.execute("SELECT 1 FROM tasks WHERE assignee_id = ? AND source = 'access' AND status = 'next'",
+                            (am.actor_id,)).fetchone()                 # nothing queued for the Access manager
 
+    # The Access manager reviews after the fact and can take it back.
     manager = mcp_server.build(db, default_actor=lambda c: am.actor_id)
 
-    async def decide():
+    async def review():
         async with Client(manager) as c:
-            pending = _call(await c.call_tool("access_review_requests", {}))
-            assert [p["id"] for p in pending] == [out["request_id"]]
             usage = _call(await c.call_tool("access_usage", {"agent": "Writer"}))
             assert usage["agents"][0]["agent"] == "Writer"
-            return _call(await c.call_tool("access_decide", {"request_id": out["request_id"], "decision": "grant",
-                                                             "note": "fine for a day"}))
+            return _call(await c.call_tool("access_revoke", {"agent": "Writer", "capability": "messages:send",
+                                                             "reason": "not needed after all"}))
 
-    anyio.run(decide)
-    assert "messages:send" in access.effective(conn, agent)
-    assert any("schválil" in b and "fine for a day" in b for b in _dms(conn, agent))
-    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] == "next"
-    assert access.requests(conn, "granted", agent)[0]["grant_id"]
-    # The Access manager finishes its own queue task without the owner's review.
-    tasks.claim(conn, am, queue[0]["id"])
-    assert tasks.complete(conn, am, queue[0]["id"], "1 granted")["status"] == "done"
+    anyio.run(review)
+    assert "messages:send" not in access.effective(conn, agent)
     # A plain agent cannot call the manager's tools.
     plain = mcp_server.build(db, default_actor=lambda c: agent)
 
@@ -288,9 +284,12 @@ def test_owner_only_requests_go_to_the_owner_and_deny_is_told(app):
     out = access.request_access(conn, Ctx(agent), what="capability", capability="secrets:smtp", why="send mail myself")
     assert out["needs_owner"]
     assert any("jen majitel" in b for b in _dms(conn, actors.owner_id(conn)))
-    rid = access.request_access(conn, Ctx(agent), what="capability", capability="tasks:write", why="x")["request_id"]
-    access.decide(conn, am, rid, "deny", "create tasks through the PM instead")
-    assert any("zamítl" in b for b in _dms(conn, agent))
+    assert out["status"] == "pending"
+    # everything else is granted at once; the Access manager can take it back with a reason
+    assert access.request_access(conn, Ctx(agent), what="capability", capability="tasks:write", why="x")["status"] \
+        == "granted"
+    access.revoke(conn, am, agent, "tasks:write", "create tasks through the PM instead")
+    assert any("odebral" in b for b in _dms(conn, agent))
 
 
 # ------------------------------------------------------------------ spikes, digest, owner changes

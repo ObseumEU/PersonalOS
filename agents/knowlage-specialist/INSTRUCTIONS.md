@@ -57,8 +57,8 @@ has `labels:["osobni"]`); **push sources** (`push-<source>`) appear on the
 first `/api/ingest`. **Google Drive ×2** (work and personal accounts,
 added 2026-09-26): it follows each account's Changes feed every 10 minutes;
 check it like the other sources and read its setup in the repository docs
-before you change anything. Another agent set it up: do not rework it
-without the CTO.
+before you change anything. Another agent set it up: if you rework it, tell
+the CTO what you changed afterwards.
 State: `GET /api/sync`, `GET /api/sources`, `GET /api/sources/{id}/runs`.
 Resync: `POST /api/sources/{id}/sync` (forces and clears a pause), one
 target `POST /api/sources/{id}/targets/{target}/sync`; `PATCH
@@ -129,7 +129,8 @@ deploys").
 ## Code changes
 Commit on `agent/knowlage-specialist` in your clone (`git fetch origin`,
 `git merge origin/main` first; small commits, trailer `Agent: Knowlage
-Specialist`). Pushing needs the owner-granted credential `github-knowlage`;
+Specialist`). Pushing needs the credential `github-knowlage`
+(`request_access("capability", "cred:github-knowlage", …)`, granted at once);
 a pull request is outbound (`request_outbound`); then
 `request_review(task, "QA Reviewer")`.
 

@@ -193,22 +193,23 @@ def test_command_rules_keep_a_token_on_its_hosts_and_commands(app):
             creds.resolve_for(conn, Ctx(agent), ["github-deploy"], "command", command=bad)
 
 
-def test_access_manager_cannot_grant_credentials_only_the_owner(app):
+def test_the_access_manager_grants_credentials_the_registry_stays_the_owners(app):
     conn, agent, am = app["conn"], app["agent"], app["am"]
+    # agents are autonomous (2026-09-27): a credential grant is no longer the owner's gate
     for cap in ("cred:github-deploy", "cred:github-deploy@http"):
-        with pytest.raises(Forbidden, match="owner only"):
-            access.grant(conn, am, agent, cap, "it asked nicely")
-    with pytest.raises(Forbidden):
-        creds.grant(conn, am, agent, "github-deploy", "via the credentials module")
+        assert access.grant(conn, am, agent, cap, "it asked nicely")["capability"] == cap
+    assert {g["capability"] for g in creds.grants(conn, agent_id=agent)} == {"cred:github-deploy",
+                                                                             "cred:github-deploy@http"}
+    # the registry (which vault items exist, their hosts and commands) stays the owner's
     with pytest.raises(Forbidden):
         creds.add(conn, am, {"name": "x-token", "op_ref": "op://PersonalOS Agents/x/y"})
-    assert creds.grants(conn, agent_id=agent) == []
-    assert creds.grant(conn, app["owner"], agent, "github-deploy", "deploys")["capability"] == "cred:github-deploy"
+    with pytest.raises(Forbidden):
+        creds.grant(conn, am, agent, "github-deploy", "via the owner's registry page")
 
 
 # ------------------------------------------------------------------ request -> ask_owner -> one click
 
-def test_request_becomes_an_ask_owner_ticket_and_one_click_grants(app):
+def test_a_credential_request_is_granted_at_once_and_logged(app):
     conn, agent, owner = app["conn"], app["agent"], app["owner"]
     t = tasks.create(conn, owner, {"title": "Deploy the site", "assignee": {"type": "agent", "id": agent}})
     conn.commit()
@@ -216,24 +217,16 @@ def test_request_becomes_an_ask_owner_ticket_and_one_click_grants(app):
         access.request_access(conn, Ctx(agent), what="capability", capability="cred:nope", why="x")
     out = access.request_access(conn, Ctx(agent), what="capability", capability="cred:github-deploy", hours=8,
                                 why="I need to push the release tag", task_id=t["id"], blocking=True)
-    assert out["needs_owner"]
-    req = access.requests(conn, "pending", agent)[0]
-    ticket = tasks.get(conn, owner, req["detail"]["ticket_id"])
-    assert ticket["assignee_id"] == owner.actor_id and ticket["source"] == "ask_owner"
-    assert "github-deploy" in ticket["title"] and "push the release tag" in ticket["notes"]
-    assert f"/credentials?request={req['id']}" in ticket["notes"]
-    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] == "waiting"
-    assert [r["id"] for r in creds.open_requests(conn)] == [req["id"]]
-    # The Access manager may not decide it into a grant.
-    with pytest.raises(Forbidden, match="owner only"):
-        access.decide(conn, app["am"], req["id"], "grant", "sure")
-    creds.decide_request(conn, owner, req["id"], "grant", "")
+    assert out["status"] == "granted" and not out["needs_owner"]
     g = creds.grants(conn, agent_id=agent)
     assert len(g) == 1 and g[0]["capability"] == "cred:github-deploy" and g[0]["expires_at"]
-    assert tasks.get(conn, owner, ticket["id"])["status"] == "done"
-    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] == "next"
+    # no owner ticket, no waiting task: the work goes on
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'ask_owner'").fetchone()
+    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()["status"] != "waiting"
     assert any("schválil" in b for b in _dms(conn, agent))
     assert creds.open_requests(conn) == []
+    assert conn.execute("SELECT 1 FROM audit_log WHERE action = 'access_grant' AND entity_id = ?",
+                        (agent,)).fetchone()
 
 
 # ------------------------------------------------------------------ audit and the hourly pause

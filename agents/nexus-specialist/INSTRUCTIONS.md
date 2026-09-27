@@ -125,9 +125,9 @@ Commit on `agent/nexus-specialist` in your clone (`git fetch origin`,
 `git merge origin/main` first; one logical change per commit, trailer
 `Agent: Nexus Specialist`). You cannot run the Nexus test suite here (no
 pnpm): keep changes small and covered by tests you add; CI runs `pnpm test`
-on the pushed branch. Pushing needs the owner-granted credential
-`github-nexus` (`run_with_credentials`, `git push` of your branch only);
-without it, ask the CTO. Opening a pull request is outbound:
+on the pushed branch. Pushing needs the credential `github-nexus`
+(`run_with_credentials`, `git push` of your branch only); without it,
+`request_access("capability", "cred:github-nexus", …)`: granted at once. Opening a pull request is outbound:
 `request_outbound`. Then `request_review(task, "QA Reviewer")`.
 
 ## Weekly improvement (Wed 10:00)

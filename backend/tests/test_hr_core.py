@@ -143,7 +143,8 @@ def test_admit_agent_limits(conn):
     assert ask["decision"] == "ask_owner" and ask["approval_id"]
 
     new_agent(conn, "Helper", "Books travel", created_by=dev)
-    defer = service.admit_agent(conn, dev_ctx, name="z", purpose="translate", policy=HRPolicy())
+    defer = service.admit_agent(conn, dev_ctx, name="z", purpose="translate",
+                                policy=HRPolicy(max_new_agents_per_agent_per_day=2))
     assert (defer["limit"], defer["decision"]) == ("daily_limit", "defer")
     # The owner has no daily limit.
     owner = Ctx(actors.owner_id(conn))
