@@ -418,3 +418,17 @@ def test_signature_by_mailbox_and_language():
     assert service.signature(OBSEUM, "cs", None).endswith("Obseum s.r.o.\ndavid.rosko@obseum.cz")
     assert service.signature(PERSONAL, "en", None) == "Best regards,\nDavid Roško"
     assert service._with_signature("Díky.\n\nDavid Roško", "S pozdravem\nDavid Roško") == "Díky.\n\nDavid Roško"
+
+
+def test_rich_project_page_links_match(conn):
+    from pos import project_info
+
+    p = projects.create(conn, owner_ctx(conn), name="Zákaznický portál", goal="Portál pro klienty", channel=False)
+    project_info.update_details(conn, owner_ctx(conn), p["id"], {
+        "links": {"repos": ["https://github.com/ObseumEU/client-portal"], "website": "https://portal.klient.cz"},
+        "keywords": ["mluvii report"]})
+    by_site = match.match(conn, mail("Chyba", "Eva <eva@klient.cz>", "Na https://portal.klient.cz/login je chyba."))
+    assert by_site["id"] == p["id"]
+    by_repo = match.match(conn, mail("Bug", "x@y.io", "client-portal crashes on start"))
+    assert by_repo["id"] == p["id"]
+    assert match.match(conn, mail("Report", "x@y.io", "Mluvii report vrací 500"))["id"] == p["id"]

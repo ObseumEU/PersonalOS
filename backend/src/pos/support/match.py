@@ -7,7 +7,7 @@ A candidate scores by what the mail (and the knowlage history with that customer
 
 - a repository name (owner/name or the bare name)        +5
 - a domain of the project, or the sender's domain in it   +5
-- a keyword phrase (the name, the slug, extra keywords)   +3
+- a keyword phrase (the name, the slug, the page's keywords) +4
 - the classifier's project hint names it                  +4
 - a knowlage tag / workspace of the project in the history +2
 
@@ -94,6 +94,24 @@ def _extra_products() -> list[dict]:
     return [dict(p) for p in data if isinstance(p, dict) and p.get("slug")] or PRODUCTS
 
 
+def _rich(conn: sqlite3.Connection, project_id: int) -> dict:
+    """The rich project page's links (pos.project_info): repos, website, customer, knowlage workspace, keywords."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'project_details'").fetchone() is None:
+        return {}
+    try:
+        from .. import project_info
+
+        d = project_info.details(conn, project_id)
+    except Exception:  # noqa: BLE001 - a page without details still matches by name
+        return {}
+    links = d.get("links") or {}
+    customer = links.get("customer") or (d.get("facts") or {}).get("customer")
+    return {"repos": [r for r in links.get("repos") or [] if r], "website": links.get("website"),
+            "customer_url": links.get("customer_url"),
+            "tags": [t for t in [d.get("kb_workspace")] if t],
+            "keywords": [k for k in [*(d.get("keywords") or []), customer] if isinstance(k, str) and len(k) >= 3]}
+
+
 def catalog(conn: sqlite3.Connection) -> list[dict]:
     """Projects (with their links) and the company's products, as match candidates."""
     out = []
@@ -106,8 +124,13 @@ def catalog(conn: sqlite3.Connection) -> list[dict]:
         texts = _strings(d.get("labels")) + [d.get("goal") or "", d.get("definition_of_done") or ""]
         for c in link_cols:
             texts += _strings(d.get(c))
+        extra = dict(KNOWN.get(d["slug"], {}))
+        rich = _rich(conn, d["id"])
+        texts += [u for u in (rich.get("website"), rich.get("customer_url")) if u]
         found = _from_texts(texts)
-        extra = KNOWN.get(d["slug"], {})
+        found["repos"] += rich.get("repos", [])
+        found["tags"] += rich.get("tags", [])
+        extra["keywords"] = [*extra.get("keywords", []), *rich.get("keywords", [])]
         out.append({"id": d["id"], "slug": d["slug"], "name": d["name"],
                     "repos": sorted(set(found["repos"]) | set(extra.get("repos", []))),
                     "domains": sorted(set(found["domains"]) | set(extra.get("domains", []))),
@@ -144,7 +167,7 @@ def score(project: dict, text: str, sender_domain: str, hint: str, history: str)
             break
     for k in project.get("keywords", []):
         if _fold(k) not in GENERIC and _mentions(t, k):
-            points += 3
+            points += 4
             why.append(f"zmínka „{k}“")
             break
     if hint and _fold(hint).strip() in {_fold(project["name"]), _fold(project["slug"])}:

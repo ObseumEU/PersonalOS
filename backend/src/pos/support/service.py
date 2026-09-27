@@ -617,7 +617,7 @@ def owner_item(conn: sqlite3.Connection, row_id: int, fixed: str, link: str, *, 
         refs.append(f"- Úkol s opravou: {tasks.display_id(row['issue_task_id'])} (/tasks?task="
                     f"{tasks.display_id(row['issue_task_id'])})")
     notes = ("### Co udělat\nZkontroluj koncept odpovědi v Gmailu a odešli ho (nebo uprav). Nic se neodeslalo.\n\n"
-             f"### Odkazy\n" + "\n".join(refs) + "\n\n"
+             "### Odkazy\n" + "\n".join(refs) + "\n\n"
              f"### Vlákno\n{row['customer']} · {row['subject']} · schránka {row['account']}.")
     existing = _open_task(conn, row["needs_task_id"])
     if existing is not None and existing["status"] not in ("done", "review"):
