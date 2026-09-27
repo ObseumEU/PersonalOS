@@ -483,3 +483,15 @@ def test_compose_caps_memory_and_isolates_the_desktop():
     env = c["agent-pool"]["environment"]
     assert env["DESKTOP_URL"] == "http://desktop:8100" and "BROWSER_MAX_MB" in env and "BROWSER_MAX_CONCURRENT" in env
     assert c["desktop"]["tmpfs"] == ["/tmp:size=256m"] and "no-new-privileges:true" in c["desktop"]["security_opt"]
+
+
+def test_agent_json_never_grants_the_browser_or_the_desktop(app):
+    from pos import agents_code
+
+    client, conn, owner, tmp, _ = app
+    aid, _ = _agent(conn, owner, tmp, "Head of Growth")
+    access.seed(conn)
+    row = actors.get(conn, aid)
+    made = agents_code._grants_from_file(conn, owner, row, {"name": "Head of Growth",
+                                                             "grants": ["tool:browser", "tool:computer"]})
+    assert made == [] and not {"tool:browser", "tool:computer"} & agents.permissions_of(conn, aid)
