@@ -234,4 +234,5 @@ export default {
   "access.recent_decisions": "Poslední rozhodnutí (všichni agenti)",
   "access.panel": "Přístupy a rozpočet",
   "access.keys": "Klíče ke službám",
+  "agent.screenshot": "snímek obrazovky",
 } as Record<string, string>;

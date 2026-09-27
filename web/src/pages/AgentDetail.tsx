@@ -335,7 +335,7 @@ function Permissions({ a, perms, advanced, onSaved }: { a: Full; perms: Record<s
 function traceText(e: TraceEntry) {
   const act = e.action.replace(/^mcp:/, "");
   const detail = Object.entries(e.detail ?? {})
-    .filter(([, v]) => v !== null && v !== "" && typeof v !== "object")
+    .filter(([k, v]) => k !== "screenshot" && v !== null && v !== "" && typeof v !== "object")
     .map(([k, v]) => `${k}: ${v}`)
     .join(", ");
   return { act: label("audit", act), raw: act, what: [e.entity ? `${label("entity", e.entity)} ${e.entity_id ?? ""}`.trim() : "", detail].filter(Boolean).join(" · ") };
@@ -532,6 +532,12 @@ function Activity({ a, advanced, onChange }: { a: Full; advanced: boolean; onCha
               <span className="min-w-0">
                 <span className="text-accent">{x.act}</span>
                 {advanced && x.raw !== x.act && <span className="ml-1.5 font-mono text-ink-2">{x.raw}</span>}
+                {typeof e.detail.screenshot === "string" && (
+                  // Browser / computer use: the screenshot of this step (pos.browser, the run's artifacts).
+                  <a href={`/api/browser/screenshots/${e.detail.screenshot}`} target="_blank" rel="noreferrer" className="ml-1.5 text-accent hover:underline">
+                    [{t("agent.screenshot")}]
+                  </a>
+                )}
                 {x.what && <span className="block truncate text-ink-2">{x.what}</span>}
               </span>
             </div>
