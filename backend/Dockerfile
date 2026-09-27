@@ -16,7 +16,8 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src
 # onepassword-sdk: agents' credentials from 1Password (pos.credentials; needs glibc >= 2.32, OpenSSL 3).
-RUN pip install --no-cache-dir ".[onepassword]"
+# pypdf: text of PDFs (pos.files, and invoice filing reads the invoice's issue date and buyer: pos.invoices).
+RUN pip install --no-cache-dir ".[onepassword,pdf]"
 
 ENV POS_DATA_DIR=/data
 VOLUME /data

@@ -1,7 +1,7 @@
 {
   "name": "CFO",
   "display_name": "Finanční ředitel (CFO)",
-  "purpose": "Finance: náklady na LLM (LiteLLM, předplatné Claude a Codex, spotřeba agentů), předplatná a faktury z pošty, cena za úkol; týdenní a měsíční report nákladů.",
+  "purpose": "Finance: náklady na LLM (LiteLLM, předplatné Claude a Codex, spotřeba agentů), předplatná a faktury z pošty, cena za úkol; týdenní a měsíční report nákladů; zařazování faktur z pošty na Google Disk (firma / osobní).",
   "role": "cfo",
   "team": "finance",
   "reports_to": "CEO",
@@ -39,6 +39,9 @@
     }
   ],
   "grants": [
-    "tool:knowledge"
+    "tool:knowledge",
+    "tool:invoice_candidates",
+    "tool:invoice_file",
+    "tool:invoice_filings"
   ]
 }

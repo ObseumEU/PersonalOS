@@ -149,6 +149,9 @@ def register_mcp_tools(mcp, session) -> None:
     from .credentials import mcp as credentials_mcp
 
     credentials_mcp.register(mcp, session)  # credentials_list, credential_http (values never shown)
+    from .invoices import service as invoices
+
+    invoices.register_mcp(mcp, session)  # the CFO's invoice filing to Google Drive (grants tool:invoice_*)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:

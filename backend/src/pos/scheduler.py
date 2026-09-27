@@ -342,6 +342,12 @@ def outbound_digest(conn: sqlite3.Connection) -> dict:
     return outbound.digest(conn)
 
 
+def invoices_poll(conn: sqlite3.Connection) -> dict:
+    from .invoices import service
+
+    return service.poll(conn)
+
+
 def weekly_publish_overdue(conn: sqlite3.Connection) -> dict:
     from . import weekly
 
@@ -354,6 +360,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "github_triage": github_triage,
     "weekly_publish_overdue": weekly_publish_overdue,
     "outbound_digest": outbound_digest,
+    "invoices_poll": invoices_poll,
     "agents_watch": agents_watch,
     "grafana_watch": grafana_watch,
     "sentinel_watch": sentinel_watch,
@@ -420,6 +427,8 @@ DEFAULT_JOBS = [
     ("Agents without input for 7 days → the CEO", "weekly mon 07:45", "idle_agents"),
     ("GitHub: new issues and PRs in the company's repositories → triage", "every 30m", "github_triage"),
     ("Weekly report: publish a draft nobody published", "every 60m", "weekly_publish_overdue"),
+    # Invoice mail -> the owner's Google Drive (pos.invoices): sure ones filed at once, unsure ones to the CFO.
+    ("Invoices: file new invoice mail to Google Drive (CFO)", "every 5m", "invoices_poll"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on
@@ -509,10 +518,11 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
     if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "routines_overdue", "knowlage_files",
                              "access_expire",
                              "access_watch", "sentinel_watch", "sentinel_digest", "grafana_watch", "review_sla",
-                             "github_triage", "weekly_publish_overdue") or result.get("sent") \
+                             "github_triage", "weekly_publish_overdue", "invoices_poll") or result.get("sent") \
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
             or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
-            or result.get("alerted") or result.get("moved") or result.get("tasks") or result.get("published"):
+            or result.get("alerted") or result.get("moved") or result.get("tasks") or result.get("published") \
+            or result.get("filed") or result.get("duplicate"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result
