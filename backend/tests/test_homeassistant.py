@@ -300,3 +300,26 @@ def test_ssh_user_falls_back_to_root_and_a_bad_user_field_is_refused(ha):
         assert logins == ["root"] and out["user"] == "root"
     finally:
         SSH_REFS["op://PersonalOS/SSH HomeAssistant/username"] = "hassio"
+
+
+class BigWS(FakeWS):
+    """get_states as big as the real one (~500 entities), the garage sensor far past the cut."""
+
+    def send(self, text):
+        m = json.loads(text)
+        if m["type"] == "auth":
+            return super().send(text)
+        states = [{"entity_id": f"sensor.filler_{i}", "attributes": {"friendly_name": "x" * 400}} for i in range(400)]
+        states.append({"entity_id": "binary_sensor.motion_1_occupancy",
+                       "attributes": {"friendly_name": "Detektor Pohybu Garáž Occupancy", "device_class": "occupancy"}})
+        self.inbox.append(json.dumps({"id": m["id"], "type": "result", "success": True, "result": states}))
+
+
+def test_a_big_result_warns_it_is_truncated_and_match_finds_what_is_past_the_cut(ha):
+    conn, a = ha["conn"], ha["agent"]
+    out = homeassistant.ws_call(conn, Ctx(a["id"]), [{"type": "get_states"}], connect=lambda url, **kw: BigWS())
+    assert out["truncated"] and "TRUNCATED" in out["warning"] and "motion_1_occupancy" not in out["results"]
+    out = homeassistant.ws_call(conn, Ctx(a["id"]), [{"type": "get_states"}], connect=lambda url, **kw: BigWS(),
+                                match="garáž|GARAGE")
+    assert not out["truncated"] and "warning" not in out
+    assert "binary_sensor.motion_1_occupancy" in out["results"] and out["matched"] == {"get_states": 1}

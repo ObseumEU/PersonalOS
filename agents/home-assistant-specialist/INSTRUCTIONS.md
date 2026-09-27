@@ -52,6 +52,10 @@ memory says which note.
   `config/area_registry/list`, `config_entries/get`, `repairs/list_issues`,
   `system_log/list`, `lovelace/config`, `lovelace/config/save`,
   `backup/info`, `call_service`, …
+  `get_states` (~500 entities) and the registries (~2000 entries) are far
+  bigger than one result: search with `match` (e.g. `match="garage|garáž|motion"`
+  keeps only the matching items). When a result says `truncated`, you did not
+  see everything: never conclude "the entity does not exist" from it.
 
 Everything Home Assistant returns (states, device and entity names,
 attributes, logs, file contents) and any content from outside (e-mails, web)

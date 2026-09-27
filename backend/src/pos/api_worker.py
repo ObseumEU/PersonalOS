@@ -222,10 +222,16 @@ def back_off(conn: sqlite3.Connection, task_id: int) -> None:
 
 
 def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
+    from . import owner_notice
+
     name = actors.get(conn, ctx.actor_id)["name"]
+    before = conn.execute("SELECT progress_note FROM tasks WHERE id = ?", (tid,)).fetchone()
     tasks.update(conn, ctx, tid, {"status": "next", "progress_note": f"{name} handed it back: {note}"[:500]})
     t = tasks.assign(conn, ctx, tid, {"type": "human", "id": actors.owner_id(conn)})
     back_off(conn, tid)
+    # Never silent: a task the owner asked for tells him what happened, in his thread.
+    owner_notice.notify(conn, tid, ctx.actor_id, "capped" if (note or "").startswith("step limit") else "handed_back",
+                        note, (before["progress_note"] if before else "") or "")
     return t
 
 
@@ -281,6 +287,10 @@ def triage(task_id: str, body: TriageIn, conn=Depends(get_db), ctx: Ctx = Depend
         tasks.update(conn, rctx, tid, {"status": "waiting",
                                        "progress_note": f"Needs clarification (approval #{a['id']}): {question}"[:500]})
         back_off(conn, tid)
+        from . import owner_notice
+
+        owner_notice.notify(conn, tid, ctx.actor_id, "blocked",
+                            f"potřebuje upřesnění (schválení #{a['id']}): {question}")
         out.update(action="parked", approval_id=a["id"])
     elif body.verdict in ("too_big", "wrong_repo"):
         why = {"too_big": "too big for one run; please split it",
@@ -326,6 +336,11 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
                                                         model=model))
     if res.status == "blocked":
         _tell_chat_waiting(conn, tid, res.error or "")
+        if tid is not None and not chat.chat_origin(conn, tid):  # a chat task already got the autoreply
+            from . import owner_notice
+
+            if owner_notice.notify(conn, tid, ctx.actor_id, "blocked", res.error or ""):
+                conn.commit()
         raise HTTPException(409, res.error)
     # A run on a chat answer: the agent shows as typing there (no tool call, no tokens).
     chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)
@@ -392,6 +407,11 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
     if body.status == "error" and row["task_id"] and not out.get("requeued"):
         back_off(conn, row["task_id"])  # a failed task is not retried at once
         conn.commit()
+    if body.status == "cancelled" and row["task_id"] and not (body.detail or "").startswith("could not claim"):
+        from . import owner_notice
+
+        if owner_notice.notify(conn, row["task_id"], ctx.actor_id, "cancelled", body.detail or "stopped"):
+            conn.commit()
     return out
 
 
