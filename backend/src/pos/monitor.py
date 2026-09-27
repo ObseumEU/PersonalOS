@@ -116,6 +116,18 @@ def monitor_id(conn: sqlite3.Connection) -> int | None:
     return row["id"] if row else None
 
 
+def platform_owner_id(conn: sqlite3.Connection) -> int | None:
+    """Who owns a platform incident nobody triaged: the SRE, else the CTO (docs/REORG.md: platform
+    problems go to engineering, only money, security and data reach the owner, through the CEO).
+    None when neither exists: the caller falls back to the owner."""
+    for name in (roles.SRE, roles.CTO):
+        row = conn.execute("SELECT id FROM actors WHERE name = ? AND archived_at IS NULL AND kind != 'human'",
+                           (name,)).fetchone()
+        if row:
+            return row["id"]
+    return None
+
+
 # ------------------------------------------------------------------ set-up
 
 def ensure(conn: sqlite3.Connection) -> dict:

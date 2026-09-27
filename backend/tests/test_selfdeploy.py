@@ -204,3 +204,93 @@ def test_restore_owner_gives_root_owned_files_back(tmp_path, monkeypatch):
     owners.clear()
     owners[str(repo)] = 1000
     assert selfdeploy.restore_owner(repo) == 0  # not root: a no-op
+
+
+def test_a_failed_rollback_is_one_revert_and_one_ticket_for_the_sre(repo, reporter, tmp_path):
+    rep, client, conn = reporter
+    owner = Ctx(actors.owner_id(conn))
+    sre = agents.create_agent(conn, owner, name="SRE", purpose="ops", lifetime="long_lived",
+                              permissions=["tasks:read", "tasks:claim"], data_dir=tmp_path)["agent"]["id"]
+    git(repo, "checkout", "-q", "-b", "deployed")
+    git(repo, "checkout", "-q", "main")
+    commit(repo, {"app.txt": "good v2"}, "Improve\n\nAgent: Software Engineer")
+    git(repo, "checkout", "-q", "deployed")
+    kw = dict(remote="", branch="main", test_cmd="", health_url=None)
+    assert selfdeploy.tick(repo, rep, up_cmd="", **kw).status == "ok"
+    git(repo, "checkout", "-q", "main")
+    commit(repo, {"app.txt": "bad"}, "Break\n\nAgent: Software Engineer")
+    git(repo, "checkout", "-q", "deployed")
+    first = selfdeploy.tick(repo, rep, up_cmd="exit 1", **kw)  # the build fails, and so does the redeploy
+    assert first.status == "error" and first.reverted_sha
+    for _ in range(3):  # later ticks: the revert is where main is; nothing to deploy, no new revert
+        assert selfdeploy.tick(repo, rep, up_cmd="exit 1", **kw).status == "nothing"
+    assert git(repo, "rev-parse", "main") == first.reverted_sha
+    tickets = conn.execute("SELECT * FROM tasks WHERE title = 'Deploy failed and could not roll back by itself'"
+                           ).fetchall()
+    assert len(tickets) == 1 and tickets[0]["assignee_id"] == sre
+    owner_p1 = conn.execute("SELECT COUNT(*) FROM tasks WHERE assignee_id = ? AND priority = 1",
+                            (actors.owner_id(conn),)).fetchone()[0]
+    assert owner_p1 == 0
+
+
+def test_the_deployer_never_reverts_its_own_revert(repo, reporter):
+    rep, client, conn = reporter
+    git(repo, "checkout", "-q", "-b", "deployed")
+    git(repo, "checkout", "-q", "main")
+    good = git(repo, "rev-parse", "HEAD")
+    commit(repo, {"app.txt": "bad"}, "Break\n\nAgent: Software Engineer")
+    bad = git(repo, "rev-parse", "HEAD")
+    revert = selfdeploy.revert_to(repo, good, bad, "tests failed", "", "main")
+    git(repo, "checkout", "-q", "deployed")
+    res = selfdeploy.deploy_range(repo, bad, revert, test_cmd="", up_cmd="exit 1", health_url=None, remote="",
+                                  branch="main")
+    assert res.status == "error" and res.reverted_sha is None and "not reverting" in res.log
+    assert git(repo, "rev-parse", "main") == revert
+
+
+def _no_identity(tmp_path, monkeypatch):
+    empty = tmp_path / "empty.gitconfig"
+    empty.write_text("")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for k in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL",
+              "DEPLOY_GIT_NAME", "DEPLOY_GIT_EMAIL"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_promote_merges_without_a_git_identity_and_retries_an_old_rejection(tmp_path, reporter, monkeypatch):
+    rep, client, conn = reporter
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "work"
+    git(tmp_path, "clone", str(origin), str(work))
+    (work / "check.py").write_text(CHECK)
+    commit(work, {"app.txt": "good v1"}, "initial")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-q", "-b", "agent/dev")
+    deploy = tmp_path / "deploy"
+    git(work, "worktree", "add", "--detach", str(deploy), "main")
+    kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
+              up_cmd="", health_url=None)
+    tip = commit(work, {"app.txt": "good v2"}, "Improve\n\nAgent: Software Engineer")
+    # the old deployer stored the tip it failed to merge (no identity) and never tried it again
+    (deploy / ".pos-promote-state").write_text(tip)
+    _no_identity(tmp_path, monkeypatch)
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok"
+    assert git(tmp_path, "--git-dir", str(origin), "log", "-1", "--format=%cn", "main") == "PersonalOS Deployer"
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"
+
+
+def test_a_merge_rejection_is_retried_once_main_moves(tmp_path):
+    import json
+
+    state = tmp_path / ".pos-promote-state"
+    assert selfdeploy._should_try(state, "t1", "b1")
+    selfdeploy._remember(state, "t1", "b1", "merge")
+    assert not selfdeploy._should_try(state, "t1", "b1")      # same tip, same main: not again
+    assert selfdeploy._should_try(state, "t1", "b2")          # main moved: a conflict may be gone
+    selfdeploy._remember(state, "t1", "b1", "tests")
+    assert not selfdeploy._should_try(state, "t1", "b2")      # failed tests need a new commit
+    assert selfdeploy._should_try(state, "t2", "b1")
+    assert json.loads(state.read_text())["stage"] == "tests"

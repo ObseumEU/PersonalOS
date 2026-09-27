@@ -42,8 +42,11 @@ class DeployIn(BaseModel):
 @router.get("/last")
 def last_good(conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx)):
     row = conn.execute(
+        # A failed redeploy after a revert ('error' with reverted_sha) still left the revert on main: the
+        # next range starts there, or every tick re-deploys old..revert and stacks another revert commit.
         "SELECT CASE WHEN status = 'ok' THEN new_sha ELSE reverted_sha END AS sha FROM deploys "
-        "WHERE status IN ('ok', 'reverted', 'rejected') ORDER BY id DESC LIMIT 1"
+        "WHERE status IN ('ok', 'reverted', 'rejected') OR (status = 'error' AND reverted_sha IS NOT NULL) "
+        "ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return {"sha": row["sha"] if row else None}
 
@@ -53,7 +56,8 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
     if body.status not in ("ok", "reverted", "rejected", "error"):
         raise HTTPException(422, "status must be ok, reverted, rejected or error")
     task_ref = None
-    if body.status != "ok":
+    own_revert = body.author == DEPLOYER  # the deployer's own revert failed: nobody's change to fix
+    if body.status != "ok" and not own_revert:
         member = actors.find_by_name(conn, body.author) if body.author else None
         assignee = {"type": "agent" if member and member["kind"] != "human" else "human",
                     "id": member["id"] if member else actors.owner_id(conn)}
@@ -71,14 +75,8 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
             "assignee": assignee,
         })
         task_ref = t["ref"]
-        if body.status == "error":  # the platform may be down: the owner must know
-            tasks.create(conn, ctx, {"title": "Deploy failed and could not roll back by itself", "priority": 1,
-                                     "notes": f"Purpose: the platform may be down or half-deployed; a person "
-                                              f"has to restore it.\nSource: the self-deploy pipeline, stage "
-                                              f"{body.stage}. Details and log: {t['ref']}.",
-                                     "definition_of_done": "PersonalOS runs a known-good commit and the health "
-                                                           "check passes.",
-                                     "assignee": "me", "status": "next", "topic": "platform"})
+    if body.status == "error":  # the platform may be down: the SRE restores it (one open ticket, not one per tick)
+        task_ref = _restore_ticket(conn, ctx, body, task_ref) or task_ref
     cur = conn.execute(
         """INSERT INTO deploys (old_sha, new_sha, status, stage, log, author, reverted_sha, commits, task_id, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -89,6 +87,35 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
               range=f"{body.old_sha[:10]}..{body.new_sha[:10]}")
     conn.commit()
     return {"id": cur.lastrowid, "task": task_ref}
+
+
+RESTORE_TITLE = "Deploy failed and could not roll back by itself"
+
+
+def _restore_ticket(conn: sqlite3.Connection, ctx: Ctx, body: DeployIn, author_ref: str | None) -> str | None:
+    """Circuit breaker: one open restore ticket for the SRE (the CTO without one; the owner only
+    when there is neither), later failures are a comment on it. Returns its ref."""
+    from . import comments, monitor, wake
+
+    who = monitor.platform_owner_id(conn)
+    line = (f"{body.old_sha[:8]}..{body.new_sha[:8]} failed at stage {body.stage}; revert commit "
+            f"{(body.reverted_sha or '-')[:10]}." + (f" Details and log: {author_ref}." if author_ref else ""))
+    open_ = conn.execute("SELECT id FROM tasks WHERE title = ? AND source = 'deployer' AND status != 'done' "
+                         "AND archived_at IS NULL ORDER BY id DESC LIMIT 1", (RESTORE_TITLE,)).fetchone()
+    if open_:
+        comments.log(conn, ctx, open_["id"], f"Again: {line}", "system")
+        return tasks.display_id(open_["id"])
+    t = tasks.create(conn, ctx, {
+        "title": RESTORE_TITLE, "priority": 1, "status": "next", "topic": "platform", "source": "deployer",
+        "notes": "Purpose: the platform may be down or half-deployed; restore a known-good version.\n"
+                 f"Source: the self-deploy pipeline. {line}\n\nThe deployer does not revert its own revert "
+                 f"again (one attempt per range); it waits for a new commit on main.\n\nLog:\n{body.log[-3000:]}",
+        "definition_of_done": "PersonalOS runs a known-good commit and the health check passes.",
+        "assignee": {"type": "agent", "id": who} if who else "me"})
+    if who:
+        conn.execute("UPDATE tasks SET reviewer_id = ? WHERE id = ?", (who, t["id"]))
+        wake.wake(who)
+    return t["ref"]
 
 
 class ReviewAsk(BaseModel):

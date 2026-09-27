@@ -30,11 +30,14 @@ On failure nothing reaches main and the author gets a task with the log.
 
 Environment: POS_URL, POS_DEPLOYER_KEY (the Deployer member's key),
 DEPLOY_TEST_CMD, DEPLOY_UP_CMD, DEPLOY_HEALTH_URL, DEPLOY_BRANCH (main),
-DEPLOY_REMOTE (origin). DEPLOY_REQUIRE_REVIEW=1 (promote mode): the QA Reviewer
+DEPLOY_REMOTE (origin), DEPLOY_GIT_NAME / DEPLOY_GIT_EMAIL (who the deployer's own merge and
+revert commits are by; default "PersonalOS Deployer" when the checkout has no identity).
+A revert that fails too is never reverted again (one attempt per range). DEPLOY_REQUIRE_REVIEW=1 (promote mode): the QA Reviewer
 approves each new tip first (pos.deploy_review); until then the tick waits.
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -66,6 +69,32 @@ class Result:
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True,
                           encoding="utf-8").stdout.strip()
+
+
+def identity(repo: Path) -> list[str]:
+    """`-c user.name=… -c user.email=…` for the commits the deployer makes itself (the promote
+    merge, a revert). Its container has no git identity, and git refuses to commit without one
+    (deploys 7 and 8 were rejected at stage=merge for that). DEPLOY_GIT_NAME / DEPLOY_GIT_EMAIL
+    always win; otherwise the checkout's own identity stays and only a missing one is filled."""
+    args: list[str] = []
+    for key, env, default in (("user.name", "DEPLOY_GIT_NAME", "PersonalOS Deployer"),
+                              ("user.email", "DEPLOY_GIT_EMAIL", "deployer@personalos.local")):
+        forced = os.environ.get(env, "").strip()
+        if not forced:
+            have = subprocess.run(["git", "config", "--get", key], cwd=repo, capture_output=True, text=True)
+            if have.returncode == 0 and have.stdout.strip():
+                continue
+        args += ["-c", f"{key}={forced or default}"]
+    return args
+
+
+def is_deployer_revert(repo: Path, sha: str) -> bool:
+    """A revert commit the deployer made itself (revert_to): never reverted again."""
+    try:
+        msg = git(repo, "log", "-1", "--format=%B", sha)
+    except subprocess.CalledProcessError:
+        return False
+    return msg.startswith("Revert ") and bool(re.search(r"^Agent:\s*Deployer\s*$", msg, re.MULTILINE))
 
 
 def sh(cmd: str, repo: Path, timeout: int = 1800) -> tuple[bool, str]:
@@ -108,7 +137,7 @@ def revert_to(repo: Path, good: str, bad: str, reason: str, remote: str, branch:
     tree = git(repo, "rev-parse", f"{good}^{{tree}}")
     msg = (f"Revert {good[:10]}..{bad[:10]}: {reason}\n\n"
            f"Automatic revert by the PersonalOS deployer (AGENTS-SPEC 6).\n\nAgent: Deployer")
-    sha = git(repo, "commit-tree", tree, "-p", bad, "-m", msg)
+    sha = git(repo, *identity(repo), "commit-tree", tree, "-p", bad, "-m", msg)
     git(repo, "merge", "--ff-only", sha)
     if remote:
         subprocess.run(["git", "push", remote, f"{sha}:{branch}"], cwd=repo, check=True, capture_output=True, text=True)
@@ -125,6 +154,13 @@ def deploy_range(repo: Path, old: str, new: str, *, test_cmd: str, up_cmd: str, 
     git(repo, "merge", "--ff-only", new)
 
     def fail(stage: str, log: str) -> Result:
+        if is_deployer_revert(repo, new):
+            # Circuit breaker: the range ends in our own revert and still fails. Another revert on
+            # top would fail the same way (a new revert commit and a new ticket every tick): stop.
+            res.status, res.stage = "error", stage
+            res.log = (f"{log}\n\n--- {new[:10]} is the deployer's own revert and it failed too; not reverting "
+                       "again: a person (the SRE) has to restore the platform ---")
+            return res
         res.status, res.stage, res.log = "reverted", stage, log
         res.reverted_sha = revert_to(repo, old, new, f"{stage} failed", remote, branch)
         ok, up_log = sh(up_cmd, repo) if up_cmd else (True, "")
@@ -215,6 +251,34 @@ def tick(repo: Path, reporter: Reporter, *, remote: str, branch: str, test_cmd: 
     return res
 
 
+# A rejection at these stages may be fixed on main (a conflict resolved there) or in the
+# deployer itself (its missing git identity): the same tip is tried again once main moves.
+RETRY_ON_NEW_BASE = ("merge",)
+
+
+def _remember(state: Path, tip: str, base: str, stage: str) -> None:
+    state.write_text(json.dumps({"tip": tip, "base": base, "stage": stage}), encoding="utf-8")
+
+
+def _should_try(state: Path, tip: str, base: str) -> bool:
+    """Not the same attempt again: a tip is tried once, unless it failed at a stage main can fix
+    (RETRY_ON_NEW_BASE) and main has moved since. The old state file held a bare sha and did not
+    say why the tip failed (deploys 7 and 8: the missing git identity), so such a tip gets one
+    more try. Deleting .pos-promote-state retries the tip by hand."""
+    if not state.exists():
+        return True
+    raw = state.read_text(encoding="utf-8").strip()
+    try:
+        last = json.loads(raw)
+    except ValueError:
+        last = None
+    if not isinstance(last, dict):
+        return True  # the old format (a bare sha): one more try with the fixed deployer
+    if last.get("tip") != tip:
+        return True
+    return last.get("stage") in RETRY_ON_NEW_BASE and last.get("base") != base
+
+
 def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, target: str, test_cmd: str,
                  up_cmd: str, health_url: str | None, source_remote: str | None = None,
                  require_review: bool = False) -> Result:
@@ -229,14 +293,14 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     tip = git(wt, "rev-parse", source)
     if subprocess.run(["git", "merge-base", "--is-ancestor", tip, base], cwd=wt).returncode == 0:
         return Result(base, tip, "nothing")  # everything on the branch is already in main
-    if state.exists() and state.read_text(encoding="utf-8").strip() == tip:
+    if not _should_try(state, tip, base):
         return Result(base, tip, "nothing")  # already tried this commit; wait for a new one
     commits = [c for c in git(wt, "rev-list", f"{base}..{tip}").splitlines() if c]
     res = Result(base, tip, "ok", author=author_of(wt, base, tip), commits=commits)
 
     def fail(stage: str, log: str) -> Result:
         res.status, res.stage, res.log = "rejected", stage, log
-        state.write_text(tip, encoding="utf-8")
+        _remember(state, tip, base, stage)
         reporter.report(res)
         return res
 
@@ -259,7 +323,7 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
         if verdict.get("status") == "returned":
             return fail("review", f"returned by the QA review: {verdict.get('note') or ''}")
     merge = subprocess.run(
-        ["git", "merge", "--no-ff", "--no-edit", "-m",
+        ["git", *identity(wt), "merge", "--no-ff", "--no-edit", "-m",
          f"Merge {source}: {subject}\n\nPromoted by the PersonalOS deployer after checks.\n\nAgent: {res.author or 'unknown'}",
          tip], cwd=wt, capture_output=True, text=True)
     if merge.returncode != 0:
@@ -297,7 +361,7 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     push = subprocess.run(["git", "push", remote, f"HEAD:{target}"], cwd=wt, capture_output=True, text=True)
     if push.returncode != 0:  # main moved meanwhile: try again next tick, not the author's fault
         return Result(base, tip, "nothing", stage="push", log=push.stderr[-2000:])
-    state.write_text(tip, encoding="utf-8")
+    _remember(state, tip, base, "ok")
     res.new = merged
     reporter.report(res)
     return res
