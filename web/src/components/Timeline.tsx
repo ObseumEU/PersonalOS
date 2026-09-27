@@ -26,7 +26,7 @@ export default function Timeline({ events }: { events: AgendaEvent[] }) {
             return (
               <div key={t} className="absolute top-0" style={{ left: `${pct(t)}%` }}>
                 <div className={`w-px bg-ink-3 ${major ? "h-2" : "h-1"}`} />
-                {major && <span className="cap absolute top-2.5 -translate-x-1/2 text-[10px]">{hhmm(t)}</span>}
+                {major && <span className="cap absolute top-2.5 -translate-x-1/2 text-xs">{hhmm(t)}</span>}
               </div>
             );
           })}

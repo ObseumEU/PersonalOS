@@ -70,7 +70,6 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
   if (!file) return <Panel title="Detail" className="w-full">{error && <p className="cap p-4 text-red-400!">{error}</p>}</Panel>;
   return (
     <Panel
-      fig={`F-${file.id}`}
       title="Detail"
       className="w-full"
       bodyClassName="overflow-y-auto"
@@ -329,7 +328,6 @@ export default function Files() {
         </nav>
 
         <Panel
-          fig="TAB. 1"
           title={[archived ? "Archive" : "Files", topic && `#${topic}`, tag && `tag ${tag}`].filter(Boolean).join(" · ")}
           right={
             <span className="flex items-center gap-3">

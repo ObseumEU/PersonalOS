@@ -111,7 +111,7 @@ function ProjectDetail({ slug }: { slug: string }) {
       <PageHeader kicker={`PROJECT · #${p.slug} · ${p.status.toUpperCase()}`} title={p.name} sub={p.goal ?? ""} />
       {error && <p className="cap text-red-400!">{error}</p>}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="GOAL" title="Definition of done" className="lg:col-span-5">
+        <Panel title="Definition of done" className="lg:col-span-5">
           <p className="px-4 py-3 text-[13px] whitespace-pre-wrap">{p.definition_of_done || "Not set yet."}</p>
           <div className="flex flex-wrap gap-2 border-t border-line px-4 py-2.5">
             {(["active", "paused", "done"] as const).map((s) => (
@@ -126,7 +126,7 @@ function ProjectDetail({ slug }: { slug: string }) {
             )}
           </div>
         </Panel>
-        <Panel fig="TEAM" title="Members" right={`lead ${p.lead_name ?? "—"} reviews by default`} className="lg:col-span-7">
+        <Panel title="Members" right={`lead ${p.lead_name ?? "—"} reviews by default`} className="lg:col-span-7">
           {p.members.map((m) => (
             <div key={m.actor_id} className="flex items-center gap-2 border-b border-line px-4 py-2 text-[13px]">
               <AssigneeChip type={m.kind === "human" ? "human" : m.kind === "ai" ? "ai" : "agent"} name={m.name} />

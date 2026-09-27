@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { type Engines, agentsApi } from "../agentsApi";
 import BudgetPanel from "../components/BudgetPanel";
-import KnowledgePanel from "../components/KnowledgePanel";
 import ObservabilityPanel from "../components/ObservabilityPanel";
 import SentinelPanel from "../components/SentinelPanel";
 import { PageHeader, Panel } from "../components/ui";
@@ -48,9 +47,8 @@ export default function System() {
         title="Everything PersonalOS knows."
         sub={`API ${api_ ? `v${api_.version}, phase ${api_.phase}` : "unreachable"}. The graph is our knowledge base (knowlage); the subsystems are probed live.`}
       />
-      <div className="grid grid-cols-1 gap-4 lg:h-[620px] lg:grid-cols-12">
-        <KnowledgePanel fig="FIG. 4" title="Knowledge graph, full" className="h-[420px] lg:col-span-9 lg:h-auto" period={140} />
-        <div className="flex flex-col gap-4 lg:col-span-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="contents">
           {subsystems?.map((s) => (
             <Panel key={s.name} bodyClassName="flex flex-col gap-2.5 px-4 py-3.5">
               <span className="flex items-baseline gap-2.5">
@@ -76,7 +74,7 @@ export default function System() {
         </div>
       </div>
       {engines && (
-        <Panel fig="TAB. 18" title="Runtimes and subscriptions" right={`default: ${engines.default} · auto = Codex first, Claude as fallback`}>
+        <Panel title="Runtimes and subscriptions" right={`default: ${engines.default} · auto = Codex first, Claude as fallback`}>
           <div className="grid grid-cols-1 md:grid-cols-2">
             <div className="flex flex-col gap-1.5 border-b border-line px-4 py-3 md:border-r md:border-b-0">
               <span className="flex items-center gap-2 text-sm">
@@ -109,7 +107,7 @@ export default function System() {
       <ObservabilityPanel />
       <SentinelPanel />
       <BudgetPanel />
-      <Panel fig="TAB. 17" title="Deploys" right="agents merge to main · the deployer checks, ships or reverts">
+      <Panel title="Deploys" right="agents merge to main · the deployer checks, ships or reverts">
         {deploys.length === 0 && (
           <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">
             No deploys recorded yet. On the server the deployer follows main: constitution check, tests, build, health check — and an automatic revert

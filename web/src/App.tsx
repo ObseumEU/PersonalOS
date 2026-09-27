@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { getMe, logout, type Me } from "./api";
 import Shell, { Mark } from "./components/Shell";
@@ -14,6 +14,11 @@ import Files from "./pages/Files";
 import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import Invite from "./pages/Invite";
+import Knowledge from "./pages/Knowledge";
+import Settings from "./pages/Settings";
+import SectionTabs from "./components/SectionTabs";
+import { t } from "./i18n";
+import { KNOWLEDGE_TABS, WORK_TABS } from "./sections";
 import Notes from "./pages/Notes";
 import Projects from "./pages/Projects";
 import Team from "./pages/Team";
@@ -42,7 +47,7 @@ export default function App() {
         <div className={error ? "" : "breathe"}>
           <Mark size={36} />
         </div>
-        {error && <p className="cap text-red-400!">Cannot reach the API: {error}</p>}
+        {error && <p className="text-sm text-red-400">{t("api.unreachable", { error })}</p>}
       </div>
     );
   }
@@ -55,43 +60,51 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/today" replace />} />
         <Route path="/today" element={<Today />} />
-        <Route path="/tasks" element={<Tasks />} />
+        {/* Práce: Úkoly · Projekty · Kalendář */}
+        <Route path="/work" element={<Navigate to="/tasks" replace />} />
+        <Route path="/tasks" element={<Work><Tasks /></Work>} />
         <Route path="/tasks/inbox" element={<InboxClarify />} />
+        <Route path="/projects" element={<Work><Projects /></Work>} />
+        <Route path="/projects/:slug" element={<Work><Projects /></Work>} />
+        <Route path="/calendar" element={<Work><Calendar /></Work>} />
         <Route path="/weekly-review" element={<WeeklyReview />} />
+        {/* Znalosti: one list, with Soubory · Poznámky · Témata as filters and their detail pages */}
+        <Route path="/knowledge" element={<Know><Knowledge /></Know>} />
+        <Route path="/files" element={<Know><Files /></Know>} />
+        <Route path="/notes" element={<Know><Notes /></Know>} />
+        <Route path="/topics" element={<Know><Topics /></Know>} />
+        <Route path="/topics/:slug" element={<Know><Topics /></Know>} />
+        {/* Tým */}
         <Route path="/team" element={<Team />} />
         <Route path="/team/:id" element={<AgentDetail />} />
         <Route path="/agents" element={<Navigate to="/team" replace />} />
         <Route path="/agents/:id" element={<AgentDetail />} />
-        <Route path="/network" element={<KeepQuery to="/team" tab="network" />} />
+        <Route path="/network" element={<Navigate to="/team?tab=structure" replace />} />
         <Route path="/org" element={<Navigate to="/team?tab=structure" replace />} />
         <Route path="/board" element={<Navigate to="/team?tab=work" replace />} />
-        <Route path="/approvals" element={<Approvals />} />
-        <Route path="/connectors" element={<Connectors />} />
-        <Route path="/credentials" element={<Credentials />} />
-        <Route path="/automations" element={<Automations />} />
-        <Route path="/tools" element={<Tools />} />
-        <Route path="/assistant" element={<AssistantChat />} />
-        <Route path="/calendar" element={<Calendar />} />
         <Route path="/chat" element={<Chat />} />
-        <Route path="/files" element={<Files />} />
-        <Route path="/projects" element={<Projects />} />
-        <Route path="/projects/:slug" element={<Projects />} />
-        <Route path="/topics" element={<Topics />} />
-        <Route path="/topics/:slug" element={<Topics />} />
-        <Route path="/notes" element={<Notes />} />
-        <Route path="/reports" element={<Suspense fallback={null}><Reports /></Suspense>} />
-        <Route path="/reports/:week" element={<Suspense fallback={null}><Reports /></Suspense>} />
+        <Route path="/approvals" element={<Approvals />} />
+        <Route path="/assistant" element={<AssistantChat />} />
+        {/* Nastavení */}
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/credentials" element={<Credentials />} />
+        <Route path="/connectors" element={<Connectors />} />
+        <Route path="/tools" element={<Tools />} />
+        <Route path="/automations" element={<Automations />} />
         <Route path="/system" element={<System />} />
         <Route path="/admin" element={<Navigate to="/system" replace />} />
+        <Route path="/reports" element={<Suspense fallback={null}><Reports /></Suspense>} />
+        <Route path="/reports/:week" element={<Suspense fallback={null}><Reports /></Suspense>} />
         <Route path="*" element={<Navigate to="/today" replace />} />
       </Routes>
     </Shell>
   );
 }
 
-/** An old path that now lives under a tab; its query (e.g. ?view=org) stays. */
-function KeepQuery({ to, tab }: { to: string; tab: string }) {
-  const q = new URLSearchParams(window.location.search);
-  q.set("tab", tab);
-  return <Navigate to={`${to}?${q}`} replace />;
+function Work({ children }: { children: ReactNode }) {
+  return <SectionTabs tabs={WORK_TABS} label={t("nav.work")}>{children}</SectionTabs>;
+}
+
+function Know({ children }: { children: ReactNode }) {
+  return <SectionTabs tabs={KNOWLEDGE_TABS} label={t("nav.knowledge")}>{children}</SectionTabs>;
 }

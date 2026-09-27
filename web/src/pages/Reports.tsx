@@ -319,7 +319,7 @@ function Meeting({ r }: { r: Report }) {
   const [open, setOpen] = useState(false);
   if (r.status === "draft" || r.status === "published") return null;
   return (
-    <Panel fig="7" title="Týdenní meeting" right={STATUS[r.status][0]} className="lg:col-span-2">
+    <Panel title="Týdenní meeting" right={STATUS[r.status][0]} className="lg:col-span-2">
       <div className="grid grid-cols-1 gap-5 p-4 lg:grid-cols-2">
         <div className="flex flex-col gap-3">
           {r.meeting_notes ? <Markdown text={r.meeting_notes} /> : <p className="cap">Zápis vznikne po meetingu.</p>}
@@ -378,13 +378,13 @@ function ReportView({ r }: { r: Report }) {
         {kpis.map((k) => <KpiTile key={k.key} label={k.label} kpi={p.kpis[k.key]} good={k.good} fmt={k.fmt} />)}
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel fig="1" title="Hotové úkoly po dnech" right={`${p.tasks.done} hotovo · ${p.tasks.new} nových`}>
+        <Panel title="Hotové úkoly po dnech" right={`${p.tasks.done} hotovo · ${p.tasks.new} nových`}>
           <div className="px-2 pt-3 pb-1"><DoneByDay p={p} /></div>
         </Panel>
-        <Panel fig="2" title="Práce podle projektu" right="hotovo tento týden · otevřené teď">
+        <Panel title="Práce podle projektu" right="hotovo tento týden · otevřené teď">
           <div className="px-2 pt-3 pb-1"><ByProject p={p} /></div>
         </Panel>
-        <Panel fig="3" title="Shrnutí týdne" right={r.narrative ? "napsal Asistent vedení" : "čeká na agenta"} className="lg:row-span-2">
+        <Panel title="Shrnutí týdne" right={r.narrative ? "napsal Asistent vedení" : "čeká na agenta"} className="lg:row-span-2">
           <div className="p-4">
             {r.narrative ? <Markdown text={r.narrative} /> : <p className="cap">Narativ ještě není napsaný; čísla jsou už spočítaná.</p>}
             {r.decisions.length > 0 && (
@@ -397,13 +397,13 @@ function ReportView({ r }: { r: Report }) {
             )}
           </div>
         </Panel>
-        <Panel fig="4" title="Cíle" right="postup a změna od minulého reportu">
+        <Panel title="Cíle" right="postup a změna od minulého reportu">
           <GoalBars goals={p.goals} />
         </Panel>
-        <Panel fig="5" title="Agenti: náklady a úspěšnost" right={`$${p.agents.cost_usd.toFixed(2)} · ${p.agents.success_rate === null ? "—" : Math.round(p.agents.success_rate * 100) + " %"}`}>
+        <Panel title="Agenti: náklady a úspěšnost" right={`$${p.agents.cost_usd.toFixed(2)} · ${p.agents.success_rate === null ? "—" : Math.round(p.agents.success_rate * 100) + " %"}`}>
           <AgentCost p={p} />
         </Panel>
-        <Panel fig="6" title="Vývoj, komunikace, incidenty">
+        <Panel title="Vývoj, komunikace, incidenty">
           <Signals p={p} />
         </Panel>
         <Panel fig="8" title="Byznys: peníze, zákazníci, čas majitele" right={p.business ? `byznys $${p.business.cost_split.business_usd.toFixed(2)}` : undefined}>

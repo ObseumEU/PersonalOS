@@ -13,7 +13,7 @@ export function AssigneeChip({ type, name }: { type: AssigneeType | null; name: 
   const { cls, Icon } = CHIP[type];
   const label = type === "ai" ? "AI" : type === "human" && name === "Owner" ? "Me" : (name ?? type);
   return (
-    <span className={`inline-flex h-[22px] items-center gap-1.5 rounded-[3px] px-1.5 font-mono text-[11px] whitespace-nowrap ${cls}`}>
+    <span className={`inline-flex h-[22px] items-center gap-1.5 rounded-[3px] px-1.5 font-mono text-xs whitespace-nowrap ${cls}`}>
       <Icon size={12} strokeWidth={1.6} />
       {label}
     </span>
@@ -42,7 +42,7 @@ export function StatePill({ task }: { task: Task }) {
   if (!cls) return null;
   const text =
     task.status === "working" && task.progress != null ? `working ${task.progress}%` : task.status === "review" ? "review" : task.status;
-  return <span className={`cap rounded-[3px] border px-1.5 py-px text-[10px]! ${cls}`}>{text}</span>;
+  return <span className={`cap rounded-[3px] border px-1.5 py-px text-xs! ${cls}`}>{text}</span>;
 }
 
 export function fmtMinutes(min: number | null | undefined) {

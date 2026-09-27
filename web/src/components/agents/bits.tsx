@@ -38,7 +38,7 @@ export function EngineBadge({ view, engine, model }: { view?: EngineView | null;
     ].filter(Boolean).join("\n");
     return (
       <span
-        className={`cap rounded-[3px] border px-1.5 py-px text-[10px]! ${fallback ? "border-amber-400/60 text-amber-300!" : "border-accent/50 text-accent!"}`}
+        className={`cap rounded-[3px] border px-1.5 py-px text-xs! ${fallback ? "border-amber-400/60 text-amber-300!" : "border-accent/50 text-accent!"}`}
         title={title}
       >
         {shown.label}
@@ -48,7 +48,7 @@ export function EngineBadge({ view, engine, model }: { view?: EngineView | null;
   if (!engine) return null;
   const label = engine === "claude" ? `Claude${model ? ` · ${model.replace("claude-", "")}` : ""}` : engine === "codex" ? "Codex" : "auto";
   return (
-    <span className="cap rounded-[3px] border border-accent/50 px-1.5 py-px text-[10px]! text-accent!" title="Runtime: which CLI and subscription this agent runs on">
+    <span className="cap rounded-[3px] border border-accent/50 px-1.5 py-px text-xs! text-accent!" title="Runtime: which CLI and subscription this agent runs on">
       {label}
     </span>
   );
@@ -56,7 +56,7 @@ export function EngineBadge({ view, engine, model }: { view?: EngineView | null;
 
 export function Pill({ children, warn = false }: { children: string; warn?: boolean }) {
   return (
-    <span className={`cap rounded-[3px] border px-1.5 py-px text-[10px]! ${warn ? "border-amber-400/60 text-amber-300!" : "border-line"}`}>
+    <span className={`cap rounded-[3px] border px-1.5 py-px text-xs! ${warn ? "border-amber-400/60 text-amber-300!" : "border-line"}`}>
       {children}
     </span>
   );

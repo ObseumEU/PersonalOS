@@ -41,6 +41,8 @@ export type Agent = {
   done_today: number;
   approvals_waiting: number;
   current: { id: number; ref: string; title: string } | null;
+  /** The one "working" source (the task and since when); older APIs send only `current`. */
+  working_on?: { task_ref: string | null; since: string | null; title?: string | null } | null;
 };
 
 /** Which engine and model an agent runs on (read-only, from /api/agents). */

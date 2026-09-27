@@ -74,7 +74,6 @@ function Editor({ id, onChanged, onClose }: { id: number; onChanged: () => void;
   if (!note) return <Panel title="Note" className="w-full">{error && <p className="cap p-4 text-red-400!">{error}</p>}</Panel>;
   return (
     <Panel
-      fig={`N-${note.id}`}
       title="Note"
       className="w-full"
       bodyClassName="flex flex-col overflow-y-auto"
@@ -250,7 +249,6 @@ export default function Notes() {
       <PageHeader kicker="NOTES · MARKDOWN · BY TOPIC" title="Notes" sub="Markdown notes that belong to your topics. Every save is a version you can go back to." />
       <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
         <Panel
-          fig="TAB. 1"
           title={[archived ? "Archive" : "Notes", topic && `#${topic}`].filter(Boolean).join(" · ")}
           right={
             <span className="flex items-center gap-3">

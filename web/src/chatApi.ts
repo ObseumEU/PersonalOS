@@ -16,6 +16,9 @@ export type ChatMember = {
   current?: { task_id: number | null; task_ref: string | null; title: string | null; since: string; minutes: number } | null;
   remote?: boolean;
   paused?: boolean;
+  /** The one "working" source; `current` is the older shape of the same. */
+  working_on?: { task_ref: string | null; since: string | null; title?: string | null } | null;
+  archived?: boolean;
 };
 
 export type Channel = {

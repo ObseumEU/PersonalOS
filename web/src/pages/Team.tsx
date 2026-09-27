@@ -1,34 +1,33 @@
 import { useSearchParams } from "react-router-dom";
+import { PageHeader } from "../components/ui";
+import { t } from "../i18n";
 import Agents from "./Agents";
 import Board from "./Board";
-import NetworkPage from "./Network";
 import Org from "./Org";
 
-// One screen for the team (REVIZE-FUNKCI 4.2): people and agents, their work, the structure, the network.
+// Tým: people and agents, their work, the structure (the old network graph is now the structure list).
 const TABS = [
-  { id: "people", label: "People and agents", Page: Agents },
-  { id: "work", label: "Work", Page: Board },
-  { id: "structure", label: "Structure", Page: Org },
-  { id: "network", label: "Network", Page: NetworkPage },
+  { id: "people", key: "team.tab.people", Page: Agents },
+  { id: "work", key: "team.tab.work", Page: Board },
+  { id: "structure", key: "team.tab.structure", Page: Org },
 ] as const;
 
 export default function Team() {
   const [params, setParams] = useSearchParams();
-  const tab = TABS.find((t) => t.id === params.get("tab")) ?? TABS[0];
+  const tab = TABS.find((x) => x.id === params.get("tab")) ?? (params.get("tab") === "network" ? TABS[2] : TABS[0]);
   return (
     <div className="flex flex-col gap-4">
-      <nav
-        className="flex flex-wrap gap-1 border-b border-line"
-        aria-label="Team"
-      >
-        {TABS.map((t) => (
+      <PageHeader kicker={t("team.kicker")} title={t("nav.team")} sub={t("team.sub")} />
+      <nav className="-mx-1 flex gap-1 overflow-x-auto border-b border-line px-1" aria-label={t("nav.team")}>
+        {TABS.map((x) => (
           <button
-            key={t.id}
+            key={x.id}
             type="button"
-            onClick={() => setParams(t.id === "people" ? {} : { tab: t.id })}
-            className={`-mb-px border-b-2 px-3 py-2 text-[13px] ${t.id === tab.id ? "border-accent text-ink" : "border-transparent text-ink-3 hover:text-ink"}`}
+            aria-current={x.id === tab.id ? "page" : undefined}
+            onClick={() => setParams(x.id === "people" ? {} : { tab: x.id })}
+            className={`-mb-px shrink-0 border-b-2 px-3 py-2 text-sm whitespace-nowrap ${x.id === tab.id ? "border-accent text-ink" : "border-transparent text-ink-2 hover:text-ink"}`}
           >
-            {t.label}
+            {t(x.key)}
           </button>
         ))}
       </nav>

@@ -1,9 +1,9 @@
 import { ArrowRight, Orbit } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { LOCALE, t } from "../i18n";
 
 export function Panel({
-  fig,
   title,
   right,
   mock,
@@ -11,6 +11,7 @@ export function Panel({
   bodyClassName = "",
   children,
 }: {
+  /** Deprecated: the decorative "FIG. 1" labels are gone; kept so old call sites compile. */
   fig?: string;
   title?: string;
   right?: ReactNode;
@@ -24,10 +25,9 @@ export function Panel({
     <section className={`panel fade-in flex min-h-0 flex-col ${className}`}>
       {title && (
         <div className="flex items-baseline gap-2.5 border-b border-line px-4 py-3">
-          {fig && <span className="cap text-accent!">{fig}</span>}
           <h2 className="text-sm font-medium">{title}</h2>
           {mock && <MockDot why={typeof mock === "string" ? mock : undefined} />}
-          {right && <span className="cap ml-auto truncate pl-3">{right}</span>}
+          {right && <span className="ml-auto min-w-0 truncate pl-3 text-xs text-ink-2">{right}</span>}
         </div>
       )}
       <div className={`min-h-0 flex-1 ${bodyClassName}`}>{children}</div>
@@ -35,7 +35,7 @@ export function Panel({
   );
 }
 
-export const MOCK_TITLE = "Mock: sample data or not implemented yet";
+export const MOCK_TITLE = t("misc.mock_title");
 
 /**
  * Small red dot on anything that is mock (sample data, unwired control, planned
@@ -43,7 +43,7 @@ export const MOCK_TITLE = "Mock: sample data or not implemented yet";
  * remove the dot there and here when the part is wired to real data.
  */
 export function MockDot({ why, className = "" }: { why?: string; className?: string }) {
-  const label = why ? `Mock: ${why}` : MOCK_TITLE;
+  const label = why ? `${t("misc.mock_title")}: ${why}` : MOCK_TITLE;
   return (
     <span
       role="img"
@@ -94,32 +94,32 @@ function ApiStatus() {
   return (
     <span className="flex items-center gap-2 text-sm">
       <span className={`h-[7px] w-[7px] rounded-full ${ok === false ? "bg-red-400" : ok ? "sonar bg-accent" : "bg-dim"}`} />
-      {ok === false ? "API unreachable" : ok ? "API online" : "checking…"}
+      {ok === false ? t("api.down") : ok ? t("api.online") : t("api.checking")}
     </span>
   );
 }
 
 export function PageHeader({ kicker, title, sub }: { kicker: string; title: string; sub?: ReactNode }) {
   const now = useNow();
-  const hm = now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const hm = now.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
   const s = String(now.getSeconds()).padStart(2, "0");
   return (
     <header className="flex flex-wrap items-end gap-6 border-b border-line pb-4">
       <div className="flex min-w-0 flex-col gap-2">
-        <span className="cap">{kicker}</span>
+        <span className="text-xs font-medium tracking-wide text-ink-2 uppercase">{kicker}</span>
         <h1 className="text-3xl leading-tight font-light tracking-[-0.03em] sm:text-[40px]">{title}</h1>
         {sub && <p className="text-sm text-ink-2">{sub}</p>}
       </div>
       <div className="ml-auto hidden items-end gap-7 text-right sm:flex">
         <div className="flex flex-col gap-1">
-          <span className="cap">LOCAL TIME</span>
+          <span className="text-xs text-ink-2">{t("time.local")}</span>
           <span className="font-mono text-[22px]">
             {hm}
             <span className="text-ink-3">:{s}</span>
           </span>
         </div>
         <div className="flex flex-col gap-1">
-          <span className="cap">STATUS</span>
+          <span className="text-xs text-ink-2">{t("time.status")}</span>
           <ApiStatus />
         </div>
       </div>
@@ -155,7 +155,7 @@ export function AskBox({
     >
       <Orbit size={18} strokeWidth={1.5} className="shrink-0 text-accent" />
       <label htmlFor={id} className="sr-only">
-        Ask PersonalOS
+        {t("misc.ask_label")}
       </label>
       <input
         id={id}
@@ -167,10 +167,10 @@ export function AskBox({
       <button
         type="submit"
         disabled={busy}
-        title="Answered by our knowledge base, with verified citations"
+        title={t("misc.ask_title")}
         className="flex h-[38px] items-center gap-1.5 rounded border border-accent bg-accent/10 px-3.5 text-[13px] font-medium text-accent transition hover:bg-accent/20"
       >
-        {busy ? "Asking…" : "Ask"} <ArrowRight size={14} />
+        {busy ? t("misc.asking") : t("misc.ask")} <ArrowRight size={14} />
       </button>
     </form>
   );

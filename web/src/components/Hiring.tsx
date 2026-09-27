@@ -41,7 +41,7 @@ export default function HiringPanel({ members, onHired }: { members: { id: numbe
   };
   const pending = hires.filter((h) => h.status === "pending");
   return (
-    <Panel fig="HIRE" title="Hire a colleague" right={`${pending.length} pending · the lead decides · 7 days' probation`}>
+    <Panel title="Hire a colleague" right={`${pending.length} pending · the lead decides · 7 days' probation`}>
       <form
         className="grid grid-cols-1 gap-2 border-b border-line p-4 md:grid-cols-4"
         onSubmit={(e) => {
@@ -111,7 +111,7 @@ export function InvitePanel() {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   return (
-    <Panel fig="PEOPLE" title="Invite a person" right="a one-time link, valid 7 days">
+    <Panel title="Invite a person" right="a one-time link, valid 7 days">
       <form
         className="flex flex-wrap gap-2 p-4"
         onSubmit={(e) => {

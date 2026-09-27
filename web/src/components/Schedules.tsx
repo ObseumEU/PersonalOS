@@ -153,17 +153,17 @@ export function SchedulesPanel({ actor, fig = "AUTO" }: { actor?: { id: number; 
   );
   if (!actor)
     return (
-      <Panel fig={fig} title="Schedules of people and agents" right="each firing creates a task · agents: max 5, every ≥ 15 min">
+      <Panel title="Schedules of people and agents" right="each firing creates a task · agents: max 5, every ≥ 15 min">
         {header}
         <Rows items={items} onChange={load} onError={setError} />
       </Panel>
     );
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-      <Panel fig={fig} title="Automations · personal" right={`${actor.name}'s own routines`}>
+      <Panel title="Automations · personal" right={`${actor.name}'s own routines`}>
         <Rows items={personal} onChange={load} onError={setError} />
       </Panel>
-      <Panel fig={fig} title="Automations · team" right="shared work it owns or is assigned">
+      <Panel title="Automations · team" right="shared work it owns or is assigned">
         {header}
         <Rows items={team} onChange={load} onError={setError} />
       </Panel>

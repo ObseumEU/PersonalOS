@@ -90,7 +90,7 @@ export function Avatar({ name, size = 20 }: { name: string; size?: number }) {
   return (
     <span
       aria-hidden
-      className="inline-flex shrink-0 items-center justify-center rounded-full font-mono text-[9px] font-medium text-bg"
+      className="inline-flex shrink-0 items-center justify-center rounded-full font-mono text-xs font-medium text-bg"
       style={{ width: size, height: size, background: `hsl(${hue(name)} 45% 68%)` }}
     >
       {initials(name)}

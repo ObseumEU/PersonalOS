@@ -47,7 +47,7 @@ export default function ObservabilityPanel() {
     ? "not connected (POS_GRAFANA_TOKEN)"
     : `${st.firing.length} firing · last alert ${st.last_webhook ? when(st.last_webhook.at) : "never"}`;
   return (
-    <Panel fig="TAB. 20" title="Systém · Grafana alerts" right={right}>
+    <Panel title="Systém · Grafana alerts" right={right}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-line px-4 py-3 text-[13px]">
         <span className="flex items-center gap-2">
           <span className={`h-1.5 w-1.5 rounded-full ${down ? "bg-red-400" : st.firing.length ? "bg-amber-300" : "bg-accent"}`} />

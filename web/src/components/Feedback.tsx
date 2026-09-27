@@ -115,7 +115,7 @@ export function FeedbackPanel({ member }: { member: { id: number; name: string }
     </div>
   );
   return (
-    <Panel fig="FEEDBACK" title="Feedback" right={`${received.filter((f) => f.status === "open").length} open`}>
+    <Panel title="Feedback" right={`${received.filter((f) => f.status === "open").length} open`}>
       <div className="border-b border-line px-4 py-3">
         <FeedbackForm to={member.id} onSent={load} />
       </div>
@@ -150,7 +150,7 @@ export function InstructionsEditor({ agentId, current }: { agentId: number; curr
     );
   return (
     <div className="flex flex-col gap-2 p-4">
-      <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} aria-label="Instructions" className={`${input} font-mono text-[11px]`} />
+      <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} aria-label="Instructions" className={`${input} font-mono text-xs`} />
       <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why (e.g. the feedback it follows)" className={`${input} h-8 py-0`} aria-label="Why" />
       <div className="flex items-center gap-2">
         <button

@@ -48,13 +48,13 @@ export default function WeeklyReview() {
       {error && <p className="cap text-red-400!">{error}</p>}
       {r && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Panel fig="1" title="Inbox to zero" right={<Link to="/tasks/inbox" className="hover:text-accent">clarify one by one →</Link>}>
+          <Panel title="Inbox to zero" right={<Link to="/tasks/inbox" className="hover:text-accent">clarify one by one →</Link>}>
             <TaskList items={r.inbox} empty="Inbox is empty." view="inbox" />
           </Panel>
-          <Panel fig="2" title="Waiting for" right="chase what is late">
+          <Panel title="Waiting for" right="chase what is late">
             <TaskList items={r.waiting} empty="Nobody owes you anything." view="waiting" />
           </Panel>
-          <Panel fig="3" title="Projects without a next step" right="give each one a next action">
+          <Panel title="Projects without a next step" right="give each one a next action">
             {r.projects_without_next.length === 0 && <p className="cap px-4 py-3">Every active project has a next step.</p>}
             {r.projects_without_next.map((p) => (
               <Link key={p.id} to={`/projects/${p.slug}`} className="flex items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised">
@@ -63,10 +63,10 @@ export default function WeeklyReview() {
               </Link>
             ))}
           </Panel>
-          <Panel fig="4" title="Waiting for your review" right="accept or return">
+          <Panel title="Waiting for your review" right="accept or return">
             <TaskList items={r.to_review} empty="Nothing to review." view="review" />
           </Panel>
-          <Panel fig="5" title="Someday / maybe" right="anything to start now?" className="lg:col-span-2">
+          <Panel title="Someday / maybe" right="anything to start now?" className="lg:col-span-2">
             <TaskList items={r.someday} empty="Nothing parked." view="someday" />
           </Panel>
         </div>

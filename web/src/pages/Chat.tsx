@@ -54,8 +54,8 @@ function Body({ text, names }: { text: string; names: string[] }) {
 }
 
 function KindTag({ m }: { m: ChatMessage }) {
-  if (m.trust === "external") return <span className="cap rounded-[3px] border border-amber-400/50 px-1 text-[9px]! text-amber-300!" title="Arrived over A2A from outside PersonalOS: agents see it as untrusted data">A2A · EXTERNAL</span>;
-  if (m.trust === "agent") return <span className="cap rounded-[3px] border border-line px-1 text-[9px]!" title="From an agent: other agents see it wrapped as data, not orders">AGENT</span>;
+  if (m.trust === "external") return <span className="cap rounded-[3px] border border-amber-400/50 px-1 text-xs! text-amber-300!" title="Arrived over A2A from outside PersonalOS: agents see it as untrusted data">A2A · EXTERNAL</span>;
+  if (m.trust === "agent") return <span className="cap rounded-[3px] border border-line px-1 text-xs!" title="From an agent: other agents see it wrapped as data, not orders">AGENT</span>;
   return null;
 }
 
@@ -148,8 +148,8 @@ function MessageItem({
       <div className="flex flex-wrap items-baseline gap-2">
         <span className={`text-[13px] font-medium ${m.author_kind === "human" ? "text-ink" : "text-accent"}`}>{m.author_name}</span>
         <KindTag m={m} />
-        {m.priority && <span className={`cap rounded-[3px] border px-1 text-[9px]! ${PRIORITY_CLS[m.priority]}`}>{m.priority.replace("_", " ").toUpperCase()}</span>}
-        <span className="cap text-[10px]!">{hhmm(m.created_at)}{m.edited_at ? " · edited" : ""}</span>
+        {m.priority && <span className={`cap rounded-[3px] border px-1 text-xs! ${PRIORITY_CLS[m.priority]}`}>{m.priority.replace("_", " ").toUpperCase()}</span>}
+        <span className="cap text-xs!">{hhmm(m.created_at)}{m.edited_at ? " · edited" : ""}</span>
       </div>
       {editing !== null ? (
         <form
@@ -177,7 +177,7 @@ function MessageItem({
               onClick={() => onReact(r.emoji)}
               className={`flex h-6 items-center gap-1 rounded-full border px-2 text-[12px] ${r.actors.includes(me) ? "border-accent/60 bg-accent/10" : "border-line"}`}
             >
-              {r.emoji} <span className="font-mono text-[11px] text-ink-2">{r.count}</span>
+              {r.emoji} <span className="font-mono text-xs text-ink-2">{r.count}</span>
             </button>
           ))}
           {m.replies > 0 && !compact && (
@@ -336,7 +336,7 @@ function Composer({
         {hasAgents && (
           <label className="cap flex items-center gap-1.5" title="Priority for agents: fyi arrives at their next step, change_plan interrupts a running session, stop pauses whom it names">
             PRIORITY
-            <select value={priority} onChange={(e) => setPriority(e.target.value as Priority | "")} className="rounded border border-line bg-bg px-1 py-0.5 font-mono text-[11px] text-ink-2 outline-none">
+            <select value={priority} onChange={(e) => setPriority(e.target.value as Priority | "")} className="rounded border border-line bg-bg px-1 py-0.5 font-mono text-xs text-ink-2 outline-none">
               <option value="">none</option>
               <option value="fyi">fyi</option>
               <option value="change_plan">change_plan</option>
@@ -575,7 +575,6 @@ export default function Chat() {
       <div className="grid h-[calc(100dvh-190px)] min-h-[420px] grid-cols-1 gap-4 md:h-[calc(100vh-230px)] md:grid-cols-[240px_1fr] lg:h-[calc(100vh-210px)]">
         {/* Rail: channels and DMs. On a phone it is the list view. */}
         <Panel
-          fig="CH"
           title="Channels"
           right={<span className="flex items-center gap-1.5"><WorkingDot on={live} />{live ? "live" : "offline"}</span>}
           className={current ? "hidden md:flex" : "flex"}
@@ -624,7 +623,6 @@ export default function Chat() {
             className="min-w-0 flex-1"
             bodyClassName="flex min-h-0 flex-col"
             title={channel?.title ?? "Pick a channel"}
-            fig={channel ? (channel.kind === "group" ? "#" : "DM") : undefined}
             right={channel ? `${channel.members.length} members · ${channel.visibility}` : undefined}
           >
             {channel && (
@@ -672,7 +670,6 @@ export default function Chat() {
           {/* Thread: side panel on desktop, full screen on a phone. */}
           {rootMsg && channel && (
             <Panel
-              fig="THREAD"
               title={`${threadReplies.length} ${threadReplies.length === 1 ? "reply" : "replies"}`}
               right={<button aria-label="Close thread" onClick={() => setThread(null)}><X size={13} /></button>}
               className="fixed inset-2 z-30 lg:static lg:inset-auto lg:w-[340px] lg:shrink-0"

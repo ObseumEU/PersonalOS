@@ -514,7 +514,7 @@ function StatusLine({ g }: { g: Group }) {
         )}
       </span>
       {uses > 0 && <span className="cap">{uses}× za 24 h</span>}
-      {errors > 0 && <span className="rounded border border-red-400/50 px-1.5 text-[11px] text-red-400">{errWord(errors)} za 24 h</span>}
+      {errors > 0 && <span className="rounded border border-red-400/50 px-1.5 text-xs text-red-400">{errWord(errors)} za 24 h</span>}
       {test && (
         <span className={`cap ${test.ok ? "text-accent!" : "text-red-400!"}`} title={test.error ?? undefined}>
           {test.ok ? `test OK ${czAgo(test.at)}` : `test selhal ${czAgo(test.at)}: ${test.error ?? ""}`}
@@ -860,7 +860,7 @@ export default function Credentials() {
         {v && view === "agenti" && <AgentsView v={v} groups={groups} act={act} highlight={highlight} />}
       </section>
 
-      <Panel fig="AUDIT" title="Použití za 7 dní" right="každé načtení: kdo, co, kdy; chyby nahoře červeně">
+      <Panel title="Použití za 7 dní" right="každé načtení: kdo, co, kdy; chyby nahoře červeně">
         <AuditList lines={v?.audit ?? []} />
       </Panel>
       <ToastBar toast={toast} hide={hide} reload={reloadAll} />
@@ -913,7 +913,7 @@ export function AgentCredentialsPanel({ agentId }: { agentId: number }) {
           <p className="cap">Tento agent nemůže mít hesla (člověk, služba nebo Správce přístupů).</p>
         )}
       </div>
-      <Panel fig="AUDIT" title="Použití za 7 dní" className="lg:col-span-7" bodyClassName="max-h-[380px] overflow-y-auto">
+      <Panel title="Použití za 7 dní" className="lg:col-span-7" bodyClassName="max-h-[380px] overflow-y-auto">
         <AuditList lines={mine.audit} />
       </Panel>
       <ToastBar toast={toast} hide={hide} reload={load} />

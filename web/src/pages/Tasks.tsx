@@ -267,7 +267,6 @@ export default function Tasks() {
         </nav>
 
         <Panel
-          fig="TAB. 1"
           title={topic ? `${current.label} · #${topic}` : current.label}
           right={
             <span className="flex items-center gap-2">

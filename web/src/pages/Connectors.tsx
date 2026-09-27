@@ -164,7 +164,7 @@ export default function Connectors() {
       />
       {error && <p className="cap text-red-400!">{error}</p>}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="TAB. 14" title="What is set up" right="secrets stay on the server" className="lg:col-span-4">
+        <Panel title="What is set up" right="secrets stay on the server" className="lg:col-span-4">
           {status &&
             Object.entries(status.outbound).map(([k, on]) => (
               <div key={k} className="flex flex-col gap-1 border-b border-line px-4 py-2.5">
@@ -212,7 +212,7 @@ export default function Connectors() {
           )}
         </Panel>
 
-        <Panel fig="TAB. 15" title="Routing rules" right="first match wins · versioned · agents may propose changes" className="lg:col-span-8">
+        <Panel title="Routing rules" right="first match wins · versioned · agents may propose changes" className="lg:col-span-8">
           <div className="grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_110px] gap-2 border-b border-line px-4 py-2">
             {["RULE", "SOURCE", "MATCH", "→ ASSIGNEE", "PRIO", "HITS", ""].map((h) => (
               <span key={h} className="cap">
@@ -279,7 +279,7 @@ export default function Connectors() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="LOG" title="Incoming events" right="content is stored as untrusted" className="lg:col-span-8">
+        <Panel title="Incoming events" right="content is stored as untrusted" className="lg:col-span-8">
           {events.length === 0 && <p className="cap p-4">No events yet. Connector agents report them with emit_event; GitHub through the webhook.</p>}
           {events.map((e) => (
             <div key={e.id} className="grid grid-cols-[70px_minmax(0,1fr)_minmax(0,0.9fr)_150px_70px] items-center gap-2 border-b border-line px-4 py-2 text-[13px]">
@@ -301,7 +301,7 @@ export default function Connectors() {
             </div>
           ))}
         </Panel>
-        <Panel fig="TEST" title="Send a test event" right="see which rule catches it" className="lg:col-span-4">
+        <Panel title="Send a test event" right="see which rule catches it" className="lg:col-span-4">
           <form onSubmit={sendTest} className="flex flex-col gap-2 p-4">
             <select className={input} value={test.source} onChange={(e) => setTest({ ...test, source: e.target.value })}>
               {SOURCES.filter((s) => s !== "any").map((s) => (

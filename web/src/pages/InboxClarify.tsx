@@ -91,7 +91,7 @@ export default function InboxClarify() {
         sub="Everything lands here first. Process it to zero; the AI proposes, you decide."
       />
       <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-        <Panel fig="TAB. 2" title="Inbox" right={`${items?.length ?? 0} to process`} className="lg:w-80 lg:shrink-0" bodyClassName="overflow-y-auto">
+        <Panel title="Inbox" right={`${items?.length ?? 0} to process`} className="lg:w-80 lg:shrink-0" bodyClassName="overflow-y-auto">
           <div className="border-b border-line p-3">
             <Capture onCaptured={() => load()} />
           </div>
@@ -119,7 +119,6 @@ export default function InboxClarify() {
         </Panel>
 
         <Panel
-          fig={items?.length ? `ITEM ${index + 1} OF ${items.length}` : "CLARIFY"}
           title="Clarify"
           right="one item at a time"
           className="min-w-0 flex-1"
@@ -253,7 +252,7 @@ export default function InboxClarify() {
           )}
         </Panel>
 
-        <Panel fig="TAB. 3" title="How items are clarified" right="GTD" className="lg:w-72 lg:shrink-0">
+        <Panel title="How items are clarified" right="GTD" className="lg:w-72 lg:shrink-0">
           {RULES.map(([q, a, r], i) => (
             <div key={q} className="grid grid-cols-[22px_minmax(0,1fr)] gap-2 border-b border-line px-3.5 py-2.5">
               <span className="cap text-accent!">{String(i + 1).padStart(2, "0")}</span>

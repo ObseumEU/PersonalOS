@@ -50,7 +50,6 @@ export default function SentinelPanel() {
   const disk = hb?.host.disk_pct ? Math.max(...Object.values(hb.host.disk_pct)) : null;
   return (
     <Panel
-      fig="TAB. 19"
       title="Sentinel · Hlídač"
       right={hb ? `heartbeat ${age}${hb.learning ? " · learning" : ""}` : "no sentinel yet (docker compose --profile sentinel up -d)"}
     >

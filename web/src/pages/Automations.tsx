@@ -85,7 +85,7 @@ export default function Automations() {
         sub="Recurring system work runs here until Nexus takes it over through its A2A facade. Jobs are plain code; when thinking is needed they hand a task to an agent."
       />
       {error && <p className="cap text-red-400!">{error}</p>}
-      <Panel fig="TAB. 16" title="Routines" right="system jobs and members' schedules · Europe/Prague · the kill switch pauses all but the morning brief, weekly review and budget check">
+      <Panel title="Routines" right="system jobs and members' schedules · Europe/Prague · the kill switch pauses all but the morning brief, weekly review and budget check">
         <div className="flex flex-col gap-2 border-b border-line px-4 py-2.5">
           <NewSchedule onCreated={load} onError={setError} />
         </div>
@@ -148,7 +148,7 @@ export default function Automations() {
       </Panel>
 
       <div className="grid gap-4 lg:grid-cols-12">
-        <Panel fig="A2A" title="Remote agents" right="tasks assigned to them travel over A2A" className="lg:col-span-5">
+        <Panel title="Remote agents" right="tasks assigned to them travel over A2A" className="lg:col-span-5">
           {a2a?.members.length === 0 && (
             <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">
               None connected yet. Set <span className="font-mono">POS_KNOWLAGE_A2A_URL</span> (knowlage-agent) or{" "}
@@ -167,7 +167,7 @@ export default function Automations() {
             <span className="font-mono">/a2a</span> (SendMessage, GetTask, CancelTask) with an agent key.
           </p>
         </Panel>
-        <Panel fig="LOG" title="Delegated over A2A" right="SendMessage → GetTask until done" className="lg:col-span-7">
+        <Panel title="Delegated over A2A" right="SendMessage → GetTask until done" className="lg:col-span-7">
           {a2a?.links.length === 0 && <p className="cap p-4">Nothing delegated yet.</p>}
           {a2a?.links.map((l) => (
             <div key={l.task_ref} className="grid grid-cols-[70px_minmax(0,1fr)_140px_90px] gap-2 border-b border-line px-4 py-2 text-[13px]">

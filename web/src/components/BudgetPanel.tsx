@@ -31,7 +31,6 @@ export default function BudgetPanel() {
     api(`/api/budget/agents/${id}`, { method: "PUT", body: JSON.stringify({ budget_class: cls }) }).then(load, (e) => setError(e.message));
   return (
     <Panel
-      fig="BUDGET"
       title="Budget"
       right={
         <span className="flex items-center gap-2">

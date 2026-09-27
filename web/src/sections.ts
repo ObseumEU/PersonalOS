@@ -1,82 +1,81 @@
 import {
   BarChart3,
   Bot,
-  Workflow,
-  Wrench,
-  Plug,
   Box,
-  ShieldCheck,
+  BookOpen,
+  Briefcase,
   CalendarDays,
   CheckSquare,
   FileText,
-  FolderOpen,
   FolderKanban,
+  FolderOpen,
   Hash,
+  Home,
   KeyRound,
   type LucideIcon,
   MessagesSquare,
-  Orbit,
-  Sun,
+  Plug,
+  Settings,
+  Workflow,
+  Wrench,
 } from "lucide-react";
+import { t } from "./i18n";
 
 export type Section = {
+  /** The path the item opens. */
   path: string;
-  label: string;
+  /** i18n key of the label. */
+  key: string;
   icon: LucideIcon;
-  phase: number;
-  blurb: string;
-  features: string[];
+  /** Paths (first segment) that count as this section, for the active state. */
+  match: string[];
   /** Shown in the phone tab bar. */
   mobile?: boolean;
   /** Not implemented yet: red mock dot in the navigation; the text is the tooltip. */
   mock?: string;
 };
 
-// Sections from docs/PLAN.md §3.
+export type SubSection = { path: string; key: string; icon: LucideIcon };
+
+// Six places: what needs you, talking, doing, knowing, who, and the rest folded under Nastavení.
 export const SECTIONS: Section[] = [
-  { path: "today", label: "Today", icon: Sun, phase: 4, mobile: true, blurb: "Your day at a glance.", features: [] },
-  {
-    path: "tasks", label: "Tasks", icon: CheckSquare, phase: 1, mobile: true,
-    blurb: "Everything you need to get done, by topic and due date.",
-    features: ["Quick-add", "Due dates and priority", "Grouped by topic", "Created by the assistant"],
-  },
-  {
-    path: "calendar", label: "Calendar", icon: CalendarDays, phase: 4,
-    blurb: "Your Google or Microsoft 365 calendar, next to your tasks.",
-    features: ["Synced events", "Day and week view", "Tasks alongside events"],
-  },
-  {
-    path: "files", label: "Files", icon: FolderOpen, phase: 2,
-    blurb: "Every document in one place, searchable in full text.",
-    features: ["Drag-and-drop upload", "Preview", "Tags and topics", "Full-text search"],
-  },
-  {
-    path: "projects", label: "Projects", icon: FolderKanban, phase: 2,
-    blurb: "Shared work with a goal, a lead, members and a channel.",
-    features: ["Board", "Lead reviews", "Project channel"],
-  },
-  {
-    path: "topics", label: "Topics", icon: Hash, phase: 2,
-    blurb: "One home for each area of your life and work.",
-    features: ["Files, notes and tasks together", "Events and conversations"],
-  },
-  {
-    path: "notes", label: "Notes", icon: FileText, phase: 2,
-    blurb: "Markdown notes that belong to your topics.",
-    features: ["Markdown editor", "Linked to topics", "Searchable"],
-  },
-  {
-    path: "reports", label: "Reports", icon: BarChart3, phase: 5,
-    blurb: "The weekly company report and the Friday meeting with the Chief of Staff.",
-    features: [],
-  },
-  { path: "assistant", label: "Assistant", icon: Orbit, phase: 3, blurb: "", features: [] },
-  { path: "chat", label: "Chat", icon: MessagesSquare, phase: 2, mobile: true, blurb: "", features: [] },
-  { path: "team", label: "Team", icon: Bot, phase: 2, mobile: true, blurb: "People and agents, their work, the structure.", features: [] },
-  { path: "approvals", label: "Approvals", icon: ShieldCheck, phase: 2, mobile: true, blurb: "", features: [] },
-  { path: "automations", label: "Automations", icon: Workflow, phase: 5, blurb: "", features: [] },
-  { path: "tools", label: "Tools", icon: Wrench, phase: 5, blurb: "", features: [] },
-  { path: "connectors", label: "Connectors", icon: Plug, phase: 4, blurb: "", features: [] },
-  { path: "credentials", label: "Přístupy", icon: KeyRound, phase: 5, blurb: "", features: [] },
-  { path: "system", label: "System", icon: Box, phase: 5, blurb: "", features: [] },
+  { path: "/today", key: "nav.home", icon: Home, match: ["today", "approvals", "weekly-review", "assistant"], mobile: true },
+  { path: "/chat", key: "nav.chat", icon: MessagesSquare, match: ["chat"], mobile: true },
+  { path: "/tasks", key: "nav.work", icon: Briefcase, match: ["tasks", "projects", "calendar", "work"], mobile: true },
+  { path: "/knowledge", key: "nav.knowledge", icon: BookOpen, match: ["knowledge", "files", "notes", "topics"] },
+  { path: "/team", key: "nav.team", icon: Bot, match: ["team", "agents"], mobile: true },
 ];
+
+/** Práce: one section, three tabs. */
+export const WORK_TABS: SubSection[] = [
+  { path: "/tasks", key: "nav.tasks", icon: CheckSquare },
+  { path: "/projects", key: "nav.projects", icon: FolderKanban },
+  { path: "/calendar", key: "nav.calendar", icon: CalendarDays },
+];
+
+/** Znalosti: one list with filters; the full pages stay for details. */
+export const KNOWLEDGE_TABS: SubSection[] = [
+  { path: "/knowledge", key: "act.all", icon: BookOpen },
+  { path: "/files", key: "nav.files", icon: FolderOpen },
+  { path: "/notes", key: "nav.notes", icon: FileText },
+  { path: "/topics", key: "nav.topics", icon: Hash },
+];
+
+/** Nastavení: folded in the rail, a list on its own page and in the phone's "Víc" sheet. */
+export const SETTINGS: (SubSection & { blurb: string })[] = [
+  { path: "/credentials", key: "nav.credentials", icon: KeyRound, blurb: "settings.blurb.credentials" },
+  { path: "/connectors", key: "nav.connectors", icon: Plug, blurb: "settings.blurb.connectors" },
+  { path: "/tools", key: "nav.tools", icon: Wrench, blurb: "settings.blurb.tools" },
+  { path: "/automations", key: "nav.automations", icon: Workflow, blurb: "settings.blurb.automations" },
+  { path: "/system", key: "nav.system", icon: Box, blurb: "settings.blurb.system" },
+  { path: "/reports", key: "nav.reports", icon: BarChart3, blurb: "settings.blurb.reports" },
+];
+export const SETTINGS_ROOT = { path: "/settings", key: "nav.settings", icon: Settings };
+
+export function sectionOf(pathname: string): string {
+  const first = pathname.split("/")[1] ?? "";
+  if (first === "settings" || SETTINGS.some((s) => s.path === `/${first}`)) return "/settings";
+  return SECTIONS.find((s) => s.match.includes(first))?.path ?? "";
+}
+
+export const navLabel = (s: { key: string }) => t(s.key);

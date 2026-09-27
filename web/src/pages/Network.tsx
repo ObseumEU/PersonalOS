@@ -96,7 +96,7 @@ export default function NetworkPage() {
         </Link>
       </div>
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel fig="FIG. 6" title={orgMode ? "Org chart" : "Agent network"} right={`window ${window_} · drag to orbit · click a member`} className="h-[520px] lg:col-span-9 lg:h-auto" bodyClassName="measure-grid relative">
+        <Panel title={orgMode ? "Org chart" : "Agent network"} right={`window ${window_} · drag to orbit · click a member`} className="h-[520px] lg:col-span-9 lg:h-auto" bodyClassName="measure-grid relative">
           <Suspense fallback={<p className="cap breathe absolute inset-0 grid place-items-center">loading network…</p>}>
             {data && <AgentNetwork data={data} onSelect={onSelect} orgMode={orgMode} />}
           </Suspense>
@@ -111,7 +111,7 @@ export default function NetworkPage() {
           </div>
         </Panel>
         <div className="flex min-h-0 flex-col gap-4 lg:col-span-3 lg:overflow-y-auto">
-          <Panel fig="TAB. 9" title="Workload" right="open · working · review">
+          <Panel title="Workload" right="open · working · review">
             {ranked.map((n) => {
               const load = n.open + 2 * n.working + n.review;
               const max = Math.max(1, ...ranked.map((r) => r.open + 2 * r.working + r.review));
@@ -131,7 +131,7 @@ export default function NetworkPage() {
               );
             })}
           </Panel>
-          <Panel fig="TAB. 10" title="Interactions" right={window_}>
+          <Panel title="Interactions" right={window_}>
             <div className="grid grid-cols-2">
               {totals.map(([t, n]) => (
                 <div key={t} className="flex flex-col border-r border-b border-line px-4 py-2 [&:nth-child(2n)]:border-r-0">
@@ -141,9 +141,9 @@ export default function NetworkPage() {
               ))}
             </div>
           </Panel>
-          <Panel fig="LOG" title="Latest" className="min-h-0 flex-1" bodyClassName="overflow-y-auto">
+          <Panel title="Latest" className="min-h-0 flex-1" bodyClassName="overflow-y-auto">
             {data?.events.slice(0, 25).map((e, i) => (
-              <div key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 border-b border-line px-4 py-1.5 font-mono text-[11px]">
+              <div key={i} className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 border-b border-line px-4 py-1.5 font-mono text-xs">
                 <span className="text-ink-3">{ago(e.at)}</span>
                 <span className="truncate">
                   <span className="text-ink-2">{names.get(e.from)}</span> <span className="text-accent">{e.type}</span> → <span className="text-ink-2">{names.get(e.to)}</span>

@@ -51,7 +51,6 @@ export default function Calendar() {
       />
       {error && <p className="cap text-red-400!">{error}</p>}
       <Panel
-        fig="FIG. 5"
         title={`${days[0].toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${days[6].toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`}
         right={
           <span className="flex items-center gap-3">
@@ -95,7 +94,7 @@ export default function Calendar() {
           })}
         </div>
       </Panel>
-      <Panel fig="SRC" title="Calendars" right={data ? `${data.sources.length} connected` : "loading…"}>
+      <Panel title="Calendars" right={data ? `${data.sources.length} connected` : "loading…"}>
         {data && !data.configured && (
           <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">
             No calendar connected yet. Add your calendar's private iCal address to <span className="font-mono">POS_CALENDAR_ICS</span> in the

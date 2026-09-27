@@ -98,7 +98,7 @@ export default function Approvals() {
           History
         </button>
       </div>
-      <Panel fig="TAB. 13" title={all ? "All approvals" : "Waiting for you"} right={`${items?.length ?? 0}`} bodyClassName="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+      <Panel title={all ? "All approvals" : "Waiting for you"} right={`${items?.length ?? 0}`} bodyClassName="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
         {items?.length === 0 && <p className="cap p-3">Nothing waiting. Agents will ask here before anything leaves PersonalOS.</p>}
         {items?.map((a) => (
           <Item key={a.id} a={a} onDone={load} />

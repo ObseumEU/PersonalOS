@@ -154,7 +154,7 @@ export default function Tools() {
       />
       {error && <p className="cap text-red-400!">{error}</p>}
 
-      <Panel fig="QUEUE" title="Publication queue" right={pending ? `${pending} waiting for you` : "nothing waiting"}>
+      <Panel title="Publication queue" right={pending ? `${pending} waiting for you` : "nothing waiting"}>
         <div className="grid grid-cols-[50px_minmax(0,1fr)_minmax(0,0.8fr)_70px_100px_minmax(0,1.2fr)_140px] gap-3 border-b border-line px-4 py-2">
           {["#", "TOOL", "FROM", "VERSION", "STATUS", "GUARD REVIEW", ""].map((h) => (
             <span key={h} className="cap">
@@ -198,11 +198,11 @@ export default function Tools() {
         ))}
       </Panel>
 
-      <Panel fig="SHARED" title="Shared tools" right="shared/tools · mounted for every agent with the permissions they need">
+      <Panel title="Shared tools" right="shared/tools · mounted for every agent with the permissions they need">
         <ToolRows items={shared} open={open} setOpen={setOpen} />
       </Panel>
 
-      <Panel fig="PERSONAL" title="Personal tools" right="agents/<agent>/tools · only their owner uses them">
+      <Panel title="Personal tools" right="agents/<agent>/tools · only their owner uses them">
         <ToolRows items={personal} open={open} setOpen={setOpen} />
       </Panel>
     </div>

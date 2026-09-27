@@ -9,7 +9,7 @@ const KIND_ICON = { human: User, ai: Orbit, agent: Boxes } as const;
 export function EngineBadge({ label }: { label: string | null | undefined }) {
   if (!label) return null;
   return (
-    <span className="inline-flex h-[18px] items-center rounded-[3px] border border-line px-1 font-mono text-[10px] whitespace-nowrap text-ink-2">
+    <span className="inline-flex h-[18px] items-center rounded-[3px] border border-line px-1 font-mono text-xs whitespace-nowrap text-ink-2">
       {label}
     </span>
   );
@@ -200,7 +200,7 @@ export default function AgentPicker({
                     {c.current && <span className="cap">has it now</span>}
                     {busy === c.id && <span className="cap text-accent!">reassigning…</span>}
                     {c.blocked.map((b) => (
-                      <span key={b.code} className={`text-[11px] leading-snug ${b.soft ? "text-amber-300" : "text-red-400"}`}>
+                      <span key={b.code} className={`text-xs leading-snug ${b.soft ? "text-amber-300" : "text-red-400"}`}>
                         {b.text}
                       </span>
                     ))}

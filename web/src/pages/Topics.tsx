@@ -179,7 +179,7 @@ function TopicPage({ slug }: { slug: string }) {
       {error && <p className="cap text-red-400!">{error}</p>}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel fig="TAB. 1" title="Open tasks" right={<Link to={`/tasks?view=next&topic=${slug}`} className="hover:text-accent">in Tasks →</Link>} bodyClassName="max-h-[360px] overflow-y-auto">
+        <Panel title="Open tasks" right={<Link to={`/tasks?view=next&topic=${slug}`} className="hover:text-accent">in Tasks →</Link>} bodyClassName="max-h-[360px] overflow-y-auto">
           {topic.open.length === 0 && <p className="cap px-4 py-4">No open tasks.</p>}
           {topic.open.map((t) => {
             const due = dueLabel(t);
@@ -198,7 +198,7 @@ function TopicPage({ slug }: { slug: string }) {
           })}
         </Panel>
 
-        <Panel fig="FIG. 2" title="Events" right="next 30 days, mentioning the topic" bodyClassName="max-h-[360px] overflow-y-auto">
+        <Panel title="Events" right="next 30 days, mentioning the topic" bodyClassName="max-h-[360px] overflow-y-auto">
           {topic.events.length === 0 && <p className="cap px-4 py-4">No calendar events mention this topic.</p>}
           {topic.events.map((e) => (
             <div key={e.id} className="flex items-baseline gap-3 border-b border-line px-4 py-2 text-[13px] last:border-0">
@@ -211,7 +211,7 @@ function TopicPage({ slug }: { slug: string }) {
           ))}
         </Panel>
 
-        <Panel fig="TAB. 2" title="Files" right={<Link to={`/files?topic=${slug}`} className="hover:text-accent">in Files →</Link>} bodyClassName="max-h-[420px] overflow-y-auto">
+        <Panel title="Files" right={<Link to={`/files?topic=${slug}`} className="hover:text-accent">in Files →</Link>} bodyClassName="max-h-[420px] overflow-y-auto">
           <div className="border-b border-line p-3.5">
             <DropZone topic={slug} onUploaded={() => load()} />
           </div>
@@ -227,7 +227,6 @@ function TopicPage({ slug }: { slug: string }) {
         </Panel>
 
         <Panel
-          fig="TAB. 3"
           title="Notes"
           right={
             <button
@@ -253,7 +252,7 @@ function TopicPage({ slug }: { slug: string }) {
         </Panel>
 
         {topic.done.length > 0 && (
-          <Panel fig="LOG" title="Done" right={`${topic.done_tasks} finished`} className="lg:col-span-2" bodyClassName="max-h-[240px] overflow-y-auto">
+          <Panel title="Done" right={`${topic.done_tasks} finished`} className="lg:col-span-2" bodyClassName="max-h-[240px] overflow-y-auto">
             {topic.done.map((t) => (
               <Link key={t.id} to={`/tasks?view=done&task=${t.ref}`} className="flex items-center gap-3 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
                 <span className="cap">{t.ref}</span>

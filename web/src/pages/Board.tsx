@@ -67,7 +67,7 @@ export default function Board() {
         </Link>
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <Panel fig="FIG. 7" title="Work across all members" right="live · every 10 s" className="xl:col-span-9" bodyClassName="overflow-x-auto">
+        <Panel title="Work across all members" right="live · every 10 s" className="xl:col-span-9" bodyClassName="overflow-x-auto">
           <div className="grid min-w-[760px] grid-cols-[200px_repeat(4,minmax(0,1fr))]">
             <div className="border-b border-line" />
             {COLUMNS.map(([k, label]) => (
@@ -92,7 +92,7 @@ export default function Board() {
             ))}
           </div>
         </Panel>
-        <Panel fig="POLICY" title="Human gates" right="enforced by the constitution" className="xl:col-span-3">
+        <Panel title="Human gates" right="enforced by the constitution" className="xl:col-span-3">
           {GATES.map(([a, b]) => (
             <div key={a} className="flex items-start gap-2.5 border-b border-line px-4 py-2.5 last:border-0">
               <Lock size={13} className="mt-0.5 shrink-0 text-amber-300" />

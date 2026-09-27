@@ -310,7 +310,6 @@ export default function TaskDetail({
 
   return (
     <Panel
-      fig={task.ref}
       title="Detail"
       className="w-full"
       right={
