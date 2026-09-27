@@ -500,8 +500,8 @@ def watch(conn: sqlite3.Connection, check=None) -> dict:
         if alerted:
             from . import chat, monitor
 
-            chat.post_to_team(conn, monitor.monitor_id(conn) or actors.owner_id(conn),
-                              f"Hlídač: Grafana na .186 zase odpovídá (výpadek od {alerted}); alerty fungují.")
+            chat.post_system(conn, monitor.monitor_id(conn) or actors.owner_id(conn),
+                             f"Hlídač: Grafana na .186 zase odpovídá (výpadek od {alerted}); alerty fungují.")
         conn.commit()
         return {"back": True} if alerted else {}
     fails = int(st.get("fails") or 0) + 1
@@ -509,19 +509,20 @@ def watch(conn: sqlite3.Connection, check=None) -> dict:
            "alerted": st.get("alerted")}
     out = {}
     if fails >= WATCH_FAILS and not st.get("alerted"):
-        from . import asks, monitor
+        from . import monitor
 
         mid = monitor.monitor_id(conn)
         asker = Ctx(mid or actors.assistant_id(conn), via="observability")
-        res = asks.ask(conn, asker, title="Grafana na .186 neodpovídá: alerty teď nechodí",
-                       why=f"{fails} kontroly po sobě selhaly ({detail}) od {new['since']}",
-                       details="Grafana, Loki a Prometheus běží v Dockeru na 192.168.1.186 (agent). Když Docker "
-                               "nebo celý stroj stojí, nepřijde žádný alert (swap, disk, restarty, zdraví aplikací).",
-                       options=["Podívám se na .186", "Počkat"],
-                       recommendation="`ssh agent`: `systemctl status docker`, `findmnt -no OPTIONS /` (read-only "
-                                      "root?), pak `cd /opt/observability/grafana && sudo docker compose up -d` a "
-                                      "`cd /opt/observability/platform && sudo docker compose up -d`.",
-                       blocking=False, kind="decision", topic=f"grafana down {new['since'][:16]}", priority=1)
+        # a platform problem: the SRE (the CTO) gets it, not the owner
+        res = monitor.platform_ticket(
+            conn, asker, title="Grafana na .186 neodpovídá: alerty teď nechodí",
+            why=f"{fails} kontroly po sobě selhaly ({detail}) od {new['since']}",
+            details="Grafana, Loki a Prometheus běží v Dockeru na 192.168.1.186 (agent). Když Docker "
+                    "nebo celý stroj stojí, nepřijde žádný alert (swap, disk, restarty, zdraví aplikací).",
+            recommendation="`ssh agent`: `systemctl status docker`, `findmnt -no OPTIONS /` (read-only "
+                           "root?), pak `cd /opt/observability/grafana && sudo docker compose up -d` a "
+                           "`cd /opt/observability/platform && sudo docker compose up -d`.",
+            topic=f"grafana down {new['since'][:16]}", priority=1)
         new["alerted"] = new["since"]
         audit.log(conn, asker, "grafana_down", "task", res["ticket_id"], since=new["since"])
         out = {"alerted": res["ref"]}

@@ -245,6 +245,61 @@ def post_to_team(conn: sqlite3.Connection, author_id: int, body: str, priority: 
     return send(conn, Ctx(author_id, via="system"), cid, body, priority=priority, system=True)
 
 
+SYSTEM = "system"
+
+
+def ensure_system_channel(conn: sqlite3.Connection) -> int:
+    """#system: the platform's automated notices (the Access manager's pauses, grants and
+    expiries, the Hlídač's heartbeat and code-built health lines), so #team stays for people
+    and real agent messages. The owner is a member; authors join when they post."""
+    owner = actors.owner_id(conn)
+    row = conn.execute("SELECT id FROM channels WHERE kind = 'group' AND name = ? AND archived_at IS NULL",
+                       (SYSTEM,)).fetchone()
+    if row is not None:
+        return row["id"]
+    ch = versioning.insert(conn, Ctx(owner, via="system"), "channel", {
+        "kind": "group", "name": SYSTEM, "visibility": "team", "created_by": owner, "created_at": now_iso(),
+        "topic": "Automatická hlášení platformy (přístupy, pozastavení, zdraví). Lidé a agenti píšou v #team."})
+    _add_member(conn, ch["id"], owner, "owner")
+    conn.commit()
+    return ch["id"]
+
+
+def post_system(conn: sqlite3.Connection, author_id: int, body: str, subject: str | None = None) -> dict:
+    """An automated notice in #system, grouped: one message per author and subject (the agent
+    it is about) per hour; a later notice in the same hour is appended to it as a new line
+    (an edit, so the history keeps every version) instead of a new message. Nobody's inbox
+    gets it and no agent is woken."""
+    cid = ensure_system_channel(conn)
+    _add_member(conn, cid, author_id)
+    body = (body or "").strip()
+    head = f"**{subject}**" if subject else None
+    if head:
+        body = " ".join(body.split())  # one line per notice
+        hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+        prev = conn.execute(
+            """SELECT id, body FROM chat_messages WHERE channel_id = ? AND author_id = ? AND archived_at IS NULL
+               AND created_at >= ? AND body LIKE ? ORDER BY id DESC LIMIT 1""",
+            (cid, author_id, hour, head + ":%")).fetchone()
+        if prev is not None and len(prev["body"]) + len(body) + 3 <= MAX_BODY:
+            ctx = Ctx(author_id, via="system")
+            versioning.update(conn, ctx, "chat_message", prev["id"],
+                              {"body": f"{prev['body']} · {body}", "edited_at": now_iso()}, action="edit")
+            conn.commit()
+            return message_view(conn, prev["id"], author_id)
+        body = f"{head}: {body}"
+    ctx = Ctx(author_id, via="system")
+    row = versioning.insert(conn, ctx, "chat_message", {
+        "channel_id": cid, "author_id": author_id, "body": body[:MAX_BODY], "reply_to": None, "mentions": "[]",
+        "attachments": "[]", "priority": None, "trust": _trust(ctx, actors.get(conn, author_id)),
+        "created_at": now_iso()})
+    conn.execute("UPDATE channel_members SET last_read_message_id = ? WHERE channel_id = ? AND actor_id = ?",
+                 (row["id"], cid, author_id))
+    audit.log(conn, ctx, "chat_send", "chat_message", row["id"], channel=cid, system_notice=True)
+    conn.commit()
+    return message_view(conn, row["id"], author_id)
+
+
 # ------------------------------------------------------------------ messages
 
 def _mentions(conn: sqlite3.Connection, body: str, extra: list[int | str] | None) -> list[int]:

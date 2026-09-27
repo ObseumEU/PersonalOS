@@ -49,9 +49,12 @@ SCOPES = ("repo", "connector")
 
 SETTINGS_KEY = "access.settings"
 DEFAULT_SETTINGS = {
-    "spike_factor": 5.0,          # last hour above this many times the hourly baseline: pause
-    "spike_floor_usd": 1.0,       # ... and above this much in the hour (no alarm on pennies)
-    "spike_floor_tokens": 300_000,
+    # Only a truly extreme runaway pauses an agent (the owner, 2026-09-27: agents are autonomous).
+    "spike_factor": 20.0,         # last hour above this many times the hourly baseline: pause
+    "spike_floor_usd": 20.0,      # ... and above this much in the hour (no alarm on normal work)
+    "spike_floor_tokens": 6_000_000,
+    "spike_budget_share": 0.5,    # ... and above this share of the agent's own daily budget in one hour
+    "spike_cooldown_h": 1.0,      # no second pause within this long after a resume
     "cap_alert_ratio": 0.8,       # ping the owner when the company cap is this full
 }
 
@@ -685,8 +688,8 @@ def grant(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, capability: str, re
     audit.log(conn, ctx, "access_grant", "actor", agent_id, grant=gid, capability=capability, kind=kind,
               hours=hours, expires_at=row["expires_at"], reason=reason, request=request_id)
     note = " Každou odchozí akci dál schvaluje majitel." if kind == "outbound" else ""
-    _post_team(conn, ctx, f"Přístupy: {name} dostal `{capability}` {_duration(hours, row['expires_at'])}.{note} "
-                          f"Důvod: {reason}")
+    _post_team(conn, ctx, f"dostal `{capability}` {_duration(hours, row['expires_at'])}.{note} Důvod: {reason}",
+               subject=name)
     conn.commit()
     return {"grant_id": gid, "agent": name, "capability": capability, "expires_at": row["expires_at"]}
 
@@ -705,7 +708,7 @@ def revoke(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, capability: str, r
     refresh_cache(conn, agent_id)
     name = actors.get(conn, agent_id)["name"]
     audit.log(conn, ctx, "access_revoke", "actor", agent_id, capability=capability, grants=ids, reason=reason)
-    _post_team(conn, ctx, f"Přístupy: {name} už nemá `{capability}`. Důvod: {reason}")
+    _post_team(conn, ctx, f"už nemá `{capability}`. Důvod: {reason}", subject=name)
     _tell(conn, ctx, agent_id, f"{actors.get(conn, ctx.actor_id)['name']} ti odebral `{capability}`: {reason}")
     conn.commit()
     return {"revoked": ids, "agent": name, "capability": capability}
@@ -745,8 +748,8 @@ def set_budget(conn: sqlite3.Connection, ctx: Ctx, agent_id: int | None, metric:
     audit.log(conn, ctx, "access_budget", "actor" if agent_id else None, agent_id, budget=bid, metric=metric,
               amount=amount, before=before, hours=hours, expires_at=row["expires_at"], reason=reason,
               request=request_id)
-    _post_team(conn, ctx, f"Přístupy: {who} má limit {METRICS[metric]} {_fmt(metric, amount)} "
-                          f"(dřív {_fmt(metric, before)}) {_duration(hours, row['expires_at'])}. Důvod: {reason}")
+    _post_team(conn, ctx, f"limit {METRICS[metric]} {_fmt(metric, amount)} (dřív {_fmt(metric, before)}) "
+                          f"{_duration(hours, row['expires_at'])}. Důvod: {reason}", subject=who)
     conn.commit()
     return {"budget_id": bid, "agent": who, "metric": metric, "amount": amount, "before": before,
             "expires_at": row["expires_at"]}
@@ -797,9 +800,9 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, request_id: int, decision: str, n
     name = actors.get(conn, r["agent_id"])["name"]
     label = r["capability"] or (METRICS.get(r["metric"] or "", "") + (f" {_fmt(r['metric'], r['amount'])}" if r["metric"] else "")) or "kontrola"
     if decision == "deny":
-        _post_team(conn, ctx, f"Přístupy: žádost #{request_id} od {name} (`{label}`) zamítnuta. Důvod: {note}")
+        _post_team(conn, ctx, f"žádost #{request_id} (`{label}`) zamítnuta. Důvod: {note}", subject=name)
     if decision == "escalate":
-        _post_team(conn, ctx, f"Přístupy: žádost #{request_id} od {name} (`{label}`) patří majiteli. {note}")
+        _post_team(conn, ctx, f"žádost #{request_id} (`{label}`) patří majiteli. {note}", subject=name)
     word = {"grant": "schválil", "deny": "zamítl", "escalate": "předal majiteli"}[decision]
     _tell(conn, ctx, r["agent_id"], f"{me['name']} {word} tvou žádost o přístup #{request_id} (`{label}`): {note}"
           + (" Pokračuj." if decision == "grant" else ""))
@@ -813,7 +816,7 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, request_id: int, decision: str, n
 
 def pause_for_spike(conn: sqlite3.Connection, agent_id: int, detail: dict) -> int:
     """Pause first, then review: the agent stops, its runs stop, the Access
-    manager gets a review request and the owner an immediate ping."""
+    manager gets a review request and the CEO (not the owner) a ping."""
     from .. import runner, versioning
 
     am = manager_id(conn)
@@ -827,9 +830,10 @@ def pause_for_spike(conn: sqlite3.Connection, agent_id: int, detail: dict) -> in
                           needs_owner=int(agent_id == am), detail={**detail, "runs_stopped": stopped,
                                                                    "signals": signals(conn, agent_id)})
     audit.log(conn, ctx, "access_pause", "actor", agent_id, request=rid, runs=stopped or None, **detail)
-    _post_team(conn, ctx, f"Přístupy: pozastavil jsem {name} kvůli skoku ve spotřebě. {why} Prověřím to (#{rid}).")
-    _dm_owner(conn, f"Pozastavil jsem {name}: {why} Prověřuju to (žádost #{rid}); pokud to byl omyl, "
-                    "pustím ho zpátky sám.")
+    _post_team(conn, ctx, f"pozastaven kvůli skoku ve spotřebě. {why} Prověřím to (#{rid}).", subject=name)
+    # Money reaches the owner only through the CEO (docs/REORG.md): the CEO hears it, not the owner.
+    _dm_ceo(conn, f"Pozastavil jsem {name}: {why} Prověřuju to (žádost #{rid}); pokud to byl omyl, "
+                  "pustím ho zpátky sám. Majiteli to předej, jen pokud jde o peníze, které vadí.")
     if agent_id != am:
         _wake_manager(conn, f"#{rid}: {name} pozastaven kvůli skoku ve spotřebě, prověř to")
     return rid
@@ -854,7 +858,7 @@ def resume_agent(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str,
         conn.execute("""UPDATE access_requests SET status = 'granted', decided_by = ?, decided_at = ?,
                         decision_note = ? WHERE agent_id = ? AND trigger = 'spike' AND status = 'pending'""",
                      (ctx.actor_id, now_iso(), reason, agent_id))
-    _post_team(conn, ctx, f"Přístupy: {row['name']} zase běží. {reason}")
+    _post_team(conn, ctx, f"zase běží. {reason}", subject=row["name"])
     conn.commit()
     return True
 
@@ -886,7 +890,8 @@ def expire(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
         who = "firma" if b["agent_id"] is None else actors.get(conn, b["agent_id"])["name"]
         out.append(f"{who}: {METRICS[b['metric']]} zpět na {_fmt(b['metric'], back)}")
     if out:
-        _post_team(conn, ctx, "Přístupy: vypršelo dočasné — " + "; ".join(out[:8]) + ("…" if len(out) > 8 else ""))
+        _post_team(conn, ctx, "vypršelo dočasné — " + "; ".join(out[:8]) + ("…" if len(out) > 8 else ""),
+                   subject="Přístupy")
     conn.commit()
     return {"expired": len(out), "items": out}
 
@@ -900,16 +905,27 @@ def watch(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     cfg = settings(conn)
     paused = []
     hour_ago, week_ago = now - timedelta(hours=1), now - timedelta(days=7)
+    cooldown = now - timedelta(hours=cfg["spike_cooldown_h"])
     for a in conn.execute("SELECT id, name, created_at FROM actors WHERE kind != 'human' AND archived_at IS NULL "
                           "AND paused_at IS NULL").fetchall():
         last = spend(conn, a["id"], hour_ago, now + timedelta(seconds=1))
         if last["usd"] < cfg["spike_floor_usd"] and last["tokens"] < cfg["spike_floor_tokens"]:
             continue
-        base = spend(conn, a["id"], week_ago, hour_ago)
-        hours = 7 * 24 - 1
+        if _resumed_since(conn, a["id"], cooldown):
+            continue  # just let back in: the same sliding hour would pause it again every 15 minutes
+        # The baseline is the agent's own history: a week, or since it exists (an agent made
+        # yesterday has no 167 quiet hours to divide by), at least one hour.
+        created = _parse(a["created_at"])
+        start = max(week_ago, created) if created else week_ago
+        hours = max(1.0, (hour_ago - start).total_seconds() / 3600)
+        base = spend(conn, a["id"], start, hour_ago) if start < hour_ago else {"usd": 0.0, "tokens": 0}
         b_usd, b_tok = base["usd"] / hours, base["tokens"] / hours
-        spiked = ((last["usd"] >= cfg["spike_floor_usd"] and last["usd"] > cfg["spike_factor"] * b_usd)
-                  or (last["tokens"] >= cfg["spike_floor_tokens"] and last["tokens"] > cfg["spike_factor"] * b_tok))
+        day_usd, day_tok = limit(conn, a["id"], "usd_day", now), limit(conn, a["id"], "tokens_day", now)
+        share = cfg["spike_budget_share"]
+        spiked = ((last["usd"] >= cfg["spike_floor_usd"] and last["usd"] > cfg["spike_factor"] * b_usd
+                   and (not day_usd or last["usd"] >= share * day_usd))
+                  or (last["tokens"] >= cfg["spike_floor_tokens"] and last["tokens"] > cfg["spike_factor"] * b_tok
+                      and (not day_tok or last["tokens"] >= share * day_tok)))
         if spiked:
             pause_for_spike(conn, a["id"], {"last_hour_usd": last["usd"], "last_hour_tokens": last["tokens"],
                                             "baseline_usd": round(b_usd, 4), "baseline_tokens": round(b_tok),
@@ -924,6 +940,21 @@ def watch(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
                 alerts.append(metric)
     conn.commit()
     return {"paused": paused, "cap_alerts": alerts}
+
+
+def _parse(at: str | None) -> datetime | None:
+    if not at:
+        return None
+    try:
+        t = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+
+def _resumed_since(conn: sqlite3.Connection, agent_id: int, since: datetime) -> bool:
+    return conn.execute("SELECT 1 FROM audit_log WHERE action = 'access_resume' AND entity = 'actor' "
+                        "AND entity_id = ? AND at >= ?", (agent_id, _iso(since))).fetchone() is not None
 
 
 def _cap_alert(conn: sqlite3.Connection, metric: str, u: float, cap: float, now: datetime, full: bool) -> bool:
@@ -1097,13 +1128,32 @@ def _ensure_seeded(conn: sqlite3.Connection, agent_id: int) -> None:
         seed_agent(conn, agent_id, actors.owner_id(conn))
 
 
-def _post_team(conn: sqlite3.Connection, ctx: Ctx, body: str) -> None:
+def _post_team(conn: sqlite3.Connection, ctx: Ctx, body: str, subject: str | None = None) -> None:
+    """An automated notice: #system, one line per agent per hour (pos.chat.post_system), never #team."""
     from .. import chat
 
     try:
-        chat.post_to_team(conn, ctx.actor_id, body[:3900])
+        chat.post_system(conn, ctx.actor_id, body[:3900], subject=subject)
     except Exception:  # noqa: BLE001 - the decision stands; the audit log has it
         audit.log(conn, ctx, "access_post_failed", None, None)
+
+
+def _dm_ceo(conn: sqlite3.Connection, body: str) -> None:
+    """A notice for the CEO (the only agent that contacts the owner); the owner only without a CEO."""
+    from .. import chat
+
+    ceo = conn.execute("SELECT id FROM actors WHERE role = 'ceo' AND archived_at IS NULL AND kind != 'human' "
+                       "ORDER BY id LIMIT 1").fetchone()
+    if ceo is None:
+        ceo = actors.find_by_name(conn, "CEO")
+    am = manager_id(conn)
+    if ceo is None or am is None or ceo["id"] == am:
+        _dm_owner(conn, body)
+        return
+    try:
+        chat.send_dm(conn, Ctx(am, via="system"), ceo["id"], body[:3900], priority="fyi", system=True)
+    except Exception:  # noqa: BLE001
+        audit.log(conn, Ctx(am, via="system"), "access_post_failed", None, None)
 
 
 def _dm_owner(conn: sqlite3.Connection, body: str) -> None:

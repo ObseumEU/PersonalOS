@@ -84,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             workers.mark_services(conn)  # built-in automation (the Deployer) is a service, not an agent
             scheduler.seed(conn)
             chat.ensure_team_channel(conn)
+            chat.ensure_system_channel(conn)  # automated notices, so #team stays for people
             from . import agents_code, projects
 
             projects.migrate_step_projects(conn)  # once: tasks with steps become projects

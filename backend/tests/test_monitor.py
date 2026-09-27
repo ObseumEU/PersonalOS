@@ -66,6 +66,12 @@ def _team(conn):
         "SELECT m.body FROM chat_messages m JOIN channels c ON c.id = m.channel_id WHERE c.name = 'team' ORDER BY m.id")]
 
 
+def _system(conn):
+    return [r["body"] for r in conn.execute(
+        "SELECT m.body FROM chat_messages m JOIN channels c ON c.id = m.channel_id WHERE c.name = 'system' "
+        "ORDER BY m.id")]
+
+
 def _run(conn, actor_id, task_id, status="ok"):
     conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', ?, ?)",
                  (actor_id, task_id, status, datetime.now(timezone.utc).isoformat(timespec="seconds")))
@@ -401,7 +407,7 @@ def test_heartbeat_status_and_the_alert_when_it_stops(app):
     ticket = tasks.get(conn, app["owner"], tasks.parse_id(alert["alerted"]))
     assert "--profile sentinel up -d" in ticket["notes"]
     c.post("/api/sentinel/heartbeat", json=hb, headers={"Authorization": f"Bearer {TOKEN}"})
-    assert any("sentinel zase běží" in m for m in _team(conn))
+    assert any("sentinel zase běží" in m for m in _system(conn))
 
 
 def test_run_stats_for_the_sentinel(app):
@@ -417,10 +423,10 @@ def test_digest_quiet_days_say_nothing_except_the_weekly_green_line(app):
     monitor.heartbeat(conn, {"checks": [{"name": "a", "ok": True}], "counters": {}, "host": {}})
     tuesday = datetime(2026, 9, 29, 6, 0, tzinfo=timezone.utc)
     monday = datetime(2026, 9, 28, 6, 0, tzinfo=timezone.utc)
-    before = len(_team(conn))
-    assert monitor.digest(conn, tuesday) == {"sent": False} and len(_team(conn)) == before
+    before = len(_system(conn))
+    assert monitor.digest(conn, tuesday) == {"sent": False} and len(_system(conn)) == before
     assert monitor.digest(conn, monday)["sent"] == "weekly_green"
-    assert "7 dní bez incidentu" in _team(conn)[-1]
+    assert "7 dní bez incidentu" in _system(conn)[-1]
 
 
 def test_digest_with_incidents_is_one_cheap_monitor_task_or_code_only(app, monkeypatch):
@@ -435,7 +441,7 @@ def test_digest_with_incidents_is_one_cheap_monitor_task_or_code_only(app, monke
     assert t["assignee_id"] == mid and "incidentů 1" in t["notes"] and "1/2 zelené" in t["notes"]
     monkeypatch.setenv("POS_MONITOR_MAX_INCIDENTS_DAY", "1")
     out = monitor.digest(conn)
-    assert out["sent"] == "code_only" and "Hlídač · zdraví za 24 h" in _team(conn)[-1]
+    assert out["sent"] == "code_only" and "Hlídač · zdraví za 24 h" in _system(conn)[-1]
 
 
 def test_monitor_agent_file_is_valid_and_matches_the_rule():

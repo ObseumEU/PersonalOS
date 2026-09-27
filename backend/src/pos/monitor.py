@@ -738,8 +738,8 @@ def heartbeat(conn: sqlite3.Connection, payload: dict) -> dict:
 
         _set_state(conn, "heartbeat_alert", None)
         try:
-            chat.post_to_team(conn, monitor_id(conn) or actors.owner_id(conn),
-                              f"Hlídač: sentinel zase běží (heartbeat po výpadku od {alert.get('since', '?')}).")
+            chat.post_system(conn, monitor_id(conn) or actors.owner_id(conn),
+                             f"Hlídač: sentinel zase běží (heartbeat po výpadku od {alert.get('since', '?')}).")
         except Exception:  # noqa: BLE001
             pass
     conn.commit()
@@ -819,7 +819,7 @@ def digest(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
         if now.astimezone(TZ).weekday() == 0:
             week = (now - timedelta(days=7)).isoformat(timespec="seconds")
             if not conn.execute("SELECT 1 FROM sentinel_incidents WHERE opened_at >= ?", (week,)).fetchone() and hb:
-                chat.post_to_team(conn, author, "Hlídač: 7 dní bez incidentu, všechny kontroly zelené.")
+                chat.post_system(conn, author, "Hlídač: 7 dní bez incidentu, všechny kontroly zelené.")
                 conn.commit()
                 return {"sent": "weekly_green"}
         return {"sent": False}
@@ -854,6 +854,6 @@ def digest(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
         conn.execute("UPDATE tasks SET reviewer_id = ? WHERE id = ?", (mid, t["id"]))
         conn.commit()
         return {"sent": "monitor_task", "task": t["ref"]}
-    chat.post_to_team(conn, author, numbers)
+    chat.post_system(conn, author, numbers)  # code-built numbers only: an automated notice
     conn.commit()
     return {"sent": "code_only", "incidents": len(rows)}

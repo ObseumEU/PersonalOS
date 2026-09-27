@@ -57,6 +57,12 @@ def _team(conn):
         "SELECT m.body FROM chat_messages m JOIN channels c ON c.id = m.channel_id WHERE c.name = 'team' ORDER BY m.id")]
 
 
+def _system(conn):
+    return [r["body"] for r in conn.execute(
+        "SELECT m.body FROM chat_messages m JOIN channels c ON c.id = m.channel_id WHERE c.name = 'system' "
+        "ORDER BY m.id")]
+
+
 def _usage(conn, agent_id, usd, hours_ago=0.0, tokens=1000):
     at = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
     conn.execute("INSERT INTO engine_usage (at, engine, actor_id, input_tokens, output_tokens, cost_usd) "
@@ -171,10 +177,11 @@ def test_access_manager_owner_only_items_and_the_company_cap(app):
     # Other agents and people cannot touch access at all.
     with pytest.raises(Forbidden):
         access.grant(conn, Ctx(agent), agent, "tasks:write", "self service")
-    # Every decision is in the audit log with its reason, and in #team.
+    # Every decision is in the audit log with its reason, and in #system (not #team).
     hist = access.history(conn, agent)
     assert any(e["action"] == "access_grant" and e["detail"]["reason"] == "creates follow-ups" for e in hist)
-    assert any("`tasks:write`" in b and "creates follow-ups" in b for b in _team(conn))
+    assert any("`tasks:write`" in b and "creates follow-ups" in b for b in _system(conn))
+    assert not any("creates follow-ups" in b for b in _team(conn))
 
 
 def test_outbound_can_be_granted_but_each_action_still_needs_approval(app):
@@ -288,22 +295,53 @@ def test_owner_only_requests_go_to_the_owner_and_deny_is_told(app):
 
 # ------------------------------------------------------------------ spikes, digest, owner changes
 
-def test_spend_spike_pauses_first_then_the_manager_reviews_and_resumes(app):
+def _age(conn, agent_id, hours):
+    at = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    conn.execute("UPDATE actors SET created_at = ? WHERE id = ?", (at, agent_id))
+    conn.commit()
+
+
+def test_spend_spike_pauses_first_then_the_manager_reviews_and_resumes(app, tmp_path):
     conn, agent, am = app["conn"], app["agent"], app["am"]
+    ceo = agents.create_agent(conn, app["owner"], name="CEO", purpose="runs the company", lifetime="long_lived",
+                              permissions=["tasks:read"], data_dir=tmp_path)["agent"]["id"]
+    _age(conn, agent, 24 * 10)
+    access.set_budget(conn, app["owner"], agent, "usd_day", 40.0, "test")
     for h in range(2, 50, 4):
         _usage(conn, agent, 0.1, hours_ago=h)  # baseline: cents per hour
-    _usage(conn, agent, 4.0, hours_ago=0.2)
+    _usage(conn, agent, 30.0, hours_ago=0.2)   # a truly extreme hour: > $20, > 20x, > half its day
     out = access.watch(conn)
     assert out["paused"] == ["Writer"] and actors.get(conn, agent)["paused_at"]
     req = access.requests(conn, "pending", agent)[0]
     assert req["trigger"] == "spike" and "signals" in req["detail"]
-    assert any("Pozastavil jsem Writer" in b for b in _dms(conn, actors.owner_id(conn)))
+    assert any("Pozastavil jsem Writer" in b for b in _dms(conn, ceo))          # the CEO hears it
+    assert not any("Pozastavil jsem Writer" in b for b in _dms(conn, actors.owner_id(conn)))
+    assert any("pozastaven" in b for b in _system(conn)) and not any("pozastaven" in b for b in _team(conn))
     access.decide(conn, am, req["id"], "grant", "one big legitimate report, not a loop")
     assert not actors.get(conn, agent)["paused_at"]
+    # the same sliding hour does not pause it again right after the resume
+    assert access.watch(conn)["paused"] == []
+    # pause and resume are one #system line for the agent in this hour
+    lines = [b for b in _system(conn) if b.startswith("**Writer**") and "pozastaven" in b]
+    assert len(lines) == 1 and "pozastaven" in lines[0] and "zase běží" in lines[0]
     # A pause by a person stays with that person.
     agents.pause(conn, app["owner"], agent, True)
     with pytest.raises(Forbidden):
         access.resume_agent(conn, am, agent, "resume")
+
+
+def test_a_young_agent_is_measured_against_its_own_hours_and_its_daily_budget(app):
+    conn, agent = app["conn"], app["agent"]
+    _age(conn, agent, 3)
+    for h in (1.5, 2.5):
+        _usage(conn, agent, 3.0, hours_ago=h)  # $3/h since it exists (3 hours), not $6 over a week
+    _usage(conn, agent, 50.0, hours_ago=0.2)   # 16x its own rate: below the 20x factor
+    assert access.watch(conn)["paused"] == []
+    _usage(conn, agent, 30.0, hours_ago=0.1)   # $80 in the hour: 26x, but within half its daily budget
+    access.set_budget(conn, app["owner"], agent, "usd_day", 200.0, "test")
+    assert access.watch(conn)["paused"] == []
+    access.set_budget(conn, app["owner"], agent, "usd_day", 100.0, "test")
+    assert access.watch(conn)["paused"] == ["Writer"]
 
 
 def test_company_cap_ping_at_80_percent_once_and_daily_digest(app):
