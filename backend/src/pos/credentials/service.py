@@ -20,6 +20,7 @@ import hashlib
 import json
 import re
 import secrets as pysecrets
+import shlex
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
@@ -39,6 +40,150 @@ HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD")
 # A command a credential goes into is one plain command: no chaining, redirection or substitution.
 SHELL_META = re.compile(r"[;&|`<>\n\r]|\$\(")
 URL_HOST = re.compile(r"[a-z][a-z0-9+.-]*://(?:[^/@\s]*@)?([^/:\s\"']+)", re.I)
+# A credential's env variable may be used only as its whole value: $VAR or ${VAR}. Anything
+# else on a `$` (a substring/transformation like ${VAR:0:12}, ${VAR/x/y}, ${#VAR}, ${!VAR},
+# arithmetic $((…)), command substitution $(…), or a bare `$`) could split or reshape the
+# secret past redaction, so it is refused.
+SIMPLE_VAR = re.compile(r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)")
+# The network programs whose bare argument may itself be a host (a token like evil.example.com
+# with no scheme). For other programs only URLs and user@host targets count as hosts, so a
+# path or a ref (README.md, origin) is not mistaken for one.
+_NET_PROGRAMS = frozenset({"ssh", "scp", "sftp", "rsync", "curl", "wget", "ha_ssh", "nc", "ncat", "telnet"})
+# ssh-family options that ProxyJump through another host.
+_JUMP_RE = re.compile(r"^proxyjump=(.+)$", re.I)
+_HOSTISH = re.compile(r"^(?:\*\.)?(?:[a-z0-9_-]+\.)+[a-z0-9_-]+(?::\d+)?$", re.I)
+_IPISH = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$")
+
+
+def _bad_dollar(command: str) -> bool:
+    """True if `$` is used for anything but a whole-variable $VAR / ${VAR} expansion."""
+    return "$" in SIMPLE_VAR.sub("", command or "")
+
+
+def _basename(tok: str) -> str:
+    return re.split(r"[\\/]", tok)[-1]
+
+
+def _target_host(tok: str) -> str | None:
+    """The host in a `[user@]host[:path]` target (ssh/scp/rsync/sftp), or None."""
+    t = tok
+    if "@" in t:
+        t = t.rsplit("@", 1)[1]
+    if t.startswith("["):  # [ipv6]:path
+        end = t.find("]")
+        return t[1:end].strip() or None if end > 0 else None
+    t = t.split("/", 1)[0]  # a stray path after the host
+    host = t.split(":", 1)[0].strip()
+    return host or None
+
+
+def _url_host(tok: str) -> str | None:
+    m = URL_HOST.match(tok)
+    return (m.group(1).split(":")[0] or None) if m else None
+
+
+def command_hosts(command: str) -> list[str] | None:
+    """Every host a command would talk to, or None when it cannot be determined
+    (unbalanced quotes, an argument we cannot parse): the caller then fails closed.
+
+    Handles ssh/scp/sftp/rsync `[user@]host[:path]`, `-p`/`-o …`/`-J` and ProxyJump,
+    curl/wget URLs and bare hosts, git remotes (URLs and scp-style git@host:path), a
+    `sshpass …` wrapper and the `ha_ssh <host>` pseudo command. Bare hostnames count
+    only for network programs; for others only URLs and user@host targets do."""
+    try:
+        toks = shlex.split(command or "", posix=True)
+    except ValueError:
+        return None
+    if not toks:
+        return []
+    i = 0
+    if _basename(toks[0]) == "sshpass":
+        i = 1
+        while i < len(toks) and toks[i].startswith("-"):
+            i += 2 if toks[i] in ("-p", "-f", "-d") and i + 1 < len(toks) else 1
+    if i >= len(toks):
+        return None
+    prog = _basename(toks[i])
+    args = toks[i + 1:]
+    net = prog in _NET_PROGRAMS or prog.startswith("ssh")
+    hosts: list[str] = []
+    j = 0
+    while j < len(args):
+        a = args[j]
+        low = a.lower()
+        # a URL argument (any program)
+        if "://" in a:
+            h = _url_host(a)
+            if h is None:
+                return None
+            hosts.append(h)
+            j += 1
+            continue
+        # ssh-family options that carry a host
+        if a in ("-J",) and j + 1 < len(args):
+            hosts += _jump_hosts(args[j + 1])
+            j += 2
+            continue
+        if a.startswith("-J"):
+            hosts += _jump_hosts(a[2:])
+            j += 1
+            continue
+        if a in ("-o",) and j + 1 < len(args):
+            m = _JUMP_RE.match(args[j + 1].strip())
+            if m:
+                hosts += _jump_hosts(m.group(1))
+            j += 2
+            continue
+        if a.startswith("-o"):
+            m = _JUMP_RE.match(a[2:].strip())
+            if m:
+                hosts += _jump_hosts(m.group(1))
+            j += 1
+            continue
+        # curl/wget proxy or connect options carry a host in their value
+        if low in ("-x", "--proxy", "--connect-to", "--resolve") and j + 1 < len(args):
+            h = _target_host(args[j + 1].split(":addr", 1)[0]) if low in ("--connect-to", "--resolve") \
+                else _target_host(args[j + 1])
+            if h:
+                hosts.append(h)
+            j += 2
+            continue
+        # any option that takes a separate value: skip the value so it is not read as a host
+        if a.startswith("-"):
+            j += 2 if _takes_value(prog, a) and j + 1 < len(args) else 1
+            continue
+        # a bare argument
+        if "@" in a:  # user@host or user@host:path (git remote, ssh target)
+            h = _target_host(a)
+            if h:
+                hosts.append(h)
+        elif net:
+            h = _target_host(a)
+            if h and (_HOSTISH.match(h) or _IPISH.match(h)):
+                hosts.append(h)
+        j += 1
+    return hosts
+
+
+def _jump_hosts(value: str) -> list[str]:
+    out = []
+    for hop in value.split(","):
+        h = _target_host(hop.strip())
+        if h:
+            out.append(h)
+    return out
+
+
+def _takes_value(prog: str, opt: str) -> bool:
+    """Short options that consume the next token, per program (so its value is not a host)."""
+    if prog in ("ssh", "scp", "sftp", "rsync") or prog.startswith("ssh"):
+        return opt in ("-p", "-P", "-l", "-i", "-F", "-c", "-m", "-b", "-e", "-w", "-O", "-Q", "-D", "-L", "-R", "-W")
+    if prog in ("curl", "wget"):
+        return opt in ("-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
+                       "-F", "--form", "-o", "--output", "-O", "-X", "--request", "-u", "--user", "-e",
+                       "--referer", "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar", "-T",
+                       "--upload-file", "-w", "--write-out", "-m", "--max-time", "--retry")
+    return False
 
 
 class CredentialError(ValueError):
@@ -245,8 +390,11 @@ def grants(conn: sqlite3.Connection, *, name: str | None = None, agent_id: int |
     where = ["g.capability LIKE 'cred:%'"]
     args: list = []
     if name:
-        where.append("(g.capability = ? OR g.capability LIKE ?)")
-        args += [capability(name), capability(name) + "@%"]
+        # GLOB, not LIKE: a credential name may contain '_', which LIKE treats as a wildcard
+        # (a grant for `ha_ssh` would then match `haXssh`). GLOB's wildcards are * and ?, which
+        # a credential name (a-z 0-9 . _ -) never contains, so this matches exactly name and name@<scope>.
+        where.append("(g.capability = ? OR g.capability GLOB ?)")
+        args += [capability(name), capability(name) + "@*"]
     if agent_id is not None:
         where.append("g.agent_id = ?")
         args.append(agent_id)
@@ -455,21 +603,41 @@ def command_problem(c: dict, command: str) -> str | None:
         return "no allowed commands: the owner lists them on the credential (like 'git push')"
     if SHELL_META.search(command or ""):
         return "one plain command only (no ; | & $( ) > < or new lines)"
+    if _bad_dollar(command or ""):
+        return ("a credential variable may be used only whole, as $VAR or ${VAR} (not ${VAR:0:12}, "
+                "${VAR/x/y}, ${#VAR}, ${!VAR}, $(...) or a bare $)")
     if not any(cmd == p or cmd.startswith(p + " ") for p in c["allowed_commands"]):
         return f"command not allowed (only: {', '.join(c['allowed_commands'])})"
-    for h in URL_HOST.findall(cmd):
+    hosts = command_hosts(cmd)
+    if hosts is None:
+        return "the command's hosts cannot be determined (refused): use one plain command with clear host arguments"
+    for h in hosts:
         if not _host_ok(h.lower(), c["allowed_hosts"]):
             return f"host {h} is not allowed for this credential"
     return None
 
 
+# Pseudo commands that name a server-side PersonalOS tool, not a program on the worker: the
+# server tool resolves the value itself (server_side=True); it is never handed to a worker.
+def _server_only_commands() -> set[str]:
+    from .discover import SSH_TOOLS
+
+    return set(SSH_TOOLS)
+
+
 def resolve_for(conn: sqlite3.Connection, ctx: Ctx, names: list[str], tool: str, host: str | None = None,
                 run_id: int | None = None, task_id: int | None = None,
-                command: str | None = None) -> dict[str, dict]:
+                command: str | None = None, server_side: bool = False) -> dict[str, dict]:
     """The values for one execution, all or nothing. Returns {name: {value, env_var,
     header}}; the caller injects them into one subprocess or request and forgets them.
-    Every name is logged, used or refused. Raises CredentialError (safe to show)."""
+    Every name is logged, used or refused. Raises CredentialError (safe to show).
+
+    `server_side` is set only by PersonalOS's own in-process tools (ha_ssh, ha_ws,
+    credential_http). A credential whose allowed command is a server-side pseudo tool
+    (ha_ssh) is never resolved to a worker process, so the worker cannot obtain it."""
     from .. import killswitch
+
+    server_only = _server_only_commands()
 
     store.ensure_schema(conn)
     names = sorted({str(n).strip().lower() for n in names if str(n).strip()})
@@ -505,6 +673,8 @@ def resolve_for(conn: sqlite3.Connection, ctx: Ctx, names: list[str], tool: str,
             refuse(c, name, "this agent is paused")
         if c["allowed_tools"] and tool not in c["allowed_tools"]:
             refuse(c, name, f"not allowed for {tool} (only {', '.join(c['allowed_tools'])})")
+        if not server_side and (set(c["allowed_commands"]) & server_only):
+            refuse(c, name, "this credential is used by a server-side tool only; it is never handed to a worker")
         if tool == "command":
             problem = command_problem(c, command or "")
             if problem:
@@ -681,7 +851,7 @@ def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credent
     named = {str(n).strip().lower() for n in (credentials or []) if str(n).strip()}
     used = placeholders(url, body or "", *headers.values(), *headers.keys())
     names = sorted(named | used)
-    values = resolve_for(conn, ctx, names, "http", host=host, task_id=task_id)
+    values = resolve_for(conn, ctx, names, "http", host=host, task_id=task_id, server_side=True)
     red = Redactor({n: v["value"] for n, v in values.items()})
     try:
         final_url = _fill(url, values)
@@ -695,18 +865,21 @@ def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credent
         content = _fill(body, values).encode() if body is not None else None
         with httpx.Client(timeout=30, follow_redirects=False, transport=transport) as client:
             resp = client.request(method, final_url, headers=final_headers, content=content)
-            text = resp.text[:MAX_BODY]
+            # Redact first, then truncate: truncating raw text could sever a secret past redaction.
+            body = red(resp.text)
+            truncated = len(body) > MAX_BODY
+            body = body[:MAX_BODY]
             keep = {k: resp.headers[k] for k in ("content-type", "location", "x-ratelimit-remaining") if k in resp.headers}
         status_code = resp.status_code
     except CredentialError:
         raise
     except Exception as e:  # noqa: BLE001 - a network error may quote the request: redact it too
-        raise CredentialError(red(f"request failed: {type(e).__name__}: {str(e)[:300]}")) from None
+        raise CredentialError(red(f"request failed: {type(e).__name__}: {str(e)}")[:400]) from None
     finally:
         values.clear()
     return {"status": status_code, "headers": {k: red(v) for k, v in keep.items()},
-            "body": wrap_external("http", red(text), ref=red(f"{host}{parts.path}")),
-            "truncated": len(text) >= MAX_BODY, "credentials": names}
+            "body": wrap_external("http", body, ref=red(f"{host}{parts.path}")),
+            "truncated": truncated, "credentials": names}
 
 
 # ------------------------------------------------------------------ views

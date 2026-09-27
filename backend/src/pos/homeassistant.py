@@ -72,7 +72,7 @@ def ws_call(conn: sqlite3.Connection, ctx: Ctx, messages: list[dict], task_id: i
             raise ValueError("each message is an object with a type (e.g. get_states)")
     c = creds.get(conn, CREDENTIAL)
     url, hostport = _ws_url(c)
-    values = creds.resolve_for(conn, ctx, [CREDENTIAL], "http", host=hostport, task_id=task_id)
+    values = creds.resolve_for(conn, ctx, [CREDENTIAL], "http", host=hostport, task_id=task_id, server_side=True)
     token = values[CREDENTIAL]["value"]
     red = Redactor({CREDENTIAL: token})
     if connect is None:
@@ -96,7 +96,7 @@ def ws_call(conn: sqlite3.Connection, ctx: Ctx, messages: list[dict], task_id: i
                                         "result": _filter(reply.get("result"), match), "error": reply.get("error")})
                         break
     except Exception as e:  # noqa: BLE001 - a network or protocol error may quote the request: redact it
-        raise ValueError(red(f"Home Assistant WebSocket failed: {type(e).__name__}: {str(e)[:300]}")) from None
+        raise ValueError(red(f"Home Assistant WebSocket failed: {type(e).__name__}: {str(e)}")[:400]) from None
     finally:
         values.clear()
         token = None
@@ -173,7 +173,7 @@ def ssh_call(conn: sqlite3.Connection, ctx: Ctx, command: str, timeout: int = 12
     host = _ssh_target(c)
     names = [SSH_CREDENTIAL] + ([SSH_USER_CREDENTIAL] if _registered(conn, SSH_USER_CREDENTIAL) else [])
     values = creds.resolve_for(conn, ctx, names, "command", host=host, task_id=task_id,
-                               command=f"{SSH_COMMAND} {host}")
+                               command=f"{SSH_COMMAND} {host}", server_side=True)
     password = values[SSH_CREDENTIAL]["value"]
     user = (values[SSH_USER_CREDENTIAL]["value"].strip() if SSH_USER_CREDENTIAL in values
             else os.environ.get("POS_HA_SSH_USER", "root"))
@@ -195,14 +195,15 @@ def ssh_call(conn: sqlite3.Connection, ctx: Ctx, command: str, timeout: int = 12
         finally:
             client.close()
     except Exception as e:  # noqa: BLE001 - an error may quote the login: redact it
-        raise ValueError(red(f"SSH to {host} failed: {type(e).__name__}: {str(e)[:300]}")) from None
+        raise ValueError(red(f"SSH to {host} failed: {type(e).__name__}: {str(e)}")[:400]) from None
     finally:
         values.clear()
         password = None
     truncated = len(out) > MAX_RESULT or len(err) > MAX_RESULT // 4
+    # Redact first, then truncate: truncating raw output could sever a secret past redaction.
     return {"host": host, "user": user, "exit_code": code,
-            "stdout": wrap_external("home-assistant-ssh", red(out[:MAX_RESULT]), ref=host),
-            "stderr": wrap_external("home-assistant-ssh", red(err[:MAX_RESULT // 4]), ref=host) if err else "",
+            "stdout": wrap_external("home-assistant-ssh", red(out)[:MAX_RESULT], ref=host),
+            "stderr": wrap_external("home-assistant-ssh", red(err)[:MAX_RESULT // 4], ref=host) if err else "",
             "truncated": truncated}
 
 

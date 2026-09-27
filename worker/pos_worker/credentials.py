@@ -23,6 +23,7 @@ Environment: POS_URL, POS_AGENT_KEY, POS_CRED_SESSION (the run's token),
 POS_RUN_ID, WORKER_WORKDIR.
 """
 
+import codecs
 import os
 import re
 import subprocess
@@ -107,23 +108,35 @@ class Runner:
         proc = subprocess.Popen(command, shell=True, cwd=self.env.get("WORKER_WORKDIR") or None, env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw)
         stream = red.stream()
+        # An incremental UTF-8 decoder so a multibyte character (and a secret) split across two
+        # byte chunks is not mangled at the boundary; the redactor's Stream then holds back a
+        # tail so a secret split across character chunks is still redacted.
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
         out: list[str] = []
         size = 0
         truncated = False
 
-        def pump():
+        def emit(text: str) -> None:
             nonlocal size, truncated
+            if not text:
+                return
+            safe = stream.feed(text)
+            if not safe:
+                return
+            if size < MAX_OUTPUT:
+                out.append(safe)
+                size += len(safe)
+            else:
+                truncated = True
+
+        def pump():
             assert proc.stdout
             while True:
                 chunk = proc.stdout.read1(4096) if hasattr(proc.stdout, "read1") else proc.stdout.read(4096)
                 if not chunk:
+                    emit(decoder.decode(b"", final=True))  # flush any bytes held for a split character
                     break
-                safe = stream.feed(chunk.decode("utf-8", errors="replace"))
-                if size < MAX_OUTPUT:
-                    out.append(safe)
-                    size += len(safe)
-                else:
-                    truncated = True
+                emit(decoder.decode(chunk))
 
         t = threading.Thread(target=pump, daemon=True)
         t.start()

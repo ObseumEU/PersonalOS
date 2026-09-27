@@ -259,6 +259,23 @@ def test_request_decision_inbox_flow_over_mcp(app):
     assert anyio.run(sneak).is_error
 
 
+def test_request_for_an_already_held_capability_makes_no_ticket_and_keeps_the_grant(app):
+    # A second request for a capability the agent already holds must not create a request: approving
+    # one would call grant() and replace (end) the still-active grant (the audit's grant 219).
+    conn, owner, agent = app["conn"], app["owner"], app["agent"]
+    g = access.grant(conn, owner, agent, "tasks:write", "writes tasks")["grant_id"]
+    before = access.requests(conn, "open")
+    out = access.request_access(conn, Ctx(agent), what="capability", capability="tasks:write", why="need it again")
+    assert out["status"] == "already_granted" and out["request_id"] is None
+    assert access.requests(conn, "open") == before  # no new request/ticket
+    row = conn.execute("SELECT ended_at, end_kind FROM access_grants WHERE id = ?", (g,)).fetchone()
+    assert row["ended_at"] is None and row["end_kind"] is None  # the active grant is untouched
+    # An unscoped credential grant also covers a later scoped request for the same credential.
+    access.grant(conn, owner, agent, "cred:deploy", "deploys")
+    scoped = access.request_access(conn, Ctx(agent), what="capability", capability="cred:deploy@http", why="api")
+    assert scoped["status"] == "already_granted"
+
+
 def test_owner_only_requests_go_to_the_owner_and_deny_is_told(app):
     conn, agent, am = app["conn"], app["agent"], app["am"]
     out = access.request_access(conn, Ctx(agent), what="capability", capability="secrets:smtp", why="send mail myself")
