@@ -680,9 +680,41 @@ def detail(conn: sqlite3.Connection, agent_id: int) -> dict:
         "queue": [tasks.to_dict(t) for t in queue],
         "runs": [dict(r) for r in runs], "trace": list(reversed(trace)),
         "memory": [dict(m) for m in memory],
+        "pending_gates": pending_gates(conn, agent_id, runs[0] if runs else None, queue),
         "week": {"done": stats["done"] or 0, "returned": stats["returned"] or 0,
                  "interventions": stats["interventions"] or 0},
     }
+
+
+def pending_gates(conn: sqlite3.Connection, agent_id: int, run, queue) -> list[dict]:
+    """What the agent's current work actually waits on from the owner: pending
+    approvals and open blocking asks linked to the latest run or its task (or a
+    working/waiting task in the queue). Empty when nothing waits on the owner."""
+    task_ids = {t["id"] for t in queue if t["status"] in ("working", "waiting")}
+    if run is not None and run["task_id"]:
+        task_ids.add(run["task_id"])
+    run_id = run["id"] if run is not None else -1
+    marks = ",".join("?" * len(task_ids)) or "NULL"
+    gates = []
+    for r in conn.execute(
+        f"""SELECT id, action, details, task_id FROM approvals WHERE status = 'pending' AND requested_by = ?
+            AND (run_id = ? OR task_id IN ({marks})) ORDER BY id""", (agent_id, run_id, *task_ids)):
+        try:
+            d = json.loads(r["details"] or "{}")
+        except ValueError:
+            d = {}
+        what = next((str(d[k]) for k in ("subject", "title", "summary", "why") if isinstance(d, dict) and d.get(k)), "")
+        gates.append({"kind": "approval", "id": r["id"], "title": f"{r['action']}" + (f" · {what}" if what else ""),
+                      "link": "/approvals"})
+    if task_ids and conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'owner_asks'").fetchone():
+        for r in conn.execute(
+            f"""SELECT a.id, a.ticket_id, t.title FROM owner_asks a JOIN tasks t ON t.id = a.ticket_id
+                WHERE a.asker_id = ? AND a.status = 'open' AND a.blocking = 1 AND a.source_task_id IN ({marks})
+                ORDER BY a.id""", (agent_id, *task_ids)):
+            ref = tasks.display_id(r["ticket_id"])
+            gates.append({"kind": "ask", "id": r["id"], "ref": ref, "title": f"{ref} · {r['title']}",
+                          "link": f"/tasks?task={ref}"})
+    return gates
 
 
 def board(conn: sqlite3.Connection) -> list[dict]:

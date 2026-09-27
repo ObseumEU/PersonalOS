@@ -84,6 +84,7 @@ export type AgentDetail = Agent & {
   trace: TraceEntry[];
   memory: { id: number; body: string; visibility: string; created_at: string }[];
   week: { done: number; returned: number; interventions: number };
+  pending_gates?: { kind: "approval" | "ask"; id: number; ref?: string; title: string; link: string }[];
   api_key?: string;
 };
 

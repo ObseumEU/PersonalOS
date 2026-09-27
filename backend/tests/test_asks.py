@@ -125,3 +125,21 @@ def test_ask_owner_over_mcp(tmp_path):
 
     out = anyio.run(scenario)
     assert out["ref"].startswith("T-") and not out["deduped"]
+
+
+def test_agent_detail_pending_gates_only_when_something_waits_on_the_owner(conn):
+    me, ai, t = _agent_task(conn)
+    assert agents.detail(conn, ai.actor_id)["pending_gates"] == []
+    a = approvals.request(conn, ai, "email.send", {"subject": "Offer for ACME"}, t["id"])
+    gates = agents.detail(conn, ai.actor_id)["pending_gates"]
+    assert gates == [{"kind": "approval", "id": a["id"], "title": "email.send · Offer for ACME", "link": "/approvals"}]
+    approvals.decide(conn, me, a["id"], True)
+    assert agents.detail(conn, ai.actor_id)["pending_gates"] == []
+    # a non-blocking ask is not a gate, a blocking one is
+    asks.ask(conn, ai, title="Confirm the due date", why="x", task_id=t["id"], blocking=False)
+    assert agents.detail(conn, ai.actor_id)["pending_gates"] == []
+    out = asks.ask(conn, ai, title="Choose the invoice template", why="Needed today.", task_id=t["id"])
+    gates = agents.detail(conn, ai.actor_id)["pending_gates"]
+    assert [(g["kind"], g["ref"], g["link"]) for g in gates] == [("ask", out["ref"], f"/tasks?task={out['ref']}")]
+    tasks.complete(conn, me, out["ticket_id"], "Minimal")
+    assert agents.detail(conn, ai.actor_id)["pending_gates"] == []

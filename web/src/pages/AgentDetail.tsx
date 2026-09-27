@@ -287,10 +287,16 @@ export default function AgentDetail() {
               <span className="cap">DONE WHEN</span>
               <span className="text-[13px]">{current?.definition_of_done ?? "—"}</span>
             </span>
-            <span className="flex flex-col gap-1">
-              <span className="cap">HUMAN GATE</span>
-              <span className="text-[13px] text-amber-300">outbound actions need your approval</span>
-            </span>
+            {(a.pending_gates ?? []).length > 0 && (
+              <span className="flex flex-col gap-1">
+                <span className="cap">HUMAN GATE</span>
+                {a.pending_gates!.map((g) => (
+                  <Link key={`${g.kind}-${g.id}`} to={g.link} className="text-[13px] text-amber-300! hover:underline">
+                    čeká na tvé {g.kind === "approval" ? "schválení" : "rozhodnutí"}: {g.title} →
+                  </Link>
+                ))}
+              </span>
+            )}
           </div>
           <span className="cap px-4 pt-3 pb-1">TRACE · WHAT THE AGENT DID</span>
           <div className="max-h-[300px] overflow-y-auto">
