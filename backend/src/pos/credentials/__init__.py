@@ -15,7 +15,9 @@ Modules:
     onepassword  the SDK seam, the short in-memory cache (tests swap the provider)
     redact       redaction, also for chunked output (a copy lives in the worker)
     store        tables (created on first use)
-    service      registry, grants, requests -> ask_owner, resolution, the use log, HTTP
+    service      registry, grants, requests -> ask_owner, resolution, the use log, HTTP,
+                 one-click register + grant, the grouped audit
+    discover     suggestions for unregistered vault items (rules first, haiku only when undecided)
     mcp          credentials_list and credential_http on the pos MCP server
     api          /api/credentials (web app) and /api/worker/credentials (the worker's runner)
 """

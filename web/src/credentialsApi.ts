@@ -36,6 +36,78 @@ export type Credential = {
   archived_at: string | null;
   grants?: CredGrant[];
   uses_24h?: number;
+  errors_24h?: number;
+  last_use?: CredLast | null;
+  last_test?: CredLast | null;
+  kind?: CredKind;
+  item?: string;
+  companions?: string[];
+  recommended?: AgentPick[];
+};
+
+export type CredKind = "ssh" | "token" | "basic" | "db" | "generic";
+export type CredLast = { at: string; ok: boolean; error: string | null; agent?: string | null; tool?: string };
+export type AgentPick = { id: number; name: string; why: string };
+export type RosterAgent = { id: number; name: string; role: string | null; team: string | null; purpose: string };
+
+/** One line of the grouped audit: a day, a credential, an agent. */
+export type AuditLine = {
+  day: string;
+  name: string;
+  credential_id: number | null;
+  agent_id: number | null;
+  agent_name: string | null;
+  count: number;
+  errors: number;
+  first_at: string;
+  last_at: string;
+  tools: string[];
+  hosts: string[];
+  last_error: string | null;
+};
+
+export type SuggestedCred = {
+  field: string | null;
+  field_id: string | null;
+  op_ref: string;
+  role: string;
+  name: string;
+  env_var: string | null;
+  header: string | null;
+  allowed_hosts: string[];
+  allowed_tools: string[];
+  allowed_commands: string[];
+  description: string;
+};
+
+/** A vault item that is not registered yet, with what PersonalOS suggests doing with it. */
+export type Suggestion = {
+  item_id: string;
+  title: string;
+  category: string;
+  kind: CredKind;
+  kind_label: string;
+  decided: boolean;
+  source: "rules" | "llm" | "owner";
+  why: string;
+  known: string | null;
+  usage: string;
+  hosts: string[];
+  credentials: SuggestedCred[];
+  extra_grants: string[];
+  agents: AgentPick[];
+  fields: { id: string; title: string; type: string; section: string | null; op_ref: string }[];
+  hidden?: boolean;
+};
+
+export type Discovery = CredStatus & { items: Suggestion[]; hidden: { item_id: string; title: string }[]; error: string | null };
+
+export type CredRequest = AccessRequest & {
+  credential: string;
+  scope: string | null;
+  registered: boolean;
+  credential_id: number | null;
+  suggestion: Suggestion | null;
 };
 
 export type CredUse = {
@@ -56,9 +128,10 @@ export type CredStatus = { enabled: boolean; vault: string | null; reason: strin
 
 export type CredOverview = CredStatus & {
   credentials: Credential[];
-  requests: AccessRequest[];
+  requests: CredRequest[];
   paused: CredGrant[];
-  uses: CredUse[];
+  agents: RosterAgent[];
+  audit: AuditLine[];
 };
 
 export type VaultField = { id: string; title: string; type: string; section: string | null; op_ref: string; registered: boolean };
@@ -87,5 +160,22 @@ export const credentialsApi = {
   decide: (requestId: number, decision: "grant" | "deny", note: string, hours: number | null = null) =>
     send("POST", `/api/credentials/requests/${requestId}/decide`, { decision, note, hours }),
   agent: (agentId: number) =>
-    api<CredStatus & { grants: CredGrant[]; uses: CredUse[]; available: string[] }>(`/api/credentials/agents/${agentId}`),
+    api<CredStatus & { grants: CredGrant[]; uses: CredUse[]; audit: AuditLine[]; requests: CredRequest[]; available: string[] }>(`/api/credentials/agents/${agentId}`),
+  discover: (refresh = false, hidden = false) =>
+    api<Discovery>(`/api/credentials/discover?refresh=${refresh}&hidden=${hidden}`),
+  suggest: (itemId: string, kind: CredKind | null) => send<Suggestion>("POST", `/api/credentials/discover/${encodeURIComponent(itemId)}/suggest`, { kind }),
+  dismiss: (itemId: string, hidden: boolean) => send("POST", `/api/credentials/discover/${encodeURIComponent(itemId)}/dismiss`, { hidden }),
+  register: (body: { item_id: string | null; credentials: SuggestedCred[]; agent_ids: number[]; hours: number | null; reason?: string }) =>
+    send<{ credentials: Credential[]; grants: number[]; extra_grants: string[] }>("POST", "/api/credentials/register", body),
+  grantMany: (agent_ids: number[], names: string[], hours: number | null, scope: string | null, reason = "") =>
+    send<{ grants: number[] }>("POST", "/api/credentials/grants/bulk", { agent_ids, names, hours, scope, reason }),
+  revokeMany: (grant_ids: number[], reason = "") => send<{ revoked: number[] }>("POST", "/api/credentials/grants/revoke", { grant_ids, reason }),
+  restoreMany: (grant_ids: number[]) => send<{ grants: number[] }>("POST", "/api/credentials/grants/restore", { grant_ids, reason: "" }),
+  uses: (q: { name?: string; agent_id?: number | null; day?: string }) => {
+    const p = new URLSearchParams();
+    if (q.name) p.set("name", q.name);
+    if (q.agent_id != null) p.set("agent_id", String(q.agent_id));
+    if (q.day) p.set("day", q.day);
+    return api<{ uses: CredUse[] }>(`/api/credentials/uses?${p}`);
+  },
 };

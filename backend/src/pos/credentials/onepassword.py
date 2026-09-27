@@ -19,9 +19,11 @@ Tests swap the provider with `set_provider`.
 
 import asyncio
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 INTEGRATION = ("PersonalOS", "1.0.0")
 TIMEOUT_S = 20
@@ -111,12 +113,50 @@ class SdkProvider:
                 fields = [FieldMeta(id=f.id, title=f.title, type=_enum(getattr(f, "field_type", "")),
                                     section=sections.get(getattr(f, "section_id", None)) or None).__dict__
                           for f in (item.fields or [])]
+                urls, hosts = _places(item)
                 del item  # the full item holds values; only the metadata above leaves this function
                 out.append({"id": ov.id, "title": ov.title, "category": _enum(getattr(ov, "category", "")),
-                            "fields": fields})
+                            "fields": fields, "urls": urls, "hosts": hosts})
             return out
 
         return self._run(go)
+
+
+_HOST = re.compile(r"\b((?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?|(?:[a-z0-9-]+\.)+(?:cz|com|cloud|io|net|org|eu|dev|app|"
+                   r"local|lan|home\.arpa)(?::\d{1,5})?)\b", re.I)
+
+
+def _origin(url: str) -> str | None:
+    """scheme://host[:port] of a URL: no user info, path, query or fragment (they may hold a secret)."""
+    try:
+        p = urlsplit(url if "://" in url else f"https://{url}")
+        host = p.hostname
+        port = p.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    return f"{p.scheme or 'https'}://{host}" + (f":{port}" if port else "")
+
+
+def _places(item) -> tuple[list[str], list[str]]:
+    """Where an item points: its websites' and URL fields' origins, and host names
+    (IP addresses, domains) mentioned in its notes. Only these leave; never the notes."""
+    urls: list[str] = []
+    for w in getattr(item, "websites", None) or []:
+        o = _origin(str(getattr(w, "url", "") or ""))
+        if o and o not in urls:
+            urls.append(o)
+    for f in getattr(item, "fields", None) or []:
+        if _enum(getattr(f, "field_type", "")).lower() == "url":
+            o = _origin(str(getattr(f, "value", "") or ""))
+            if o and o not in urls:
+                urls.append(o)
+    hosts: list[str] = []
+    for m in _HOST.findall(str(getattr(item, "notes", "") or ""))[:20]:
+        if m.lower() not in hosts:
+            hosts.append(m.lower())
+    return urls[:10], hosts[:10]
 
 
 def _enum(v) -> str:
@@ -143,8 +183,10 @@ def set_provider(p) -> None:
 
 
 def clear_cache() -> None:
+    global _items_cache
     with _cache_lock:
         _cache.clear()
+    _items_cache = None
 
 
 def resolve(ref: str) -> str:
@@ -172,8 +214,22 @@ def forget(ref: str) -> None:
         _cache.pop(ref, None)
 
 
-def items() -> list[dict]:
+_items_cache: tuple[float, str, list[dict]] | None = None
+ITEMS_TTL = 60.0  # metadata only (titles, field names, URL origins): a page load does not list the vault again
+
+
+def items(refresh: bool = False) -> list[dict]:
+    """The vault's items (metadata, never values); a fresh copy every call, cached for a minute."""
+    import copy
+
+    global _items_cache
     on, why = configured()
     if not on:
         raise Unavailable(why)
-    return provider().items(vault())
+    now = time.monotonic()
+    hit = _items_cache
+    if not refresh and hit and hit[1] == vault() and now - hit[0] < ITEMS_TTL:
+        return copy.deepcopy(hit[2])
+    got = provider().items(vault())
+    _items_cache = (now, vault(), got)
+    return copy.deepcopy(got)

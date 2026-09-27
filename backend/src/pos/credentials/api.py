@@ -110,6 +110,103 @@ def decide(request_id: int, body: DecideIn, conn=Depends(get_db), ctx=Depends(ge
         raise tasks.Invalid(str(e)) from e
 
 
+class RegisterCredIn(BaseModel):
+    name: str
+    op_ref: str
+    description: str | None = None
+    env_var: str | None = None
+    header: str | None = None
+    allowed_hosts: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    allowed_commands: list[str] | None = None
+    max_uses_hour: int | None = None
+
+
+class RegisterIn(BaseModel):
+    item_id: str | None = None
+    credentials: list[RegisterCredIn]
+    agent_ids: list[int] = []
+    hours: float | None = None
+    scope: str | None = None
+    reason: str | None = None
+
+
+class KindIn(BaseModel):
+    kind: str | None = None
+
+
+class HiddenIn(BaseModel):
+    hidden: bool = True
+
+
+class BulkGrantIn(BaseModel):
+    agent_ids: list[int]
+    names: list[str]
+    reason: str = ""
+    hours: float | None = None
+    scope: str | None = None
+
+
+class GrantIdsIn(BaseModel):
+    grant_ids: list[int]
+    reason: str = ""
+
+
+def _access(fn):
+    from ..access.service import AccessError
+
+    try:
+        return _call(fn)
+    except AccessError as e:
+        raise tasks.Invalid(str(e)) from e
+
+
+@router.get("/discover")
+def discover(hidden: bool = False, refresh: bool = False, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Vault items not in the registry, each with a suggestion (never values)."""
+    return _call(lambda: service.discover_items(conn, ctx, include_hidden=hidden, refresh=refresh))
+
+
+@router.post("/discover/{item_id}/suggest")
+def suggest(item_id: str, body: KindIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return _call(lambda: service.suggest_item(conn, ctx, item_id, body.kind))
+
+
+@router.post("/discover/{item_id}/dismiss")
+def dismiss(item_id: str, body: HiddenIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return _call(lambda: service.dismiss(conn, ctx, item_id, body.hidden))
+
+
+@router.post("/register", status_code=201)
+def register(body: RegisterIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Zaregistrovat a přidělit: the item's entries and their grants in one call."""
+    spec = body.model_dump()
+    spec["credentials"] = [c.model_dump(exclude_none=True) for c in body.credentials]
+    return _access(lambda: service.register_and_grant(conn, ctx, spec))
+
+
+@router.post("/grants/bulk", status_code=201)
+def grant_bulk(body: BulkGrantIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return _access(lambda: service.grant_many(conn, ctx, body.agent_ids, body.names, body.reason, body.hours,
+                                              body.scope))
+
+
+@router.post("/grants/revoke")
+def revoke_bulk(body: GrantIdsIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return _access(lambda: service.revoke_many(conn, ctx, body.grant_ids, body.reason))
+
+
+@router.post("/grants/restore")
+def restore_bulk(body: GrantIdsIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return _access(lambda: service.restore_grants(conn, ctx, body.grant_ids))
+
+
+@router.get("/uses")
+def uses(name: str | None = None, agent_id: int | None = None, day: str | None = None, conn=Depends(get_db)):
+    """The single uses behind one grouped audit line."""
+    return {"uses": service.uses_filtered(conn, name, agent_id, day)}
+
+
 @router.get("/{cid}")
 def detail(cid: int, conn=Depends(get_db)):
     return service.detail(conn, cid)

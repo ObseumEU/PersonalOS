@@ -174,17 +174,26 @@ def add(conn: sqlite3.Connection, ctx: Ctx, data: dict) -> dict:
     _require_owner(conn, ctx)
     store.ensure_schema(conn)
     f = _clean(conn, data)
-    if conn.execute("SELECT 1 FROM credentials WHERE name = ?", (f["name"],)).fetchone():
+    if conn.execute("SELECT 1 FROM credentials WHERE name = ? AND archived_at IS NULL", (f["name"],)).fetchone():
         raise CredentialError(f"a credential called {f['name']} exists already")
+    cid = _insert(conn, ctx, f)
+    conn.commit()
+    return get(conn, cid)
+
+
+def _insert(conn: sqlite3.Connection, ctx: Ctx, f: dict) -> int:
+    """A cleaned entry (the caller commits); an archived one of the same name steps aside."""
     now = now_iso()
+    old = conn.execute("SELECT id FROM credentials WHERE name = ? AND archived_at IS NOT NULL", (f["name"],)).fetchone()
+    if old:
+        conn.execute("UPDATE credentials SET name = name || '~' || id WHERE id = ?", (old["id"],))
     cid = conn.execute(
         """INSERT INTO credentials (name, op_ref, description, env_var, header, allowed_hosts, allowed_tools,
                allowed_commands, max_uses_hour, notes, created_by, created_at, updated_at)
            VALUES (:name, :op_ref, :description, :env_var, :header, :allowed_hosts, :allowed_tools,
                    :allowed_commands, :max_uses_hour, :notes, :by, :now, :now)""", {**f, "by": ctx.actor_id, "now": now}).lastrowid
     audit.log(conn, ctx, "cred_add", "credential", cid, name=f["name"], op_ref=f["op_ref"])
-    conn.commit()
-    return get(conn, cid)
+    return cid
 
 
 def update(conn: sqlite3.Connection, ctx: Ctx, cid: int, data: dict) -> dict:
@@ -223,18 +232,7 @@ def archive(conn: sqlite3.Connection, ctx: Ctx, cid: int, reason: str) -> dict:
 def vault_items(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     """The vault's items and field names for 'add from 1Password' (never values)."""
     _require_owner(conn, ctx)
-    try:
-        items = onepassword.items()
-    except onepassword.Unavailable as e:
-        raise CredentialError(str(e)) from None
-    vault = onepassword.vault()
-    known = {c["op_ref"] for c in list_all(conn)}
-    for it in items:
-        for f in it["fields"]:
-            path = f"{it['title']}/{f['section']}/{f['title']}" if f.get("section") else f"{it['title']}/{f['title']}"
-            f["op_ref"] = f"op://{vault}/{path}"
-            f["registered"] = f["op_ref"] in known
-    return {"vault": vault, "items": items}
+    return {"vault": onepassword.vault(), "items": _vault_items(conn)}
 
 
 # ------------------------------------------------------------------ grants (owner only, via pos.access)
@@ -310,8 +308,10 @@ def validate_request(conn: sqlite3.Connection, cap: str) -> None:
     try:
         c = get(conn, name)
     except NotFound:
+        if NAME_RE.match(name) and vault_match(conn, name, quiet=True):
+            return  # in the vault, not registered yet: the owner registers and grants it in one click
         raise AccessError(f"no credential called {name!r}: credentials_list shows the registry; the owner "
-                          "adds new ones") from None
+                          "adds new ones (or puts it into the PersonalOS vault in 1Password)") from None
     if c["archived_at"]:
         raise AccessError(f"{name} is archived")
     if scope and scope not in TOOLS and not re.fullmatch(r"(\*\.)?[a-z0-9.-]+(:\d+)?", scope):
@@ -325,7 +325,15 @@ def on_access_request(conn: sqlite3.Connection, ctx: Ctx, request_id: int, cap: 
     from .. import asks
 
     name, scope = parse_capability(cap)
-    c = get(conn, name)
+    extra: dict = {}
+    try:
+        c = get(conn, name)
+    except NotFound:
+        s = vault_match(conn, name, quiet=True) or {}
+        extra = {"vault_item": s.get("item_id"), "vault_title": s.get("title")}
+        c = {"name": name, "description": f"Zatím není v registru; v 1Password je položka „{s.get('title', '?')}“ "
+                                          f"({s.get('kind_label', '?')}). Schválení ji zaregistruje a přidělí.",
+             "env_var": None, "header": None, "allowed_hosts": s.get("hosts", [])}
     me = actors.get(conn, ctx.actor_id)
     use = ", ".join(filter(None, [f"proměnná `{c['env_var']}`" if c["env_var"] else "",
                                   f"hlavička `{c['header'].split(':')[0]}`" if c["header"] else "",
@@ -345,7 +353,7 @@ def on_access_request(conn: sqlite3.Connection, ctx: Ctx, request_id: int, cap: 
                    after=("Approve or deny on the **Přístupy** page (the link above): approving creates the grant, "
                           f"{me['name']} gets the answer in its inbox and this ticket closes."))
     row = conn.execute("SELECT detail FROM access_requests WHERE id = ?", (request_id,)).fetchone()
-    detail = {**json.loads(row["detail"] or "{}"), "ticket_id": out["ticket_id"], "ticket_ref": out["ref"]}
+    detail = {**json.loads(row["detail"] or "{}"), "ticket_id": out["ticket_id"], "ticket_ref": out["ref"], **extra}
     conn.execute("UPDATE access_requests SET detail = ? WHERE id = ?", (json.dumps(detail), request_id))
     return out
 
@@ -353,7 +361,14 @@ def on_access_request(conn: sqlite3.Connection, ctx: Ctx, request_id: int, cap: 
 def open_requests(conn: sqlite3.Connection) -> list[dict]:
     from ..access import service as access
 
-    return [r for r in access.requests(conn, "open") if (r["capability"] or "").startswith(PREFIX)]
+    out = [r for r in access.requests(conn, "open") if (r["capability"] or "").startswith(PREFIX)]
+    for r in out:
+        name, scope = parse_capability(r["capability"])
+        row = conn.execute("SELECT id FROM credentials WHERE name = ? AND archived_at IS NULL", (name,)).fetchone()
+        r.update({"credential": name, "scope": scope, "registered": row is not None,
+                  "credential_id": row["id"] if row else None,
+                  "suggestion": None if row else vault_match(conn, name, quiet=True)})
+    return out
 
 
 def decide_request(conn: sqlite3.Connection, ctx: Ctx, request_id: int, decision: str, note: str,
@@ -369,7 +384,14 @@ def decide_request(conn: sqlite3.Connection, ctx: Ctx, request_id: int, decision
     if decision not in ("grant", "deny"):
         raise CredentialError("decision: grant or deny")
     note = (note or "").strip() or ("Schváleno majitelem." if decision == "grant" else "Zamítnuto majitelem.")
+    registered = None
+    if decision == "grant" and r["status"] in ("pending", "escalated"):
+        registered = _register_for_request(conn, ctx, r, hours)
+        if registered:
+            note = f"{note} Zaregistrováno jako `{registered['primary']}`."
     out = access.decide(conn, ctx, request_id, decision, note, hours=hours)
+    if registered:
+        out["registered"] = registered
     ticket = json.loads(r["detail"] or "{}").get("ticket_id")
     if ticket:
         # The agent heard the decision from pos.access; the ticket closes without a second message.
@@ -704,20 +726,59 @@ def for_agent(conn: sqlite3.Connection, agent_id: int) -> list[dict]:
     return out
 
 
+def kind_of(c: dict) -> str:
+    """What a registered credential is, from how it is used (the card's label)."""
+    cmds = " ".join(c.get("allowed_commands") or [])
+    if "ssh" in cmds:
+        return "ssh"
+    if re.search(r"psql|pg_dump|mysql", cmds):
+        return "db"
+    if c.get("header"):
+        return "token"
+    if (c.get("allowed_tools") or []) == ["http"]:
+        return "basic"
+    return "generic"
+
+
+def item_of(op_ref: str) -> str:
+    """op://vault/ITEM/field -> ITEM (the 1Password item a credential comes from)."""
+    parts = (op_ref or "")[5:].split("/")
+    return parts[1] if len(parts) > 1 else op_ref
+
+
 def overview(conn: sqlite3.Connection) -> dict:
+    from . import discover
+
     creds = list_all(conn)
     active = grants(conn)
-    counts: dict[int, int] = {}
     since = _iso(_utc() - timedelta(days=1))
-    for r in conn.execute("SELECT credential_id, COUNT(*) FROM credential_uses WHERE at > ? GROUP BY credential_id",
-                          (since,)):
-        counts[r[0]] = r[1]
+    stats = {r["credential_id"]: dict(r) for r in conn.execute(
+        """SELECT credential_id, SUM(at > ? AND tool != 'test') AS uses_24h, SUM(at > ? AND ok = 0) AS errors_24h
+           FROM credential_uses WHERE credential_id IS NOT NULL GROUP BY credential_id""", (since, since))}
+
+    def latest(test: bool) -> dict:
+        return {r["credential_id"]: {"at": r["at"], "ok": bool(r["ok"]), "error": r["error"],
+                                     "agent": r["agent_name"], "tool": r["tool"]} for r in conn.execute(
+            f"""SELECT u.credential_id, u.at, u.ok, u.error, u.tool, a.name AS agent_name FROM credential_uses u
+                LEFT JOIN actors a ON a.id = u.agent_id WHERE u.id IN (SELECT MAX(id) FROM credential_uses
+                WHERE tool {'=' if test else '!='} 'test' AND credential_id IS NOT NULL GROUP BY credential_id)""")}
+
+    tests, lasts = latest(True), latest(False)
+    roster = discover.agents(conn)
     for c in creds:
+        st = stats.get(c["id"], {})
         c["grants"] = [g for g in active if g["credential"] == c["name"]]
-        c["uses_24h"] = counts.get(c["id"], 0)
+        c["uses_24h"] = st.get("uses_24h") or 0
+        c["errors_24h"] = st.get("errors_24h") or 0
+        c["last_use"] = lasts.get(c["id"])
+        c["last_test"] = tests.get(c["id"])
+        c["kind"] = kind_of(c)
+        c["item"] = item_of(c["op_ref"])
+        c["companions"] = companion_grants([c])
+        c["recommended"] = discover.recommend_for(c, roster)
     return {**status(), "credentials": creds, "requests": open_requests(conn),
             "paused": [g for g in grants(conn, include_ended=True, limit=100) if g["end_kind"] == "paused"][:20],
-            "uses": uses(conn, limit=100)}
+            "agents": roster, "audit": audit_groups(conn)}
 
 
 def detail(conn: sqlite3.Connection, cid: int) -> dict:
@@ -729,4 +790,291 @@ def detail(conn: sqlite3.Connection, cid: int) -> dict:
 def agent_view(conn: sqlite3.Connection, agent_id: int) -> dict:
     return {**status(), "grants": grants(conn, agent_id=agent_id, include_ended=True, limit=50),
             "uses": uses(conn, agent_id=agent_id, limit=50),
+            "audit": audit_groups(conn, agent_id=agent_id),
+            "requests": [r for r in open_requests(conn) if r["agent_id"] == agent_id],
             "available": [c["name"] for c in list_all(conn)]}
+
+
+# ------------------------------------------------------------------ discovery, one-click register + grant
+
+DISMISSED_KEY = "credentials.dismissed"
+
+
+def _vault_items(conn: sqlite3.Connection, refresh: bool = False) -> list[dict]:
+    """The vault's items with each field's op:// reference and whether it is registered (never values)."""
+    try:
+        items = onepassword.items(refresh=refresh)
+    except onepassword.Unavailable as e:
+        raise CredentialError(str(e)) from None
+    vault = onepassword.vault()
+    known = {c["op_ref"] for c in list_all(conn)}
+    for it in items:
+        for f in it["fields"]:
+            path = f"{it['title']}/{f['section']}/{f['title']}" if f.get("section") else f"{it['title']}/{f['title']}"
+            f["op_ref"] = f"op://{vault}/{path}"
+            f["registered"] = f["op_ref"] in known
+        it["registered"] = any(f["registered"] for f in it["fields"])
+    return items
+
+
+def discover_items(conn: sqlite3.Connection, ctx: Ctx, include_hidden: bool = False, refresh: bool = False) -> dict:
+    """Vault items not in the registry, each with a suggestion (rules first; the model only
+    for items the rules cannot place, a few per call, cached)."""
+    from .. import settings_store
+    from . import discover
+
+    _require_owner(conn, ctx)
+    on, why = onepassword.configured()
+    if not on:
+        return {**status(), "items": [], "hidden": [], "error": why}
+    try:
+        items = _vault_items(conn, refresh=refresh)
+    except CredentialError as e:
+        return {**status(), "items": [], "hidden": [], "error": str(e)}
+    dismissed = set(settings_store.get(conn, DISMISSED_KEY, []) or [])
+    roster = discover.agents(conn)
+    taken = {r[0] for r in conn.execute("SELECT name FROM credentials WHERE archived_at IS NULL")}
+    out, hidden, budget = [], [], discover.LLM_MAX_PER_CALL
+    for it in items:
+        if it["registered"]:
+            continue
+        if it["id"] in dismissed and not include_hidden:
+            hidden.append({"item_id": it["id"], "title": it["title"]})
+            continue
+        s = discover.suggest(conn, it, roster=roster, taken=taken, use_llm=budget > 0)
+        if s["source"] == "llm" or (not s["decided"] and budget > 0):
+            budget -= 1
+        s["hidden"] = it["id"] in dismissed
+        out.append(s)
+    return {**status(), "items": out, "hidden": hidden, "error": None}
+
+
+def suggest_item(conn: sqlite3.Connection, ctx: Ctx, item_id: str, kind: str | None = None) -> dict:
+    """One item's suggestion again, as another kind (the owner's 'Upravit')."""
+    from . import discover
+
+    _require_owner(conn, ctx)
+    it = next((i for i in _vault_items(conn) if i["id"] == item_id), None)
+    if it is None:
+        raise NotFound(f"no item {item_id} in the vault")
+    try:
+        return discover.suggest(conn, it, kind=kind or None, use_llm=False)
+    except ValueError as e:
+        raise CredentialError(str(e)) from None
+
+
+def dismiss(conn: sqlite3.Connection, ctx: Ctx, item_id: str, hidden: bool = True) -> dict:
+    from .. import settings_store
+
+    _require_owner(conn, ctx)
+    cur = [x for x in (settings_store.get(conn, DISMISSED_KEY, []) or []) if x != item_id]
+    if hidden:
+        cur.append(item_id)
+    settings_store.put(conn, ctx, DISMISSED_KEY, cur[-500:])
+    audit.log(conn, ctx, "cred_dismiss" if hidden else "cred_undismiss", "credential", None, item=item_id)
+    conn.commit()
+    return {"item_id": item_id, "hidden": hidden}
+
+
+def vault_match(conn: sqlite3.Connection, name: str, quiet: bool = False) -> dict | None:
+    """The unregistered vault item an agent means by `name`: a suggested credential of that
+    name, or an item whose title says the same words. Rules only (no model)."""
+    from . import discover
+
+    try:
+        items = [i for i in _vault_items(conn) if not i["registered"]]
+    except CredentialError:
+        if quiet:
+            return None
+        raise
+    if not items:
+        return None
+    roster = discover.agents(conn)
+    want = set(name.split("-")) - {""}
+    for it in items:
+        s = discover.suggest(conn, it, roster=roster, taken=set(), use_llm=False)
+        title = discover.tokens(it["title"]) | {discover.norm(it["title"]).replace(" ", "")}
+        if name in {c["name"] for c in s["credentials"]} or discover.slug(it["title"]) == name or want <= title:
+            return s
+    return None
+
+
+def companion_grants(creds: list[dict]) -> list[str]:
+    """Grants a credential needs besides itself: the dedicated tool its pseudo command names (ha_ssh)."""
+    from .discover import SSH_TOOLS
+
+    return sorted({SSH_TOOLS[cmd] for c in creds for cmd in (c.get("allowed_commands") or []) if cmd in SSH_TOOLS})
+
+
+def register_and_grant(conn: sqlite3.Connection, ctx: Ctx, spec: dict) -> dict:
+    """The owner's one click on a discovery card: the item's registry entries and their grants
+    to the chosen agents (plus the tool a credential's pseudo command needs), all checked
+    before anything is written. No value is read."""
+    from ..access import service as access
+
+    _require_owner(conn, ctx)
+    store.ensure_schema(conn)
+    items = spec.get("credentials") or []
+    if not items:
+        raise CredentialError("nothing to register: pick at least one field")
+    cleaned, names = [], set()
+    for c in items:
+        data = {k: c.get(k) for k in ("name", "op_ref", "description", "env_var", "header", "allowed_hosts",
+                                      "allowed_tools", "allowed_commands", "max_uses_hour", "notes")
+                if c.get(k) is not None}
+        f = _clean(conn, data)
+        if f["name"] in names or conn.execute("SELECT 1 FROM credentials WHERE name = ? AND archived_at IS NULL",
+                                              (f["name"],)).fetchone():
+            raise CredentialError(f"a credential called {f['name']} exists already: pick another name")
+        names.add(f["name"])
+        cleaned.append(f)
+    agent_ids = sorted({int(a) for a in spec.get("agent_ids") or []})
+    for a in agent_ids:
+        row = conn.execute("SELECT kind, archived_at FROM actors WHERE id = ?", (a,)).fetchone()
+        if row is None or row["kind"] == "human" or row["archived_at"]:
+            raise CredentialError(f"agent #{a}: not an active agent")
+    hours = spec.get("hours")
+    if hours is not None and not (0 < float(hours) <= 24 * 366):
+        raise CredentialError("hours: between 0 and a year (empty = permanent)")
+    scope = (spec.get("scope") or "").strip().lower() or None
+    if scope and scope not in TOOLS:
+        _hosts([scope])
+    reason = (spec.get("reason") or "").strip() or "zaregistrováno a přiděleno majitelem"
+    ids = [_insert(conn, ctx, f) for f in cleaned]
+    conn.commit()
+    made = [get(conn, i) for i in ids]
+    extra = companion_grants(made)
+    granted = []
+    for a in agent_ids:
+        for c in made:
+            granted.append(access.grant(conn, ctx, a, capability(c["name"], scope), reason, hours)["grant_id"])
+        for cap in extra:
+            if cap not in (access.effective(conn, a) or set()):
+                granted.append(access.grant(conn, ctx, a, cap, f"{reason} (nástroj pro {made[0]['name']})")["grant_id"])
+    audit.log(conn, ctx, "cred_register_grant", "credential", ids[0], names=[c["name"] for c in made],
+              item=spec.get("item_id"), agents=agent_ids, extra=extra, grants=granted)
+    conn.commit()
+    return {"credentials": made, "grants": granted, "agents": agent_ids, "extra_grants": extra}
+
+
+def _register_for_request(conn: sqlite3.Connection, ctx: Ctx, r: sqlite3.Row, hours: float | None) -> dict | None:
+    """A request for a credential that is only in the vault: register the item's suggestion,
+    grant its other entries (and the tool they need) to the agent, and point the request at
+    the registered name; access.decide then grants that one."""
+    from ..access import service as access
+
+    name, scope = parse_capability(r["capability"])
+    if conn.execute("SELECT 1 FROM credentials WHERE name = ? AND archived_at IS NULL", (name,)).fetchone():
+        return None
+    s = vault_match(conn, name)
+    if not s or not s["credentials"]:
+        raise CredentialError(f"{name} is neither in the registry nor in the vault: add it to 1Password first")
+    primary = next((c for c in s["credentials"] if c["name"] == name), s["credentials"][0])
+    out = register_and_grant(conn, ctx, {"item_id": s["item_id"], "credentials": s["credentials"], "agent_ids": []})
+    reason = f"žádost #{r['id']}"
+    for c in out["credentials"]:
+        if c["name"] != primary["name"]:
+            access.grant(conn, ctx, r["agent_id"], capability(c["name"], scope), reason,
+                         hours if hours is not None else r["hours"])
+    for cap in out["extra_grants"]:
+        if cap not in (access.effective(conn, r["agent_id"]) or set()):
+            access.grant(conn, ctx, r["agent_id"], cap, reason)
+    conn.execute("UPDATE access_requests SET capability = ? WHERE id = ?",
+                 (capability(primary["name"], scope), r["id"]))
+    conn.commit()
+    return {"primary": primary["name"], "names": [c["name"] for c in out["credentials"]],
+            "extra_grants": out["extra_grants"]}
+
+
+def grant_many(conn: sqlite3.Connection, ctx: Ctx, agent_ids: list[int], names: list[str], reason: str,
+               hours: float | None = None, scope: str | None = None) -> dict:
+    """Přidělit on a card: every credential of the card (an SSH pair) to every picked agent,
+    plus the tool their pseudo command needs. Owner only (grant checks it)."""
+    from ..access import service as access
+
+    _require_owner(conn, ctx)
+    names = sorted({n.strip().lower() for n in names if n and n.strip()})
+    if not names or not agent_ids:
+        raise CredentialError("pick at least one agent and one credential")
+    cs = [get(conn, n) for n in names]
+    reason = (reason or "").strip() or "přiděleno majitelem"
+    out = []
+    for a in sorted(set(agent_ids)):
+        for c in cs:
+            out.append(grant(conn, ctx, a, c["name"], reason, hours, scope)["grant_id"])
+        for cap in companion_grants(cs):
+            if cap not in (access.effective(conn, a) or set()):
+                out.append(access.grant(conn, ctx, a, cap, f"{reason} (nástroj pro {cs[0]['name']})")["grant_id"])
+    return {"grants": out}
+
+
+def revoke_many(conn: sqlite3.Connection, ctx: Ctx, grant_ids: list[int], reason: str) -> dict:
+    """Odebrat: the agent's grants of a card, in one click; the ids come back for Vrátit (undo)."""
+    from ..access import service as access
+
+    _require_owner(conn, ctx)
+    done = []
+    for gid in sorted(set(grant_ids)):
+        g = conn.execute("SELECT * FROM access_grants WHERE id = ?", (gid,)).fetchone()
+        if g is None or not g["capability"].startswith(PREFIX):
+            raise NotFound(f"credential grant {gid}")
+        if g["ended_at"] is None:
+            access.revoke_grant(conn, ctx, gid, (reason or "").strip() or "odebráno majitelem")
+            done.append(gid)
+    return {"revoked": done}
+
+
+def restore_grants(conn: sqlite3.Connection, ctx: Ctx, grant_ids: list[int]) -> dict:
+    """Vrátit (undo) after Odebrat: the same grants again, for what was left of their time."""
+    return {"grants": [resume(conn, ctx, gid, "vráceno majitelem (zpět)")["grant_id"] for gid in sorted(set(grant_ids))]}
+
+
+# ------------------------------------------------------------------ the audit, grouped
+
+def audit_groups(conn: sqlite3.Connection, days: int = 7, credential_id: int | None = None,
+                 agent_id: int | None = None) -> list[dict]:
+    """One line per day, credential and agent: how many uses, how many refused, the last error."""
+    store.ensure_schema(conn)
+    where, args = ["u.at > ?"], [_iso(_utc() - timedelta(days=days))]
+    if credential_id is not None:
+        where.append("u.credential_id = ?")
+        args.append(credential_id)
+    if agent_id is not None:
+        where.append("u.agent_id = ?")
+        args.append(agent_id)
+    rows = conn.execute(
+        f"""SELECT substr(u.at, 1, 10) AS day, u.name, u.credential_id, u.agent_id, a.name AS agent_name,
+                   COUNT(*) AS count, SUM(u.ok = 0) AS errors, MIN(u.at) AS first_at, MAX(u.at) AS last_at,
+                   GROUP_CONCAT(DISTINCT u.tool) AS tools, GROUP_CONCAT(DISTINCT u.host) AS hosts,
+                   (SELECT e.error FROM credential_uses e WHERE e.name = u.name AND e.agent_id IS u.agent_id
+                      AND substr(e.at, 1, 10) = substr(u.at, 1, 10) AND e.ok = 0 ORDER BY e.id DESC LIMIT 1)
+                     AS last_error
+            FROM credential_uses u LEFT JOIN actors a ON a.id = u.agent_id WHERE {' AND '.join(where)}
+            GROUP BY day, u.name, u.agent_id ORDER BY day DESC, errors > 0 DESC, last_at DESC
+            LIMIT 200""", args).fetchall()
+    return [{**dict(r), "errors": r["errors"] or 0, "tools": sorted(set((r["tools"] or "").split(",")) - {""}),
+             "hosts": sorted(set((r["hosts"] or "").split(",")) - {""})} for r in rows]
+
+
+def uses_filtered(conn: sqlite3.Connection, name: str | None = None, agent_id: int | None = None,
+                  day: str | None = None, limit: int = 200) -> list[dict]:
+    """The single uses behind one audit line (expand)."""
+    from ..tasks import display_id
+
+    store.ensure_schema(conn)
+    where, args = [], []
+    if name:
+        where.append("u.name = ?")
+        args.append(name)
+    if agent_id is not None:
+        where.append("u.agent_id = ?" if agent_id else "u.agent_id IS NULL")
+        if agent_id:
+            args.append(agent_id)
+    if day:
+        where.append("substr(u.at, 1, 10) = ?")
+        args.append(day[:10])
+    rows = conn.execute(
+        f"""SELECT u.*, a.name AS agent_name FROM credential_uses u LEFT JOIN actors a ON a.id = u.agent_id
+            {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY u.id DESC LIMIT ?""", (*args, limit)).fetchall()
+    return [{**dict(r), "ok": bool(r["ok"]), "task_ref": display_id(r["task_id"]) if r["task_id"] else None}
+            for r in rows]

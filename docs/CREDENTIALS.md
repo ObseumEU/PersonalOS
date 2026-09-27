@@ -72,10 +72,42 @@ run is live) goes to that one MCP server, not to the model.
    ```
    then rebuild/restart `api` (the image installs `onepassword-sdk`).
    Service account access is immutable: for another vault, create a new one.
-5. In PersonalOS → **Přístupy** → **Přidat z 1Password**: pick an item's
-   field (names only are listed), set the env var/header, allowed hosts and
-   commands, save, **Otestovat načtení** (answers OK or the error, never the
-   value), then grant it to an agent or approve its request.
+5. Put the password or token into the vault. PersonalOS → **Přístupy** shows it
+   under **Nové v 1Password** with a suggestion; **Zaregistrovat a přidělit**
+   applies it (or **Upravit** first), **Otestovat** answers OK or the error,
+   never the value.
+
+## The Přístupy page
+
+- **Čeká na tebe**: agents' `request_access` for `cred:<name>` as cards
+  (who, what, why) with **Schválit** / **Zamítnout**. Approving creates the
+  grant, tells the agent and resumes its waiting task. A request may name an
+  item that is only in the vault (not registered yet): approving registers
+  the item's suggestion and grants it in one step (the request is pointed at
+  the registered name).
+- **Nové v 1Password** (`pos.credentials.discover`): vault items with no
+  registered field. Deterministic rules suggest the kind (SSH login, API
+  token, HTTP basic, DB login, generic) from the category, field names/types,
+  title, URL origins and host names in the notes; the registry entries
+  (names, fields, env var, `Authorization: Bearer` header, hosts, commands);
+  the owner's known hosts (Home Assistant 192.168.1.56, svr03 192.168.1.108,
+  knowlage/nexus/litellm/grafana domains, GitHub); and the agents, from that
+  table or by matching the item against the agents' names and purposes.
+  "SSH HomeAssistant" becomes `ha-ssh` + `ha-ssh-user` for the `ha_ssh` tool
+  (plus the `tool:ha_ssh` grant). Only when the rules cannot decide, one
+  `claude-haiku-4-5` call gets the title, category, field names/types and URL
+  hosts (never a value, never the notes), at most 3 per load, cached.
+  `POST /api/credentials/register` registers and grants in one call, all
+  checked before anything is written. Items can be hidden (**Skrýt**).
+- **Hesla a tokeny**: one card per 1Password item: kind, the agents holding
+  it (chips with scope and time left; × removes, **Vrátit** undoes), last
+  use, last test, errors; **Přidělit** (recommended agents on top, optional
+  expiry and scope), **Otestovat**, **Archivovat**; raw fields under
+  **Pokročilé**. **Podle agentů**: each agent's credentials, its pending
+  requests and a quick add.
+- **Audit**: grouped per day, credential and agent ("home-assistant · Home
+  Assistant Specialist · 42× dnes, vše OK"), errors first in red; a line
+  expands to the single uses.
 
 ## Later: the stacks' own secrets from 1Password (not done yet)
 
