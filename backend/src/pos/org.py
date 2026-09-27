@@ -182,9 +182,9 @@ def chart(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict
                         + ("" if include_archived else "AND archived_at IS NULL ")
                         + "ORDER BY is_owner DESC, id").fetchall()
     by_id = {r["id"]: r for r in rows}
-    working = {r["assignee_id"]: r["n"] for r in conn.execute(
-        "SELECT assignee_id, COUNT(*) AS n FROM tasks WHERE status = 'working' AND archived_at IS NULL "
-        "GROUP BY assignee_id")}
+    from .workers import working_on
+
+    working = working_on(conn)  # the one "working" state: a live run with a fresh heartbeat
 
     def level(aid: int) -> int:
         seen, n = {aid}, 0
@@ -199,7 +199,7 @@ def chart(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict
         "id": r["id"], "name": r["name"], "kind": r["kind"], "is_owner": bool(r["is_owner"]),
         "role": r["role"], "team": r["team"], "reports_to": r["reports_to"],
         "reports_to_name": by_id[r["reports_to"]]["name"] if r["reports_to"] in by_id else None,
-        "status": _status(r, working.get(r["id"], 0)), "level": level(r["id"]),
+        "status": _status(r, r["id"] in working), "level": level(r["id"]),
     } for r in rows]
 
 

@@ -124,3 +124,52 @@ the owner's messages answered" (every 2 min) keeps the pool's keys in step,
 files an incident for the Hlídač when a worker has been silent for 10 min
 (resolved when it is back) and when an owner message has had no real answer
 for 10 min.
+
+## Staying alive (2026-09-27)
+
+- **The pool wakes for messages too.** `pos_worker.pool` starts an agent's worker when
+  `GET /api/worker/next?wait=0` shows a task *or unread messages* (a DM, "handed in for
+  your review"). When `POOL_MAX_RUNNING` is reached, the waiting agents start in order:
+  the owner's chat message first, then other chat, then messages, then tasks; within a
+  rank, whoever started longest ago (round robin).
+- **Blocked agents let go of their slot.** A pool worker whose run is refused (budget,
+  usage limit) exits with code 75 and its agent waits 5 min; refused and skipped steps no
+  longer reset the idle clock.
+- **A short API outage does not kill a run.** Heartbeat, inbox and the calls that finish
+  a run are retried with a growing pause (~2 min, `finish_run` ~5 min); after that the run
+  carries on to its next step. The worker's alive tick (every 10 s, also inside a long
+  step) moves `runs.heartbeat_at` at most once a minute, so a 20+ minute step is neither
+  reaped nor offered to a second worker.
+- **One "working" state.** `pos.workers.working_on`: a running run whose heartbeat is at
+  most 5 min old. The chat, the Team page (`working_on: {task_ref, since}` on each agent
+  of `GET /api/agents`), the org chart and the network all use it.
+- **Chat answers once.** When a run on a "Chat: answer" task starts, the question it
+  answers is marked read and acked in the agent's inbox (it is in the prompt); messages
+  that joined the task later still reach the run through its inbox. The fast lane leaves
+  a message alone while the run answering it is live, and waits until a run has been
+  going for 30 s (the lazy pool needs up to 15 s to start a worker).
+
+### Core scheduler jobs
+
+`member_schedules`, `reap_runs`, `budget_check` and `routines_overdue` are the platform's
+own loops (`pos.scheduler.CORE_JOBS`): Automations cannot switch them off (only their
+schedule changes), `run_due` runs them even when their row says off, and start-up
+(`scheduler.seed` → `enforce_core`) switches such a row back on with an audit line
+(`job_update`, reason "core job: always on"). `routines_overdue` (every 10 min) files an
+incident through the Monitor for the SRE when an active routine is more than an hour late.
+
+**Prod data change (deploy of 2026-09-27).** The owner switched off jobs 1–9 on
+2026-09-25 21:03, including `member_schedules`, `reap_runs` and `budget_check`. No manual
+step is needed: the first start of this version re-enables the three (and seeds
+`routines_overdue`). To check after the deploy:
+
+```sql
+SELECT id, action, enabled, next_run_at, last_run_at FROM jobs
+ WHERE action IN ('member_schedules', 'reap_runs', 'budget_check', 'routines_overdue');
+SELECT at, entity_id, detail FROM audit_log WHERE action = 'job_update'
+ AND json_extract(detail, '$.reason') = 'core job: always on' ORDER BY id DESC LIMIT 5;
+```
+
+All four rows must say `enabled = 1` and get a fresh `last_run_at` within minutes. The
+other switched-off jobs (morning brief, follow-ups, weekly review, nightly retrospective,
+A2A sync, Claude self-check) stay as the owner left them.

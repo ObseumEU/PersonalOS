@@ -599,6 +599,11 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
     from .engine_view import Viewer
 
     runtime_view = Viewer(conn)
+    from .workers import working_on
+
+    # The one "working" state everywhere (chat, Team page, org chart): a live run with a fresh
+    # heartbeat, not a task left in "working" by a worker that died.
+    live = working_on(conn)
     out = []
     # Services (pos.workers: the Deployer, knowlage, Nexus) are not members of the team.
     for row in conn.execute("SELECT * FROM actors WHERE runtime != 'service' "
@@ -627,7 +632,7 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
                 json.loads(row["permissions"] or "[]") if row["kind"] == "human"
                 else sorted(p for p in permissions_of(conn, row["id"]) if p in PERMISSIONS)),
             "budget_class": c["budget_class"] if c else None,
-            "status": "online" if row["kind"] == "human" and not row["archived_at"] else _status(row, q["working"] or 0, waiting),
+            "status": "online" if row["kind"] == "human" and not row["archived_at"] else _status(row, row["id"] in live, waiting),
             "last_seen_at": row["last_seen_at"], "paused": bool(row["paused_at"]),
             "archived": bool(row["archived_at"]), "created_by": row["created_by"],
             "created_by_name": names.get(row["created_by"] or (p["created_by"] if p else None)),
@@ -642,6 +647,8 @@ def overview(conn: sqlite3.Connection) -> list[dict]:
             "queued": q["queued"] or 0, "working": q["working"] or 0, "review": q["review"] or 0,
             "done_today": q["done_today"] or 0, "approvals_waiting": waiting,
             "current": {"id": current["id"], "ref": tasks.display_id(current["id"]), "title": current["title"]} if current else None,
+            "working_on": ({"task_ref": live[row["id"]]["task_ref"], "since": live[row["id"]]["since"]}
+                           if row["id"] in live else None),
         })
     return out
 

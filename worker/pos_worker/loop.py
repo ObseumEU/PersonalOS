@@ -56,6 +56,20 @@ class _AliveTicker:
         self._stop.set()
 
 
+RETRY_DELAYS = (1, 2, 4, 8, 15, 30, 30, 30)  # ~2 min: PersonalOS restarting (a deploy) or a network blip
+
+
+def transient(e: Exception) -> bool:
+    """A failure worth retrying: PersonalOS unreachable or answering 5xx (not a refusal, not a 4xx)."""
+    import httpx
+
+    if isinstance(e, Blocked):
+        return False
+    if isinstance(e, httpx.HTTPStatusError):
+        return e.response.status_code >= 500 or e.response.status_code == 429
+    return isinstance(e, (httpx.TransportError, OSError, TimeoutError))
+
+
 CHAT_REASONS = ("dm", "mention", "reply")  # a chat message addressed to the agent: it answers mid-run
 
 
@@ -101,20 +115,52 @@ class Worker:
         self.context: list[dict] = []  # messages received while idle, used in the next task
         self.me: dict = {}
 
+    # ------------------------------------------------------------- calls to PersonalOS
+
+    def _call(self, fn: Callable, *args, delays=RETRY_DELAYS, **kw):
+        """A call to PersonalOS that survives a short outage (a deploy restarts the API):
+        retried with a growing pause on transient errors; others raise at once."""
+        for i, pause in enumerate((*delays, None)):
+            try:
+                return fn(*args, **kw)
+            except Exception as e:  # noqa: BLE001
+                if pause is None or not transient(e):
+                    raise
+                log.info("PersonalOS call %s failed (%s); retry %d in %ss",
+                         getattr(fn, "__name__", "?"), str(e)[:120], i + 1, pause)
+                self.sleep(pause)
+
+    def _safe(self, fn: Callable, default, *args):
+        """_call inside a run: after the retries, log it and go on with `default`."""
+        try:
+            return self._call(fn, *args)
+        except Exception as e:  # noqa: BLE001 - the run goes on; the next step tries again
+            if not transient(e):
+                raise
+            log.warning("PersonalOS unreachable (%s): the run goes on", str(e)[:120])
+            return default
+
     # ------------------------------------------------------------- main loop
 
-    def run_forever(self) -> None:
+    IDLE = ("idle", "read_messages", "held", "blocked", "skipped")  # nothing ran: the idle clock keeps going
+
+    def run_forever(self) -> str:
+        """Returns why it ended (exit_idle_s only): "idle", or "blocked" when its run was refused
+        (the pool then gives the slot to another agent for a while, pos_worker.pool.BLOCKED_EXIT)."""
         self.me = self.client.me()
         log.info("worker for %s started", self.me["name"])
         busy_at = self.clock()
         while True:
             what = self.step()
-            if what not in ("idle", "read_messages", "held"):
+            if what == "blocked" and self.exit_idle_s:
+                log.info("worker for %s: run refused; exiting so another agent gets the slot", self.me.get("name"))
+                return "blocked"
+            if what not in self.IDLE:
                 busy_at = self.clock()
             elif self.exit_idle_s and self.clock() - busy_at > self.exit_idle_s:
                 log.info("worker for %s idle for %ss: exiting (the pool starts it again on work)",
                          self.me.get("name"), int(self.exit_idle_s))
-                return
+                return "idle"
 
     def step(self) -> str:
         """One iteration; returns what happened (for tests and logs)."""
@@ -161,13 +207,14 @@ class Worker:
             started = self.client.start_run(ref)
         except Blocked as e:
             log.info("run for %s blocked: %s", ref, e)
-            self.sleep(min(self.poll_wait, 30))
+            if not self.exit_idle_s:  # the pool's worker ends at once instead (run_forever)
+                self.sleep(min(self.poll_wait, 30))
             return "blocked"
         try:
             run_id = started["run_id"]
             self.client.claim(ref, run_id)
         except Exception as e:  # someone else took it, or it changed meanwhile
-            self.client.finish_run(started["run_id"], "cancelled", "", f"could not claim {ref}: {e}")
+            self._call(self.client.finish_run, started["run_id"], "cancelled", "", f"could not claim {ref}: {e}")
             return "skipped"
 
         engine = started.get("engine") or "codex"
@@ -175,8 +222,8 @@ class Worker:
         self.run_cap_usd = started.get("max_budget_usd")
         check = self._triage(ref, task, run_id)
         if check and check.get("action") in ("parked", "handed_back"):
-            self.client.finish_run(run_id, "ok", check.get("jsonl", ""),
-                                   f"triage: {check['verdict']}, {check['action'].replace('_', ' ')}")
+            self._call(self.client.finish_run, run_id, "ok", check.get("jsonl", ""),
+                       f"triage: {check['verdict']}, {check['action'].replace('_', ' ')}")
             log.info("%s: triage said %s, no full run", ref, check["verdict"])
             return "triaged"
         try:
@@ -184,8 +231,8 @@ class Worker:
         except Exception as e:  # noqa: BLE001 - report it, hand the task back, keep the worker alive
             log.exception("run %s for %s failed", run_id, ref)
             try:
-                self.client.finish_run(run_id, "error", "", f"worker error: {e}"[:2000])
-                self.client.handback(ref, f"worker error: {e}"[:400])
+                self._call(self.client.finish_run, run_id, "error", "", f"worker error: {e}"[:2000])
+                self._call(self.client.handback, ref, f"worker error: {e}"[:400])
             except Exception:  # noqa: BLE001
                 log.exception("could not report the failure")
             return "error"
@@ -245,12 +292,14 @@ class Worker:
                     session.stop()
                     interrupted = "step_cap"
                     break
-                state = self.client.heartbeat(run_id, step_label(ev, last_tool), steps)
+                # A short outage (a deploy) must not end the run: retried, and when PersonalOS
+                # stays away the run carries on to the next step instead of dying.
+                state = self._safe(self.client.heartbeat, {}, run_id, step_label(ev, last_tool), steps)
                 if state.get("run_cancelled") or state.get("frozen") or state.get("paused"):
                     session.stop()
                     interrupted = "cancelled"
                     break
-                msgs = self.client.inbox(run_id)
+                msgs = self._safe(self.client.inbox, [], run_id)
                 if any(m["priority"] == "stop" for m in msgs):
                     session.stop()
                     interrupted = "cancelled"
@@ -279,7 +328,7 @@ class Worker:
                 outcome = "error"
                 break
             # The session finished its turn. Late information still gets a say.
-            pending_fyi += [m for m in self.client.inbox(run_id) if m["priority"] != "stop"]
+            pending_fyi += [m for m in self._safe(self.client.inbox, [], run_id) if m["priority"] != "stop"]
             if pending_fyi and resumes < self.max_resumes:
                 prompt = injection(pending_fyi, before_finishing=True)
                 pending_fyi = []
@@ -291,12 +340,13 @@ class Worker:
     def _after_run(self, ref: str, run_id: int, engine: str, session, check: dict | None, outcome: str) -> str:
         # The check's usage line first, so PersonalOS counts its cost with the run's.
         jsonl = "\n".join(x for x in ((check or {}).get("jsonl", ""), session.jsonl) if x)
-        done = self.client.finish_run(run_id, outcome, jsonl,
-                                      session.failed or ("stopped" if outcome == "cancelled" else ""))
+        done = self._call(self.client.finish_run, run_id, outcome, jsonl,
+                          session.failed or ("stopped" if outcome == "cancelled" else ""),
+                          delays=(*RETRY_DELAYS, 60, 60, 60))  # the result is worth a longer wait
         if done.get("requeued"):  # the runtime hit its usage limit; PersonalOS retries on the other one
             log.info("%s: %s hit its usage limit, task requeued", ref, engine)
             return "requeued"
-        now = self.client.task(ref)
+        now = self._call(self.client.task, ref)
         if now.get("assignee_id") not in (None, self.me.get("id")):
             # Reassigned to someone else meanwhile: it is theirs now, leave it alone.
             log.info("%s: reassigned to %s, not handing anything in", ref, now.get("assignee_name"))
@@ -304,7 +354,7 @@ class Worker:
         if outcome == "ok":
             # The agent may have handed it in itself (complete_task over MCP).
             if now["status"] == "working":
-                self.client.complete(ref, session.last_message[:2000] or "Done.")
+                self._call(self.client.complete, ref, session.last_message[:2000] or "Done.")
         elif outcome == "error":
-            self.client.handback(ref, session.failed[:400])
+            self._call(self.client.handback, ref, session.failed[:400])
         return outcome

@@ -41,6 +41,9 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
     from .engine_view import Viewer
 
     runtime_view = Viewer(conn)
+    from .workers import working_on
+
+    live = working_on(conn)  # the one "working" state: a live run with a fresh heartbeat
     nodes = [{"id": HUB, "name": "PersonalOS", "kind": "hub", "open": 0, "working": 0, "review": 0,
               "tokens": 0, "status": "frozen" if frozen else "online", "is_owner": False}]
     for a in conn.execute("SELECT * FROM actors ORDER BY id"):
@@ -49,7 +52,7 @@ def build(conn: sqlite3.Connection, window: str = "24h") -> dict:
                FROM tasks WHERE assignee_id = ? AND archived_at IS NULL""", (a["id"],)
         ).fetchone()
         status = ("archived" if a["archived_at"] else "paused" if a["paused_at"]
-                  else "frozen" if frozen and a["kind"] != "human" else "working" if load["working"] else "idle")
+                  else "frozen" if frozen and a["kind"] != "human" else "working" if a["id"] in live else "idle")
         nodes.append({
             "id": a["id"], "name": a["name"], "kind": a["kind"], "is_owner": bool(a["is_owner"]),
             "open": load["open"] or 0, "working": load["working"] or 0, "review": load["review"] or 0,

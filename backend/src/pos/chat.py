@@ -453,6 +453,8 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     if open_:
         comments.log(conn, ctx, open_["id"], f"{author} added (message {message_id}): {body[:1500]}", "comment")
         audit.log(conn, ctx, "chat_task", "task", open_["id"], channel=ch["id"], message=message_id)
+        # Stays unread: the task's notes carry only the first message, so the run takes this
+        # one from its inbox (_own_question keeps only the first one out).
         availability.autoreply(conn, open_["id"], message_id)
         return
     notes = (f"Purpose: {author} wrote to you in chat and waits for an answer.\n"
@@ -473,6 +475,37 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     })
     audit.log(conn, ctx, "chat_task", "task", t["id"], channel=ch["id"], message=message_id)
     availability.autoreply(conn, t["id"], message_id)
+
+
+def _task_question(conn: sqlite3.Connection, task_id: int | None) -> int | None:
+    """The message a "Chat: answer" task was created for (its notes carry it); None otherwise."""
+    if not task_id:
+        return None
+    row = conn.execute("""SELECT json_extract(detail, '$.message') FROM audit_log WHERE action = 'chat_task'
+                          AND entity = 'task' AND entity_id = ? ORDER BY id LIMIT 1""", (task_id,)).fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def take_question(conn: sqlite3.Connection, actor_id: int, task_id: int | None) -> None:
+    """A run on a "Chat: answer" task starts: the question it answers is in its prompt, so its
+    inbox row is read and acked now. Left unread, the run got its own question injected at its
+    first step and answered twice (prod, 2026-09-27: messages 356, 209, 208, 311). Messages
+    that joined the task later stay unread: the prompt does not carry them, the run takes them
+    from its inbox."""
+    mid = _task_question(conn, task_id)
+    if mid is None:
+        return
+    now = now_iso()
+    conn.execute("UPDATE chat_inbox SET read_at = COALESCE(read_at, ?), acked_at = COALESCE(acked_at, ?) "
+                 "WHERE message_id = ? AND actor_id = ?", (now, now, mid, actor_id))
+    conn.commit()
+
+
+def _own_question(conn: sqlite3.Connection, run_id: int, message_ids: list[int]) -> set[int]:
+    """Of these messages, the one the run already has: the question of its own chat task."""
+    run = conn.execute("SELECT task_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+    mid = _task_question(conn, run["task_id"]) if run is not None else None
+    return {mid} & set(message_ids) if mid is not None else set()
 
 
 def _close_answered(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, reply_id: int) -> None:
@@ -620,6 +653,9 @@ def check_inbox(conn: sqlite3.Connection, actor_id: int, mark_read: bool = True,
             f"UPDATE chat_inbox SET read_at = ?, delivered_in_run = COALESCE(delivered_in_run, ?) "
             f"WHERE actor_id = ? AND message_id IN ({','.join('?' for _ in ids)})",
             [now_iso(), run_id, actor_id, *ids])
+    if rows and run_id:  # the run's own question is in its prompt already: not injected again
+        own = _own_question(conn, run_id, [r["id"] for r in rows])
+        rows = [r for r in rows if r["id"] not in own]
     out = []
     for r in rows:
         body, trust = _wrap_for_agent(r, r["body"])
@@ -653,8 +689,11 @@ def _names(conn: sqlite3.Connection) -> dict[int, sqlite3.Row]:
 
 
 def working_ids(conn: sqlite3.Connection) -> list[int]:
-    """Members with a running run (the "working" indicator)."""
-    return [r[0] for r in conn.execute("SELECT DISTINCT actor_id FROM runs WHERE status = 'running'")]
+    """Members with a live run (the "working" indicator): pos.workers.working_on, the same
+    state the Team page shows."""
+    from .workers import working_on
+
+    return sorted(working_on(conn))
 
 
 def _reactions(conn: sqlite3.Connection, ids: list[int]) -> dict[int, list[dict]]:

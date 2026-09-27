@@ -12,11 +12,15 @@ goes.
 Lazy mode (POOL_LAZY=1, the default): an idle agent has no process. For each
 key the supervisor asks PersonalOS `GET /api/worker/next?wait=0` (no side
 effects; it also keeps the agent's last-seen time, so the core knows its
-worker is alive); only when the agent has a task does it start the worker,
+worker is alive); only when the agent has a task or unread messages does it
+start the worker,
 which ends itself after WORKER_EXIT_IDLE_S (default 120) without a task. The
 supervisor itself is one small process; memory grows only with the agents
 that are working right now, and POOL_MAX_RUNNING (default 4) caps how many
-work at once (a run's CLI takes ~200 MB; the others wait for the next scan).
+work at once (a run's CLI takes ~200 MB; the others wait for the next scan,
+the owner's messages first, then round robin). A worker whose run is refused
+(budget, usage limit) ends at once and its agent waits BLOCKED_BACKOFF_S, so
+blocked agents do not hold the slots.
 POOL_LAZY=0 keeps one worker per agent running
 (a crash restarts it with a growing pause, at most 5 min).
 
@@ -51,8 +55,33 @@ def scan(root: Path) -> dict[str, str]:
     return out
 
 
-def has_work(url: str, key: str) -> bool:
-    """Does this agent have a task now? (GET /api/worker/next?wait=0; no side effects.)"""
+# Who starts first when the pool is full (POOL_MAX_RUNNING): lower goes first.
+RANK_OWNER = 1      # the owner's chat message waits for an answer
+RANK_CHAT = 2       # someone else's chat message
+RANK_MESSAGES = 3   # unread messages: a DM, "handed in for your review", an @mention
+RANK_TASK = 4       # ordinary queued work
+BLOCKED_EXIT = 75   # a worker ends with this when its run was refused (budget, usage limit): try later
+BLOCKED_BACKOFF_S = 300
+
+
+def work_rank(work: dict) -> int | None:
+    """How urgent the agent's work is (RANK_*), None when it has none (or may not run)."""
+    state = work.get("state") or {}
+    if state.get("frozen") or state.get("paused") or state.get("archived"):
+        return None
+    task = work.get("task") or None
+    if task and task.get("topic") == "chat":
+        return RANK_OWNER if task.get("priority") == 1 else RANK_CHAT
+    if work.get("unread_messages"):
+        # Messages wake the agent too (2026-09-27: review requests and DMs sat unread while
+        # the pool only started agents with a task).
+        return RANK_MESSAGES
+    return RANK_TASK if task else None
+
+
+def has_work(url: str, key: str) -> int | None:
+    """Does this agent have work now, a task or unread messages? Its rank (RANK_*), else None.
+    (GET /api/worker/next?wait=0; no side effects.)"""
     import httpx
 
     try:
@@ -62,9 +91,8 @@ def has_work(url: str, key: str) -> bool:
         work = r.json()
     except Exception as e:  # noqa: BLE001 - PersonalOS restarting: ask again next scan
         log.info("probe failed: %s", str(e)[:200])
-        return False
-    state = work.get("state") or {}
-    return bool(work.get("task")) and not (state.get("frozen") or state.get("paused") or state.get("archived"))
+        return None
+    return work_rank(work)
 
 
 class Pool:
@@ -79,6 +107,7 @@ class Pool:
         self.children: dict[str, tuple[object, str]] = {}
         self.failures: dict[str, int] = {}
         self.not_before: dict[str, float] = {}
+        self.last_started: dict[str, float] = {}  # round robin among agents of the same rank
 
     def _spawn(self, slug: str, key: str):
         workdir = self.work / slug
@@ -112,19 +141,34 @@ class Pool:
                 if proc.returncode == 0 and self.lazy:  # it ended itself when idle: started again on work
                     self.failures.pop(slug, None)
                     continue
+                if proc.returncode == BLOCKED_EXIT:  # its run was refused: the slot goes to someone else
+                    self.failures.pop(slug, None)
+                    self.not_before[slug] = self.clock() + BLOCKED_BACKOFF_S
+                    log.info("worker %s: run refused (budget or limit); trying again later", slug)
+                    continue
                 n = self.failures[slug] = self.failures.get(slug, 0) + 1
                 self.not_before[slug] = self.clock() + min(300, 5 * 2 ** min(n, 6))
                 log.warning("worker %s exited with %s; restarting later", slug, proc.returncode)
+        waiting = []
         for slug, key in want.items():
             if slug in self.children or self.not_before.get(slug, 0) > self.clock():
                 continue
-            if self.lazy and not self.probe(slug, key):
-                continue
+            rank = RANK_TASK
+            if self.lazy:
+                found = self.probe(slug, key)
+                if not found:
+                    continue
+                rank = RANK_TASK if found is True else int(found)
+            waiting.append((rank, self.last_started.get(slug, float("-inf")), slug, key))
+        # Fair: the owner's messages first, then chat, messages, tasks; within a rank, whoever
+        # started longest ago (round robin), so a few agents cannot hold every slot.
+        for _rank, _, slug, key in sorted(waiting):
             if self.max_running and len(self.children) >= self.max_running:
                 # Memory: it starts when a running one ends. The probe above still ran, so the core
                 # sees the agent alive and does not tell the owner its worker is down (2026-09-26).
                 continue
             self.children[slug] = (self.spawn(slug, key), key)
+            self.last_started[slug] = self.clock()
             started.append(slug)
             log.info("started worker %s", slug)
         return {"started": started, "stopped": stopped, "running": sorted(self.children)}

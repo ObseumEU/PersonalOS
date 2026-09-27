@@ -35,6 +35,7 @@ SERVICES = {
     "Nexus": "platforma pro automatizaci procesů (Nexus), napojená přes A2A",
 }
 POOL = "pool"
+LIVE_S = 300               # a run whose worker spoke (heartbeat or alive tick) this recently is live
 WORKER_STALE_S = 300       # workers long-poll every 60 s; 5 min of silence and no run: not running
 NEVER_SEEN_GRACE_S = 600   # a new agent's worker gets 10 min to start
 
@@ -100,6 +101,40 @@ def _age_s(iso: str | None) -> float | None:
     return (datetime.now(timezone.utc) - t).total_seconds()
 
 
+def live_cutoff(now: datetime | None = None, live_s: int = LIVE_S) -> str:
+    """Heartbeats at or after this are fresh: the run has a worker behind it."""
+    from datetime import timedelta
+
+    return ((now or datetime.now(timezone.utc)) - timedelta(seconds=live_s)).isoformat(timespec="seconds")
+
+
+LIVE_RUN_SQL = ("status = 'running' AND kind != 'chat_fastlane' "
+                "AND COALESCE(heartbeat_at, started_at) >= ?")  # with live_cutoff()
+
+
+def working_on(conn: sqlite3.Connection, actor_id: int | None = None) -> dict[int, dict]:
+    """THE "working" state (the chat, the Team page, the org chart, the network): per agent
+    with a live run (running, a fresh heartbeat), the newest such run:
+    {"task_ref", "since", "task_id", "title", "run_id", "minutes"}. A run whose worker went
+    silent does not count, however its row reads."""
+    from . import tasks
+
+    sql = ("SELECT r.id, r.actor_id, r.task_id, r.started_at, t.title FROM runs r LEFT JOIN tasks t "
+           "ON t.id = r.task_id WHERE r.status = 'running' AND r.kind != 'chat_fastlane' "
+           "AND COALESCE(r.heartbeat_at, r.started_at) >= ?")
+    args: list = [live_cutoff()]
+    if actor_id is not None:
+        sql += " AND r.actor_id = ?"
+        args.append(actor_id)
+    out: dict[int, dict] = {}
+    for r in conn.execute(sql + " ORDER BY r.id", args):
+        age = _age_s(r["started_at"]) or 0
+        out[r["actor_id"]] = {"task_ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
+                              "since": r["started_at"], "task_id": r["task_id"], "title": r["title"],
+                              "run_id": r["id"], "minutes": max(0, int(age // 60))}
+    return out
+
+
 def a2a_bridge_off(conn: sqlite3.Connection) -> bool:
     """The scheduler job that hands tasks to remote agents is switched off (Automations)."""
     job = conn.execute("SELECT enabled FROM jobs WHERE action = 'a2a_sync'").fetchone()
@@ -116,7 +151,10 @@ def worker_down(conn: sqlite3.Connection, row, stale_s: int = WORKER_STALE_S) ->
     if path["kind"] == "a2a":
         return ("jeho spojení se vzdálenou aplikací je vypnuté (úloha „A2A: hand tasks to remote agents“ "
                 "na stránce Automatizace)") if a2a_bridge_off(conn) else None
-    if conn.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (row["id"],)).fetchone():
+    # A run counts only while its worker still speaks: a run left "running" by a worker that
+    # died in an outage is no proof that a worker is there (2026-09-27).
+    if conn.execute(f"SELECT 1 FROM runs WHERE actor_id = ? AND {LIVE_RUN_SQL}",
+                    (row["id"], live_cutoff())).fetchone():
         return None
     age = _age_s(row["last_seen_at"])
     if age is None:

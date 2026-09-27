@@ -32,7 +32,7 @@ log = logging.getLogger("pos.fastlane")
 FASTLANE_AFTER_S = 30  # a message the run has not picked up after this long gets a fast answer
 FASTLANE_MAX_AGE_S = 30 * 60  # older unread messages are left to the run (e.g. after a restart)
 FASTLANE_MODEL = os.environ.get("POS_FASTLANE_MODEL", "claude-haiku-4-5")
-LIVE_S = 5 * 60  # a run whose worker spoke within this is alive (api_worker.LIVE_RUN_MINUTES)
+LIVE_S = 5 * 60  # a run whose worker spoke within this is alive (pos.workers.LIVE_S)
 
 # ------------------------------------------------------------------ the run's last steps (memory)
 
@@ -192,6 +192,27 @@ def ask_model(conn: sqlite3.Connection, actor_id: int, prompt: str) -> str:
     return res.output.strip()
 
 
+def answers_it(conn: sqlite3.Connection, run: sqlite3.Row, message_id: int) -> bool:
+    """Is this run the one answering the message (its "Chat: answer" task)? Then the run itself
+    answers; a fast answer would be the second one (prod, 2026-09-27)."""
+    if not run["task_id"]:
+        return False
+    return conn.execute("""SELECT 1 FROM audit_log WHERE action = 'chat_task' AND entity = 'task' AND entity_id = ?
+                           AND json_extract(detail, '$.message') = ?""", (run["task_id"], message_id)).fetchone() is not None
+
+
+def _run_too_new(run: sqlite3.Row, now: datetime | None = None) -> bool:
+    """The run started less than FASTLANE_AFTER_S ago: it has not had its chance to read the
+    message yet (the lazy pool takes up to 15 s to start a worker, and the worker its CLI)."""
+    try:
+        started = datetime.fromisoformat(run["started_at"].replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - started).total_seconds() < FASTLANE_AFTER_S
+
+
 def respond(conn: sqlite3.Connection, actor_id: int, message_id: int) -> dict | None:
     """The fast answer to one message; None when it is not due (read meanwhile, already answered,
     the run ended)."""
@@ -201,6 +222,8 @@ def respond(conn: sqlite3.Connection, actor_id: int, message_id: int) -> dict | 
                          (message_id, actor_id)).fetchone()
     run = live_run(conn, actor_id)
     if m is None or inbox is None or inbox["read_at"] or run is None or m["archived_at"]:
+        return None
+    if answers_it(conn, run, message_id) or _run_too_new(run):
         return None
     if conn.execute("SELECT 1 FROM audit_log WHERE action = 'chat_fastlane' AND entity = 'chat_message' "
                     "AND entity_id = ? AND actor_id = ?", (message_id, actor_id)).fetchone():
@@ -241,7 +264,9 @@ def respond(conn: sqlite3.Connection, actor_id: int, message_id: int) -> dict | 
 
 def due(conn: sqlite3.Connection, now: datetime | None = None) -> list[tuple[int, int]]:
     """(agent, message) pairs waiting for a fast answer: a person's DM, mention or reply to an agent
-    with a live run, unread by that run for FASTLANE_AFTER_S."""
+    with a live run, unread by that run for FASTLANE_AFTER_S. Not when that run is the one
+    answering the message (its chat task), and the run must have been going for
+    FASTLANE_AFTER_S too (a run that just started has not reached its first step yet)."""
     now = now or datetime.now(timezone.utc)
     newest = (now - timedelta(seconds=FASTLANE_AFTER_S)).isoformat(timespec="seconds")
     oldest = (now - timedelta(seconds=FASTLANE_MAX_AGE_S)).isoformat(timespec="seconds")
@@ -254,10 +279,14 @@ def due(conn: sqlite3.Connection, now: datetime | None = None) -> list[tuple[int
              AND COALESCE(m.priority, 'fyi') != 'stop' AND au.kind = 'human' AND ag.kind != 'human'
              AND m.created_at <= ? AND m.created_at >= ?
              AND EXISTS (SELECT 1 FROM runs r WHERE r.actor_id = i.actor_id AND r.status = 'running'
-                         AND r.kind != 'chat_fastlane' AND COALESCE(r.heartbeat_at, r.started_at) >= ?)
+                         AND r.kind != 'chat_fastlane' AND COALESCE(r.heartbeat_at, r.started_at) >= ?
+                         AND r.started_at <= ?
+                         AND NOT (r.task_id IS NOT NULL AND EXISTS (SELECT 1 FROM audit_log c
+                                  WHERE c.action = 'chat_task' AND c.entity = 'task' AND c.entity_id = r.task_id
+                                  AND json_extract(c.detail, '$.message') = i.message_id)))
              AND NOT EXISTS (SELECT 1 FROM audit_log l WHERE l.action = 'chat_fastlane'
                              AND l.entity = 'chat_message' AND l.entity_id = i.message_id AND l.actor_id = i.actor_id)
-           ORDER BY i.message_id""", (newest, oldest, live)).fetchall()
+           ORDER BY i.message_id""", (newest, oldest, live, newest)).fetchall()
     return [(r["actor_id"], r["message_id"]) for r in rows]
 
 
@@ -286,16 +315,9 @@ async def loop(db_path, interval_s: float = 10) -> None:
 
 def current_work(conn: sqlite3.Connection) -> dict[int, dict]:
     """Per busy agent: the task its live run works on and for how long (the chat's "pracuje na T-046 · 12 min")."""
-    from . import tasks
+    from .workers import working_on
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=LIVE_S)).isoformat(timespec="seconds")
-    out: dict[int, dict] = {}
-    for r in conn.execute(
-            "SELECT r.actor_id, r.task_id, r.started_at, t.title FROM runs r LEFT JOIN tasks t ON t.id = r.task_id "
-            "WHERE r.status = 'running' AND r.kind != 'chat_fastlane' AND COALESCE(r.heartbeat_at, r.started_at) >= ? "
-            "ORDER BY r.id", (cutoff,)):
-        out[r["actor_id"]] = {"task_id": r["task_id"], "task_ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
-                              "title": r["title"], "since": r["started_at"], "minutes": _minutes_since(r["started_at"])}
-    return out
+    return {aid: {k: w[k] for k in ("task_id", "task_ref", "title", "since", "minutes")}
+            for aid, w in working_on(conn).items()}
 
 

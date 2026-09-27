@@ -344,6 +344,8 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
         raise HTTPException(409, res.error)
     # A run on a chat answer: the agent shows as typing there (no tool call, no tokens).
     chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)
+    # Its question is in the prompt: not injected again at the first step (a double answer).
+    chat.take_question(conn, ctx.actor_id, tid)
     from .access import service as access
 
     # The agent's max USD per run (pos.access): the worker hands it to the engine as its cost cap.
@@ -367,13 +369,24 @@ def heartbeat(run_id: int, body: BeatIn | None = None, conn=Depends(get_db), ctx
     return _state(conn, ctx.actor_id, run_id)
 
 
+ALIVE_WRITE_S = 60  # the alive tick comes every 10 s; the heartbeat column moves at most this often
+
+
 @router.post("/runs/{run_id}/alive")
 def alive(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """The worker's tick between steps (long tool work): keeps a chat run's softer
-    "working" indicator, nothing else. Memory only."""
+    "working" indicator and the run itself alive: its heartbeat moves on (at most once a
+    minute), so a step longer than the reaper's 20 min is not released and the task is
+    not offered to a second worker (_live_run_sql)."""
+    from datetime import datetime, timedelta, timezone
+
     r = conn.execute("SELECT status FROM runs WHERE id = ? AND actor_id = ?", (run_id, ctx.actor_id)).fetchone()
     if r and r["status"] == "running":
         chat.typing_run_alive(run_id)
+        stale = (datetime.now(timezone.utc) - timedelta(seconds=ALIVE_WRITE_S)).isoformat(timespec="seconds")
+        conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running' "
+                     "AND (heartbeat_at IS NULL OR heartbeat_at < ?)", (now_iso(), run_id, stale))
+        conn.commit()
     else:
         chat.typing_clear(run_id=run_id)
     return {"ok": True}

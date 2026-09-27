@@ -25,9 +25,23 @@ log = logging.getLogger(__name__)
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
+def _at(day, hh: int, mm: int) -> datetime:
+    """The UTC instant of a Prague wall-clock time on a date. Timezone-aware: the hour the
+    October change repeats counts once (its first occurrence, fold 0); a time the March change
+    skips falls on the hour after it."""
+    local = datetime(day.year, day.month, day.day, hh, mm, tzinfo=TZ, fold=0)
+    return local.astimezone(timezone.utc)
+
+
 def next_run(schedule: str, after: datetime) -> datetime:
-    """Next time (UTC) the schedule fires strictly after `after` (UTC)."""
+    """Next time (UTC) the schedule fires strictly after `after` (UTC).
+
+    Local times are built from the Prague date and compared as UTC instants, never as wall
+    clocks: comparing wall clocks returned a time in the past inside the hour the October
+    change repeats, and a daily job fired on every scheduler tick for that hour (2026-09-27)."""
     s = schedule.strip().lower()
+    if after.tzinfo is None:
+        after = after.replace(tzinfo=timezone.utc)
     if m := re.fullmatch(r"every (\d+) ?(m|min|h)", s):
         n = int(m[1]) * (60 if m[2] == "h" else 1)
         if n < 1:
@@ -42,10 +56,7 @@ def next_run(schedule: str, after: datetime) -> datetime:
         hh, mm = int(m[3]), int(m[4])  # every N days at a time of day (Prague): N days on, at that time
         if hh > 23 or mm > 59:
             raise ValueError(f"unknown schedule: {schedule}")
-        local = after.astimezone(TZ)
-        return (local + timedelta(days=days_n)).replace(hour=hh, minute=mm, second=0,
-                                                        microsecond=0).astimezone(timezone.utc)
-    local = after.astimezone(TZ)
+        return _at(after.astimezone(TZ).date() + timedelta(days=days_n), hh, mm)
     if m := re.fullmatch(r"(daily|weekdays) (\d{1,2}):(\d{2})", s):
         kind, hh, mm = m[1], int(m[2]), int(m[3])
         days = range(5) if kind == "weekdays" else range(7)
@@ -53,10 +64,16 @@ def next_run(schedule: str, after: datetime) -> datetime:
         days, hh, mm = [DAYS.index(m[1])], int(m[2]), int(m[3])
     else:
         raise ValueError(f"unknown schedule: {schedule}")
-    for add in range(0, 8):
-        d = (local + timedelta(days=add)).replace(hour=hh, minute=mm, second=0, microsecond=0)
-        if d > local and d.weekday() in days:
-            return d.astimezone(timezone.utc)
+    if hh > 23 or mm > 59:
+        raise ValueError(f"unknown schedule: {schedule}")
+    start = after.astimezone(TZ).date()
+    for add in range(0, 9):
+        day = start + timedelta(days=add)
+        if day.weekday() not in days:
+            continue
+        at = _at(day, hh, mm)
+        if at > after:
+            return at
     raise ValueError(schedule)
 
 
@@ -209,6 +226,12 @@ def member_schedules(conn: sqlite3.Connection) -> dict:
     return schedules.run_due(conn)
 
 
+def routines_overdue(conn: sqlite3.Connection) -> dict:
+    from . import schedules
+
+    return schedules.watch_overdue(conn)
+
+
 def a2a_sync(conn: sqlite3.Connection) -> dict:
     from . import a2a
 
@@ -315,6 +338,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "a2a_sync": a2a_sync,
     "reap_runs": reap_runs,
     "member_schedules": member_schedules,
+    "routines_overdue": routines_overdue,
     "claude_selfcheck": claude_selfcheck,
 }
 
@@ -348,7 +372,15 @@ DEFAULT_JOBS = [
     # Every agent has a worker and the owner is never left without an answer (pos.workers): the pool's
     # keys, a worker silent for 10 min, an owner message unanswered for 10 min: an incident each.
     ("Agents: workers running, the owner's messages answered", "every 2m", "agents_watch"),
+    # A routine more than an hour late (its loop stopped, the scheduler was off): an incident for the SRE.
+    ("Routines: alert when one is more than an hour late", "every 10m", "routines_overdue"),
 ]
+
+# The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on
+# 2026-09-25 and no routine ran, no stuck run was released and no budget was checked for two
+# days). The schedule stays editable; a disabled row still runs (run_due) and is switched back
+# on at start-up (enforce_core), with an audit line.
+CORE_JOBS = ("member_schedules", "reap_runs", "budget_check", "routines_overdue")
 
 
 # ------------------------------------------------------------------ jobs
@@ -363,11 +395,28 @@ def seed(conn: sqlite3.Connection) -> None:
             (name, schedule, action, next_run(schedule, now).isoformat(timespec="seconds"), now_iso()),
         )
     conn.commit()
+    enforce_core(conn)
+
+
+def enforce_core(conn: sqlite3.Connection) -> list[str]:
+    """Core jobs switched off (by hand, or before they were core) are on again. Runs at start-up
+    (scheduler.seed), so a deploy repairs the data by itself; audited."""
+    rows = conn.execute(f"SELECT id, action FROM jobs WHERE enabled = 0 AND action IN "
+                        f"({','.join('?' * len(CORE_JOBS))})", CORE_JOBS).fetchall()
+    if not rows:
+        return []
+    ctx = Ctx(actors.owner_id(conn), via="scheduler")
+    for r in rows:
+        conn.execute("UPDATE jobs SET enabled = 1 WHERE id = ?", (r["id"],))
+        audit.log(conn, ctx, "job_update", "job", r["id"], enabled=1, reason="core job: always on")
+    conn.commit()
+    log.warning("core jobs were switched off; switched on again: %s", [r["action"] for r in rows])
+    return [r["action"] for r in rows]
 
 
 def list_jobs(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT * FROM jobs ORDER BY id").fetchall()
-    return [{**dict(r), "enabled": bool(r["enabled"]),
+    return [{**dict(r), "enabled": bool(r["enabled"]) or r["action"] in CORE_JOBS, "core": r["action"] in CORE_JOBS,
              "last_result": json.loads(r["last_result"]) if r["last_result"] else None} for r in rows]
 
 
@@ -377,6 +426,9 @@ def update_job(conn: sqlite3.Connection, ctx: Ctx, job_id: int, changes: dict) -
         raise tasks.Invalid(f"no job {job_id}")
     sets = {}
     if "enabled" in changes:
+        if not changes["enabled"] and row["action"] in CORE_JOBS:
+            raise tasks.Invalid(f"“{row['name']}” is one of the platform's own loops and cannot be switched off; "
+                                "change its schedule instead")
         sets["enabled"] = 1 if changes["enabled"] else 0
     if "schedule" in changes:
         next_run(changes["schedule"], datetime.now(timezone.utc))  # validates
@@ -408,7 +460,8 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
         (now.isoformat(timespec="seconds"), json.dumps(result, ensure_ascii=False, default=str),
          next_run(job["schedule"], now).isoformat(timespec="seconds"), job["id"]),
     )
-    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "knowlage_files", "access_expire",
+    if job["action"] not in ("a2a_sync", "reap_runs", "member_schedules", "routines_overdue", "knowlage_files",
+                             "access_expire",
                              "access_watch", "sentinel_watch", "sentinel_digest", "grafana_watch") or result.get("sent") \
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
             or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
@@ -420,7 +473,8 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
 
 def run_due(conn: sqlite3.Connection) -> list[str]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    due = conn.execute("SELECT * FROM jobs WHERE enabled = 1 AND next_run_at <= ?", (now,)).fetchall()
+    due = conn.execute(f"SELECT * FROM jobs WHERE (enabled = 1 OR action IN ({','.join('?' * len(CORE_JOBS))})) "
+                       "AND next_run_at <= ?", (*CORE_JOBS, now)).fetchall()
     for job in due:
         run_job(conn, job)
     return [j["action"] for j in due]

@@ -243,6 +243,45 @@ def fire(conn: sqlite3.Connection, schedule_id: int, *, manual_by: Ctx | None = 
     return {**result, "next_run_at": nxt}
 
 
+OVERDUE_S = 3600  # a routine this late means its loop is not running: an incident for the SRE
+
+
+def watch_overdue(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """Scheduler (every 10 min): active routines more than an hour past their time are an
+    incident for the SRE (through the Monitor, pos.workers._incident; never the owner's
+    inbox), once per routine and due time; resolved when none is late any more."""
+    from . import monitor, workers
+
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=OVERDUE_S)).isoformat(timespec="seconds")
+    late = conn.execute("""SELECT id, name, schedule, next_run_at, last_run_at FROM schedules WHERE status = 'active'
+                           AND archived_at IS NULL AND next_run_at < ? ORDER BY id""", (cutoff,)).fetchall()
+    monitor.ensure_schema(conn)
+    open_ = monitor._state(conn, "routines_overdue") or {}
+    out: dict = {"late": [r["id"] for r in late]}
+    if late:
+        key = ",".join(f"{r['id']}@{r['next_run_at']}" for r in late)
+        if key != open_.get("key"):
+            iid = open_.get("iid") or f"routines-overdue-{now.strftime('%Y%m%d%H%M')}"
+            lines = "\n".join(f"- #{r['id']} {r['name']} ({r['schedule']}): měla běžet {r['next_run_at']}, "
+                              f"naposledy {r['last_run_at'] or 'nikdy'}" for r in late)
+            workers._incident(
+                conn, iid=iid, kind="routine_overdue",
+                key="scheduler:routines", title=f"{len(late)} rutin(y) mešká přes hodinu",
+                body=(f"Rutiny (plány členů) nespustily včas; jejich smyčka (úloha „Schedules of people and "
+                      f"agents“, scheduler) asi neběží.\n\n{lines}\n\nZkontroluj plánovač (stránka Automatizace, "
+                      "`docker compose logs --tail 100 api`)."),
+                detail={"schedules": [r["id"] for r in late]})
+            monitor._set_state(conn, "routines_overdue", {"key": key, "iid": iid})
+            out["alerted"] = True
+    elif open_.get("iid"):
+        workers._incident(conn, iid=open_["iid"], kind="routine_overdue", key="scheduler:routines",
+                          title="rutiny zase běží včas", body="", detail={}, resolved=True)
+        monitor._set_state(conn, "routines_overdue", {})
+    conn.commit()
+    return out
+
+
 def run_due(conn: sqlite3.Connection) -> dict:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     due = conn.execute("SELECT id FROM schedules WHERE status = 'active' AND archived_at IS NULL "
