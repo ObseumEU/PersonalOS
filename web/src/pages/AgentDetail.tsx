@@ -1,4 +1,5 @@
 import { KeyRound, Pause, Pencil, Play, RotateCcw, Send, Square, UserCheck } from "lucide-react";
+import { ToolText } from "../toolMarkup";
 import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -454,7 +455,7 @@ function Overview({ a, messages, onChange }: { a: Full; messages: Message[]; onC
                 {m.from_name} → {m.to_name} · <span className={PRIORITY_CLS[m.priority]}>{t(`priority.${m.priority}`)}</span> · {ago(m.created_at)} ·{" "}
                 {m.acked_at ? t("agent.msg.acted") : m.read_at ? t("agent.msg.read") : t("agent.msg.unread")}
               </span>
-              <span className="text-[13px]">{m.body}</span>
+              <span className="text-[13px]"><ToolText text={m.body} /></span>
             </div>
           ))}
         </Panel>
@@ -720,7 +721,7 @@ export default function AgentDetail() {
             {a.memory.length === 0 && <p className="px-4 py-3 text-sm text-ink-2">{t("agent.no_memory")}</p>}
             {a.memory.map((m) => (
               <p key={m.id} className="border-b border-line px-4 py-2 text-[13px] text-ink-2 last:border-0">
-                {m.body}
+                <ToolText text={m.body} />
               </p>
             ))}
           </Panel>

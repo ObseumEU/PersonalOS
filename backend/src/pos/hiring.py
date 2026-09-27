@@ -358,6 +358,9 @@ def _commit_agent_files(conn: sqlite3.Connection, ctx: Ctx, aid: int, name: str,
             "reports_to": lead_row["name"], "permissions": perms, "budget_class": budget_class,
             "lifetime": "long_lived", "runtime": "codex_worker", "worker": "pool",
             "engine": "claude", "model": sets.get("model") or DEFAULT_MODEL, "effort": DEFAULT_EFFORT}
+    from .agents_code import default_profile
+
+    spec["profile"] = default_profile(sets.get("role")) or None  # a developer's tools (Bash, git) in git too
     spec = {k: v for k, v in spec.items() if v is not None}
     t = tasks.create(conn, ctx, {
         "title": f"Soubory nového agenta {name} do gitu",

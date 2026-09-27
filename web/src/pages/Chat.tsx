@@ -1,5 +1,6 @@
 import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
 import { TaskLink } from "../taskSheet";
+import { ToolChip, stripToolMarkup } from "../toolMarkup";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { type OrgMember, agentsApi } from "../agentsApi";
@@ -35,19 +36,21 @@ function escapeRe(s: string) {
 function Body({ text, names }: { text: string; names: string[] }) {
   const inline = useMemo(() => {
     const mention = names.length ? `@(?:${[...names].sort((a, b) => b.length - a.length).map(escapeRe).join("|")})` : "@\\w+";
-    return new RegExp(`(\`[^\`\\n]+\`|\\*\\*[^*\\n]+\\*\\*|https?://[^\\s<]+|\\bT-\\d{1,6}\\b|${mention})`, "gi");
+    return new RegExp(`(\\[nástroj[^\\]\\n]*\\]|\`[^\`\\n]+\`|\\*\\*[^*\\n]+\\*\\*|https?://[^\\s<]+|\\bT-\\d{1,6}\\b|${mention})`, "gi");
   }, [names]);
   const renderInline = (s: string, key: string): ReactNode[] =>
     s.split(inline).map((part, i) => {
       const k = `${key}-${i}`;
       if (i % 2 === 0) return <Fragment key={k}>{part}</Fragment>;
+      if (part.startsWith("[nástroj")) return <ToolChip key={k} label={part.slice(1, -1)} />;
       if (part.startsWith("`")) return <code key={k} className="rounded-[3px] bg-raised px-1 font-mono text-[12px]">{part.slice(1, -1)}</code>;
       if (part.startsWith("**")) return <strong key={k} className="font-medium">{part.slice(2, -2)}</strong>;
       if (part.startsWith("http")) return <a key={k} href={part} target="_blank" rel="noreferrer noopener" className="break-all text-accent underline decoration-accent/40">{part}</a>;
       if (/^T-\d+$/i.test(part)) return <TaskLink key={k} taskRef={part.toUpperCase()} className="rounded-[3px] bg-accent/10 px-1 font-mono text-[12px] text-accent">{part.toUpperCase()}</TaskLink>;
       return <span key={k} className="rounded-[3px] bg-accent/15 px-0.5 text-accent">{part}</span>;
     });
-  const blocks = text.split(/```(?:\w+\n)?/);
+  // Tool calls a model wrote as text never ran: a muted chip instead (toolMarkup).
+  const blocks = stripToolMarkup(text).split(/```(?:\w+\n)?/);
   return (
     <div className="text-[14px] leading-relaxed break-words whitespace-pre-wrap">
       {blocks.map((b, i) =>

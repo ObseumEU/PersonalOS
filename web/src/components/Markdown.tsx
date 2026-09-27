@@ -2,6 +2,7 @@ import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markd
 import remarkGfm from "remark-gfm";
 import { Link } from "react-router-dom";
 import { TaskLink } from "../taskSheet";
+import { ToolChip, toolMarkupToMarkdown } from "../toolMarkup";
 
 /**
  * Task text, notes and answers as formatted Markdown (GitHub flavour: tables,
@@ -32,7 +33,8 @@ function linkRefs(text: string): string {
 
 /** Wrapped outside content (<external …>) shows as its text, not as tags. */
 function clean(text: string): string {
-  return (text ?? "").replace(/\r\n/g, "\n").replace(/<\/?external\b[^>]*>/g, "");
+  // Tool calls a model wrote as text become a muted chip (toolMarkup, the `a` component below).
+  return toolMarkupToMarkdown((text ?? "").replace(/\r\n/g, "\n").replace(/<\/?external\b[^>]*>/g, ""));
 }
 
 function safeUrl(url: string): string {
@@ -42,6 +44,7 @@ function safeUrl(url: string): string {
 
 const components: Components = {
   a: ({ href, children }) => {
+    if (href === "#pos-tool") return <ToolChip label={String(Array.isArray(children) ? children.join("") : children ?? "")} />;
     const ref = href?.match(/^\/tasks(?:\/|\?(?:.*&)?task=)(T-\d+)/i);
     if (ref) return <TaskLink taskRef={ref[1].toUpperCase()}>{children}</TaskLink>;
     if (href && href.startsWith("/") && !href.startsWith("/api/")) return <Link to={href}>{children}</Link>;

@@ -362,6 +362,15 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     if priority is not None and priority not in PRIORITIES:
         raise ChatError(f"priority must be one of {PRIORITIES}")
     author = actors.get(conn, ctx.actor_id)
+    if author["kind"] != "human":
+        # Tool calls an agent wrote as text never ran; they never reach a person (pos.pseudo_tools).
+        from . import pseudo_tools
+
+        if pseudo_tools.contains(body) and not pseudo_tools.clean(body, marker=False):
+            raise ChatError("the message was only tool calls written as text; they did not run")
+        body = pseudo_tools.clean(body)
+        if not body:
+            raise ChatError("the message was only tool calls written as text; they did not run")
     ch = _channel(conn, channel_id)
     if ch["archived_at"]:
         raise ChatError("this channel is archived")

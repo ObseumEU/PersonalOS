@@ -1,4 +1,5 @@
 import { Archive, Check, ChevronLeft, ChevronRight, Hand, Link2, MoreHorizontal, Pencil, RotateCcw, X } from "lucide-react";
+import { ToolText } from "../../toolMarkup";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { type Approval, agentsApi } from "../../agentsApi";
@@ -414,7 +415,7 @@ function SummaryBox({ summary, loading }: { summary: Summary | null; loading: bo
         {loading && <span className="breathe text-xs font-normal tracking-normal normal-case">{t("tk.summary_updating")}</span>}
       </h3>
       {summary?.text ? (
-        <p className="text-[15px] leading-relaxed text-ink">{summary.text}</p>
+        <p className="text-[15px] leading-relaxed text-ink"><ToolText text={summary.text} /></p>
       ) : (
         <div className="flex flex-col gap-2" aria-hidden>
           <span className="h-3 w-11/12 rounded bg-line" />

@@ -278,18 +278,53 @@ RUN_USD_SCALE = 5    # the worker's per-run USD cap, 5x the file
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max")
 
 
-def worker_profile(name: str, base: Path | None = None) -> dict:
+# The worker profile an agent gets by its role when its agent.json has none (or it has no
+# agent.json yet: an agent hired through HR runs in the pool before its files are in git).
+# Without it a hired developer ran with the pool's defaults, which have no Bash at all, and
+# could not clone or build anything (T-215, 2026-09-27). The same tools as the Software
+# Engineer, plus cloning and reading any repository it is given; every command still goes
+# through the command guard (pos_worker.command_hook) and the allow-list below.
+DEV_ROLES = ("developer", "engineer", "software_engineer", "devops", "frontend", "backend")
+DEV_PROFILE = {
+    "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
+    "claude_tools": "|".join([
+        "Read", "Glob", "Grep", "Write", "Edit", "WebSearch", "WebFetch",
+        "Bash(git clone:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
+        "Bash(git add:*)", "Bash(git commit:*)", "Bash(git fetch:*)", "Bash(git pull:*)", "Bash(git switch:*)",
+        "Bash(git checkout:*)", "Bash(git branch:*)", "Bash(git ls-remote:*)", "Bash(git remote -v:*)",
+        "Bash(ls:*)", "Bash(wc:*)", "Bash(python -m pytest:*)", "Bash(python -m pip install:*)",
+        "Bash(npm ci:*)", "Bash(npm install:*)", "Bash(npm run build:*)", "Bash(npm test:*)"]),
+}
+
+
+def default_profile(role: str | None) -> dict:
+    """The profile an agent without one gets by its role (only developers get more than the
+    pool's defaults)."""
+    r = (role or "").strip().lower()
+    if r in DEV_ROLES or r.endswith(("_developer", "_engineer")):
+        return dict(DEV_PROFILE)
+    return {}
+
+
+def worker_profile(name: str, base: Path | None = None, role: str | None = None) -> dict:
     """The worker settings from the agent's file: effort and "profile" (only the known keys; a
-    workdir only under /work or /repos)."""
+    workdir only under /work or /repos). An agent whose file has no "profile" (or that has no file
+    yet) gets its role's default one (default_profile)."""
     s = spec_of(name, base)
     if not s:
-        return {}
-    out = {k: v for k, v in (s.get("profile") or {}).items() if k in PROFILE_KEYS}
+        return _normalized(default_profile(role))
+    raw = s.get("profile") if "profile" in s else default_profile(role or s.get("role"))
+    out = _normalized(raw or {})
+    if s.get("effort") in EFFORTS:
+        out["effort"] = s["effort"]
+    return out
+
+
+def _normalized(profile: dict) -> dict:
+    out = {k: v for k, v in (profile or {}).items() if k in PROFILE_KEYS}
     if "workdir" in out and not (isinstance(out["workdir"], str) and out["workdir"].startswith(WORKDIR_ROOTS)
                                  and ".." not in out["workdir"]):
         out.pop("workdir")
-    if s.get("effort") in EFFORTS:
-        out["effort"] = s["effort"]
     if isinstance(out.get("max_steps"), (int, float)) and 0 < out["max_steps"] < MIN_STEPS:
         out["max_steps"] = MIN_STEPS
         if isinstance(out.get("max_steps_owner"), (int, float)):  # the owner's own tasks keep their higher cap

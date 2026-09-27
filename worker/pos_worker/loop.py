@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .client import Blocked, PosClient
+from . import pseudo_tools
 from .prompt import build_task_prompt, injection, stable_prompt
 from .tools import fetch as fetch_tools
 
@@ -92,6 +93,15 @@ def tool_of(ev: dict) -> str:
         if isinstance(c, dict) and c.get("type") == "tool_use":
             return str(c.get("name") or "")[:80]
     return ""
+
+
+# The model wrote its tool calls as text (pos_worker.pseudo_tools): nothing ran. One more try in
+# the same session with this correction; a second time the run fails (PersonalOS escalates it).
+FAKE_TOOLS_RETRY = (
+    "Your last answer contained tool calls written as text (function_calls / invoke / parameter markup). "
+    "They were NOT executed: nothing ran and nothing of it happened. Do the work with your real tools "
+    "(the tool-use interface you were given), then report what they actually returned. If the tool you "
+    "need is not available to you, say so plainly (name the tool) instead of writing the call as text.")
 
 
 OWNER_STEP_FACTOR = 2  # an owner-assigned task without max_steps_owner gets twice the agent's cap
@@ -295,6 +305,7 @@ class Worker:
         steps = 0
         outcome = "ok"
         last_tool = ""
+        fake_retried = False
         while True:
             interrupted = None
             for ev in session.run(prompt):
@@ -334,7 +345,7 @@ class Worker:
             if interrupted == "step_cap":
                 outcome = "error"
                 session.failed = (f"step limit reached ({self.max_steps} steps); last note: "
-                                  f"{session.last_message[:300] or 'none'}")
+                                  f"{pseudo_tools.clean(session.last_message)[:300] or 'none'}")
                 break
             if interrupted == "inject":
                 resumes += 1
@@ -342,6 +353,16 @@ class Worker:
                 continue
             if session.failed:
                 outcome = "error"
+                break
+            if pseudo_tools.contains(session.last_message):
+                if not fake_retried:
+                    fake_retried = True
+                    log.warning("%s: the model wrote tool calls as text; nothing ran. Retrying once", ref)
+                    prompt = FAKE_TOOLS_RETRY
+                    continue
+                outcome = "error"
+                session.failed = f"{pseudo_tools.MARKER} (twice, after one retry)"
+                session.last_message = pseudo_tools.clean(session.last_message)
                 break
             # The session finished its turn. Late information still gets a say.
             pending_fyi += [m for m in self._safe(self.client.inbox, [], run_id) if m["priority"] != "stop"]

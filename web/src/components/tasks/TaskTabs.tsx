@@ -1,4 +1,5 @@
 import { CheckCircle2, ChevronDown, ChevronRight, Circle, CircleCheck, Pencil, RotateCcw, Send } from "lucide-react";
+import { ToolText } from "../../toolMarkup";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { LOCALE, label, t } from "../../i18n";
 import { taskChanged } from "../../taskSheet";
@@ -230,7 +231,7 @@ export function Overview({ task, onSave, onChange }: { task: Task; onSave: (c: R
       {!result && task.status === "working" && task.progress_note && (
         <p className="rounded-lg border border-cyan-400/30 bg-cyan-400/[0.04] px-4 py-3 text-[14px]">
           <span className="text-cyan-200">{t("tk.now")} </span>
-          {task.progress_note}
+          <ToolText text={task.progress_note} />
         </p>
       )}
       <Description task={task} onSave={(notes) => notes !== task.notes && onSave({ notes })} />

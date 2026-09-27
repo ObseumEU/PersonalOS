@@ -41,7 +41,9 @@ def set_body(conn: sqlite3.Connection, ctx: Ctx, body: str, agent_id: int | None
     target = agent_id if agent_id is not None else ctx.actor_id
     if target != ctx.actor_id and not actors.get(conn, ctx.actor_id)["is_owner"]:
         raise Forbidden("an agent's memory is its own: only it and the owner change it")
-    body = (body or "").strip()
+    from . import pseudo_tools
+
+    body = pseudo_tools.clean((body or "").strip(), marker=False)  # tool calls written as text never ran
     if len(body) > MAX_CHARS:
         raise MemoryError(f"memory is {len(body)} characters, the limit is {MAX_CHARS}: keep the facts, drop the "
                           "history (logs and change records belong in notes)")

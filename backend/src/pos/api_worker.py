@@ -85,7 +85,7 @@ def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
         "guardrails": guard_prompt.agent_guardrails(), "constitution_sha256": guard_prompt.constitution_digest(),
         # Its worker settings from agents/<slug>/agent.json (effort, tools, caps, work folder): the agent
         # pool runs many agents in one container, so each one's settings come from here, not the env.
-        "profile": agents_code.worker_profile(row["name"]),
+        "profile": agents_code.worker_profile(row["name"], role=row["role"]),
         # Platform notes for its prompt (pos.business: e.g. contacting the owner past the chain of command).
         "nudges": business.nudges(conn, ctx.actor_id),
         **_state(conn, ctx.actor_id),
@@ -246,10 +246,50 @@ def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
 @router.post("/tasks/{task_id}/handback")
 def handback(task_id: str, body: NoteIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """The agent could not finish: the task goes back to the owner, with the reason."""
+    from . import pseudo_tools
+
     tid = tasks.parse_id(task_id)
     _still_mine(conn, ctx, tid)
-    t = _hand_back(conn, ctx, tid, body.note)
+    if pseudo_tools.MARKER in (body.note or ""):
+        t = fake_tool_calls(conn, ctx, tid)
+    else:
+        t = _hand_back(conn, ctx, tid, pseudo_tools.clean(body.note))
     conn.commit()
+    return t
+
+
+def fake_tool_calls(conn: sqlite3.Connection, ctx: Ctx, tid: int) -> dict:
+    """The run failed because the model wrote its tool calls as text twice (pos_worker.loop): the
+    tools never ran, so this is the platform's fault, not the task's. Not done, not the owner's:
+    the task waits (back-off) with the agent, the SRE gets an incident (the Monitor routes it) and
+    the agent's lead a message. The model's text itself goes nowhere."""
+    from . import pseudo_tools, workers
+
+    me = actors.get(conn, ctx.actor_id)
+    ref = tasks.display_id(tid)
+    lead = conn.execute("SELECT id, name FROM actors WHERE id = ? AND archived_at IS NULL",
+                        (me["reports_to"],)).fetchone() if me["reports_to"] else None
+    t = tasks.update(conn, ctx, tid, {
+        "status": "next",
+        "progress_note": f"{me['name']}: model napsal volání nástrojů jako text, nástroje se nespustily "
+                         f"(i po jednom opakování). Nahlášeno SRE{' a ' + lead['name'] if lead else ''} jako incident."})
+    back_off(conn, tid)
+    workers._incident(
+        conn, iid=f"fake-tools-{ctx.run_id or 0}-{tid}", kind="fake_tool_calls", key=f"agent:{me['id']}",
+        title=f"{me['name']}: the model wrote tool calls as text ({ref})",
+        body=(f"{me['name']} ({ref}) answered with tool-call markup as text twice in a row: {pseudo_tools.MARKER}. "
+              "Check the agent's worker settings (claude_builtin/claude_tools in its profile, the MCP config, "
+              "the engine and model), then requeue the task."),
+        detail={"agent_id": me["id"], "task_id": tid, "run_id": ctx.run_id})
+    if lead and lead["id"] != ctx.actor_id:
+        try:
+            chat.send_dm(conn, ctx, lead["id"],
+                         f"[platforma] {ref}: můj model napsal volání nástrojů jako text, nic se nespustilo. "
+                         "Úkol čeká, SRE má incident; nic z toho textu neber jako hotovou práci.", system=True)
+        except Exception as e:  # noqa: BLE001 - the incident stands either way
+            import logging
+
+            logging.getLogger(__name__).info("lead not told about %s: %s", ref, e)
     return t
 
 

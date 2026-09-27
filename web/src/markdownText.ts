@@ -1,10 +1,12 @@
+import { stripToolMarkup } from "./toolMarkup";
+
 /**
  * Markdown as a one-line plain-text snippet, for previews in lists and chips
  * (the full text renders with components/Markdown). Drops code blocks, HTML
  * and wrapper tags, keeps link and image labels, flattens tables and lists.
  */
 export function markdownSnippet(text: string | null | undefined, max = 180): string {
-  const out = (text ?? "")
+  const out = stripToolMarkup(text)
     .replace(/<\/?external[^>]*>/g, " ")
     .replace(/```[\s\S]*?(```|$)/g, " ")
     .replace(/<[^>]+>/g, " ")

@@ -626,10 +626,25 @@ def _ask_reviewer(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> None:
         wake.wake(rid)
 
 
+def _no_pseudo_tools(conn: sqlite3.Connection, ctx: Ctx, text: str | None) -> None:
+    """An agent's result or progress note with tool calls written as text (pos.pseudo_tools) is
+    refused: those calls never ran, so the "work" it describes did not happen."""
+    from . import pseudo_tools
+
+    if not pseudo_tools.contains(text):
+        return
+    who = conn.execute("SELECT kind FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
+    if who is not None and who["kind"] == "human":
+        return
+    raise Invalid("Your text contains tool calls written as text (<function_calls>/<invoke …>); they were NOT "
+                  "executed, so nothing of it happened. Call the real tools, then report what they actually returned.")
+
+
 def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None = None) -> dict:
     """People finish tasks; AI and agents hand results in for review. A person
     completing a task that waits for review accepts it."""
     row = _row(conn, ctx, task_id)
+    _no_pseudo_tools(conn, ctx, note)
     if row["status"] == "review" and may_review(conn, ctx, row)[0]:
         return review(conn, ctx, task_id, True, note)
     changes: dict = {"progress": 100, "status": "done"}  # update() turns it into a hand-in when needed
@@ -717,6 +732,7 @@ def claim(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
 def report_progress(conn: sqlite3.Connection, ctx: Ctx, task_id: int, percent: int, message: str = "") -> dict:
     if not 0 <= percent <= 100:
         raise Invalid("percent must be 0 to 100")
+    _no_pseudo_tools(conn, ctx, message)
     out = update(conn, ctx, task_id, {"progress": percent, "progress_note": message or None})
     if message:
         from . import comments
