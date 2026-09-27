@@ -136,6 +136,9 @@ def test_business_for_it_suppliers_in_english():
     telecom = rules.classify({"subject": "Moje O2 - vyúčtování za služby", "sender": "Moje O2 <mojeo2@o2.cz>",
                               "to": "rosko.dav@gmail.com"}, "Vyúčtování služeb mobilní tarif a internet")
     assert telecom["suggestion"] == rules.BUSINESS
+    billed_home = rules.classify({"subject": "Moje O2 - vyúčtování", "sender": "mojeo2@o2.cz"},
+                                 "Vyúčtování služeb O2 mobilní tarif Roško David Velvarská 1152 Horoměřice")
+    assert (billed_home["suggestion"], billed_home["confidence"]) == (rules.BUSINESS, "strong")
 
 
 def test_personal_only_when_clearly_unrelated():
@@ -182,6 +185,13 @@ def test_what_is_an_invoice():
     labelled = {"subject": "ACRCloud 202455-74109", "sender": "noreply@acrcloud.com", "labels": ["invoice"],
                 "attachments": [{"filename": "202455-74109-20260927.pdf", "mime": "application/pdf"}]}
     assert rules.looks_like_invoice(labelled)[0]
+    # A readable attachment must itself be an invoice: a contract annex in a mail labelled "invoice" is not.
+    assert not rules.document_is_invoice("22_01_01_PL č.1 licence.pdf", "Příloha č. 1 ke smlouvě, licenční podmínky")
+    assert rules.document_is_invoice("x.pdf", "FAKTURA - daňový doklad č. 20260041")
+    annex = "Příloha č. 1 ke smlouvě o poskytování licence. " + "Ujednání. " * 400 + "faktura bude vystavena"
+    assert not rules.document_is_invoice("annex.pdf", annex)  # mentions invoicing only far below its top
+    assert rules.document_is_invoice("scan.pdf", "")  # unreadable: the mail decides
+    assert not rules.is_document("Cenová nabídka - CN20260014.pdf")
 
 
 def test_issue_date_and_file_name():
@@ -354,7 +364,7 @@ def test_poll_files_sure_ones_and_gives_unsure_ones_to_the_cfo(conn, monkeypatch
             "h1": mail("Hetzner Online GmbH - Invoice 0880", "billing@hetzner.com", "david.rosko@obseum.cz",
                        [("Hetzner_2026-09-03_0880.pdf", b"Invoice Cloud Server Date of issue September 3, 2026")]),
             "t1": mail("Zálohová faktura k nabídce TKP-N-0088", "info@tkprofi.cz", "david.rosko@obseum.cz",
-                       [("Zálohová_faktura_ZFP262004.pdf", b"David Rosko Statenice montaz klimatizace")]),
+                       [("Zálohová_faktura_ZFP262004.pdf", "ZÁLOHOVÁ FAKTURA David Rosko Statenice montáž klimatizace".encode())]),
             "q1": mail("Nabidka na skoleni", "jaro@nowapp.cz", "david.rosko@obseum.cz",
                        [("Nabidka.pdf", b"nabidka")])},
         "rosko.dav@gmail.com": {}})

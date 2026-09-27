@@ -86,7 +86,8 @@ NOT_INVOICE_SUBJECT = re.compile(r"nab[ií]dk|quote|offer|poptávk|poptavk|upom�
 INVOICE_LABELS = re.compile(r"^(invoice|invoices|faktur[ay]?|receipts?|ucetni|účetní|doklady)$", re.I)
 DOC_EXT = (".pdf", ".isdoc", ".isdocx", ".xml")
 NOT_DOCUMENT = re.compile(r"^(vop|terms|obchodn[ií]|smime|logo|image\d*|outlook-|protokol|jak_pouzivat|how_to_use|"
-                          r"platebn[ií]_instrukce|.*platebn[ií] instrukce)", re.I)
+                          r"platebn[ií]_instrukce|.*platebn[ií] instrukce|.*nab[ií]dk|.*quote|.*offer|.*smlouv|"
+                          r".*contract|.*timesheet|.*vykaz)", re.I)
 GENERIC_NAME = re.compile(r"^(invoice|faktura|doklad|receipt|document|dokument|attachment|priloha|příloha|scan|"
                           r"danovy[-_ ]doklad.*|da[nň]ov[yý][-_ ]doklad.*|uctenka|účtenka|\d{1,4}|file|download)$",
                           re.I)
@@ -111,7 +112,7 @@ def _no_emails(text: str) -> str:
 def is_document(filename: str, mime: str = "") -> bool:
     name = (filename or "").strip()
     low = name.lower()
-    if not name or NOT_DOCUMENT.match(name):
+    if not name or NOT_DOCUMENT.match(fold(name)):
         return False
     return low.endswith(DOC_EXT) or mime in ("application/pdf", "application/xml", "text/xml")
 
@@ -149,6 +150,29 @@ def looks_like_invoice(mail: dict) -> tuple[bool, str]:
     return False, "nic nenaznačuje fakturu"
 
 
+# What an invoice says about itself (folded: no diacritics, lowercase), and what a contract says.
+DOC_TITLE = re.compile(r"\bfaktur[ay]\b|danov\w*\s+doklad|\binvoice\b|\breceipt\b|credit\s?note|dobropis|"
+                       r"vyuctovani|doklad\s+o\s+zaplaceni|\buctenk[ay]\b|rechnung|proforma|\bbill\s+to\b|"
+                       r"amount\s+(due|paid)|celkem\s+k\s+uhrade")
+CONTRACT = re.compile(r"smlouv|\bdodatek\b|projektov\w*\s+list|udeleni\s+licence|\bpriloha\s+c|ujednani|"
+                      r"\bagreement\b|\bcontract\b|\btimesheet\b|\bvykaz\s+prace\b|cenova\s+nabidka|\bquote\b")
+TITLE_CHARS, HEAD_CHARS = 1200, 600
+
+
+def document_is_invoice(filename: str, text: str) -> bool:
+    """A readable document must itself be an invoice: its title near the top, or no contract/quote/report
+    head and invoice words further on (a contract annex that mentions invoicing is not); an unreadable one
+    (a scan) is judged by its mail."""
+    if not (text or "").strip():
+        return True
+    flat = fold(" ".join(text.split()))
+    if DOC_TITLE.search(flat[:TITLE_CHARS]):
+        return True
+    if CONTRACT.search(flat[:HEAD_CHARS]):
+        return False
+    return bool(DOC_TITLE.search(flat))
+
+
 # ------------------------------------------------------------------ business or personal
 
 def classify(mail: dict, document_text: str = "") -> dict:
@@ -177,13 +201,16 @@ def classify(mail: dict, document_text: str = "") -> dict:
     elif (mail.get("account") or "").lower() in WORK_ADDRESSES:
         weak.append("přišlo do pracovní schránky")
 
+    items = []
     if (p := PERSONAL_RE.search(text) or PERSONAL_RE.search(ftext)):
-        personal.append(f"osobní položka („{p.group(0).strip()}“)")
+        items.append(f"osobní položka („{p.group(0).strip()}“)")
+    personal += items
     if PRIVATE_ADDRESS_RE.search(doc) and not any("Obseum" in s or "IČO" in s or "DIČ" in s for s in strong):
         personal.append("fakturováno soukromé osobě na domácí adresu")
 
     obseum_named = any(s.startswith(("jmenuje Obseum", "IČO", "DIČ", "adresa Obseum", "účet Obseum")) for s in strong)
-    if obseum_named or (strong and not personal):
+    # A private billing address alone does not cancel an IT supplier (a phone plan billed to the home).
+    if obseum_named or (strong and not items):
         return _out(BUSINESS, "strong", strong + weak + personal)
     if personal and not strong and not weak:
         return _out(PERSONAL, "strong", personal)

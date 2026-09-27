@@ -359,17 +359,26 @@ def candidates(conn: sqlite3.Connection, days: int = 3, account: str | None = No
             ok, why = rules.looks_like_invoice(mail)
             if not ok:
                 continue
-            docs = []
-            for att in rules.pick_documents(mail["attachments"])[:4]:
-                data = gm.attachment(mid, att)
-                text = document_text(att["filename"], data)
-                docs.append({"attachment": att["part_id"], "filename": att["filename"],
-                             "issue_date": (rules.issue_date(text) or received_date(mail)).isoformat(),
-                             **rules.classify(mail, text)})
+            docs = documents(gm, mail)
+            if not docs:
+                continue
             out.append({"account": box, "message_id": mid, "subject": mail["subject"][:200],
                         "sender": mail["sender"][:120], "to": mail["to"][:200],
                         "received": received_date(mail).isoformat(), "why_invoice": why, "documents": docs,
                         "filed": [dict(r) for r in filed]})
+    return out
+
+
+def documents(gm, mail: dict) -> list[dict]:
+    """The mail's invoice documents with the pre-classifier's suggestion each (at most 4)."""
+    out = []
+    for att in rules.pick_documents(mail["attachments"])[:4]:
+        text = document_text(att["filename"], gm.attachment(mail["message_id"], att))
+        if not rules.document_is_invoice(att["filename"], text):
+            continue
+        out.append({"attachment": att["part_id"], "filename": att["filename"],
+                    "issue_date": (rules.issue_date(text) or received_date(mail)).isoformat(),
+                    **rules.classify(mail, text)})
     return out
 
 
@@ -442,11 +451,13 @@ def poll(conn: sqlite3.Connection, *, days: int = 3, gmail_factory=gapi.Gmail, d
                         _mark(conn, box, mid, "not_invoice", why)
                         conn.commit()
                     continue
-                docs = []
-                for att in rules.pick_documents(mail["attachments"])[:4]:
-                    text = document_text(att["filename"], gm.attachment(mid, att))
-                    docs.append({"attachment": att["part_id"], "filename": att["filename"],
-                                 **rules.classify(mail, text)})
+                docs = documents(gm, mail)
+                if not docs:
+                    counts["not_invoice"] += 1
+                    if not dry_run:
+                        _mark(conn, box, mid, "not_invoice", "přílohy nejsou faktury (smlouva, nabídka, výkaz…)")
+                        conn.commit()
+                    continue
                 sure = all(d["confidence"] == "strong" for d in docs)
                 plan.append({"account": box, "message_id": mid, "subject": mail["subject"][:80],
                              "sure": sure, "documents": [{k: d[k] for k in ("filename", "suggestion", "confidence",
