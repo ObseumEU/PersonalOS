@@ -29,52 +29,43 @@ import {
   errWord,
   field,
 } from "../components/credentials/parts";
+import { confirmDialog, toast } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
+import { t } from "../i18n";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
-const list = (s: string) => s.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
+const list = (s: string) =>
+  s
+    .split(/[\n,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+const tools = (xs: string[]) => xs.map((x) => x.replace("tool:", "")).join(", ");
 
-// ------------------------------------------------------------------ toast with undo
+// ------------------------------------------------------------------ act: run, toast (with undo), reload
 
-type Toast = { text: string; error?: boolean; undo?: () => Promise<unknown> };
+type Act = (p: Promise<unknown>, ok?: string, undo?: () => Promise<unknown>) => Promise<boolean>;
 
-function useToast() {
-  const [toast, setToast] = useState<Toast | null>(null);
-  const timer = useRef<number | undefined>(undefined);
-  const show = useCallback((t: Toast) => {
-    setToast(t);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setToast(null), t.undo ? 10000 : t.error ? 9000 : 5000);
-  }, []);
-  return { toast, show, hide: () => setToast(null) };
-}
-
-function ToastBar({ toast, hide, reload }: { toast: Toast | null; hide: () => void; reload: () => void }) {
-  if (!toast) return null;
-  return (
-    <div role="status" className="fixed inset-x-3 bottom-3 z-50 mx-auto flex max-w-xl items-center gap-3 rounded-md border border-line bg-raised px-4 py-3 text-sm shadow-2xl sm:bottom-6">
-      <span className={`min-w-0 flex-1 ${toast.error ? "text-red-400" : ""}`}>{toast.text}</span>
-      {toast.undo && (
-        <button
-          type="button"
-          className="btn-accent h-7! shrink-0"
-          onClick={() => {
-            const u = toast.undo!;
-            hide();
-            u().then(reload, reload);
-          }}
-        >
-          Vrátit
-        </button>
-      )}
-      <button type="button" aria-label="Zavřít" className="shrink-0 text-ink-3 hover:text-ink" onClick={hide}>
-        <X size={14} />
-      </button>
-    </div>
+function useAct(reload: () => void): Act {
+  return useCallback(
+    async (p, ok, undo) => {
+      try {
+        await p;
+        if (ok) toast(ok, { undo: undo ? () => undo().then(reload, reload) : undefined });
+        reload();
+        return true;
+      } catch (e) {
+        toast(errText(e), { error: true });
+        reload();
+        return false;
+      }
+    },
+    [reload],
   );
 }
 
-type Act = (p: Promise<unknown>, ok?: string, undo?: () => Promise<unknown>) => Promise<boolean>;
+function Label({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <span className={`text-xs text-ink-2 ${className}`}>{children}</span>;
+}
 
 // ------------------------------------------------------------------ groups: one card per 1Password item
 
@@ -113,8 +104,6 @@ function groupsOf(v: CredOverview): Group[] {
 // ------------------------------------------------------------------ requests
 
 function RequestCard({ r, act, highlight }: { r: CredRequest; act: Act; highlight: boolean }) {
-  const [denying, setDenying] = useState(false);
-  const [why, setWhy] = useState("");
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (highlight) ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -122,62 +111,51 @@ function RequestCard({ r, act, highlight }: { r: CredRequest; act: Act; highligh
   const s = r.suggestion;
   const what = r.registered ? r.credential : s ? s.title : r.credential;
   const missing = !r.registered && !s;
+  const deny = async () => {
+    const why = await confirmDialog({ title: t("cred.deny_title", { agent: r.agent_name, what }), reason: t("cred.deny_reason"), confirm: t("act.reject"), danger: true });
+    if (why === null) return;
+    act(credentialsApi.decide(r.id, "deny", why), t("cred.denied_toast", { agent: r.agent_name }));
+  };
   return (
-    <div ref={ref} className={`panel flex flex-col gap-3 p-4 ${highlight ? "border-accent!" : "border-amber-400/50!"}`}>
+    <div ref={ref} className={`panel flex min-w-0 flex-col gap-3 p-4 ${highlight ? "border-accent!" : "border-amber-400/50!"}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
         <Avatar name={r.agent_name} size={24} />
-        <span className="min-w-0">
-          <b className="font-medium">{r.agent_name}</b> chce <b className="font-medium text-accent">{what}</b>
-          {r.scope ? <span className="text-ink-2"> (jen {r.scope})</span> : null}
-          <span className="text-ink-2"> · {r.hours ? `na ${r.hours} h` : "natrvalo"}</span>
+        <span className="min-w-0 break-words">
+          <b className="font-medium">{r.agent_name}</b> {t("cred.wants")} <b className="font-medium text-accent">{what}</b>
+          {r.scope ? <span className="text-ink-2"> ({t("cred.only", { scope: r.scope })})</span> : null}
+          <span className="text-ink-2"> · {r.hours ? t("cred.for_hours", { n: r.hours }) : t("cred.forever")}</span>
         </span>
-        <span className="cap ml-auto shrink-0">{czAgo(r.created_at)}</span>
+        <Label className="ml-auto shrink-0">{czAgo(r.created_at)}</Label>
       </div>
-      <div className="text-sm text-ink-2">
-        <span className="cap mr-1">protože</span>
+      <div className="min-w-0 text-sm break-words text-ink-2">
+        <Label className="mr-1">{t("cred.because")}</Label>
         <Markdown text={r.why} compact className="inline" />
-        {r.task_ref && <span className="cap"> · úkol {r.task_ref}</span>}
+        {r.task_ref && <Label> · {t("cred.task", { ref: r.task_ref })}</Label>}
       </div>
       {!r.registered && s && (
         <p className="flex items-start gap-2 rounded border border-accent/40 bg-accent/5 px-3 py-2 text-xs text-ink-2">
           <Sparkles size={13} className="mt-0.5 shrink-0 text-accent" />
-          <span>
-            Ještě není zaregistrované, ale je v 1Passwordu ({s.kind_label}). Schválením se zaregistruje jako{" "}
+          <span className="min-w-0 break-words">
+            {t("cred.not_registered", { kind: s.kind_label })}{" "}
             <span className="font-mono text-accent">{s.credentials.map((c) => c.name).join(" + ")}</span>
-            {s.extra_grants.length ? ` a agent dostane i nástroj ${s.extra_grants.map((x) => x.replace("tool:", "")).join(", ")}` : ""}.
+            {s.extra_grants.length ? t("cred.and_tool", { tools: tools(s.extra_grants) }) : ""}.
           </span>
         </p>
       )}
-      {missing && (
-        <p className="rounded border border-amber-400/50 px-3 py-2 text-xs text-amber-300">
-          Tohle v trezoru není. Přidej položku do trezoru PersonalOS v 1Passwordu, pak půjde schválit, nebo žádost zamítni.
-        </p>
-      )}
-      {denying ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <input autoFocus aria-label="Důvod zamítnutí" placeholder="Proč ne? (agent to uvidí, nepovinné)" value={why} onChange={(e) => setWhy(e.target.value)} className={`${field} min-w-0 flex-1`} />
-          <button type="button" className="btn h-8!" onClick={() => act(credentialsApi.decide(r.id, "deny", why), `Zamítnuto, ${r.agent_name} dostane zprávu.`)}>
-            Zamítnout
-          </button>
-          <button type="button" className="cap hover:text-ink!" onClick={() => setDenying(false)}>
-            zpět
-          </button>
-        </div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className="btn-accent"
-            disabled={missing}
-            onClick={() => act(credentialsApi.decide(r.id, "grant", ""), `Schváleno: ${r.agent_name} má ${what} a pokračuje v práci.`)}
-          >
-            <Check size={14} /> Schválit
-          </button>
-          <button type="button" className="btn" onClick={() => setDenying(true)}>
-            <X size={14} /> Zamítnout
-          </button>
-        </div>
-      )}
+      {missing && <p className="rounded border border-amber-400/50 px-3 py-2 text-xs text-amber-300">{t("cred.missing")}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="btn-accent"
+          disabled={missing}
+          onClick={() => act(credentialsApi.decide(r.id, "grant", ""), t("cred.granted_toast", { agent: r.agent_name, what }))}
+        >
+          <Check size={14} /> {t("act.approve")}
+        </button>
+        <button type="button" className="btn" onClick={deny}>
+          <X size={14} /> {t("act.reject")}
+        </button>
+      </div>
     </div>
   );
 }
@@ -201,7 +179,7 @@ function DiscoveryCard({ s0, agents, act }: { s0: Suggestion; agents: RosterAgen
     setBusy(true);
     act(
       credentialsApi.register({ item_id: s.item_id, credentials: cs, agent_ids: ids, hours: h }),
-      ids.length ? `${s.title}: zaregistrováno a přiděleno (${chosen.join(", ")}).` : `${s.title}: zaregistrováno.`,
+      ids.length ? t("cred.registered_granted", { title: s.title, who: chosen.join(", ") }) : t("cred.registered", { title: s.title }),
     ).finally(() => setBusy(false));
   };
   const reKind = (k: CredKind) =>
@@ -221,31 +199,33 @@ function DiscoveryCard({ s0, agents, act }: { s0: Suggestion; agents: RosterAgen
         <KindIcon kind={s.kind} size={17} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-[15px] font-medium">{s.title}</span>
-          <span className="cap truncate">
+          <Label className="truncate">
             {s.kind_label}
             {s.known ? ` · ${s.known}` : ""}
-            {s.source === "llm" ? " · návrh modelu" : !s.decided ? " · nejistý návrh" : ""}
-          </span>
+            {s.source === "llm" ? t("cred.llm_suggestion") : !s.decided ? t("cred.unsure") : ""}
+          </Label>
         </div>
         <button
           type="button"
-          title="Skrýt (nechci registrovat)"
-          aria-label="Skrýt"
-          className="shrink-0 text-ink-3 hover:text-ink"
-          onClick={() => act(credentialsApi.dismiss(s.item_id, true), `${s.title} skryto.`, () => credentialsApi.dismiss(s.item_id, false))}
+          title={t("cred.hide_title")}
+          aria-label={t("cred.hide")}
+          className="shrink-0 text-ink-2 hover:text-ink"
+          onClick={() => act(credentialsApi.dismiss(s.item_id, true), t("cred.hidden_toast", { title: s.title }), () => credentialsApi.dismiss(s.item_id, false))}
         >
           <EyeOff size={14} />
         </button>
       </div>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
-        <dt className="cap pt-0.5">Použití</dt>
-        <dd className="min-w-0 break-words text-ink-2">{s.usage || "—"}</dd>
-        <dt className="cap pt-0.5">Kam smí</dt>
-        <dd className="min-w-0 break-words font-mono text-ink-2">{s.hosts.length ? s.hosts.join(", ") : <span className="font-sans text-ink-3">kamkoli, kam ho pustí příkaz</span>}</dd>
-        <dt className="cap pt-0.5">Komu</dt>
+        <dt className="pt-0.5 text-ink-2">{t("cred.usage")}</dt>
+        <dd className="min-w-0 break-words text-ink">{s.usage || "—"}</dd>
+        <dt className="pt-0.5 text-ink-2">{t("cred.where")}</dt>
+        <dd className="min-w-0 font-mono break-words text-ink">
+          {s.hosts.length ? s.hosts.join(", ") : <span className="font-sans text-ink-2">{t("cred.anywhere")}</span>}
+        </dd>
+        <dt className="pt-0.5 text-ink-2">{t("cred.to_whom")}</dt>
         <dd className="flex min-w-0 flex-wrap gap-1">
           {pick.length === 0 ? (
-            <span className="text-ink-3">nenašel jsem vhodného agenta — vyber v Upravit</span>
+            <span className="text-ink-2">{t("cred.no_agent_found")}</span>
           ) : (
             pick.map((id) => {
               const a = agents.find((x) => x.id === id);
@@ -257,7 +237,7 @@ function DiscoveryCard({ s0, agents, act }: { s0: Suggestion; agents: RosterAgen
       {editing && (
         <div className="flex flex-col gap-3 rounded border border-line p-3 text-xs">
           <label className="flex flex-col gap-1">
-            <span className="cap">Co to je</span>
+            <Label>{t("cred.what_is_it")}</Label>
             <select value={s.kind} onChange={(e) => reKind(e.target.value as CredKind)} className={field}>
               {(Object.keys(KIND_LABEL) as CredKind[]).map((k) => (
                 <option key={k} value={k}>
@@ -270,12 +250,16 @@ function DiscoveryCard({ s0, agents, act }: { s0: Suggestion; agents: RosterAgen
             <div key={i} className="flex flex-col gap-2 border-t border-line pt-2">
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <label className="flex min-w-0 flex-col gap-1">
-                  <span className="cap">{c.role === "user" ? "Název (uživatel)" : "Název"}</span>
+                  <Label>{c.role === "user" ? t("cred.name_user") : t("cred.name")}</Label>
                   <input value={c.name} onChange={(e) => setC(i, { name: e.target.value.toLowerCase().replace(/[^a-z0-9_.-]/g, "-") })} className={field} />
                 </label>
                 <label className="flex min-w-0 flex-col gap-1">
-                  <span className="cap">Pole v 1Password</span>
-                  <select value={c.op_ref} onChange={(e) => setC(i, { op_ref: e.target.value, field: s.fields.find((f) => f.op_ref === e.target.value)?.title ?? c.field })} className={field}>
+                  <Label>{t("cred.op_field")}</Label>
+                  <select
+                    value={c.op_ref}
+                    onChange={(e) => setC(i, { op_ref: e.target.value, field: s.fields.find((f) => f.op_ref === e.target.value)?.title ?? c.field })}
+                    className={field}
+                  >
                     {s.fields.map((f) => (
                       <option key={f.id} value={f.op_ref}>
                         {f.section ? `${f.section} / ` : ""}
@@ -285,39 +269,39 @@ function DiscoveryCard({ s0, agents, act }: { s0: Suggestion; agents: RosterAgen
                   </select>
                 </label>
                 <label className="flex min-w-0 flex-col gap-1 sm:col-span-2">
-                  <span className="cap">Kam smí (hosty, čárkou)</span>
+                  <Label>{t("cred.hosts_comma")}</Label>
                   <input value={c.allowed_hosts.join(", ")} onChange={(e) => setC(i, { allowed_hosts: list(e.target.value) })} className={field} />
                 </label>
               </div>
               <Advanced>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <label className="flex min-w-0 flex-col gap-1">
-                    <span className="cap">Proměnná pro příkaz</span>
+                    <Label>{t("cred.env_var")}</Label>
                     <input value={c.env_var ?? ""} onChange={(e) => setC(i, { env_var: e.target.value.toUpperCase() || null })} className={field} />
                   </label>
                   <label className="flex min-w-0 flex-col gap-1">
-                    <span className="cap">HTTP hlavička</span>
+                    <Label>{t("cred.header")}</Label>
                     <input value={c.header ?? ""} placeholder="Authorization: Bearer {value}" onChange={(e) => setC(i, { header: e.target.value || null })} className={field} />
                   </label>
                   <label className="flex min-w-0 flex-col gap-1">
-                    <span className="cap">Povolené příkazy (čárkou)</span>
+                    <Label>{t("cred.commands_comma")}</Label>
                     <input value={c.allowed_commands.join(", ")} onChange={(e) => setC(i, { allowed_commands: list(e.target.value) })} className={field} />
                   </label>
                   <label className="flex min-w-0 flex-col gap-1">
-                    <span className="cap">Nástroje (command, http; prázdné = oba)</span>
+                    <Label>{t("cred.tools_both")}</Label>
                     <input value={c.allowed_tools.join(", ")} onChange={(e) => setC(i, { allowed_tools: list(e.target.value) })} className={field} />
                   </label>
-                  <span className="cap break-all sm:col-span-2">{c.op_ref}</span>
+                  <span className="font-mono text-xs break-all text-ink-2 sm:col-span-2">{c.op_ref}</span>
                 </div>
               </Advanced>
             </div>
           ))}
           <div className="flex flex-col gap-1 border-t border-line pt-2">
-            <span className="cap">Komu přidělit</span>
+            <Label>{t("cred.grant_to")}</Label>
             <AgentPicker agents={agents} recommended={s.agents} value={pick} onChange={setPick} />
           </div>
-          <label className="flex items-center gap-2">
-            <span className="cap">Na jak dlouho</span>
+          <label className="flex flex-wrap items-center gap-2">
+            <Label>{t("cred.how_long")}</Label>
             <HoursPick value={hours} onChange={setHours} />
           </label>
         </div>
@@ -325,51 +309,79 @@ function DiscoveryCard({ s0, agents, act }: { s0: Suggestion; agents: RosterAgen
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn-accent" disabled={busy || none} onClick={() => apply(creds, pick, hours)}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          {pick.length ? "Zaregistrovat a přidělit" : "Zaregistrovat"}
+          {pick.length ? t("cred.register_grant") : t("cred.register")}
         </button>
         <button type="button" className="btn" onClick={() => setEditing(!editing)} aria-expanded={editing}>
-          <Pencil size={13} /> {editing ? "Hotovo" : "Upravit"}
+          <Pencil size={13} /> {editing ? t("cred.done") : t("act.edit")}
         </button>
-        {none && <span className="cap">V položce není tajné pole.</span>}
+        {none && <Label>{t("cred.no_secret")}</Label>}
       </div>
     </div>
   );
 }
 
-function DiscoverySection({ d, loading, agents, act, reload }: { d: Discovery | null; loading: boolean; agents: RosterAgent[]; act: Act; reload: (refresh: boolean, hidden?: boolean) => void }) {
+function DiscoverySection({
+  d,
+  loading,
+  agents,
+  act,
+  reload,
+}: {
+  d: Discovery | null;
+  loading: boolean;
+  agents: RosterAgent[];
+  act: Act;
+  reload: (refresh: boolean, hidden?: boolean) => void;
+}) {
   const [showHidden, setShowHidden] = useState(false);
-  if (!d && loading) return <p className="cap flex items-center gap-2"><Loader2 size={12} className="animate-spin" /> Hledám nové položky v 1Passwordu…</p>;
+  if (!d && loading)
+    return (
+      <p className="flex items-center gap-2 text-xs text-ink-2">
+        <Loader2 size={12} className="animate-spin" /> {t("cred.discovering")}
+      </p>
+    );
   if (!d || !d.enabled) return null;
   const items = d.items;
   return (
-    <section className="flex flex-col gap-3">
+    <section className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="text-base font-medium">Nové v 1Password</h2>
-        <span className="cap">{items.length ? `${items.length} čeká na registraci · návrhy podle názvu, polí a adres` : ""}</span>
+        <h2 className="text-base font-medium">{t("cred.new_in_op")}</h2>
+        <Label>{items.length ? t("cred.new_count", { n: items.length }) : ""}</Label>
         <span className="ml-auto flex items-center gap-3">
           {d.hidden.length > 0 && (
-            <button type="button" className="cap hover:text-accent!" onClick={() => { setShowHidden(!showHidden); reload(false, !showHidden); }}>
-              {showHidden ? "schovat skryté" : `skryté (${d.hidden.length})`}
+            <button
+              type="button"
+              className="text-xs text-ink-2 hover:text-accent"
+              onClick={() => {
+                setShowHidden(!showHidden);
+                reload(false, !showHidden);
+              }}
+            >
+              {showHidden ? t("cred.hide_hidden") : t("cred.hidden_count", { n: d.hidden.length })}
             </button>
           )}
-          <button type="button" className="cap flex items-center gap-1 hover:text-accent!" onClick={() => reload(true, showHidden)} disabled={loading}>
-            <RefreshCw size={11} className={loading ? "animate-spin" : ""} /> načíst znovu
+          <button type="button" className="flex items-center gap-1 text-xs text-ink-2 hover:text-accent" onClick={() => reload(true, showHidden)} disabled={loading}>
+            <RefreshCw size={11} className={loading ? "animate-spin" : ""} /> {t("cred.reload")}
           </button>
         </span>
       </div>
-      {d.error && <p className="cap text-red-400!">{d.error}</p>}
+      {d.error && <p className="text-xs break-words text-red-400">{d.error}</p>}
       {!d.error && items.length === 0 && (
         <p className="panel px-4 py-3 text-sm text-ink-2">
-          Všechno z trezoru <b className="font-medium">{d.vault}</b> je zaregistrované. Přidej heslo nebo token do trezoru PersonalOS v 1Passwordu a objeví se tady i s návrhem, komu ho dát.
+          {t("cred.all_registered_a")} <b className="font-medium">{d.vault}</b> {t("cred.all_registered_b")}
         </p>
       )}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {items.map((s) =>
           s.hidden ? (
-            <div key={s.item_id} className="panel flex items-center gap-2 px-4 py-2 text-sm text-ink-3">
+            <div key={s.item_id} className="panel flex min-w-0 items-center gap-2 px-4 py-2 text-sm text-ink-2">
               <EyeOff size={13} /> <span className="min-w-0 flex-1 truncate">{s.title}</span>
-              <button type="button" className="cap hover:text-accent!" onClick={() => act(credentialsApi.dismiss(s.item_id, false), `${s.title} je zase vidět.`)}>
-                zobrazit
+              <button
+                type="button"
+                className="text-xs text-ink-2 hover:text-accent"
+                onClick={() => act(credentialsApi.dismiss(s.item_id, false), t("cred.visible_toast", { title: s.title }))}
+              >
+                {t("cred.show")}
               </button>
             </div>
           ) : (
@@ -394,13 +406,13 @@ function GrantBox({ g, agents, act, onDone }: { g: Group; agents: RosterAgent[];
       <AgentPicker agents={agents} recommended={g.recommended} value={pick} onChange={setPick} exclude={has} />
       <div className="flex flex-wrap items-center gap-2">
         <HoursPick value={hours} onChange={setHours} />
-        <select aria-label="Rozsah" value={scope} onChange={(e) => setScope(e.target.value)} className={field}>
-          <option value="">vše, co přístup dovolí</option>
-          <option value="command">jen příkazy</option>
-          <option value="http">jen HTTP</option>
+        <select aria-label={t("cred.scope")} value={scope} onChange={(e) => setScope(e.target.value)} className={field}>
+          <option value="">{t("cred.scope_all")}</option>
+          <option value="command">{t("cred.scope_command")}</option>
+          <option value="http">{t("cred.scope_http")}</option>
           {g.primary.allowed_hosts.map((h) => (
             <option key={h} value={h}>
-              jen {h}
+              {t("cred.only", { scope: h })}
             </option>
           ))}
         </select>
@@ -410,16 +422,17 @@ function GrantBox({ g, agents, act, onDone }: { g: Group; agents: RosterAgent[];
           disabled={pick.length === 0}
           onClick={() => {
             const who = pick.map((id) => agents.find((a) => a.id === id)?.name).join(", ");
-            act(credentialsApi.grantMany(pick, names, hours, scope || null), `${g.title}: přiděleno (${who}).`).then((ok) => ok && onDone());
+            act(credentialsApi.grantMany(pick, names, hours, scope || null), t("cred.granted_many", { title: g.title, who })).then((ok) => ok && onDone());
           }}
         >
-          <Plus size={14} /> Přidělit{pick.length > 1 ? ` (${pick.length})` : ""}
+          <Plus size={14} /> {t("cred.grant")}
+          {pick.length > 1 ? ` (${pick.length})` : ""}
         </button>
-        <button type="button" className="cap hover:text-ink!" onClick={onDone}>
-          zrušit
+        <button type="button" className="btn" onClick={onDone}>
+          {t("act.cancel")}
         </button>
       </div>
-      {(g.primary.companions?.length ?? 0) > 0 && <span className="cap">Agent dostane i nástroj {g.primary.companions!.map((x) => x.replace("tool:", "")).join(", ")}.</span>}
+      {(g.primary.companions?.length ?? 0) > 0 && <Label>{t("cred.companion", { tools: tools(g.primary.companions!) })}</Label>}
     </div>
   );
 }
@@ -435,6 +448,12 @@ function CredEdit({ c, act, onDone }: { c: Credential; act: Act; onDone: () => v
     description: c.description,
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const input = (k: keyof typeof f, name: string, extra: { placeholder?: string } = {}) => (
+    <label className="flex min-w-0 flex-col gap-1">
+      <Label>{name}</Label>
+      <input value={f[k]} onChange={set(k)} className={field} {...extra} />
+    </label>
+  );
   return (
     <form
       className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2"
@@ -450,44 +469,29 @@ function CredEdit({ c, act, onDone }: { c: Credential; act: Act; onDone: () => v
             max_uses_hour: Number(f.max) || 60,
             description: f.description,
           }),
-          `${c.name} uloženo.`,
+          t("cred.saved", { name: c.name }),
         ).then((ok) => ok && onDone());
       }}
     >
+      {input("env_var", t("cred.env_var"))}
+      {input("header", t("cred.header"), { placeholder: "Authorization: Bearer {value}" })}
+      {input("hosts", t("cred.hosts"))}
+      {input("commands", t("cred.commands"))}
+      {input("tools", t("cred.tools"))}
       <label className="flex min-w-0 flex-col gap-1">
-        <span className="cap">Proměnná pro příkaz</span>
-        <input value={f.env_var} onChange={set("env_var")} className={field} />
-      </label>
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className="cap">HTTP hlavička</span>
-        <input value={f.header} placeholder="Authorization: Bearer {value}" onChange={set("header")} className={field} />
-      </label>
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className="cap">Kam smí (hosty)</span>
-        <input value={f.hosts} onChange={set("hosts")} className={field} />
-      </label>
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className="cap">Povolené příkazy</span>
-        <input value={f.commands} onChange={set("commands")} className={field} />
-      </label>
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className="cap">Nástroje (command, http)</span>
-        <input value={f.tools} onChange={set("tools")} className={field} />
-      </label>
-      <label className="flex min-w-0 flex-col gap-1">
-        <span className="cap">Max. použití za hodinu</span>
+        <Label>{t("cred.max_hour")}</Label>
         <input value={f.max} onChange={(e) => setF({ ...f, max: e.target.value.replace(/[^0-9]/g, "") })} className={field} />
       </label>
       <label className="flex min-w-0 flex-col gap-1 sm:col-span-2">
-        <span className="cap">Popis (agenti ho vidí)</span>
+        <Label>{t("cred.description")}</Label>
         <textarea value={f.description} onChange={set("description")} rows={2} className={`${field} h-auto! py-1`} />
       </label>
       <div className="flex gap-2 sm:col-span-2">
         <button className="btn-accent h-7!">
-          <Check size={13} /> Uložit
+          <Check size={13} /> {t("act.save")}
         </button>
         <button type="button" className="btn h-7!" onClick={onDone}>
-          Zrušit
+          {t("act.cancel")}
         </button>
       </div>
     </form>
@@ -495,9 +499,12 @@ function CredEdit({ c, act, onDone }: { c: Credential; act: Act; onDone: () => v
 }
 
 function StatusLine({ g }: { g: Group }) {
-  const last = g.creds.map((c) => c.last_use).filter(Boolean).sort((a, b) => (a!.at < b!.at ? 1 : -1))[0];
+  const last = g.creds
+    .map((c) => c.last_use)
+    .filter(Boolean)
+    .sort((a, b) => (a!.at < b!.at ? 1 : -1))[0];
   const tests = g.creds.map((c) => c.last_test).filter(Boolean);
-  const failed = tests.find((t) => !t!.ok);
+  const failed = tests.find((x) => !x!.ok);
   const test = failed ?? tests.sort((a, b) => (a!.at < b!.at ? 1 : -1))[0];
   const errors = g.creds.reduce((n, c) => n + (c.errors_24h ?? 0), 0);
   const uses = g.creds.reduce((n, c) => n + (c.uses_24h ?? 0), 0);
@@ -506,18 +513,18 @@ function StatusLine({ g }: { g: Group }) {
       <span>
         {last ? (
           <>
-            Naposledy {czAgo(last.at)}
-            {last.agent ? ` · ${last.agent}` : ""} · <span className={last.ok ? "" : "text-red-400"}>{last.ok ? "OK" : "odmítnuto"}</span>
+            {t("cred.last_used", { when: czAgo(last.at) })}
+            {last.agent ? ` · ${last.agent}` : ""} · <span className={last.ok ? "" : "text-red-400"}>{last.ok ? t("cred.ok") : t("cred.denied")}</span>
           </>
         ) : (
-          <span className="text-ink-3">Zatím nepoužito</span>
+          <span>{t("cred.unused")}</span>
         )}
       </span>
-      {uses > 0 && <span className="cap">{uses}× za 24 h</span>}
-      {errors > 0 && <span className="rounded border border-red-400/50 px-1.5 text-xs text-red-400">{errWord(errors)} za 24 h</span>}
+      {uses > 0 && <span>{t("cred.uses_24h", { n: uses })}</span>}
+      {errors > 0 && <span className="rounded border border-red-400/50 px-1.5 text-xs text-red-400">{t("cred.errors_24h", { errors: errWord(errors) })}</span>}
       {test && (
-        <span className={`cap ${test.ok ? "text-accent!" : "text-red-400!"}`} title={test.error ?? undefined}>
-          {test.ok ? `test OK ${czAgo(test.at)}` : `test selhal ${czAgo(test.at)}: ${test.error ?? ""}`}
+        <span className={`break-words ${test.ok ? "text-accent" : "text-red-400"}`} title={test.error ?? undefined}>
+          {test.ok ? t("cred.test_ok", { when: czAgo(test.at) }) : t("cred.test_failed", { when: czAgo(test.at), error: test.error ?? "" })}
         </span>
       )}
     </div>
@@ -526,22 +533,26 @@ function StatusLine({ g }: { g: Group }) {
 
 function CredentialCard({ g, agents, act }: { g: Group; agents: RosterAgent[]; act: Act }) {
   const [granting, setGranting] = useState(false);
-  const [confirmArchive, setConfirmArchive] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
   const [testing, setTesting] = useState(false);
-  const removeAgent = (agentId: number, name: string, grants: CredGrant[]) => {
+  const removeAgent = (name: string, grants: CredGrant[]) => {
     const ids = grants.map((x) => x.id);
-    act(credentialsApi.revokeMany(ids), `${name} už nemá ${g.title}.`, () => credentialsApi.restoreMany(ids));
+    act(credentialsApi.revokeMany(ids), t("cred.revoked", { name, title: g.title }), () => credentialsApi.restoreMany(ids));
   };
   const test = () => {
     setTesting(true);
     act(
       Promise.all(g.creds.map((c) => credentialsApi.test(c.id).then((r) => ({ c, r })))).then((rs) => {
         const bad = rs.filter((x) => !x.r.ok);
-        if (bad.length) throw new Error(`Test selhal: ${bad.map((x) => `${x.c.name}: ${x.r.error}`).join("; ")}`);
+        if (bad.length) throw new Error(t("cred.test_failed_list", { list: bad.map((x) => `${x.c.name}: ${x.r.error}`).join("; ") }));
       }),
-      `${g.title}: test OK, hodnota se z 1Passwordu načetla (nikde se nezobrazuje).`,
+      t("cred.test_ok_toast", { title: g.title }),
     ).finally(() => setTesting(false));
+  };
+  const archive = async () => {
+    const ok = await confirmDialog({ title: t("cred.archive_title", { title: g.title }), body: t("cred.archive_body"), confirm: t("act.archive"), danger: true });
+    if (ok === null) return;
+    act(Promise.all(g.creds.map((c) => credentialsApi.archive(c.id, t("cred.archive_reason")))), t("cred.archived", { title: g.title }));
   };
   return (
     <div className="panel flex min-w-0 flex-col gap-3 p-4">
@@ -549,74 +560,64 @@ function CredentialCard({ g, agents, act }: { g: Group; agents: RosterAgent[]; a
         <KindIcon kind={g.kind} size={17} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="truncate text-[15px] font-medium">{g.title}</span>
-          <span className="cap truncate">
+          <Label className="truncate">
             {KIND_LABEL[g.kind]} · <span className="font-mono">{g.creds.map((c) => c.name).join(" + ")}</span>
-          </span>
+          </Label>
         </div>
       </div>
       {g.primary.description && <Markdown text={g.primary.description} compact className="text-xs text-ink-2" />}
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        {g.byAgent.size === 0 && g.paused.length === 0 && <span className="text-xs text-ink-3">Zatím ho nemá žádný agent.</span>}
+        {g.byAgent.size === 0 && g.paused.length === 0 && <Label>{t("cred.nobody_has")}</Label>}
         {[...g.byAgent.entries()].map(([id, e]) => (
-          <AgentChip key={id} name={e.name} grant={e.grants.find((x) => x.credential === g.primary.name) ?? e.grants[0]} onRemove={() => removeAgent(id, e.name, e.grants)} />
+          <AgentChip key={id} name={e.name} grant={e.grants.find((x) => x.credential === g.primary.name) ?? e.grants[0]} onRemove={() => removeAgent(e.name, e.grants)} />
         ))}
         {g.paused.map((p) => (
-          <AgentChip key={p.id} name={p.agent_name} paused onResume={() => act(credentialsApi.resume(p.id), `${p.agent_name}: přístup obnoven.`)} />
+          <AgentChip key={p.id} name={p.agent_name} paused onResume={() => act(credentialsApi.resume(p.id), t("cred.resumed", { name: p.agent_name }))} />
         ))}
       </div>
       <StatusLine g={g} />
       {granting && <GrantBox g={g} agents={agents} act={act} onDone={() => setGranting(false)} />}
-      {confirmArchive ? (
-        <div className="flex flex-wrap items-center gap-2 rounded border border-red-400/50 px-3 py-2 text-xs">
-          <span className="min-w-0 flex-1">Archivovat {g.title}? Všem agentům přístup skončí. Heslo v 1Passwordu zůstane.</span>
-          <button type="button" className="btn h-7! hover:text-red-400!" onClick={() => act(Promise.all(g.creds.map((c) => credentialsApi.archive(c.id, "archivováno majitelem"))), `${g.title} archivováno.`)}>
-            Archivovat
+      <div className="flex flex-wrap gap-2">
+        {!granting && (
+          <button type="button" className="btn-accent h-8!" onClick={() => setGranting(true)}>
+            <Plus size={14} /> {t("cred.grant")}
           </button>
-          <button type="button" className="cap hover:text-ink!" onClick={() => setConfirmArchive(false)}>
-            zpět
-          </button>
-        </div>
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {!granting && (
-            <button type="button" className="btn-accent h-8!" onClick={() => setGranting(true)}>
-              <Plus size={14} /> Přidělit
-            </button>
-          )}
-          <button type="button" className="btn h-8!" disabled={testing} onClick={test}>
-            {testing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Otestovat
-          </button>
-          <button type="button" className="btn h-8!" onClick={() => setConfirmArchive(true)}>
-            <Archive size={13} /> Archivovat
-          </button>
-        </div>
-      )}
+        )}
+        <button type="button" className="btn h-8!" disabled={testing} onClick={test}>
+          {testing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} {t("cred.test")}
+        </button>
+        <button type="button" className="btn h-8!" onClick={archive}>
+          <Archive size={13} /> {t("act.archive")}
+        </button>
+      </div>
       <Advanced>
         <div className="flex flex-col gap-3">
           {g.creds.map((c) => (
             <div key={c.id} className="flex min-w-0 flex-col gap-1 border-t border-line pt-2 text-xs">
               <div className="flex min-w-0 items-center gap-2">
-                <span className="font-mono text-accent">{c.name}</span>
-                <button type="button" className="cap ml-auto hover:text-accent!" onClick={() => setEditing(editing === c.id ? null : c.id)}>
-                  {editing === c.id ? "zavřít" : "upravit"}
+                <span className="min-w-0 truncate font-mono text-accent">{c.name}</span>
+                <button type="button" className="ml-auto text-xs text-ink-2 hover:text-accent" onClick={() => setEditing(editing === c.id ? null : c.id)}>
+                  {editing === c.id ? t("act.close") : t("act.edit")}
                 </button>
               </div>
               {editing === c.id ? (
                 <CredEdit c={c} act={act} onDone={() => setEditing(null)} />
               ) : (
                 <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
-                  <dt className="cap">1Password</dt>
-                  <dd className="font-mono break-all text-ink-2">{c.op_ref}</dd>
-                  <dt className="cap">proměnná</dt>
-                  <dd className="font-mono text-ink-2">{c.env_var ?? `CRED_${c.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`}</dd>
-                  <dt className="cap">hlavička</dt>
-                  <dd className="font-mono break-all text-ink-2">{c.header ?? "—"}</dd>
-                  <dt className="cap">hosty</dt>
-                  <dd className="font-mono break-all text-ink-2">{c.allowed_hosts.join(", ") || "—"}</dd>
-                  <dt className="cap">příkazy</dt>
-                  <dd className="font-mono break-all text-ink-2">{c.allowed_commands.join(", ") || "—"}</dd>
-                  <dt className="cap">nástroje</dt>
-                  <dd className="text-ink-2">{c.allowed_tools.join(" + ") || "příkaz i HTTP"} · limit {c.max_uses_hour}/h</dd>
+                  <dt className="text-ink-2">1Password</dt>
+                  <dd className="font-mono break-all text-ink">{c.op_ref}</dd>
+                  <dt className="text-ink-2">{t("cred.dt.env")}</dt>
+                  <dd className="font-mono break-all text-ink">{c.env_var ?? `CRED_${c.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`}</dd>
+                  <dt className="text-ink-2">{t("cred.dt.header")}</dt>
+                  <dd className="font-mono break-all text-ink">{c.header ?? "—"}</dd>
+                  <dt className="text-ink-2">{t("cred.dt.hosts")}</dt>
+                  <dd className="font-mono break-all text-ink">{c.allowed_hosts.join(", ") || "—"}</dd>
+                  <dt className="text-ink-2">{t("cred.dt.commands")}</dt>
+                  <dd className="font-mono break-all text-ink">{c.allowed_commands.join(", ") || "—"}</dd>
+                  <dt className="text-ink-2">{t("cred.dt.tools")}</dt>
+                  <dd className="text-ink">
+                    {c.allowed_tools.join(" + ") || t("cred.command_and_http")} · {t("cred.limit", { n: c.max_uses_hour })}
+                  </dd>
                 </dl>
               )}
             </div>
@@ -634,7 +635,16 @@ function AgentCard({ a, groups, requests, act, highlight }: { a: RosterAgent; gr
   const free = groups.filter((g) => !g.byAgent.has(a.id));
   const rec = free.filter((g) => g.recommended.some((r) => r.id === a.id));
   const [pick, setPick] = useState("");
-  const grant = (g: Group) => act(credentialsApi.grantMany([a.id], g.creds.map((c) => c.name), null, null), `${a.name} má ${g.title}.`);
+  const grant = (g: Group) =>
+    act(
+      credentialsApi.grantMany(
+        [a.id],
+        g.creds.map((c) => c.name),
+        null,
+        null,
+      ),
+      t("cred.has", { name: a.name, title: g.title }),
+    );
   return (
     <div className="panel flex min-w-0 flex-col gap-3 p-4">
       <div className="flex min-w-0 items-center gap-2">
@@ -643,14 +653,14 @@ function AgentCard({ a, groups, requests, act, highlight }: { a: RosterAgent; gr
           <Link to={`/agents/${a.id}`} className="truncate text-[15px] font-medium hover:text-accent">
             {a.name}
           </Link>
-          {a.purpose && <span className="cap truncate">{a.purpose}</span>}
+          {a.purpose && <Label className="truncate">{a.purpose}</Label>}
         </div>
       </div>
       {requests.map((r) => (
         <RequestCard key={r.id} r={r} act={act} highlight={highlight === r.id} />
       ))}
       <div className="flex min-w-0 flex-wrap gap-1.5">
-        {held.length === 0 && <span className="text-xs text-ink-3">Nemá žádné heslo ani token.</span>}
+        {held.length === 0 && <Label>{t("cred.agent_none")}</Label>}
         {held.map((g) => {
           const e = g.byAgent.get(a.id)!;
           const grant0 = e.grants.find((x) => x.credential === g.primary.name) ?? e.grants[0];
@@ -659,8 +669,17 @@ function AgentCard({ a, groups, requests, act, highlight }: { a: RosterAgent; gr
             <span key={g.key} className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-line bg-raised py-0.5 pr-1 pl-2 text-xs">
               <KindIcon kind={g.kind} size={12} />
               <span className="truncate">{g.title}</span>
-              <span className="cap shrink-0">{grant0.scope ? `jen ${grant0.scope} · ` : ""}{czLeft(grant0.expires_at)}</span>
-              <button type="button" aria-label={`Odebrat ${g.title}`} className="rounded-full p-0.5 text-ink-3 hover:bg-line hover:text-red-400" onClick={() => act(credentialsApi.revokeMany(ids), `${a.name} už nemá ${g.title}.`, () => credentialsApi.restoreMany(ids))}>
+              <span className="shrink-0 text-ink-2">
+                {grant0.scope ? `${t("cred.only", { scope: grant0.scope })} · ` : ""}
+                {czLeft(grant0.expires_at)}
+              </span>
+              <button
+                type="button"
+                aria-label={t("cred.remove", { name: g.title })}
+                title={t("cred.remove", { name: g.title })}
+                className="rounded-full p-0.5 text-ink-2 hover:bg-line hover:text-red-400"
+                onClick={() => act(credentialsApi.revokeMany(ids), t("cred.revoked", { name: a.name, title: g.title }), () => credentialsApi.restoreMany(ids))}
+              >
                 <X size={12} />
               </button>
             </span>
@@ -670,14 +689,20 @@ function AgentCard({ a, groups, requests, act, highlight }: { a: RosterAgent; gr
       {(rec.length > 0 || free.length > 0) && (
         <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
           {rec.map((g) => (
-            <button key={g.key} type="button" className="inline-flex items-center gap-1 rounded-full border border-dashed border-accent/60 px-2 py-0.5 text-accent hover:bg-accent/10" onClick={() => grant(g)} title="Doporučeno podle role agenta">
-              <Plus size={11} /> {g.title}
+            <button
+              key={g.key}
+              type="button"
+              className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-dashed border-accent/60 px-2 py-0.5 text-accent hover:bg-accent/10"
+              onClick={() => grant(g)}
+              title={t("cred.rec_by_role")}
+            >
+              <Plus size={11} className="shrink-0" /> <span className="truncate">{g.title}</span>
             </button>
           ))}
           {free.length > rec.length && (
             <span className="flex min-w-0 items-center gap-1">
-              <select aria-label={`Přidat přístup pro ${a.name}`} value={pick} onChange={(e) => setPick(e.target.value)} className={`${field} max-w-52`}>
-                <option value="">přidat přístup…</option>
+              <select aria-label={t("cred.add_for", { name: a.name })} value={pick} onChange={(e) => setPick(e.target.value)} className={`${field} max-w-52`}>
+                <option value="">{t("cred.add_access")}</option>
                 {free
                   .filter((g) => !rec.includes(g))
                   .map((g) => (
@@ -695,7 +720,7 @@ function AgentCard({ a, groups, requests, act, highlight }: { a: RosterAgent; gr
                   if (g) grant(g).then(() => setPick(""));
                 }}
               >
-                <Plus size={13} /> Přidat
+                <Plus size={13} /> {t("cred.add")}
               </button>
             </span>
           )}
@@ -713,12 +738,12 @@ function AgentsView({ v, groups, act, highlight }: { v: CredOverview; groups: Gr
     <AgentCard key={a.id} a={a} groups={groups} requests={v.requests.filter((r) => r.agent_id === a.id)} act={act} highlight={highlight} />
   );
   return (
-    <div className="flex flex-col gap-3">
-      {active.length === 0 && <p className="panel px-4 py-3 text-sm text-ink-2">Zatím nikdo nic nemá. Přiděl přístup na kartě hesla nebo níže u agenta.</p>}
+    <div className="flex min-w-0 flex-col gap-3">
+      {active.length === 0 && <p className="panel px-4 py-3 text-sm text-ink-2">{t("cred.nobody_anything")}</p>}
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{active.map(card)}</div>
       {rest.length > 0 && (
-        <button type="button" className="cap self-start hover:text-accent!" onClick={() => setOthers(!others)}>
-          {others ? "Schovat ostatní agenty" : `Ostatní agenti bez přístupů (${rest.length})`}
+        <button type="button" className="self-start text-xs text-ink-2 hover:text-accent" onClick={() => setOthers(!others)}>
+          {others ? t("cred.hide_others") : t("cred.others_count", { n: rest.length })}
         </button>
       )}
       {others && <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{rest.map(card)}</div>}
@@ -729,21 +754,21 @@ function AgentsView({ v, groups, act, highlight }: { v: CredOverview; groups: Gr
 // ------------------------------------------------------------------ the page
 
 function Tabs({ value, onChange, counts }: { value: string; onChange: (v: string) => void; counts: Record<string, number> }) {
-  const tab = (k: string, label: ReactNode) => (
+  const tab = (k: string, name: ReactNode) => (
     <button
       type="button"
       role="tab"
       aria-selected={value === k}
       onClick={() => onChange(k)}
-      className={`rounded px-3 py-1.5 text-sm ${value === k ? "bg-raised text-ink" : "text-ink-3 hover:text-ink"}`}
+      className={`rounded px-3 py-1.5 text-sm ${value === k ? "bg-raised text-ink" : "text-ink-2 hover:text-ink"}`}
     >
-      {label} <span className="cap">{counts[k]}</span>
+      {name} <span className="text-xs text-ink-2">{counts[k]}</span>
     </button>
   );
   return (
-    <div role="tablist" className="inline-flex self-start rounded-md border border-line p-0.5">
-      {tab("hesla", "Hesla a tokeny")}
-      {tab("agenti", "Podle agentů")}
+    <div role="tablist" className="inline-flex max-w-full self-start rounded-md border border-line p-0.5">
+      {tab("hesla", t("cred.tab.creds"))}
+      {tab("agenti", t("cred.tab.agents"))}
     </div>
   );
 }
@@ -756,7 +781,6 @@ export default function Credentials() {
   const [params, setParams] = useSearchParams();
   const highlight = Number(params.get("request")) || null;
   const view = params.get("view") === "agenti" ? "agenti" : "hesla";
-  const { toast, show, hide } = useToast();
 
   const load = useCallback(() => {
     credentialsApi.overview().then(
@@ -783,43 +807,25 @@ export default function Credentials() {
     loadDiscovery(false);
   }, [load, loadDiscovery]);
 
-  const act: Act = useCallback(
-    async (p, ok, undo) => {
-      try {
-        await p;
-        if (ok) show({ text: ok, undo });
-        reloadAll();
-        return true;
-      } catch (e) {
-        show({ text: errText(e), error: true });
-        reloadAll();
-        return false;
-      }
-    },
-    [show, reloadAll],
-  );
+  const act = useAct(reloadAll);
 
   const groups = useMemo(() => (v ? groupsOf(v) : []), [v]);
   const agents = v?.agents ?? [];
 
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-20">
-      <PageHeader
-        kicker="PŘÍSTUPY · 1PASSWORD"
-        title="Přístupy"
-        sub="Hesla a tokeny pro agenty. Agent zná jen název: hodnotu PersonalOS vezme z 1Passwordu až ve chvíli použití a z výstupu ji začerní. Přidělit je můžeš jen ty."
-      />
+      <PageHeader kicker={t("settings.kicker")} title={t("nav.credentials")} sub={t("cred.sub")} />
       {v && !v.enabled && (
-        <p className="panel border-amber-400/60! px-4 py-3 text-sm text-amber-300">
-          1Password není připojený ({v.reason}). Dokud to nebude, každé použití hesla selže. Na serveru chybí <code>OP_SERVICE_ACCOUNT_TOKEN</code> a <code>POS_OP_VAULT</code> (návod v docs/CREDENTIALS.md).
+        <p className="panel border-amber-400/60! px-4 py-3 text-sm break-words text-amber-300">
+          {t("cred.op_off", { reason: v.reason ?? "" })} <code>OP_SERVICE_ACCOUNT_TOKEN</code> {t("cred.and")} <code>POS_OP_VAULT</code> {t("cred.op_off_docs")}
         </p>
       )}
-      {loadError && <p className="cap text-red-400!">{loadError}</p>}
+      {loadError && <p className="text-xs break-words text-red-400">{loadError}</p>}
 
       {v && v.requests.length > 0 && (
-        <section className="flex flex-col gap-3">
+        <section className="flex min-w-0 flex-col gap-3">
           <h2 className="text-base font-medium">
-            Čeká na tebe <span className="cap">{v.requests.length}</span>
+            {t("cred.waiting")} <span className="text-xs text-ink-2">{v.requests.length}</span>
           </h2>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {v.requests.map((r) => (
@@ -831,7 +837,7 @@ export default function Credentials() {
 
       <DiscoverySection d={d} loading={dLoading} agents={agents} act={act} reload={loadDiscovery} />
 
-      <section className="flex flex-col gap-3">
+      <section className="flex min-w-0 flex-col gap-3">
         <Tabs
           value={view}
           onChange={(k) => {
@@ -842,14 +848,10 @@ export default function Credentials() {
           }}
           counts={{ hesla: groups.length, agenti: agents.filter((a) => groups.some((g) => g.byAgent.has(a.id))).length }}
         />
-        {!v && !loadError && <p className="cap">Načítám…</p>}
+        {!v && !loadError && <p className="text-xs text-ink-2">{t("act.loading")}</p>}
         {v && view === "hesla" && (
           <>
-            {groups.length === 0 && (
-              <p className="panel px-4 py-3 text-sm text-ink-2">
-                Zatím tu nic není. Přidej heslo do trezoru PersonalOS v 1Passwordu a objeví se nahoře v „Nové v 1Password“ i s návrhem, komu ho dát.
-              </p>
-            )}
+            {groups.length === 0 && <p className="panel px-4 py-3 text-sm text-ink-2">{t("cred.empty")}</p>}
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               {groups.map((g) => (
                 <CredentialCard key={g.key} g={g} agents={agents} act={act} />
@@ -860,10 +862,9 @@ export default function Credentials() {
         {v && view === "agenti" && <AgentsView v={v} groups={groups} act={act} highlight={highlight} />}
       </section>
 
-      <Panel title="Použití za 7 dní" right="každé načtení: kdo, co, kdy; chyby nahoře červeně">
+      <Panel title={t("cred.usage_7d")} right={t("cred.usage_7d_right")}>
         <AuditList lines={v?.audit ?? []} />
       </Panel>
-      <ToastBar toast={toast} hide={hide} reload={reloadAll} />
     </div>
   );
 }
@@ -874,49 +875,29 @@ export default function Credentials() {
 export function AgentCredentialsPanel({ agentId }: { agentId: number }) {
   const [v, setV] = useState<CredOverview | null>(null);
   const [mine, setMine] = useState<Awaited<ReturnType<typeof credentialsApi.agent>> | null>(null);
-  const { toast, show, hide } = useToast();
   const load = useCallback(() => {
     credentialsApi.overview().then(setV, () => setV(null));
     credentialsApi.agent(agentId).then(setMine, () => setMine(null));
   }, [agentId]);
   useEffect(load, [load]);
-  const act: Act = useCallback(
-    async (p, ok, undo) => {
-      try {
-        await p;
-        if (ok) show({ text: ok, undo });
-        load();
-        return true;
-      } catch (e) {
-        show({ text: errText(e), error: true });
-        return false;
-      }
-    },
-    [show, load],
-  );
+  const act = useAct(load);
   const groups = useMemo(() => (v ? groupsOf(v) : []), [v]);
   if (!v || !mine) return null;
   const a = v.agents.find((x) => x.id === agentId);
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
       <div className="flex min-w-0 flex-col gap-2 lg:col-span-5">
-        <div className="flex items-baseline gap-2">
-          <span className="cap text-accent!">PŘÍSTUPY</span>
-          <h2 className="text-sm font-medium">Hesla a tokeny</h2>
-          <Link to="/credentials?view=agenti" className="cap ml-auto hover:text-accent!">
-            vše na stránce Přístupy →
+        <div className="flex flex-wrap items-baseline gap-2">
+          <h2 className="text-sm font-medium">{t("cred.panel_title")}</h2>
+          <Link to="/credentials?view=agenti" className="ml-auto text-xs text-ink-2 hover:text-accent">
+            {t("cred.all_on_page")}
           </Link>
         </div>
-        {a ? (
-          <AgentCard a={a} groups={groups} requests={mine.requests} act={act} highlight={null} />
-        ) : (
-          <p className="cap">Tento agent nemůže mít hesla (člověk, služba nebo Správce přístupů).</p>
-        )}
+        {a ? <AgentCard a={a} groups={groups} requests={mine.requests} act={act} highlight={null} /> : <p className="text-xs text-ink-2">{t("cred.cannot_have")}</p>}
       </div>
-      <Panel title="Použití za 7 dní" className="lg:col-span-7" bodyClassName="max-h-[380px] overflow-y-auto">
+      <Panel title={t("cred.usage_7d")} className="min-w-0 lg:col-span-7" bodyClassName="max-h-[380px] overflow-y-auto">
         <AuditList lines={mine.audit} />
       </Panel>
-      <ToastBar toast={toast} hide={hide} reload={load} />
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { confirmDialog, toast } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
-import { ago } from "./Agents";
+import { ago, label, t } from "../i18n";
 
 type Rule = {
   id: number;
@@ -38,7 +39,8 @@ type Status = {
 
 // calendar, nexus and web come back when something sends them.
 const SOURCES = ["gmail", "github", "discord", "manual", "any"];
-const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
+const MATCH_KEYS = ["text_regex", "from_contains", "kind", "label"];
+const input = "h-8 min-w-0 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
 const SETUP: Record<string, string> = {
   "email.send": "POS_SMTP_HOST, POS_SMTP_PORT, POS_SMTP_USER, POS_SMTP_PASSWORD, POS_SMTP_FROM",
@@ -46,9 +48,34 @@ const SETUP: Record<string, string> = {
   "discord.post": "POS_DISCORD_WEBHOOK_URL",
   "github.issue": "POS_GITHUB_TOKEN",
   "github.review": "POS_GITHUB_TOKEN",
-  "payment": "never automatic: approved, it becomes your task",
-  "web.post": "never automatic: approved, it becomes your task",
 };
+const NEVER_AUTO = new Set(["payment", "web.post"]);
+
+const RULE_GRID = "grid grid-cols-[minmax(0,1.4fr)_80px_minmax(0,1fr)_130px_56px_56px_200px] gap-2";
+const EVENT_GRID = "grid grid-cols-[80px_minmax(0,1fr)_minmax(0,0.9fr)_150px_90px] gap-2";
+
+function MatchOptions() {
+  return (
+    <>
+      {MATCH_KEYS.map((k) => (
+        <option key={k} value={k}>
+          {t(`conn.match.${k}`)}
+        </option>
+      ))}
+    </>
+  );
+}
+
+function PriorityOptions() {
+  return (
+    <>
+      <option value="">{t("conn.no_priority")}</option>
+      <option value="1">P1</option>
+      <option value="2">P2</option>
+      <option value="3">P3</option>
+    </>
+  );
+}
 
 /** Every field of a routing rule, edited in place (versioned on the server). */
 function EditRule({ r, onSave, onCancel }: { r: Rule; onSave: (changes: Record<string, unknown>) => void; onCancel: () => void }) {
@@ -59,27 +86,23 @@ function EditRule({ r, onSave, onCancel }: { r: Rule; onSave: (changes: Record<s
   });
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line bg-raised px-4 py-2.5">
-      <input className={`${input} w-44`} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label="Rule name" />
-      <select className={input} value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label="Source">
+      <input className={`${input} w-44`} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} aria-label={t("conn.rule_name")} />
+      <select className={input} value={f.source} onChange={(e) => setF({ ...f, source: e.target.value })} aria-label={t("conn.source")}>
         {[...new Set([...SOURCES, r.source])].map((s) => (
-          <option key={s}>{s}</option>
+          <option key={s} value={s}>
+            {label("conn.src", s)}
+          </option>
         ))}
       </select>
-      <select className={input} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} aria-label="Match">
-        <option value="text_regex">text matches</option>
-        <option value="from_contains">from contains</option>
-        <option value="kind">kind is</option>
-        <option value="label">has label</option>
+      <select className={input} value={f.key} onChange={(e) => setF({ ...f, key: e.target.value })} aria-label={t("conn.match")}>
+        <MatchOptions />
       </select>
-      <input className={`${input} w-36`} placeholder="(every event)" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} aria-label="Match value" />
-      <input className={`${input} w-36`} placeholder="assignee" value={f.assignee} onChange={(e) => setF({ ...f, assignee: e.target.value })} aria-label="Assignee" />
-      <select className={input} value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} aria-label="Priority">
-        <option value="">no priority</option>
-        <option value="1">P1</option>
-        <option value="2">P2</option>
-        <option value="3">P3</option>
+      <input className={`${input} w-36`} placeholder={t("conn.every_event_ph")} value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} aria-label={t("conn.match_value")} />
+      <input className={`${input} w-36`} placeholder={t("conn.assignee")} value={f.assignee} onChange={(e) => setF({ ...f, assignee: e.target.value })} aria-label={t("conn.assignee")} />
+      <select className={input} value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} aria-label={t("priority.label")}>
+        <PriorityOptions />
       </select>
-      <input className={`${input} w-28`} placeholder="topic" value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} aria-label="Topic" />
+      <input className={`${input} w-28`} placeholder={t("conn.topic")} value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} aria-label={t("conn.topic")} />
       <button
         type="button"
         className="btn-accent"
@@ -90,18 +113,18 @@ function EditRule({ r, onSave, onCancel }: { r: Rule; onSave: (changes: Record<s
           })
         }
       >
-        Save
+        {t("act.save")}
       </button>
-      <button type="button" className="cap hover:text-accent!" onClick={onCancel}>
-        cancel
+      <button type="button" className="btn" onClick={onCancel}>
+        {t("act.cancel")}
       </button>
     </div>
   );
 }
 
 function matchText(m: Record<string, string>) {
-  const parts = Object.entries(m).map(([k, v]) => `${k.replace("_", " ")} ${v}`);
-  return parts.length ? parts.join(" · ") : "every event";
+  const parts = Object.entries(m).map(([k, v]) => `${label("conn.match", k)} ${v}`);
+  return parts.length ? parts.join(" · ") : t("conn.every_event");
 }
 
 export default function Connectors() {
@@ -127,9 +150,28 @@ export default function Connectors() {
       () => {
         setError(null);
         load();
+        return true;
       },
-      (e) => setError(e.message),
+      (e) => {
+        setError(e.message);
+        return false;
+      },
     );
+
+  const setEnabled = (r: Rule, enabled: boolean) =>
+    run(api(`/api/routes/${r.id}`, { method: "PATCH", body: JSON.stringify({ enabled }) }));
+
+  function toggle(r: Rule) {
+    setEnabled(r, !r.enabled).then((ok) => {
+      if (ok) toast(t(r.enabled ? "conn.paused_toast" : "conn.resumed_toast", { name: r.name }), { undo: () => setEnabled(r, r.enabled) });
+    });
+  }
+
+  async function archive(r: Rule) {
+    const ok = await confirmDialog({ title: t("conn.archive_title", { name: r.name }), body: t("conn.archive_body"), confirm: t("act.archive"), danger: true });
+    if (ok === null) return;
+    run(api(`/api/routes/${r.id}/archive`, { method: "POST" })).then((done) => done && toast(t("conn.archived_toast", { name: r.name })));
+  }
 
   function addRule(e: FormEvent) {
     e.preventDefault();
@@ -156,44 +198,46 @@ export default function Connectors() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <PageHeader
-        kicker="SYSTEM · CONNECTORS · STEP 4"
-        title="Connectors"
-        sub="Incoming events (e-mail, GitHub, Discord) become tasks for the right member. Anything going out waits for your approval."
-      />
-      {error && <p className="cap text-red-400!">{error}</p>}
+    <div className="flex min-w-0 flex-col gap-5">
+      <PageHeader kicker={t("settings.kicker")} title={t("nav.connectors")} sub={t("conn.sub")} />
+      {error && <p className="text-xs break-words text-red-400">{error}</p>}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel title="What is set up" right="secrets stay on the server" className="lg:col-span-4">
+        <Panel title={t("conn.setup")} right={t("conn.setup_right")} className="min-w-0 lg:col-span-4">
           {status &&
             Object.entries(status.outbound).map(([k, on]) => (
-              <div key={k} className="flex flex-col gap-1 border-b border-line px-4 py-2.5">
-                <span className="flex items-center gap-2 text-[13px]">
-                  <span className={`h-1.5 w-1.5 rounded-full ${on ? "bg-accent" : "bg-dim"}`} />
-                  <span className="font-mono">{k}</span>
-                  <span className={`cap ml-auto ${on ? "text-accent!" : ""}`}>{on ? "on" : "off · sent by hand"}</span>
+              <div key={k} className="flex min-w-0 flex-col gap-1 border-b border-line px-4 py-2.5">
+                <span className="flex min-w-0 items-center gap-2 text-[13px]">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${on ? "bg-accent" : "bg-dim"}`} />
+                  <span className="min-w-0 truncate">{label("conn.out", k)}</span>
+                  <span className={`ml-auto shrink-0 text-xs ${on ? "text-accent" : "text-ink-2"}`}>{on ? t("conn.on") : t("conn.off_by_hand")}</span>
                 </span>
-                {!on && <span className="cap">set {SETUP[k]}</span>}
+                {!on && (
+                  <span className="text-xs break-words text-ink-2">
+                    {NEVER_AUTO.has(k) ? t("conn.never_auto") : t("conn.set_env", { env: SETUP[k] ?? "" })}
+                  </span>
+                )}
               </div>
             ))}
           {status && (
             <>
-              <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
+              <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
                 <span className={`h-1.5 w-1.5 rounded-full ${status.github_webhook ? "bg-accent" : "bg-dim"}`} />
-                GitHub webhook <span className="font-mono text-xs text-ink-3">/api/hooks/github</span>
-                <span className="cap ml-auto">{status.github_webhook ? "on" : "off · POS_GITHUB_WEBHOOK_SECRET"}</span>
+                {t("conn.gh_webhook")} <span className="font-mono text-xs text-ink-2">/api/hooks/github</span>
+                <span className="ml-auto text-xs break-all text-ink-2">{status.github_webhook ? t("conn.on") : t("conn.off_env", { env: "POS_GITHUB_WEBHOOK_SECRET" })}</span>
               </div>
-              <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
+              <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
                 <span className={`h-1.5 w-1.5 rounded-full ${status.event_senders?.length ? "bg-accent" : "bg-dim"}`} />
-                Machine events <span className="font-mono text-xs text-ink-3">/api/events</span>
-                <span className="cap ml-auto">{status.event_senders?.length ? status.event_senders.join(", ") : "off · POS_EVENTS_TOKENS"}</span>
+                {t("conn.machine_events")} <span className="font-mono text-xs text-ink-2">/api/events</span>
+                <span className="ml-auto text-xs break-all text-ink-2">
+                  {status.event_senders?.length ? status.event_senders.join(", ") : t("conn.off_env", { env: "POS_EVENTS_TOKENS" })}
+                </span>
               </div>
               {status.mail_prefilter && (
                 <div className="flex flex-col gap-1 border-b border-line px-4 py-2.5">
                   <span className="flex items-center gap-2 text-[13px]">
-                    Mail prefilter
-                    <span className="cap ml-auto">
-                      {status.mail_prefilter.total} skipped · {status.mail_prefilter.days} days
+                    {t("conn.prefilter")}
+                    <span className="ml-auto text-xs text-ink-2">
+                      {t("conn.prefilter_stats", { n: status.mail_prefilter.total, days: status.mail_prefilter.days })}
                     </span>
                   </span>
                   {Object.entries(status.mail_prefilter.by_reason).map(([reason, n]) => (
@@ -202,116 +246,139 @@ export default function Connectors() {
                       <span className="font-mono">{n}</span>
                     </span>
                   ))}
-                  {status.mail_prefilter.total === 0 && <span className="cap">no bulk or automatic mail dropped yet</span>}
+                  {status.mail_prefilter.total === 0 && <span className="text-xs text-ink-2">{t("conn.prefilter_empty")}</span>}
                 </div>
               )}
-              <p className="px-4 py-2.5 text-xs leading-relaxed text-ink-2">
-                Knowledge: agents push what they read into knowlage-agent themselves, each with its own KB key ({status.knowlage_ingest}).
-              </p>
+              <p className="px-4 py-2.5 text-xs leading-relaxed break-words text-ink-2">{t("conn.knowledge", { ingest: status.knowlage_ingest })}</p>
             </>
           )}
         </Panel>
 
-        <Panel title="Routing rules" right="first match wins · versioned · agents may propose changes" className="lg:col-span-8">
-          <div className="grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_110px] gap-2 border-b border-line px-4 py-2">
-            {["RULE", "SOURCE", "MATCH", "→ ASSIGNEE", "PRIO", "HITS", ""].map((h) => (
-              <span key={h} className="cap">
-                {h}
-              </span>
-            ))}
-          </div>
-          {rules.map((r) =>
-            editing === r.id ? (
-              <EditRule
-                key={r.id}
-                r={r}
-                onCancel={() => setEditing(null)}
-                onSave={(changes) =>
-                  run(api(`/api/routes/${r.id}`, { method: "PATCH", body: JSON.stringify(changes) })).then(() => setEditing(null))
-                }
-              />
-            ) : (
-            <div key={r.id} className={`grid grid-cols-[minmax(0,1.4fr)_70px_minmax(0,1fr)_130px_48px_44px_110px] items-center gap-2 border-b border-line px-4 py-2 text-[13px] ${r.enabled ? "" : "opacity-45"}`}>
-              <span className="truncate">{r.name}</span>
-              <span className="font-mono text-xs">{r.source}</span>
-              <span className="cap truncate">{matchText(r.match)}</span>
-              <span className="truncate text-accent">{r.assignee ?? "inbox"}</span>
-              <span className="cap">{r.priority ? `P${r.priority}` : "—"}</span>
-              <span className="font-mono text-xs">{r.hits}</span>
-              <span className="flex gap-2">
-                <button className="cap hover:text-accent!" onClick={() => run(api(`/api/routes/${r.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !r.enabled }) }))}>
-                  {r.enabled ? "off" : "on"}
-                </button>
-                <button className="cap hover:text-accent!" onClick={() => setEditing(r.id)}>
-                  edit
-                </button>
-                <button className="cap hover:text-red-400!" onClick={() => run(api(`/api/routes/${r.id}/archive`, { method: "POST" }))}>
-                  archive
-                </button>
-              </span>
+        <Panel title={t("conn.rules")} right={t("conn.rules_right")} className="min-w-0 lg:col-span-8">
+          <div className="overflow-x-auto">
+            <div className="min-w-[760px]">
+              <div className={`${RULE_GRID} border-b border-line px-4 py-2 text-xs text-ink-2`}>
+                <span>{t("conn.h.rule")}</span>
+                <span>{t("conn.source")}</span>
+                <span>{t("conn.match")}</span>
+                <span>{t("conn.h.assignee")}</span>
+                <span>{t("conn.h.prio")}</span>
+                <span>{t("conn.h.hits")}</span>
+                <span />
+              </div>
+              {rules.map((r) =>
+                editing === r.id ? (
+                  <EditRule
+                    key={r.id}
+                    r={r}
+                    onCancel={() => setEditing(null)}
+                    onSave={(changes) =>
+                      run(api(`/api/routes/${r.id}`, { method: "PATCH", body: JSON.stringify(changes) })).then((ok) => {
+                        if (ok) {
+                          setEditing(null);
+                          toast(t("act.saved"));
+                        }
+                      })
+                    }
+                  />
+                ) : (
+                  <div key={r.id} className={`${RULE_GRID} items-center border-b border-line px-4 py-2 text-[13px]`}>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{r.name}</span>
+                      {!r.enabled && <span className="shrink-0 rounded border border-amber-400/60 px-1.5 text-xs text-amber-300">{t("status.paused_badge")}</span>}
+                    </span>
+                    <span className="text-xs">{label("conn.src", r.source)}</span>
+                    <span className="truncate text-xs text-ink-2">{matchText(r.match)}</span>
+                    <span className="truncate text-accent">{r.assignee ?? t("conn.inbox")}</span>
+                    <span className="text-xs text-ink-2">{r.priority ? `P${r.priority}` : "—"}</span>
+                    <span className="font-mono text-xs">{r.hits}</span>
+                    <span className="flex justify-end gap-3 text-xs">
+                      <button className="text-ink-2 hover:text-accent" onClick={() => toggle(r)}>
+                        {r.enabled ? t("act.pause") : t("act.resume")}
+                      </button>
+                      <button className="text-ink-2 hover:text-accent" onClick={() => setEditing(r.id)}>
+                        {t("act.edit")}
+                      </button>
+                      <button className="text-ink-2 hover:text-red-400" onClick={() => archive(r)}>
+                        {t("act.archive")}
+                      </button>
+                    </span>
+                  </div>
+                ),
+              )}
             </div>
-            ),
-          )}
+          </div>
           <form onSubmit={addRule} className="flex flex-wrap items-center gap-2 px-4 py-3">
-            <input required placeholder="New rule name" className={`${input} w-48`} value={rule.name} onChange={(e) => setRule({ ...rule, name: e.target.value })} />
-            <select className={input} value={rule.source} onChange={(e) => setRule({ ...rule, source: e.target.value })}>
+            <input required placeholder={t("conn.new_rule")} aria-label={t("conn.rule_name")} className={`${input} w-48`} value={rule.name} onChange={(e) => setRule({ ...rule, name: e.target.value })} />
+            <select className={input} aria-label={t("conn.source")} value={rule.source} onChange={(e) => setRule({ ...rule, source: e.target.value })}>
               {SOURCES.map((s) => (
-                <option key={s}>{s}</option>
+                <option key={s} value={s}>
+                  {label("conn.src", s)}
+                </option>
               ))}
             </select>
-            <select className={input} value={rule.key} onChange={(e) => setRule({ ...rule, key: e.target.value })}>
-              <option value="text_regex">text matches</option>
-              <option value="from_contains">from contains</option>
-              <option value="kind">kind is</option>
-              <option value="label">has label</option>
+            <select className={input} aria-label={t("conn.match")} value={rule.key} onChange={(e) => setRule({ ...rule, key: e.target.value })}>
+              <MatchOptions />
             </select>
-            <input placeholder="value" className={`${input} w-36`} value={rule.value} onChange={(e) => setRule({ ...rule, value: e.target.value })} />
-            <input placeholder="assignee (me, ai, agent)" className={`${input} w-44`} value={rule.assignee} onChange={(e) => setRule({ ...rule, assignee: e.target.value })} />
-            <select className={input} value={rule.priority} onChange={(e) => setRule({ ...rule, priority: e.target.value })}>
-              <option value="">no priority</option>
-              <option value="1">P1</option>
-              <option value="2">P2</option>
-              <option value="3">P3</option>
+            <input placeholder={t("conn.value")} aria-label={t("conn.match_value")} className={`${input} w-36`} value={rule.value} onChange={(e) => setRule({ ...rule, value: e.target.value })} />
+            <input placeholder={t("conn.assignee_ph")} aria-label={t("conn.assignee")} className={`${input} w-44`} value={rule.assignee} onChange={(e) => setRule({ ...rule, assignee: e.target.value })} />
+            <select className={input} aria-label={t("priority.label")} value={rule.priority} onChange={(e) => setRule({ ...rule, priority: e.target.value })}>
+              <PriorityOptions />
             </select>
-            <button className="btn-accent">Add rule</button>
+            <button className="btn-accent">{t("conn.add_rule")}</button>
           </form>
         </Panel>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <Panel title="Incoming events" right="content is stored as untrusted" className="lg:col-span-8">
-          {events.length === 0 && <p className="cap p-4">No events yet. Connector agents report them with emit_event; GitHub through the webhook.</p>}
-          {events.map((e) => (
-            <div key={e.id} className="grid grid-cols-[70px_minmax(0,1fr)_minmax(0,0.9fr)_150px_70px] items-center gap-2 border-b border-line px-4 py-2 text-[13px]">
-              <span className="font-mono text-xs">{e.source}</span>
-              <span className="truncate">
-                {e.title}
-                {e.signals && <span className="cap ml-2 text-amber-300!">suspicious: {e.signals}</span>}
-              </span>
-              <span className="cap truncate">{e.rule_name ?? "no rule → inbox"}</span>
-              <span className="truncate">
-                {e.task_ref && (
-                  <Link to={`/tasks?view=agents&task=${e.task_ref}`} className="text-accent hover:underline">
-                    {e.task_ref}
-                  </Link>
-                )}{" "}
-                <span className="text-ink-2">{e.assignee_name ?? "inbox"}</span>
-              </span>
-              <span className="cap text-right">{ago(e.received_at)}</span>
+        <Panel title={t("conn.events")} right={t("conn.events_right")} className="min-w-0 lg:col-span-8">
+          {events.length === 0 && <p className="p-4 text-xs text-ink-2">{t("conn.events_empty")}</p>}
+          {events.length > 0 && (
+            <div className="overflow-x-auto">
+              <div className="min-w-[640px]">
+                {events.map((e) => (
+                  <div key={e.id} className={`${EVENT_GRID} items-center border-b border-line px-4 py-2 text-[13px]`}>
+                    <span className="text-xs">{label("conn.src", e.source)}</span>
+                    <span className="truncate">
+                      {e.title}
+                      {e.signals && <span className="ml-2 text-xs text-amber-300">{t("conn.suspicious", { signals: e.signals })}</span>}
+                    </span>
+                    <span className="truncate text-xs text-ink-2">{e.rule_name ?? t("conn.no_rule")}</span>
+                    <span className="truncate">
+                      {e.task_ref && (
+                        <Link to={`/tasks?view=agents&task=${e.task_ref}`} className="text-accent hover:underline">
+                          {e.task_ref}
+                        </Link>
+                      )}{" "}
+                      <span className="text-ink-2">{e.assignee_name ?? t("conn.inbox")}</span>
+                    </span>
+                    <span className="text-right text-xs text-ink-2">{ago(e.received_at)}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
         </Panel>
-        <Panel title="Send a test event" right="see which rule catches it" className="lg:col-span-4">
+        <Panel title={t("conn.test")} right={t("conn.test_right")} className="min-w-0 lg:col-span-4">
           <form onSubmit={sendTest} className="flex flex-col gap-2 p-4">
-            <select className={input} value={test.source} onChange={(e) => setTest({ ...test, source: e.target.value })}>
+            <select className={input} aria-label={t("conn.source")} value={test.source} onChange={(e) => setTest({ ...test, source: e.target.value })}>
               {SOURCES.filter((s) => s !== "any").map((s) => (
-                <option key={s}>{s}</option>
+                <option key={s} value={s}>
+                  {label("conn.src", s)}
+                </option>
               ))}
             </select>
-            <input required placeholder="Title (e.g. subject)" className={input} value={test.title} onChange={(e) => setTest({ ...test, title: e.target.value })} />
-            <input placeholder="From" className={input} value={test.author} onChange={(e) => setTest({ ...test, author: e.target.value })} />
-            <textarea rows={3} placeholder="Body" className="rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent" value={test.body} onChange={(e) => setTest({ ...test, body: e.target.value })} />
-            <button className="btn-accent self-start">Send event</button>
+            <input required placeholder={t("conn.test_title")} aria-label={t("conn.test_title")} className={input} value={test.title} onChange={(e) => setTest({ ...test, title: e.target.value })} />
+            <input placeholder={t("conn.test_from")} aria-label={t("conn.test_from")} className={input} value={test.author} onChange={(e) => setTest({ ...test, author: e.target.value })} />
+            <textarea
+              rows={3}
+              placeholder={t("conn.test_body")}
+              aria-label={t("conn.test_body")}
+              className="rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent"
+              value={test.body}
+              onChange={(e) => setTest({ ...test, body: e.target.value })}
+            />
+            <button className="btn-accent self-start">{t("conn.test_send")}</button>
           </form>
         </Panel>
       </div>

@@ -3,13 +3,20 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { type Approval, agentsApi } from "../agentsApi";
 import { ActorChip } from "../components/agents/bits";
+import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
-import { ago } from "./Agents";
+import { ago, label, t } from "../i18n";
 
 function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
+  const action = label("approval", a.action);
   async function decide(approve: boolean) {
-    const comment = approve ? undefined : window.prompt("Why not? (optional)") ?? undefined;
+    let comment: string | undefined;
+    if (!approve) {
+      const why = await confirmDialog({ title: t("appr.reject_title", { action }), confirm: t("act.reject"), reason: t("appr.reject_reason"), danger: true });
+      if (why === null) return;
+      comment = why || undefined;
+    }
     try {
       await agentsApi.decide(a.id, approve, comment);
       window.dispatchEvent(new Event("pos:approvals"));
@@ -20,55 +27,60 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
   }
   const shot = typeof a.details?.screenshot === "string" ? (a.details.screenshot as string) : null;
   const details = Object.entries(a.details ?? {}).filter(([k]) => k !== "screenshot");
+  const result = a.result;
   return (
-    <div className="panel fade-in flex flex-col gap-3 p-4">
+    <div className="panel fade-in flex min-w-0 flex-col gap-3 p-4">
       <span className="flex flex-wrap items-center gap-2">
         <ActorChip a={{ kind: a.requested_by_kind, name: a.requested_by_name, is_owner: false }} />
-        {a.status === "pending" ? <span className="cap text-amber-300!">needs you</span> : <span className="cap">{a.status}</span>}
-        <span className="cap ml-auto">
+        {a.status === "pending" ? (
+          <span className="text-xs text-amber-300">{t("appr.needs_you")}</span>
+        ) : (
+          <span className="text-xs text-ink-2">{label("appr.status", a.status)}</span>
+        )}
+        <span className="ml-auto text-xs text-ink-2">
           #{a.id} · {ago(a.created_at)}
         </span>
       </span>
-      <span className="text-base">{a.action.replace(/_/g, " ")}</span>
+      <span className="text-base break-words">{action}</span>
       {details.length > 0 && (
-        <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 rounded border border-line bg-bg p-3 text-xs">
+        <div className="grid grid-cols-1 gap-x-3 gap-y-1 rounded border border-line bg-bg p-3 text-xs sm:grid-cols-[110px_minmax(0,1fr)]">
           {details.map(([k, v]) => (
             <div key={k} className="contents">
-              <span className="cap">{k.toUpperCase()}</span>
-              <span className="break-words text-ink-2">{typeof v === "string" ? v : JSON.stringify(v)}</span>
+              <span className="text-ink-2">{label("appr.field", k)}</span>
+              <span className="min-w-0 break-words text-ink">{typeof v === "string" ? v : JSON.stringify(v)}</span>
             </div>
           ))}
         </div>
       )}
       {shot && (
-        <a href={`/api/browser/screenshots/${shot}`} target="_blank" rel="noreferrer" title="What the agent's browser showed">
-          <img src={`/api/browser/screenshots/${shot}`} alt="Screenshot of the agent's browser" className="max-h-64 rounded border border-line" />
+        <a href={`/api/browser/screenshots/${shot}`} target="_blank" rel="noreferrer" title={t("appr.shot_title")}>
+          <img src={`/api/browser/screenshots/${shot}`} alt={t("appr.shot_alt")} className="max-h-64 max-w-full rounded border border-line" />
         </a>
       )}
       {a.task_ref && (
-        <Link to={`/tasks?view=agents&task=${a.task_ref}`} className="cap text-accent!">
-          for task {a.task_ref} →
+        <Link to={`/tasks?view=agents&task=${a.task_ref}`} className="text-xs text-accent hover:underline">
+          {t("appr.for_task", { ref: a.task_ref })}
         </Link>
       )}
       {a.status === "pending" && (
-        <span className="flex gap-2">
+        <span className="flex flex-wrap gap-2">
           <button className="btn-accent" onClick={() => decide(true)}>
-            <Check size={14} /> Approve
+            <Check size={14} /> {t("act.approve")}
           </button>
           <button className="btn" onClick={() => decide(false)}>
-            <X size={14} /> Reject
+            <X size={14} /> {t("act.reject")}
           </button>
         </span>
       )}
-      {a.comment && <span className="cap">“{a.comment}”</span>}
-      {a.result && (
-        <span className={`cap ${a.result.status === "sent" ? "text-accent!" : a.result.status === "failed" ? "text-red-400!" : ""}`}>
-          result: {a.result.status}
-          {a.result.owner_task ? ` · send it by hand: ${a.result.owner_task}` : ""}
-          {a.result.error ? ` · ${a.result.error}` : ""}
+      {a.comment && <span className="text-xs break-words text-ink-2">„{a.comment}“</span>}
+      {result && (
+        <span className={`text-xs break-words ${result.status === "sent" ? "text-accent" : result.status === "failed" ? "text-red-400" : "text-ink-2"}`}>
+          {t("appr.result", { status: label("appr.result", result.status) })}
+          {result.owner_task ? t("appr.by_hand", { task: result.owner_task }) : ""}
+          {result.error ? ` · ${result.error}` : ""}
         </span>
       )}
-      {error && <span className="cap text-red-400!">{error}</span>}
+      {error && <span className="text-xs break-words text-red-400">{error}</span>}
     </div>
   );
 }
@@ -79,27 +91,27 @@ export default function Approvals() {
   const load = useCallback(() => agentsApi.approvals(all ? "all" : "pending").then(setItems), [all]);
   useEffect(() => {
     load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
+    const h = setInterval(load, 15000);
+    return () => clearInterval(h);
   }, [load]);
 
   return (
-    <div className="flex flex-col gap-5">
-      <PageHeader
-        kicker="CONSTITUTION RULE 1 · NOTHING LEAVES WITHOUT YOU"
-        title="Approvals"
-        sub="Payments, e-mails, posts, merges, permission and limit changes: agents stop here before anything leaves PersonalOS."
-      />
+    <div className="flex min-w-0 flex-col gap-5">
+      <PageHeader kicker={t("appr.kicker")} title={t("nav.approvals")} sub={t("appr.sub")} />
       <div className="flex gap-2">
         <button className={all ? "btn" : "btn-accent"} onClick={() => setAll(false)}>
-          Waiting
+          {t("appr.waiting")}
         </button>
         <button className={all ? "btn-accent" : "btn"} onClick={() => setAll(true)}>
-          History
+          {t("appr.history")}
         </button>
       </div>
-      <Panel title={all ? "All approvals" : "Waiting for you"} right={`${items?.length ?? 0}`} bodyClassName="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
-        {items?.length === 0 && <p className="cap p-3">Nothing waiting. Agents will ask here before anything leaves PersonalOS.</p>}
+      <Panel
+        title={all ? t("appr.all") : t("appr.waiting_for_you")}
+        right={`${items?.length ?? 0}`}
+        bodyClassName="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3"
+      >
+        {items?.length === 0 && <p className="p-3 text-sm text-ink-2">{t("appr.empty")}</p>}
         {items?.map((a) => (
           <Item key={a.id} a={a} onDone={load} />
         ))}
