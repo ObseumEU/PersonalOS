@@ -13,6 +13,8 @@ export type NeedsItem = {
   from_kind: "human" | "ai" | "agent" | "external" | null;
   at: string;
   link: string;
+  /** An approval's action id (email_send…), shown in words. */
+  action?: string;
   ask_kind?: string | null;
   blocking?: boolean;
   channel_id?: number;

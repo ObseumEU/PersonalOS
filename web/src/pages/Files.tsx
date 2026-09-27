@@ -3,15 +3,16 @@ import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNod
 import { Link, useSearchParams } from "react-router-dom";
 import TopicInput, { refreshTopics } from "../components/TopicInput";
 import { PageHeader, Panel } from "../components/ui";
-import { type FileItem, type FileSearch, filesApi, fmtDate, fmtSize, parseTags } from "../filesApi";
+import { type FileItem, type FileSearch, filesApi, fmtDate, fmtSize, histAction, parseTags } from "../filesApi";
+import { LOCALE, label, plural, t } from "../i18n";
 import type { Version } from "../tasksApi";
 
 const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
 function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <label htmlFor={htmlFor} className="cap">
+    <div className="flex min-w-0 flex-col gap-1">
+      <label htmlFor={htmlFor} className="text-xs text-ink-2">
         {label}
       </label>
       {children}
@@ -37,11 +38,11 @@ function Preview({ file }: { file: FileItem }) {
     return <iframe src={url} title={file.name} className="h-[420px] w-full rounded border border-line bg-white" />;
   if (file.preview === "text")
     return (
-      <pre className="max-h-[320px] overflow-auto rounded border border-line bg-bg p-3 font-mono text-[12px] whitespace-pre-wrap">
-        {text ?? "loading…"}
+      <pre className="max-h-[320px] overflow-auto rounded border border-line bg-bg p-3 font-mono text-xs break-words whitespace-pre-wrap">
+        {text ?? t("act.loading")}
       </pre>
     );
-  return <p className="cap rounded border border-dashed border-line p-4 text-center">No preview for this type. Download it to open.</p>;
+  return <p className="rounded border border-dashed border-line p-4 text-center text-xs text-ink-2">{t("files.no_preview")}</p>;
 }
 
 function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => void; onClose: () => void }) {
@@ -67,33 +68,38 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
     }
   }
 
-  if (!file) return <Panel title="Detail" className="w-full">{error && <p className="cap p-4 text-red-400!">{error}</p>}</Panel>;
+  if (!file)
+    return (
+      <Panel title={t("files.detail")} className="w-full">
+        {error && <p className="p-4 text-xs text-red-400">{error}</p>}
+      </Panel>
+    );
   return (
     <Panel
-      title="Detail"
-      className="w-full"
+      title={t("files.detail")}
+      className="w-full min-w-0"
       bodyClassName="overflow-y-auto"
       right={
-        <button type="button" onClick={onClose} aria-label="Close detail" className="text-ink-3 hover:text-ink">
+        <button type="button" onClick={onClose} aria-label={t("files.close_detail")} className="text-ink-3 hover:text-ink">
           <X size={14} />
         </button>
       }
     >
-      <div className="flex flex-col gap-4 p-4">
+      <div className="flex min-w-0 flex-col gap-4 p-4">
         <input
           key={file.updated_at}
           defaultValue={file.name}
-          aria-label="File name"
+          aria-label={t("files.name")}
           onBlur={(e) => e.target.value.trim() && e.target.value !== file.name && run(filesApi.update(file.id, { name: e.target.value }))}
-          className="bg-transparent text-lg font-light tracking-[-0.01em] outline-none focus:border-b focus:border-accent"
+          className="min-w-0 bg-transparent text-lg font-light tracking-[-0.01em] outline-none focus:border-b focus:border-accent"
         />
-        <span className="cap">
-          {file.mime} · {fmtSize(file.size)} · added {fmtDate(file.created_at)}
-          {file.archived_at && <span className="text-amber-300!"> · archived</span>}
+        <span className="text-xs break-words text-ink-2">
+          {t("files.meta", { mime: file.mime ?? "—", size: fmtSize(file.size), date: fmtDate(file.created_at) })}
+          {file.archived_at && <span className="text-amber-300">{t("files.archived_flag")}</span>}
         </span>
         <Preview file={file} />
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="TOPIC" htmlFor="file-topic">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label={t("files.topic")} htmlFor="file-topic">
             <TopicInput
               id="file-topic"
               value={file.topic}
@@ -103,20 +109,22 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
               }}
             />
           </Field>
-          <Field label="VISIBILITY" htmlFor="file-visibility">
+          <Field label={t("files.visibility")} htmlFor="file-visibility">
             <select
               id="file-visibility"
               className={input}
               value={file.visibility}
               onChange={(e) => run(filesApi.update(file.id, { visibility: e.target.value as FileItem["visibility"] }))}
             >
-              <option value="team">team</option>
-              <option value="private">private</option>
-              <option value="public">public</option>
+              {(["team", "private", "public"] as const).map((v) => (
+                <option key={v} value={v}>
+                  {label("files.vis", v)}
+                </option>
+              ))}
             </select>
           </Field>
         </div>
-        <Field label="TAGS (COMMA SEPARATED)" htmlFor="file-tags">
+        <Field label={t("files.tags_label")} htmlFor="file-tags">
           <input
             id="file-tags"
             key={`t${file.updated_at}`}
@@ -128,44 +136,44 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
             }}
           />
         </Field>
-        <span className="cap">
+        <span className="text-xs break-words text-ink-2">
           {file.kb_status === "ok"
-            ? `in knowlage${file.text_chars > 0 ? ` · ${file.text_chars.toLocaleString("en-GB")} characters of text searchable` : ""}`
+            ? t("files.kb_ok") + (file.text_chars > 0 ? t("files.kb_chars", { n: file.text_chars.toLocaleString(LOCALE) }) : "")
             : file.kb_status === "error"
-              ? `not in knowlage yet (will retry): ${file.kb_error ?? "error"}`
-              : "waiting to be indexed in knowlage"}
+              ? t("files.kb_error", { error: file.kb_error ?? t("files.kb_error_generic") })
+              : t("files.kb_pending")}
         </span>
         <div className="flex flex-wrap gap-2 border-t border-line pt-3">
           <a className="btn" href={filesApi.contentUrl(file.id, true)}>
-            <Download size={14} /> Download
+            <Download size={14} /> {t("files.download")}
           </a>
           {file.archived_at ? (
             <button type="button" className="btn" onClick={() => run(filesApi.unarchive(file.id))}>
-              <RotateCcw size={14} /> Restore
+              <RotateCcw size={14} /> {t("act.restore")}
             </button>
           ) : (
             <button type="button" className="btn" onClick={() => run(filesApi.archive(file.id))}>
-              <Archive size={14} /> Archive
+              <Archive size={14} /> {t("act.archive")}
             </button>
           )}
           <button type="button" className="btn" onClick={() => filesApi.history(file.id).then(setHistory)}>
-            <History size={14} /> History
+            <History size={14} /> {t("files.history")}
           </button>
         </div>
         {history && (
           <div className="flex flex-col">
             {history.map((h) => (
-              <div key={h.version} className="flex items-center gap-2 border-t border-line py-1.5 text-[12px]">
-                <span className="cap">v{h.version}</span>
-                <span>{h.action}</span>
-                <span className="cap ml-auto">
-                  {h.actor_name ?? "system"} · {new Date(h.at).toLocaleString("en-GB")}
+              <div key={h.version} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-line py-1.5 text-xs">
+                <span className="font-mono text-ink-2">v{h.version}</span>
+                <span>{histAction(h.action)}</span>
+                <span className="ml-auto text-ink-2">
+                  {h.actor_name ?? t("files.system")} · {new Date(h.at).toLocaleString(LOCALE)}
                 </span>
               </div>
             ))}
           </div>
         )}
-        {error && <p className="cap text-red-400!">{error}</p>}
+        {error && <p className="text-xs break-words text-red-400">{error}</p>}
       </div>
     </Panel>
   );
@@ -182,7 +190,7 @@ export function DropZone({ topic, onUploaded }: { topic?: string; onUploaded: (f
     setError(null);
     const done: FileItem[] = [];
     for (const f of Array.from(list)) {
-      setBusy(`Uploading ${f.name}…`);
+      setBusy(t("files.uploading", { name: f.name }));
       try {
         done.push(await filesApi.upload(f, { topic }));
       } catch (e) {
@@ -208,22 +216,24 @@ export function DropZone({ topic, onUploaded }: { topic?: string; onUploaded: (f
       className={`flex flex-wrap items-center gap-3 rounded-md border border-dashed px-4 py-3.5 ${over ? "border-accent bg-accent/5" : "border-line"}`}
     >
       <Upload size={16} strokeWidth={1.5} className="text-accent" />
-      <span className="text-[13px] text-ink-2">{busy ?? `Drop files here${topic ? ` to add them to #${topic}` : ""}, or`}</span>
+      <span className="min-w-0 text-[13px] break-words text-ink-2">
+        {busy ?? (topic ? t("files.drop_topic", { topic }) : t("files.drop"))}
+      </span>
       <button type="button" className="btn-accent" disabled={!!busy} onClick={() => picker.current?.click()}>
-        Choose files
+        {t("files.choose")}
       </button>
       <input
         ref={picker}
         type="file"
         multiple
         className="hidden"
-        aria-label="Upload files"
+        aria-label={t("files.upload_label")}
         onChange={(e) => {
           send(e.target.files);
           e.target.value = "";
         }}
       />
-      {error && <span className="cap w-full text-red-400!">{error}</span>}
+      {error && <span className="w-full text-xs break-words text-red-400">{error}</span>}
     </div>
   );
 }
@@ -261,10 +271,10 @@ export default function Files() {
   useEffect(refresh, [refresh]);
   // Search as you type, a moment after the last key.
   useEffect(() => {
-    const t = setTimeout(() => {
+    const h = setTimeout(() => {
       if ((params.get("q") ?? "") !== q.trim()) set({ q: q.trim() || null });
     }, 300);
-    return () => clearTimeout(t);
+    return () => clearTimeout(h);
   }, [q]);
 
   const set = (next: Record<string, string | null>) => {
@@ -275,21 +285,19 @@ export default function Files() {
   const total = files?.reduce((s, f) => s + f.size, 0) ?? 0;
 
   return (
-    <div className="flex flex-col gap-5 lg:h-[calc(100vh-3rem)]">
-      <PageHeader
-        kicker="FILES · UPLOAD → TAG → FIND"
-        title="Files"
-        sub="Working files and attachments, linked to tasks, topics and notes. Search goes through knowlage: every upload is indexed there, text, markdown, CSV, JSON and PDFs in full text."
-      />
-      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-        <nav aria-label="File filters" className="flex shrink-0 gap-1 overflow-x-auto lg:w-44 lg:flex-col lg:overflow-visible">
-          <span className="cap hidden px-2.5 pb-1 lg:block">SHOW</span>
-          {[
-            ["All files", false],
-            ["Archive", true],
-          ].map(([label, arch]) => (
+    <div className="flex min-w-0 flex-col gap-5 lg:h-[calc(100vh-3rem)]">
+      <PageHeader kicker={t("nav.knowledge")} title={t("nav.files")} sub={t("files.sub")} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:flex-row">
+        <nav aria-label={t("files.filters")} className="flex shrink-0 gap-1 overflow-x-auto lg:w-44 lg:flex-col lg:overflow-visible">
+          <span className="hidden px-2.5 pb-1 text-xs text-ink-2 lg:block">{t("files.show")}</span>
+          {(
+            [
+              [t("files.all"), false],
+              [t("files.archive"), true],
+            ] as const
+          ).map(([name, arch]) => (
             <button
-              key={String(label)}
+              key={name}
               type="button"
               onClick={() => set({ archived: arch ? "1" : null, file: null })}
               className={`flex h-[34px] shrink-0 items-center gap-2.5 rounded px-2.5 text-[13px] ${
@@ -297,30 +305,30 @@ export default function Files() {
               }`}
             >
               {arch ? <Archive size={15} strokeWidth={1.5} className="text-ink-3" /> : <FileText size={15} strokeWidth={1.5} className="text-ink-3" />}
-              {label}
+              {name}
             </button>
           ))}
           {topic && (
-            <button type="button" onClick={() => set({ topic: null })} className="flex h-[30px] shrink-0 items-center gap-2 rounded bg-raised px-2.5 text-[13px]">
-              <span className="cap">#</span>
-              {topic}
-              <X size={12} className="ml-auto text-ink-3" />
+            <button type="button" onClick={() => set({ topic: null })} className="flex h-[30px] max-w-[60vw] shrink-0 items-center gap-2 rounded bg-raised px-2.5 text-[13px] lg:max-w-none">
+              <span className="text-ink-2">#</span>
+              <span className="truncate">{topic}</span>
+              <X size={12} className="ml-auto shrink-0 text-ink-3" />
             </button>
           )}
           {tags.length > 0 && (
             <>
-              <span className="cap hidden px-2.5 pt-4 pb-1 lg:block">TAGS</span>
-              {tags.map((t) => (
+              <span className="hidden px-2.5 pt-4 pb-1 text-xs text-ink-2 lg:block">{t("files.tags")}</span>
+              {tags.map((x) => (
                 <button
-                  key={t.tag}
+                  key={x.tag}
                   type="button"
-                  onClick={() => set({ tag: tag === t.tag ? null : t.tag })}
-                  className={`hidden h-[30px] items-center gap-2.5 rounded px-2.5 text-[13px] lg:flex ${
-                    t.tag === tag ? "bg-raised text-ink" : "text-ink-2 hover:bg-raised"
+                  onClick={() => set({ tag: tag === x.tag ? null : x.tag })}
+                  className={`hidden h-[30px] min-w-0 items-center gap-2.5 rounded px-2.5 text-[13px] lg:flex ${
+                    x.tag === tag ? "bg-raised text-ink" : "text-ink-2 hover:bg-raised"
                   }`}
                 >
-                  {t.tag}
-                  <span className="cap ml-auto">{t.n}</span>
+                  <span className="truncate">{x.tag}</span>
+                  <span className="ml-auto text-xs text-ink-2">{x.n}</span>
                 </button>
               ))}
             </>
@@ -328,12 +336,18 @@ export default function Files() {
         </nav>
 
         <Panel
-          title={[archived ? "Archive" : "Files", topic && `#${topic}`, tag && `tag ${tag}`].filter(Boolean).join(" · ")}
+          title={[archived ? t("files.archive") : t("nav.files"), topic && `#${topic}`, tag && t("files.panel_tag", { tag })].filter(Boolean).join(" · ")}
           right={
             <span className="flex items-center gap-3">
-              {files ? `${files.length} files · ${fmtSize(total)}` : "loading…"}
+              {files
+                ? t("files.count", {
+                    n: files.length,
+                    word: plural(files.length, t("files.one"), t("files.few"), t("files.many")),
+                    size: fmtSize(total),
+                  })
+                : t("act.loading")}
               <button type="button" className="hover:text-accent!" onClick={() => setGrid(!grid)}>
-                {grid ? "list" : "grid"}
+                {grid ? t("files.view_list") : t("files.view_grid")}
               </button>
             </span>
           }
@@ -346,7 +360,7 @@ export default function Files() {
                 topic={topic}
                 onUploaded={(done) => {
                   const dup = done.filter((f) => f.duplicate).length;
-                  setNotice(`${done.length} uploaded${dup ? ` · ${dup} already here (kept once)` : ""}`);
+                  setNotice(t("files.uploaded", { n: done.length }) + (dup ? t("files.uploaded_dup", { n: dup }) : ""));
                   refreshTopics();
                   refresh();
                   if (done.length === 1) set({ file: String(done[0].id) });
@@ -356,24 +370,28 @@ export default function Files() {
             <div className="flex h-9 items-center gap-2.5 rounded-md border border-line bg-bg px-3 focus-within:border-accent">
               <Search size={14} className="text-ink-3" />
               <label htmlFor="file-search" className="sr-only">
-                Search files
+                {t("files.search_label")}
               </label>
               <input
                 id="file-search"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Search the text inside, through knowlage…"
+                placeholder={t("files.search_ph")}
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-3"
               />
             </div>
             {query && mode === "filename" && (
-              <span className="cap text-amber-300!" role="status">
-                knowlage did not answer, so only file names were searched
+              <span className="text-xs text-amber-300" role="status">
+                {t("files.filename_only")}
               </span>
             )}
-            {notice && <span className="cap text-accent!">{notice}</span>}
+            {notice && <span className="text-xs text-accent">{notice}</span>}
           </div>
-          {files?.length === 0 && <p className="cap p-6 text-center">{query || tag || topic ? "No file matches." : archived ? "Nothing archived." : "No files yet. Drop one above."}</p>}
+          {files?.length === 0 && (
+            <p className="p-6 text-center text-xs text-ink-2">
+              {query || tag || topic ? t("files.no_match") : archived ? t("files.no_archived") : t("files.empty")}
+            </p>
+          )}
           {grid ? (
             <div className="grid grid-cols-2 gap-3 p-3.5 sm:grid-cols-3 xl:grid-cols-4">
               {files?.map((f) => (
@@ -381,13 +399,13 @@ export default function Files() {
                   key={f.id}
                   type="button"
                   onClick={() => set({ file: String(f.id) })}
-                  className={`flex flex-col gap-2 rounded border p-2 text-left ${f.id === selected ? "border-accent" : "border-line hover:border-ink-3"}`}
+                  className={`flex min-w-0 flex-col gap-2 rounded border p-2 text-left ${f.id === selected ? "border-accent" : "border-line hover:border-ink-3"}`}
                 >
                   <div className="grid h-24 place-items-center overflow-hidden rounded bg-bg">
                     {f.preview === "image" ? <img src={filesApi.contentUrl(f.id)} alt="" className="h-full w-full object-cover" /> : <TypeIcon file={f} />}
                   </div>
                   <span className="truncate text-[13px]">{f.name}</span>
-                  <span className="cap truncate">
+                  <span className="truncate text-xs text-ink-2">
                     {fmtSize(f.size)}
                     {f.topic && ` · #${f.topic}`}
                   </span>
@@ -400,37 +418,37 @@ export default function Files() {
                 key={f.id}
                 type="button"
                 onClick={() => set({ file: String(f.id) })}
-                className={`grid grid-cols-[18px_minmax(0,1fr)_auto_64px_84px] items-center gap-2.5 border-b border-line px-3.5 py-2 text-left ${
+                className={`grid grid-cols-[18px_minmax(0,1fr)_64px] items-center gap-2.5 border-b border-line px-3.5 py-2 text-left sm:grid-cols-[18px_minmax(0,1fr)_auto_64px_96px] ${
                   f.id === selected ? "bg-raised shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-raised/60"
                 }`}
               >
                 <TypeIcon file={f} />
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="truncate text-sm">{f.name}</span>
-                  {f.tags.slice(0, 3).map((t) => (
-                    <span key={t} className="cap hidden shrink-0 rounded-sm border border-line px-1 xl:inline">
-                      {t}
+                  {f.tags.slice(0, 3).map((x) => (
+                    <span key={x} className="hidden shrink-0 rounded-sm border border-line px-1 text-xs text-ink-2 xl:inline">
+                      {x}
                     </span>
                   ))}
                 </span>
-                <span className="cap">{f.topic ? `#${f.topic}` : ""}</span>
-                <span className="cap text-right">{fmtSize(f.size)}</span>
-                <span className="cap text-right">{fmtDate(f.created_at)}</span>
+                <span className="hidden max-w-40 truncate text-xs text-ink-2 sm:block">{f.topic ? `#${f.topic}` : ""}</span>
+                <span className="text-right text-xs text-ink-2">{fmtSize(f.size)}</span>
+                <span className="hidden text-right text-xs text-ink-2 sm:block">{fmtDate(f.created_at)}</span>
               </button>
             ))
           )}
-          {error && <p className="cap p-3.5 text-red-400!">{error}</p>}
+          {error && <p className="p-3.5 text-xs break-words text-red-400">{error}</p>}
         </Panel>
 
         {selected && (
-          <div className="flex min-h-0 lg:w-[400px] lg:shrink-0">
+          <div className="flex min-h-0 min-w-0 lg:w-[400px] lg:shrink-0">
             <FileDetail id={selected} onChanged={refresh} onClose={() => set({ file: null })} />
           </div>
         )}
       </div>
       {topic && (
-        <Link to={`/topics/${topic}`} className="cap hover:text-accent!">
-          → everything in #{topic}
+        <Link to={`/topics/${topic}`} className="text-xs text-ink-2 hover:text-accent">
+          {t("files.all_in_topic", { topic })}
         </Link>
       )}
     </div>

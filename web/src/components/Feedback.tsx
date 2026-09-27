@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { label, t } from "../i18n";
+import { confirmDialog, toast } from "./overlay";
 import { Panel } from "./ui";
 
 export type FeedbackItem = {
@@ -30,7 +32,7 @@ export const feedbackApi = {
     post<{ task: string; path: string; assignee: string }>(`/api/agents/${agentId}/instructions`, { text, reason }),
 };
 
-const input = "rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent";
+const input = "rounded border border-line bg-bg p-2 text-sm outline-none focus:border-accent";
 
 /** Write feedback for a member, optionally about a task. */
 export function FeedbackForm({ to, taskRef, onSent }: { to: string | number; taskRef?: string; onSent?: () => void }) {
@@ -39,11 +41,11 @@ export function FeedbackForm({ to, taskRef, onSent }: { to: string | number; tas
   const [msg, setMsg] = useState<string | null>(null);
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex gap-2">
-        <select className={`${input} h-8 py-0`} value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind">
-          <option value="critique">critique</option>
-          <option value="suggestion">suggestion</option>
-          <option value="praise">praise</option>
+      <div className="flex flex-wrap gap-2">
+        <select className={`${input} h-8 py-0`} value={kind} onChange={(e) => setKind(e.target.value)} aria-label={t("fb.kind_aria")}>
+          <option value="critique">{t("fb.kind.critique")}</option>
+          <option value="suggestion">{t("fb.kind.suggestion")}</option>
+          <option value="praise">{t("fb.kind.praise")}</option>
         </select>
         <button
           type="button"
@@ -53,23 +55,23 @@ export function FeedbackForm({ to, taskRef, onSent }: { to: string | number; tas
             feedbackApi.give(to, body.trim(), kind, taskRef).then(
               () => {
                 setBody("");
-                setMsg("sent · it reaches their inbox and their next runs");
+                setMsg(t("fb.sent"));
                 onSent?.();
               },
               (e) => setMsg(e.message),
             )
           }
         >
-          Give feedback
+          {t("fb.give")}
         </button>
-        {msg && <span className="cap self-center">{msg}</span>}
+        {msg && <span className="self-center text-xs text-ink-2">{msg}</span>}
       </div>
       <textarea
         rows={2}
         value={body}
         onChange={(e) => setBody(e.target.value)}
-        placeholder="What happened, why it matters, what to do instead"
-        aria-label="Feedback"
+        placeholder={t("fb.placeholder")}
+        aria-label={t("fb.aria")}
         className={input}
       />
     </div>
@@ -88,50 +90,52 @@ export function FeedbackPanel({ member }: { member: { id: number; name: string }
   useEffect(load, [member.id]);
   const row = (f: FeedbackItem, other: string | null) => (
     <div key={f.id} className="flex flex-col gap-0.5 border-b border-line px-4 py-2 last:border-0">
-      <span className="cap">
-        {f.kind} · {other ?? "?"}
-        {f.task_ref ? ` · ${f.task_ref}` : ""} · {f.status}
+      <span className="text-xs text-ink-2">
+        {label("fb.kind", f.kind)} · {other ?? "?"}
+        {f.task_ref ? ` · ${f.task_ref}` : ""} · {label("fb.status", f.status)}
         {f.applied_ref ? ` → ${f.applied_ref}` : ""}
       </span>
-      <span className="text-[13px]">{f.body}</span>
-      {f.resolution && <span className="text-xs text-ink-3">{f.resolution}</span>}
+      <span className="text-sm">{f.body}</span>
+      {f.resolution && <span className="text-xs text-ink-2">{f.resolution}</span>}
       {f.status === "open" && other && (
         <span className="flex gap-2 pt-1">
-          <button type="button" className="cap hover:text-accent" onClick={() => feedbackApi.resolve(f.id, "applied", "").then(load, (e) => setError(e.message))}>
-            mark applied
+          <button type="button" className="text-xs text-ink-2 hover:text-accent" onClick={() => feedbackApi.resolve(f.id, "applied", "").then(load, (e) => setError(e.message))}>
+            {t("fb.mark_applied")}
           </button>
           <button
             type="button"
-            className="cap hover:text-accent"
-            onClick={() => {
-              const why = window.prompt("Why dismiss it?");
-              if (why) feedbackApi.resolve(f.id, "dismissed", why).then(load, (e) => setError(e.message));
+            className="text-xs text-ink-2 hover:text-accent"
+            onClick={async () => {
+              const why = await confirmDialog({ title: t("fb.dismiss_title"), reason: t("fb.dismiss_reason"), confirm: t("fb.dismiss"), danger: true });
+              if (why === null) return;
+              if (!why.trim()) return toast(t("fb.dismiss_need_reason"), { error: true });
+              feedbackApi.resolve(f.id, "dismissed", why).then(load, (e) => setError(e.message));
             }}
           >
-            dismiss
+            {t("fb.dismiss")}
           </button>
         </span>
       )}
     </div>
   );
   return (
-    <Panel title="Feedback" right={`${received.filter((f) => f.status === "open").length} open`}>
+    <Panel title={t("fb.title")} right={t("fb.open_n", { n: received.filter((f) => f.status === "open").length })}>
       <div className="border-b border-line px-4 py-3">
         <FeedbackForm to={member.id} onSent={load} />
       </div>
-      <p className="cap px-4 pt-2">received</p>
-      {received.length === 0 && <p className="cap px-4 py-2">none yet</p>}
+      <p className="px-4 pt-2 text-xs font-medium text-ink-2">{t("fb.received")}</p>
+      {received.length === 0 && <p className="px-4 py-2 text-xs text-ink-2">{t("fb.none")}</p>}
       {received.map((f) => row(f, f.from_name))}
-      {given.length > 0 && <p className="cap px-4 pt-2">given</p>}
+      {given.length > 0 && <p className="px-4 pt-2 text-xs font-medium text-ink-2">{t("fb.given")}</p>}
       {given.map((f) => (
         <div key={`g${f.id}`} className="flex flex-col gap-0.5 border-b border-line px-4 py-2 last:border-0">
-          <span className="cap">
-            {f.kind} → {f.to_name} · {f.status}
+          <span className="text-xs text-ink-2">
+            {label("fb.kind", f.kind)} → {f.to_name} · {label("fb.status", f.status)}
           </span>
-          <span className="text-[13px]">{f.body}</span>
+          <span className="text-sm">{f.body}</span>
         </div>
       ))}
-      {error && <p className="cap px-4 py-2 text-red-400!">{error}</p>}
+      {error && <p className="px-4 py-2 text-xs text-red-400">{error}</p>}
     </Panel>
   );
 }
@@ -145,31 +149,31 @@ export function InstructionsEditor({ agentId, current }: { agentId: number; curr
   if (!open)
     return (
       <button type="button" className="btn m-4" onClick={() => setOpen(true)}>
-        Edit instructions…
+        {t("fb.edit_instructions")}
       </button>
     );
   return (
     <div className="flex flex-col gap-2 p-4">
-      <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} aria-label="Instructions" className={`${input} font-mono text-xs`} />
-      <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why (e.g. the feedback it follows)" className={`${input} h-8 py-0`} aria-label="Why" />
-      <div className="flex items-center gap-2">
+      <textarea rows={12} value={text} onChange={(e) => setText(e.target.value)} aria-label={t("fb.instructions_aria")} className={`${input} font-mono text-xs`} />
+      <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={t("fb.why_ph")} className={`${input} h-8 py-0`} aria-label={t("fb.why_aria")} />
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="btn-accent"
           disabled={text.trim().length < 40}
           onClick={() =>
             feedbackApi.proposeInstructions(agentId, text, reason).then(
-              (r) => setMsg(`${r.task} for ${r.assignee}: commits ${r.path}, the deployer checks it`),
+              (r) => setMsg(t("fb.proposed", { task: r.task, assignee: r.assignee, path: r.path })),
               (e) => setMsg(e.message),
             )
           }
         >
-          Propose
+          {t("fb.propose")}
         </button>
         <button type="button" className="btn" onClick={() => setOpen(false)}>
-          Cancel
+          {t("act.cancel")}
         </button>
-        {msg && <span className="cap">{msg}</span>}
+        {msg && <span className="text-xs text-ink-2">{msg}</span>}
       </div>
     </div>
   );

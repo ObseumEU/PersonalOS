@@ -1,6 +1,8 @@
 import { ArrowRightLeft, Boxes, ChevronDown, Orbit, User } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { type Candidate, type ReassignResult, type Task, tasksApi } from "../../tasksApi";
+import { t } from "../../i18n";
+import { confirmDialog } from "../overlay";
 import { AssigneeChip } from "./bits";
 
 const KIND_ICON = { human: User, ai: Orbit, agent: Boxes } as const;
@@ -16,8 +18,9 @@ export function EngineBadge({ label }: { label: string | null | undefined }) {
 }
 
 function role(c: Candidate) {
-  if (c.is_owner) return "owner";
-  return (c.role ?? (c.kind === "ai" ? "assistant" : c.kind)).replace(/_/g, " ");
+  if (c.is_owner) return t("work.picker.owner");
+  if (c.role) return c.role.replace(/_/g, " ");
+  return c.kind === "ai" ? t("work.picker.assistant") : c.kind === "human" ? t("who.person") : t("who.agent");
 }
 
 /**
@@ -90,7 +93,12 @@ export default function AgentPicker({
     let force = false;
     if (c.blocked.length) {
       const why = c.blocked.map((b) => b.text).join("\n");
-      if (!window.confirm(`${c.name} cannot start now:\n${why}\n\nQueue the task for ${c.name} anyway?`)) return;
+      const ok = await confirmDialog({
+        title: t("work.picker.blocked_title", { name: c.name }),
+        body: t("work.picker.blocked_body", { why, name: c.name }),
+        confirm: t("work.picker.blocked_confirm"),
+      });
+      if (ok === null) return;
       force = true;
     }
     setBusy(c.id);
@@ -114,8 +122,8 @@ export default function AgentPicker({
       <button
         type="button"
         disabled={done}
-        title={done ? "Done tasks are not reassigned" : "Reassign"}
-        aria-label={`Reassign ${task.ref}`}
+        title={done ? t("work.picker.done") : t("work.picker.reassign")}
+        aria-label={t("work.picker.reassign_ref", { ref: task.ref })}
         aria-expanded={open}
         onClick={(e) => {
           e.preventDefault();
@@ -141,7 +149,7 @@ export default function AgentPicker({
           setOpen((o) => !o);
         }}
       >
-        <ArrowRightLeft size={14} /> Reassign
+        <ArrowRightLeft size={14} /> {t("work.picker.reassign")}
       </button>
     );
   }
@@ -152,23 +160,23 @@ export default function AgentPicker({
       {open && pos && (
         <div
           role="dialog"
-          aria-label={`Reassign ${task.ref}`}
+          aria-label={t("work.picker.reassign_ref", { ref: task.ref })}
           style={{ position: "fixed", ...pos }}
           className="panel z-50 flex max-h-[min(420px,70vh)] w-[320px] max-w-[calc(100vw-32px)] flex-col shadow-lg"
         >
           <div className="flex items-baseline gap-2 border-b border-line px-3 py-2">
-            <span className="cap">REASSIGN {task.ref}</span>
-            <span className="cap ml-auto">agent is told and starts at once</span>
+            <span className="shrink-0 text-xs font-medium">{t("work.picker.reassign_ref", { ref: task.ref })}</span>
+            <span className="ml-auto min-w-0 truncate text-xs text-ink-2">{t("work.picker.hint")}</span>
           </div>
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="Note for the new assignee (optional)"
-            aria-label="Note for the new assignee"
+            placeholder={t("work.picker.note")}
+            aria-label={t("work.picker.note_aria")}
             className="mx-3 my-2 h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent"
           />
           <ul className="min-h-0 overflow-y-auto">
-            {!options && !error && <li className="cap px-3 py-2">Loading…</li>}
+            {!options && !error && <li className="px-3 py-2 text-xs text-ink-2">{t("act.loading")}</li>}
             {options?.map((c) => {
               const Icon = KIND_ICON[c.kind] ?? Boxes;
               const hard = c.blocked.some((b) => !b.soft);
@@ -185,20 +193,20 @@ export default function AgentPicker({
                   >
                     <span className="flex w-full items-center gap-2">
                       <Icon size={13} strokeWidth={1.6} className={c.kind === "human" ? "text-ink-2" : "text-accent"} />
-                      <span className="truncate text-[13px]">{c.is_owner ? `${c.name} (me)` : c.name}</span>
-                      <span className="cap shrink-0">{role(c)}</span>
+                      <span className="truncate text-[13px]">{c.is_owner ? t("work.picker.me", { name: c.name }) : c.name}</span>
+                      <span className="shrink-0 text-xs text-ink-2">{role(c)}</span>
                       <span className="ml-auto flex shrink-0 items-center gap-1.5">
                         <EngineBadge label={c.engine_label} />
                         {c.worker_online != null && (
                           <span
-                            title={c.worker_online ? "worker online" : "no worker seen in the last minutes"}
+                            title={c.worker_online ? t("work.live.worker_online") : t("work.live.worker_offline")}
                             className={`h-1.5 w-1.5 rounded-full ${c.worker_online ? "bg-emerald-400" : "bg-dim"}`}
                           />
                         )}
                       </span>
                     </span>
-                    {c.current && <span className="cap">has it now</span>}
-                    {busy === c.id && <span className="cap text-accent!">reassigning…</span>}
+                    {c.current && <span className="text-xs text-ink-2">{t("work.picker.current")}</span>}
+                    {busy === c.id && <span className="text-xs text-accent">{t("work.picker.busy")}</span>}
                     {c.blocked.map((b) => (
                       <span key={b.code} className={`text-xs leading-snug ${b.soft ? "text-amber-300" : "text-red-400"}`}>
                         {b.text}
@@ -209,7 +217,7 @@ export default function AgentPicker({
               );
             })}
           </ul>
-          {error && <p className="cap border-t border-line px-3 py-2 text-red-400!">{error}</p>}
+          {error && <p className="border-t border-line px-3 py-2 text-xs break-words text-red-400">{error}</p>}
         </div>
       )}
     </div>

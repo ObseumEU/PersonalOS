@@ -106,7 +106,7 @@ export function PageHeader({ kicker, title, sub }: { kicker: string; title: stri
   return (
     <header className="flex flex-wrap items-end gap-6 border-b border-line pb-4">
       <div className="flex min-w-0 flex-col gap-2">
-        <span className="text-xs font-medium tracking-wide text-ink-2 uppercase">{kicker}</span>
+        <span className="text-xs font-medium text-ink-2">{kicker}</span>
         <h1 className="text-3xl leading-tight font-light tracking-[-0.03em] sm:text-[40px]">{title}</h1>
         {sub && <p className="text-sm text-ink-2">{sub}</p>}
       </div>

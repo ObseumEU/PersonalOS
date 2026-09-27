@@ -2,7 +2,7 @@ import { ChevronDown, LogOut, MoreHorizontal, Power, X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { type FreezeState, agentsApi } from "../agentsApi";
-import { t } from "../i18n";
+import { label, t } from "../i18n";
 import { useSubsystems } from "../knowledgeApi";
 import { useNeedsMe } from "../needsMeApi";
 import { KNOWLEDGE_TABS, SECTIONS, SETTINGS, SETTINGS_ROOT, type SubSection, sectionOf } from "../sections";
@@ -197,7 +197,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
           {subsystems?.map((s) => (
             <span key={s.name} className="flex items-center gap-2 text-[13px] text-ink-2" title={s.detail}>
               <span className={`h-1.5 w-1.5 rounded-full ${s.ok ? "bg-accent" : "bg-ink-3"}`} />
-              {s.name.split(" ")[0]}
+              {label("subsys", s.name)}
               <span className="ml-auto font-mono text-xs">
                 {s.value !== null ? `${s.value}${s.unit}` : s.ok ? s.detail.split(" ")[0] : t("nav.off")}
               </span>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import { LOCALE, t } from "../i18n";
 import type { KGraph, KNode } from "../knowledgeApi";
 
 type Props = {
@@ -85,7 +86,7 @@ function sizer(nodes: KNode[]) {
   return (node: KNode) => 0.008 + 0.042 * Math.sqrt((node.count ?? 0) / max);
 }
 
-const docs = (n: number) => `${n.toLocaleString("cs-CZ")} dok.`;
+const docs = (n: number) => t("kg.docs_short", { n: n.toLocaleString(LOCALE) });
 
 /** Slowly orbiting 3D graph of our knowledge base (WebGL). Drag to rotate, scroll to zoom, click to open. */
 export default function KnowledgeGraph({
@@ -177,7 +178,7 @@ export default function KnowledgeGraph({
         const name = node.label.length > 34 ? `${node.label.slice(0, 33)}…` : node.label;
         text.textContent = node.type === "document" ? name : `${name} · ${docs(node.count ?? 0)}`;
         const strongLabel = node.type === "workspace" || isHi;
-        text.style.cssText = `display: block; margin-left: 10px; font: ${node.type === "workspace" ? "11px" : "10px"} "IBM Plex Mono", monospace; color: ${strongLabel ? "#6cc4dc" : "#a3a9b3"}; white-space: nowrap;`;
+        text.style.cssText = `display: block; margin-left: 10px; font: ${node.type === "workspace" ? "13px" : "12px"} "IBM Plex Mono", monospace; color: ${strongLabel ? "#6cc4dc" : "#a3a9b3"}; white-space: nowrap;`;
         tag.appendChild(text);
         const obj = new CSS2DObject(tag);
         obj.center.set(0, 0.5);
@@ -258,9 +259,9 @@ export default function KnowledgeGraph({
       ref={host}
       className={`relative h-full w-full cursor-grab overflow-hidden active:cursor-grabbing ${className}`}
       role="img"
-      aria-label={`3D graph of the knowledge base: ${data.nodes.length} nodes. Drag to rotate, click a node to open it.`}
+      aria-label={t("kg.aria", { n: data.nodes.length })}
     >
-      {failed && <p className="cap absolute inset-0 grid place-items-center">WebGL is not available in this browser.</p>}
+      {failed && <p className="absolute inset-0 grid place-items-center text-xs text-ink-2">{t("kg.no_webgl")}</p>}
     </div>
   );
 }

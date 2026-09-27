@@ -15,7 +15,8 @@ type Source = {
 
 export function workingOn(x: Source | null | undefined): WorkingOn | null {
   if (!x) return null;
-  if (x.working_on) return { task_ref: x.working_on.task_ref ?? null, since: x.working_on.since ?? null, title: x.working_on.title ?? null };
+  // The payload carries working_on (even null = not working): that is the answer, no fallback.
+  if ("working_on" in x) return x.working_on ? { task_ref: x.working_on.task_ref ?? null, since: x.working_on.since ?? null, title: x.working_on.title ?? null } : null;
   const c = x.current;
   if (!c) return null;
   return { task_ref: c.task_ref ?? c.ref ?? null, since: c.since ?? null, title: c.title ?? null };

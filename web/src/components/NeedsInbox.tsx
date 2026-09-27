@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { agentsApi } from "../agentsApi";
 import { chatApi } from "../chatApi";
-import { ago, t } from "../i18n";
+import { ago, label, plural, t } from "../i18n";
 import { type NeedsItem, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { tasksApi } from "../tasksApi";
 import { toast } from "./overlay";
@@ -67,7 +67,7 @@ function Item({ it }: { it: NeedsItem }) {
             </span>
           </span>
           <Link to={it.link} className="text-sm break-words hover:text-accent">
-            {it.title}
+            {it.kind === "approval" && it.action ? label("approval", it.action) : it.title}
           </Link>
           {it.detail && <p className="line-clamp-2 text-[13px] break-words text-ink-2">{it.detail}</p>}
         </div>
@@ -158,10 +158,10 @@ export default function NeedsInbox() {
             {needs.count === 0
               ? t("needs.none_short")
               : [
-                  c!.approval && t("needs.count.approval", { n: c!.approval }),
-                  c!.ask && t("needs.count.ask", { n: c!.ask }),
-                  c!.review && t("needs.count.review", { n: c!.review }),
-                  c!.mention && t("needs.count.mention", { n: c!.mention }),
+                  c!.approval && `${c!.approval} ${plural(c!.approval, t("needs.count.approval.one"), t("needs.count.approval.few"), t("needs.count.approval.many"))}`,
+                  c!.ask && `${c!.ask} ${plural(c!.ask, t("needs.count.ask.one"), t("needs.count.ask.few"), t("needs.count.ask.many"))}`,
+                  c!.review && `${c!.review} ${plural(c!.review, t("needs.count.review.one"), t("needs.count.review.few"), t("needs.count.review.many"))}`,
+                  c!.mention && `${c!.mention} ${plural(c!.mention, t("needs.count.mention.one"), t("needs.count.mention.few"), t("needs.count.mention.many"))}`,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

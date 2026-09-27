@@ -343,7 +343,7 @@ function traceText(e: TraceEntry) {
 
 function Overview({ a, messages, onChange }: { a: Full; messages: Message[]; onChange: () => void }) {
   const current = a.queue.find((x) => x.status === "working");
-  const w = workingOn(a) ?? (current ? { task_ref: current.ref, since: null, title: current.title } : null);
+  const w = workingOn(a);
   const lastResult = a.queue.find((x) => x.status === "review" && x.progress_note);
   const lastRun = a.runs.find((r) => r.status !== "running" && r.detail);
   const unread = messages.filter((m) => m.to_actor === a.id && !m.read_at).length;
@@ -641,7 +641,7 @@ export default function AgentDetail() {
       </div>
 
       <div className="flex flex-wrap items-end gap-2 border-b border-line">
-        <nav className="-mx-1 flex min-w-0 flex-1 gap-1 overflow-x-auto px-1" role="tablist" aria-label={a.name}>
+        <nav className="-mx-1 flex min-w-0 flex-1 gap-1 overflow-x-auto overflow-y-hidden px-1" role="tablist" aria-label={a.name}>
           {TABS.map((x) => (
             <button
               key={x}

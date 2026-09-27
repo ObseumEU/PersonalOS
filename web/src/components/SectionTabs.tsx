@@ -7,7 +7,7 @@ import type { SubSection } from "../sections";
 export default function SectionTabs({ tabs, label, children }: { tabs: SubSection[]; label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-4">
-      <nav aria-label={label} className="-mx-1 flex gap-1 overflow-x-auto border-b border-line px-1">
+      <nav aria-label={label} className="-mx-1 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-line px-1">
         {tabs.map((s) => (
           <NavLink
             key={s.path}

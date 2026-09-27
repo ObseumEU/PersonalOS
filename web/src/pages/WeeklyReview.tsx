@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { PageHeader, Panel } from "../components/ui";
+import { t } from "../i18n";
 import type { Task } from "../tasksApi";
 
 type Review = {
@@ -14,15 +15,21 @@ type Review = {
 };
 
 function TaskList({ items, empty, view }: { items: Task[]; empty: string; view: string }) {
-  if (!items.length) return <p className="cap px-4 py-3">{empty}</p>;
+  if (!items.length) return <p className="px-4 py-3 text-sm text-ink-2">{empty}</p>;
   return (
     <>
-      {items.slice(0, 12).map((t) => (
-        <Link key={t.id} to={`/tasks?view=${view}&task=${t.ref}`} className="flex items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised">
-          <span className="cap">{t.ref}</span>
-          <span className="min-w-0 flex-1 truncate">{t.title}</span>
-          <StatePill task={t} />
-          <AssigneeChip type={t.assignee_type} name={t.assignee_name} />
+      {items.slice(0, 12).map((task) => (
+        <Link
+          key={task.id}
+          to={`/tasks?view=${view}&task=${task.ref}`}
+          className="flex min-w-0 items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised"
+        >
+          <span className="hidden shrink-0 font-mono text-xs text-ink-2 sm:inline">{task.ref}</span>
+          <span className="min-w-0 flex-1 truncate">{task.title}</span>
+          <StatePill task={task} />
+          <span className="max-w-[40%] min-w-0 shrink-0">
+            <AssigneeChip type={task.assignee_type} name={task.assignee_name} />
+          </span>
         </Link>
       ))}
     </>
@@ -41,33 +48,44 @@ export default function WeeklyReview() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        kicker="GTD · WEEKLY REVIEW"
-        title="Weekly review"
-        sub={r ? `${clear.filter(Boolean).length} of 3 checks clear · get clear, get current, get creative` : "Loading…"}
+        kicker={t("work.weekly.kicker")}
+        title={t("nav.weekly_review")}
+        sub={r ? t("work.weekly.sub", { n: clear.filter(Boolean).length }) : t("act.loading")}
       />
-      {error && <p className="cap text-red-400!">{error}</p>}
+      {error && <p className="text-xs break-words text-red-400">{error}</p>}
       {r && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Panel title="Inbox to zero" right={<Link to="/tasks/inbox" className="hover:text-accent">clarify one by one →</Link>}>
-            <TaskList items={r.inbox} empty="Inbox is empty." view="inbox" />
+          <Panel
+            title={t("work.weekly.inbox")}
+            right={
+              <Link to="/tasks/inbox" className="hover:text-accent">
+                {t("work.weekly.inbox_right")}
+              </Link>
+            }
+          >
+            <TaskList items={r.inbox} empty={t("work.weekly.inbox_empty")} view="inbox" />
           </Panel>
-          <Panel title="Waiting for" right="chase what is late">
-            <TaskList items={r.waiting} empty="Nobody owes you anything." view="waiting" />
+          <Panel title={t("work.weekly.waiting")} right={t("work.weekly.waiting_right")}>
+            <TaskList items={r.waiting} empty={t("work.weekly.waiting_empty")} view="waiting" />
           </Panel>
-          <Panel title="Projects without a next step" right="give each one a next action">
-            {r.projects_without_next.length === 0 && <p className="cap px-4 py-3">Every active project has a next step.</p>}
+          <Panel title={t("work.weekly.projects")} right={t("work.weekly.projects_right")}>
+            {r.projects_without_next.length === 0 && <p className="px-4 py-3 text-sm text-ink-2">{t("work.weekly.projects_empty")}</p>}
             {r.projects_without_next.map((p) => (
-              <Link key={p.id} to={`/projects/${p.slug}`} className="flex items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised">
+              <Link
+                key={p.id}
+                to={`/projects/${p.slug}`}
+                className="flex min-w-0 items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised"
+              >
                 <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                <span className="cap">lead {p.lead_name ?? "—"}</span>
+                <span className="shrink-0 text-xs text-ink-2">{t("work.weekly.lead", { name: p.lead_name ?? "—" })}</span>
               </Link>
             ))}
           </Panel>
-          <Panel title="Waiting for your review" right="accept or return">
-            <TaskList items={r.to_review} empty="Nothing to review." view="review" />
+          <Panel title={t("work.weekly.review")} right={t("work.weekly.review_right")}>
+            <TaskList items={r.to_review} empty={t("work.weekly.review_empty")} view="review" />
           </Panel>
-          <Panel title="Someday / maybe" right="anything to start now?" className="lg:col-span-2">
-            <TaskList items={r.someday} empty="Nothing parked." view="someday" />
+          <Panel title={t("work.weekly.someday")} right={t("work.weekly.someday_right")} className="lg:col-span-2">
+            <TaskList items={r.someday} empty={t("work.weekly.someday_empty")} view="someday" />
           </Panel>
         </div>
       )}

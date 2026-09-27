@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { LOCALE, t } from "./i18n";
 import { markdownSnippet } from "./markdownText";
 
 export type AssigneeType = "human" | "ai" | "agent" | "external";
@@ -89,7 +90,8 @@ export type Scope = "mine" | "team" | "all";
 
 export type Actor = { id: number; kind: "human" | "ai" | "agent"; name: string; is_owner: number };
 export type Version = { version: number; action: string; at: string; actor_name: string | null; run_id: number | null };
-export type Counts = Record<Exclude<View, "done">, number>;
+/** Open tasks per view; `to_review` = results waiting for me as their reviewer (the same number Home shows). */
+export type Counts = Record<Exclude<View, "done">, number> & { to_review?: number };
 
 /** Why a member cannot take a task now. Soft reasons (pause, kill switch, budget) pass on the owner's say. */
 export type Blocker = { code: string; text: string; soft: boolean };
@@ -192,21 +194,25 @@ export const tasksApi = {
   live: (ref: string) => api<TaskLive>(`/api/tasks/${ref}/live`),
 };
 
-export const PRIORITY_LABEL: Record<number, string> = { 1: "Must", 2: "Should", 3: "Could" };
+export const PRIORITY_LABEL: Record<number, string> = { 1: t("work.priority.1"), 2: t("work.priority.2"), 3: t("work.priority.3") };
 
-export function dueLabel(t: Pick<Task, "do_date" | "deadline" | "follow_up" | "status">): { text: string; urgent: boolean } {
+export function dueLabel(task: Pick<Task, "do_date" | "deadline" | "follow_up" | "status">): { text: string; urgent: boolean } {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
   const fmt = (d: string) =>
-    d === today ? "today" : d === tomorrow ? "tomorrow" : new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  if (t.deadline && t.deadline <= today && t.status !== "done")
-    return { text: t.deadline < today ? "overdue" : "due today", urgent: true };
-  const d = t.do_date ?? t.deadline ?? (t.status === "waiting" ? t.follow_up : null);
+    d === today
+      ? t("work.due.today")
+      : d === tomorrow
+        ? t("work.due.tomorrow")
+        : new Date(d).toLocaleDateString(LOCALE, { day: "numeric", month: "short" });
+  if (task.deadline && task.deadline <= today && task.status !== "done")
+    return { text: task.deadline < today ? t("work.due.overdue") : t("work.due.due_today"), urgent: true };
+  const d = task.do_date ?? task.deadline ?? (task.status === "waiting" ? task.follow_up : null);
   if (!d) return { text: "", urgent: false };
   return { text: fmt(d), urgent: d <= today };
 }
 
-export const NO_DESCRIPTION = "Bez popisu";
+export const NO_DESCRIPTION = t("work.no_description");
 
 /** A short plain-text preview of a task's description (markdown marks and wrappers stripped). */
 export function descriptionPreview(notes: string | null | undefined, max = 180): string {

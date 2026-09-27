@@ -1,4 +1,5 @@
 import { ApiError, api } from "./api";
+import { LOCALE, t } from "./i18n";
 import type { Task, Version } from "./tasksApi";
 import type { CalEvent } from "./pages/Calendar";
 
@@ -129,12 +130,21 @@ export const searchApi = (q: string) => api<SearchResult>(`/api/search?q=${encod
 
 export function fmtSize(n: number) {
   if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  if (n < 1024 * 1024) return `${(n / 1024).toLocaleString(LOCALE, { maximumFractionDigits: n < 10 * 1024 ? 1 : 0 })} kB`;
+  return `${(n / 1024 / 1024).toLocaleString(LOCALE, { maximumFractionDigits: 1 })} MB`;
 }
 
 export function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(iso).toLocaleDateString(LOCALE, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** A history entry's action in words ("create", "restore:v3"…); the raw value when unknown. */
+export function histAction(action: string) {
+  const m = /^restore:v(\d+)$/.exec(action);
+  if (m) return t("files.hist.restore", { v: m[1] });
+  const k = `files.hist.${action}`;
+  const s = t(k);
+  return s === k ? action.replace(/_/g, " ") : s;
 }
 
 export const parseTags = (s: string) =>

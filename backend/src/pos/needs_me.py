@@ -37,7 +37,7 @@ def _approvals(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
         why = str(details.get("why") or details.get("reason") or details.get("summary") or "")
         out.append({
             "kind": "approval", "key": f"approval:{r['id']}", "id": r["id"],
-            "title": str(r["action"]).replace("_", " "), "detail": why[:240],
+            "title": str(r["action"]).replace("_", " "), "action": r["action"], "detail": why[:240],
             "from_name": r["requested_by_name"], "from_kind": r["requested_by_kind"], "at": r["created_at"],
             "ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
             "link": "/approvals",

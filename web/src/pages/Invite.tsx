@@ -2,6 +2,7 @@ import { ArrowRight } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { acceptInvite, api, type Me } from "../api";
 import { Mark } from "../components/Shell";
+import { t } from "../i18n";
 
 /** Accept an invitation: the invited person sets a password and is signed in. */
 export default function Invite({ token, onJoined }: { token: string; onJoined: (me: Me) => void }) {
@@ -25,12 +26,12 @@ export default function Invite({ token, onJoined }: { token: string; onJoined: (
           <Mark />
           <span className="font-medium">PersonalOS</span>
         </div>
-        <h1 className="mt-6 text-2xl font-light tracking-[-0.02em]">{info ? `Welcome, ${info.name}` : "Invitation"}</h1>
-        {info && <p className="cap mt-2">{info.email} · set your password (at least 10 characters)</p>}
+        <h1 className="mt-6 text-2xl font-light tracking-[-0.02em]">{info ? t("invite.welcome", { name: info.name }) : t("invite.title")}</h1>
+        {info && <p className="mt-2 text-xs text-ink-2">{t("invite.hint", { email: info.email })}</p>}
         {info && (
           <>
-            <label htmlFor="new-password" className="cap mt-6 block">
-              PASSWORD
+            <label htmlFor="new-password" className="mt-6 block text-xs text-ink-2">
+              {t("invite.password")}
             </label>
             <input
               id="new-password"
@@ -44,7 +45,7 @@ export default function Invite({ token, onJoined }: { token: string; onJoined: (
               disabled={password.length < 10}
               className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-accent bg-accent/10 text-sm font-medium text-accent transition hover:bg-accent/20 disabled:opacity-40"
             >
-              Join <ArrowRight size={15} />
+              {t("invite.join")} <ArrowRight size={15} />
             </button>
           </>
         )}

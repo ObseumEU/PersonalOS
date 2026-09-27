@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { label, t } from "../i18n";
+import { confirmDialog, toast } from "./overlay";
 import { Panel } from "./ui";
 
 type Hire = {
@@ -17,22 +19,34 @@ type Hire = {
 };
 
 const post = <T,>(path: string, body: unknown) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
-const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
+const input = "h-8 min-w-0 rounded border border-line bg-bg px-2 text-sm outline-none focus:border-accent";
 
 /** Hire a colleague: one request, HR's limits first, the lead (or the owner) decides; 7 days' probation. */
 export default function HiringPanel({ members, onHired }: { members: { id: number; name: string; kind: string }[]; onHired: () => void }) {
   const [hires, setHires] = useState<Hire[]>([]);
   const [form, setForm] = useState({ name: "", purpose: "", role: "", lead: "", instructions: "" });
   const [error, setError] = useState<string | null>(null);
+  const [key, setKey] = useState<string | null>(null);
   const load = () => api<Hire[]>("/api/hires").then(setHires, (e) => setError(e.message));
   useEffect(() => {
     load();
   }, []);
-  const decide = (id: number, approve: boolean) => {
-    const note = approve ? "" : window.prompt("Why not?") ?? "";
-    post<{ api_key?: string }>(`/api/hires/${id}/decide`, { approve, note }).then(
+  const decide = async (h: Hire, approve: boolean) => {
+    let note = "";
+    if (!approve) {
+      const why = await confirmDialog({
+        title: t("hire.reject_title", { name: h.name }),
+        reason: t("hire.reject_reason"),
+        confirm: t("act.reject"),
+        danger: true,
+      });
+      if (why === null) return;
+      note = why;
+    }
+    post<{ api_key?: string }>(`/api/hires/${h.id}/decide`, { approve, note }).then(
       (r) => {
-        if (r.api_key) window.alert(`Hired. The agent's key (shown once, for its worker): ${r.api_key}`);
+        if (r.api_key) setKey(r.api_key);
+        toast(t(approve ? "hire.hired" : "hire.rejected"));
         load();
         onHired();
       },
@@ -41,7 +55,7 @@ export default function HiringPanel({ members, onHired }: { members: { id: numbe
   };
   const pending = hires.filter((h) => h.status === "pending");
   return (
-    <Panel title="Hire a colleague" right={`${pending.length} pending · the lead decides · 7 days' probation`}>
+    <Panel title={t("hire.title")} right={t("hire.right", { n: pending.length })}>
       <form
         className="grid grid-cols-1 gap-2 border-b border-line p-4 md:grid-cols-4"
         onSubmit={(e) => {
@@ -56,51 +70,62 @@ export default function HiringPanel({ members, onHired }: { members: { id: numbe
           );
         }}
       >
-        <input className={input} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-label="Name" />
-        <input className={`${input} md:col-span-2`} placeholder="Purpose: what it is for" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} aria-label="Purpose" />
-        <input className={input} placeholder="Role (optional)" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} aria-label="Role" />
-        <select className={input} value={form.lead} onChange={(e) => setForm({ ...form, lead: e.target.value })} aria-label="Lead">
-          <option value="">reports to the COO</option>
+        <input className={input} placeholder={t("hire.name")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-label={t("hire.name")} />
+        <input
+          className={`${input} md:col-span-2`}
+          placeholder={t("hire.purpose")}
+          value={form.purpose}
+          onChange={(e) => setForm({ ...form, purpose: e.target.value })}
+          aria-label={t("hire.purpose_aria")}
+        />
+        <input className={input} placeholder={t("hire.role")} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} aria-label={t("hire.role_aria")} />
+        <select className={input} value={form.lead} onChange={(e) => setForm({ ...form, lead: e.target.value })} aria-label={t("hire.lead_aria")}>
+          <option value="">{t("hire.lead_coo")}</option>
           {members.map((m) => (
             <option key={m.id} value={m.id}>
-              reports to {m.name}
+              {t("hire.lead", { name: m.name })}
             </option>
           ))}
         </select>
         <textarea
           rows={2}
-          className="rounded border border-line bg-bg p-2 text-[13px] outline-none focus:border-accent md:col-span-2"
-          placeholder="Draft instructions (optional)"
+          className="min-w-0 rounded border border-line bg-bg p-2 text-sm outline-none focus:border-accent md:col-span-2"
+          placeholder={t("hire.instructions")}
           value={form.instructions}
           onChange={(e) => setForm({ ...form, instructions: e.target.value })}
-          aria-label="Instructions"
+          aria-label={t("hire.instructions_aria")}
         />
         <button type="submit" className="btn-accent self-start" disabled={!form.name.trim() || !form.purpose.trim()}>
-          Ask to hire
+          {t("hire.ask")}
         </button>
       </form>
+      {key && (
+        <p className="border-b border-line px-4 py-2.5 text-sm">
+          {t("hire.key")} <span className="font-mono text-xs break-all text-accent">{key}</span>
+        </p>
+      )}
       {hires.slice(0, 12).map((h) => (
-        <div key={h.id} className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0">
+        <div key={h.id} className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2 text-sm last:border-0">
           <span className="font-medium">{h.name}</span>
-          <span className="cap truncate">{h.purpose}</span>
-          <span className="cap">
-            → {h.lead_name} · asked by {h.requested_by_name} · decides {h.decider_name}
+          <span className="min-w-0 truncate text-xs text-ink-2">{h.purpose}</span>
+          <span className="text-xs text-ink-2">
+            {t("hire.row", { lead: h.lead_name, by: h.requested_by_name, decider: h.decider_name })}
           </span>
-          {h.needs_owner && <span className="cap text-amber-300!">{h.needs_owner}</span>}
-          <span className="cap ml-auto">{h.status}</span>
+          {h.needs_owner && <span className="text-xs text-amber-300">{h.needs_owner}</span>}
+          <span className="ml-auto text-xs text-ink-2">{label("hire.status", h.status)}</span>
           {h.status === "pending" && (
             <>
-              <button type="button" className="btn" onClick={() => decide(h.id, true)}>
-                Approve
+              <button type="button" className="btn" onClick={() => decide(h, true)}>
+                {t("act.approve")}
               </button>
-              <button type="button" className="btn" onClick={() => decide(h.id, false)}>
-                Reject
+              <button type="button" className="btn" onClick={() => decide(h, false)}>
+                {t("act.reject")}
               </button>
             </>
           )}
         </div>
       ))}
-      {error && <p className="cap px-4 py-2 text-red-400!">{error}</p>}
+      {error && <p className="px-4 py-2 text-xs text-red-400">{error}</p>}
     </Panel>
   );
 }
@@ -111,7 +136,7 @@ export function InvitePanel() {
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   return (
-    <Panel title="Invite a person" right="a one-time link, valid 7 days">
+    <Panel title={t("hire.invite_title")} right={t("hire.invite_right")}>
       <form
         className="flex flex-wrap gap-2 p-4"
         onSubmit={(e) => {
@@ -126,18 +151,25 @@ export function InvitePanel() {
           );
         }}
       >
-        <input className={input} placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-label="Name" />
-        <input className={`${input} min-w-56 flex-1`} placeholder="E-mail" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} aria-label="E-mail" />
+        <input className={`${input} w-full sm:w-auto`} placeholder={t("hire.name")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} aria-label={t("hire.name")} />
+        <input
+          className={`${input} w-full flex-1 sm:w-auto sm:min-w-56`}
+          placeholder={t("hire.email")}
+          type="email"
+          value={form.email}
+          onChange={(e) => setForm({ ...form, email: e.target.value })}
+          aria-label={t("hire.email")}
+        />
         <button type="submit" className="btn-accent" disabled={!form.name.trim() || !form.email.trim()}>
-          Create link
+          {t("hire.create_link")}
         </button>
       </form>
       {link && (
-        <p className="border-t border-line px-4 py-2.5 text-[13px]">
-          Send this link yourself (shown once): <span className="font-mono text-xs break-all text-accent">{link}</span>
+        <p className="border-t border-line px-4 py-2.5 text-sm">
+          {t("hire.link")} <span className="font-mono text-xs break-all text-accent">{link}</span>
         </p>
       )}
-      {error && <p className="cap px-4 py-2 text-red-400!">{error}</p>}
+      {error && <p className="px-4 py-2 text-xs text-red-400">{error}</p>}
     </Panel>
   );
 }

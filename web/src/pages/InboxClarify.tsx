@@ -2,20 +2,24 @@ import { Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Markdown from "../components/Markdown";
+import { confirmDialog } from "../components/overlay";
 import { AssigneeChip } from "../components/tasks/bits";
 import { PageHeader, Panel } from "../components/ui";
-import { type AssigneeType, type Step, type Suggestion, type Task, tasksApi } from "../tasksApi";
+import { LOCALE, t } from "../i18n";
+import { type AssigneeType, PRIORITY_LABEL, type Step, type Suggestion, type Task, tasksApi } from "../tasksApi";
 import { Capture } from "./Tasks";
 
-const input = "h-8 w-full rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
+const input = "h-8 w-full min-w-0 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
+// The GTD questions: [question, answer that leads to the result, result]. The 4th rule is the one about assigning.
 const RULES: [string, string, string][] = [
-  ["Actionable?", "no", "Trash, Someday or Reference"],
-  ["More than one step?", "yes", "Project: split into steps"],
-  ["Under 2 minutes?", "yes", "Do it now"],
-  ["Better done by AI, an agent or a person?", "yes", "Assign it"],
-  ["Otherwise", "", "Me: next action with a do date"],
+  [t("work.rule.1.q"), t("work.rule.no"), t("work.rule.1.r")],
+  [t("work.rule.2.q"), t("work.rule.yes"), t("work.rule.2.r")],
+  [t("work.rule.3.q"), t("work.rule.yes"), t("work.rule.3.r")],
+  [t("work.rule.4.q"), t("work.rule.yes"), t("work.rule.4.r")],
+  [t("work.rule.5.q"), "", t("work.rule.5.r")],
 ];
+const ASSIGN_RULE = 3;
 
 function stepType(assignee: string): AssigneeType {
   const a = assignee.toLowerCase();
@@ -23,6 +27,10 @@ function stepType(assignee: string): AssigneeType {
   if (a === "ai" || a === "assistant") return "ai";
   if (a.includes("agent") || a === "nexus") return "agent";
   return "external";
+}
+
+function Label({ children }: { children: string }) {
+  return <span className="text-xs text-ink-2">{children}</span>;
 }
 
 export default function InboxClarify() {
@@ -79,134 +87,153 @@ export default function InboxClarify() {
     act("accept", { ...clean, ...(assignee ? { assignee } : {}), steps });
   }
 
+  async function delegate() {
+    const who = await confirmDialog({
+      title: t("work.clarify.delegate_title"),
+      body: t("work.clarify.delegate_body"),
+      confirm: t("work.clarify.delegate_confirm"),
+      reason: t("work.clarify.delegate_reason"),
+    });
+    if (who) act("delegate", { assignee: who });
+  }
+
   const setField = (k: keyof Suggestion, v: unknown) => draft && setDraft({ ...draft, [k]: v });
   const setStep = (i: number, s: Partial<Step>) =>
     draft && setDraft({ ...draft, steps: draft.steps.map((x, j) => (j === i ? { ...x, ...s } : x)) });
 
   return (
     <div className="flex flex-col gap-5 lg:h-[calc(100vh-3rem)]">
-      <PageHeader
-        kicker="TASKS · INBOX · CLARIFY"
-        title="Inbox"
-        sub="Everything lands here first. Process it to zero; the AI proposes, you decide."
-      />
-      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-        <Panel title="Inbox" right={`${items?.length ?? 0} to process`} className="lg:w-80 lg:shrink-0" bodyClassName="overflow-y-auto">
+      <PageHeader kicker={t("work.clarify.kicker")} title={t("work.view.inbox")} sub={t("work.clarify.sub")} />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:flex-row">
+        <Panel
+          title={t("work.view.inbox")}
+          right={t("work.clarify.to_process", { n: items?.length ?? 0 })}
+          className="min-w-0 lg:w-80 lg:shrink-0"
+          bodyClassName="overflow-y-auto"
+        >
           <div className="border-b border-line p-3">
             <Capture onCaptured={() => load()} />
           </div>
-          {items?.map((t, i) => (
+          {items?.map((task, i) => (
             <button
-              key={t.id}
+              key={task.id}
               type="button"
               onClick={() => setIndex(i)}
-              className={`flex w-full flex-col gap-1 border-b border-line px-3.5 py-2.5 text-left ${
+              className={`flex w-full min-w-0 flex-col gap-1 border-b border-line px-3.5 py-2.5 text-left ${
                 i === index ? "bg-raised shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-raised/60"
               }`}
             >
-              <span className="text-[13px]">{t.title}</span>
-              <span className="cap">
-                {t.ref} · {t.source} · {new Date(t.created_at).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}
-                {t.suggestion ? " · suggestion ready" : ""}
+              <span className="text-[13px] break-words">{task.title}</span>
+              <span className="text-xs break-words text-ink-2">
+                {task.ref} · {task.source} · {new Date(task.created_at).toLocaleString(LOCALE, { dateStyle: "short", timeStyle: "short" })}
+                {task.suggestion ? ` · ${t("work.clarify.suggestion_ready")}` : ""}
               </span>
             </button>
           ))}
           {items?.length === 0 && (
-            <p className="cap p-6 text-center">
-              Inbox zero. <Link to="/tasks?view=today" className="text-accent!">Go to Today →</Link>
+            <p className="p-6 text-center text-sm text-ink-2">
+              {t("work.tasks.empty.inbox")}{" "}
+              <Link to="/tasks?view=today" className="text-accent">
+                {t("work.clarify.go_today")}
+              </Link>
             </p>
           )}
         </Panel>
 
         <Panel
-          title="Clarify"
-          right="one item at a time"
+          title={t("work.clarify.title")}
+          right={t("work.clarify.one_at_a_time")}
           className="min-w-0 flex-1"
           bodyClassName="overflow-y-auto"
         >
           {!item ? (
-            <p className="cap p-6">Nothing to clarify.</p>
+            <p className="p-6 text-sm text-ink-2">{t("work.clarify.nothing")}</p>
           ) : (
-            <div className="flex flex-col gap-4 p-5">
-              <div className="flex flex-col gap-1.5">
-                <span className="cap">CAPTURED · {item.source.toUpperCase()}</span>
-                <span className="text-xl font-light">“{item.title}”</span>
+            <div className="flex min-w-0 flex-col gap-4 p-4 sm:p-5">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <span className="text-xs text-ink-2">{t("work.clarify.captured", { source: item.source })}</span>
+                <span className="text-xl font-light break-words">„{item.title}“</span>
                 {item.notes && <Markdown text={item.notes} compact className="md-muted" />}
               </div>
 
               {!draft ? (
                 <button type="button" disabled={busy} onClick={suggest} className="btn-accent self-start">
-                  <Sparkles size={14} /> {busy ? "Thinking…" : "Suggest with AI"}
+                  <Sparkles size={14} /> {busy ? t("work.clarify.thinking") : t("work.clarify.suggest")}
                 </button>
               ) : (
-                <div className="flex flex-col gap-3 rounded-md border border-accent/70 bg-accent/5 p-4">
+                <div className="flex min-w-0 flex-col gap-3 rounded-md border border-accent/70 bg-accent/5 p-3 sm:p-4">
                   <span className="flex flex-wrap items-center gap-2">
                     <AssigneeChip type="ai" name="AI" />
-                    <span className="cap">
-                      {draft.engine === "codex" ? "suggested by Codex" : "rule-based: Codex was not available"} ·{" "}
-                      {draft.actionable ? "actionable" : "probably not actionable"}
-                      {draft.two_minutes ? " · under 2 minutes" : ""}
+                    <span className="text-xs text-ink-2">
+                      {draft.engine === "codex" ? t("work.clarify.by_codex") : t("work.clarify.by_rules")} ·{" "}
+                      {draft.actionable ? t("work.clarify.actionable") : t("work.clarify.not_actionable")}
+                      {draft.two_minutes ? ` · ${t("work.clarify.two_minutes")}` : ""}
                     </span>
-                    <button type="button" onClick={suggest} disabled={busy} className="cap ml-auto text-accent!">
-                      {busy ? "thinking…" : "suggest again"}
+                    <button type="button" onClick={suggest} disabled={busy} className="ml-auto text-xs text-accent">
+                      {busy ? t("work.clarify.thinking") : t("work.clarify.again")}
                     </button>
                   </span>
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                    <label className="col-span-2 flex flex-col gap-1">
-                      <span className="cap">TITLE</span>
+                  <div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 md:grid-cols-4">
+                    <label className="flex min-w-0 flex-col gap-1 min-[400px]:col-span-2">
+                      <Label>{t("work.clarify.f.title")}</Label>
                       <input className={input} value={draft.title} onChange={(e) => setField("title", e.target.value)} />
                     </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="cap">TOPIC</span>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <Label>{t("work.detail.topic")}</Label>
                       <input className={input} value={draft.topic ?? ""} onChange={(e) => setField("topic", e.target.value || null)} />
                     </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="cap">PRIORITY</span>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <Label>{t("priority.label")}</Label>
                       <select className={input} value={draft.priority ?? ""} onChange={(e) => setField("priority", e.target.value ? Number(e.target.value) : null)}>
-                        <option value="">none</option>
-                        <option value="1">P1 · Must</option>
-                        <option value="2">P2 · Should</option>
-                        <option value="3">P3 · Could</option>
+                        <option value="">{t("work.priority.unset")}</option>
+                        <option value="1">P1 · {PRIORITY_LABEL[1]}</option>
+                        <option value="2">P2 · {PRIORITY_LABEL[2]}</option>
+                        <option value="3">P3 · {PRIORITY_LABEL[3]}</option>
                       </select>
                     </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="cap">DO DATE</span>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <Label>{t("work.detail.do_date")}</Label>
                       <input type="date" className={input} value={draft.do_date ?? ""} onChange={(e) => setField("do_date", e.target.value || null)} />
                     </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="cap">DEADLINE</span>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <Label>{t("work.detail.deadline")}</Label>
                       <input type="date" className={input} value={draft.deadline ?? ""} onChange={(e) => setField("deadline", e.target.value || null)} />
                     </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="cap">ESTIMATE (MIN)</span>
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <Label>{t("work.detail.estimate")}</Label>
                       <input type="number" className={input} value={draft.estimate_min ?? ""} onChange={(e) => setField("estimate_min", e.target.value ? Number(e.target.value) : null)} />
                     </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="cap">ASSIGNEE</span>
-                      <input className={input} value={draft.assignee ?? ""} placeholder="me, ai, agent, name" onChange={(e) => setField("assignee", e.target.value || null)} />
+                    <label className="flex min-w-0 flex-col gap-1">
+                      <Label>{t("work.detail.assignee")}</Label>
+                      <input
+                        className={input}
+                        value={draft.assignee ?? ""}
+                        placeholder={t("work.clarify.f.assignee_ph")}
+                        onChange={(e) => setField("assignee", e.target.value || null)}
+                      />
                     </label>
                   </div>
                   {draft.steps.length > 0 && (
-                    <div className="flex flex-col">
-                      <span className="cap pb-1 text-ink-2!">PROPOSED STEPS AND WHO DOES THEM</span>
+                    <div className="flex min-w-0 flex-col">
+                      <span className="pb-1 text-xs text-ink-2">{t("work.clarify.steps")}</span>
                       {draft.steps.map((s, i) => (
-                        <div key={i} className="grid grid-cols-[minmax(0,1fr)_150px_24px] items-center gap-3 border-t border-line py-2">
-                          <span className="flex flex-col gap-0.5">
+                        <div key={i} className="grid grid-cols-[minmax(0,1fr)_auto_24px] items-center gap-2 border-t border-line py-2 sm:gap-3">
+                          <span className="flex min-w-0 flex-col gap-0.5">
                             <input
-                              className="bg-transparent text-[13px] outline-none"
+                              className="min-w-0 bg-transparent text-[13px] outline-none"
                               value={s.title}
                               onChange={(e) => setStep(i, { title: e.target.value })}
-                              aria-label={`Step ${i + 1}`}
+                              aria-label={t("work.clarify.step_aria", { n: i + 1 })}
                             />
-                            {s.reason && <span className="cap">{s.reason}</span>}
+                            {s.reason && <span className="text-xs break-words text-ink-2">{s.reason}</span>}
                           </span>
-                          <span className="flex items-center gap-1.5">
+                          <span className="flex max-w-[140px] min-w-0 items-center gap-1.5">
                             <AssigneeChip type={stepType(s.assignee)} name={s.assignee} />
                           </span>
                           <button
                             type="button"
-                            aria-label="Remove step"
-                            className="text-ink-3 hover:text-ink"
+                            aria-label={t("work.clarify.remove_step")}
+                            className="text-ink-2 hover:text-ink"
                             onClick={() => setDraft({ ...draft, steps: draft.steps.filter((_, j) => j !== i) })}
                           >
                             ×
@@ -215,56 +242,48 @@ export default function InboxClarify() {
                       ))}
                     </div>
                   )}
-                  <span className="cap">{draft.rationale}</span>
+                  <span className="text-xs break-words text-ink-2">{draft.rationale}</span>
                 </div>
               )}
 
               <div className="flex flex-wrap gap-2">
                 <button type="button" disabled={busy} onClick={accept} className="btn-accent">
-                  Accept{draft ? "" : " as is"}
+                  {draft ? t("work.clarify.accept") : t("work.clarify.accept_as_is")}
                 </button>
                 <button type="button" disabled={busy} onClick={() => act("do_now")} className="btn">
-                  Done now (&lt; 2 min)
+                  {t("work.clarify.do_now")}
                 </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    const who = window.prompt("Delegate to: ai, an agent name, or a person's name");
-                    if (who) act("delegate", { assignee: who });
-                  }}
-                  className="btn"
-                >
-                  Delegate…
+                <button type="button" disabled={busy} onClick={delegate} className="btn">
+                  {t("work.clarify.delegate")}
                 </button>
                 <button type="button" disabled={busy} onClick={() => act("someday")} className="btn">
-                  Someday
+                  {t("work.clarify.someday")}
                 </button>
                 <button type="button" disabled={busy} onClick={() => act("reference")} className="btn">
-                  Reference (→ note)
+                  {t("work.clarify.reference")}
                 </button>
                 <button type="button" disabled={busy} onClick={() => act("trash")} className="btn">
-                  Trash
+                  {t("work.clarify.trash")}
                 </button>
               </div>
-              {error && <p className="cap text-red-400!">{error}</p>}
+              {error && <p className="text-xs break-words text-red-400">{error}</p>}
             </div>
           )}
         </Panel>
 
-        <Panel title="How items are clarified" right="GTD" className="lg:w-72 lg:shrink-0">
+        <Panel title={t("work.clarify.rules_title")} right="GTD" className="min-w-0 lg:w-72 lg:shrink-0">
           {RULES.map(([q, a, r], i) => (
             <div key={q} className="grid grid-cols-[22px_minmax(0,1fr)] gap-2 border-b border-line px-3.5 py-2.5">
-              <span className="cap text-accent!">{String(i + 1).padStart(2, "0")}</span>
-              <span className="flex flex-col gap-1">
+              <span className="text-xs text-accent tabular-nums">{i + 1}</span>
+              <span className="flex min-w-0 flex-col gap-1">
                 <span className="text-[13px]">{q}</span>
-                <span className={`text-xs ${r === "Assign it" ? "text-accent" : "text-ink-2"}`}>
-                  {a && <span className="cap mr-1.5 rounded-sm border border-line px-1">{a}</span>}→ {r}
+                <span className={`text-xs ${i === ASSIGN_RULE ? "text-accent" : "text-ink-2"}`}>
+                  {a && <span className="mr-1.5 rounded-sm border border-line px-1">{a}</span>}→ {r}
                 </span>
               </span>
             </div>
           ))}
-          <p className="cap px-3.5 py-3 leading-relaxed">Trash and Someday only archive; everything can be restored from history.</p>
+          <p className="px-3.5 py-3 text-xs leading-relaxed text-ink-2">{t("work.clarify.rules_footer")}</p>
         </Panel>
       </div>
     </div>

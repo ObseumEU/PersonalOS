@@ -197,6 +197,11 @@ export default {
   "audit.access_owner_permissions": "oprávnění od majitele",
   "audit.access_report": "report přístupů",
 
+  // subsystems in the rail
+  "subsys.Knowledge base": "Znalosti",
+  "subsys.Nexus": "Nexus",
+  "subsys.Agent runtime": "Agenti",
+
   // misc
   "misc.mock": "= ukázka, zatím není napojeno",
   "misc.mock_title": "Ukázka: vzorová data nebo ještě není hotové",

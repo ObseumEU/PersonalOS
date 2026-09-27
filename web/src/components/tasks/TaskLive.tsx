@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
+import { LOCALE, label, t } from "../../i18n";
 import { type TaskLive as Live, tasksApi } from "../../tasksApi";
 import Markdown from "../Markdown";
 import { EngineBadge } from "./AgentPicker";
 
-const STATE_TEXT: Record<string, string> = {
-  working: "working now",
-  queued: "queued · the agent picks it up next",
-  blocked: "not moving",
+const STATE_KEY: Record<string, string> = {
+  working: "work.live.working",
+  queued: "work.live.queued",
+  blocked: "work.live.blocked",
 };
 
 const time = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+  iso ? new Date(iso).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
 
 /** Live status of a task: who has it, the current run with its engine/model, progress notes, and why it is stuck. */
 export default function TaskLive({ taskRef, version, onChange }: { taskRef: string; version: string; onChange?: () => void }) {
@@ -42,22 +43,29 @@ export default function TaskLive({ taskRef, version, onChange }: { taskRef: stri
   const a = live.assignee;
   const run = live.run;
   const blocked = live.blocked.length > 0 && live.state === "blocked";
+  const state = STATE_KEY[live.state] ? t(STATE_KEY[live.state]) : live.state;
 
   return (
     <div
-      className={`flex flex-col gap-2 rounded border p-3 ${blocked ? "border-amber-400/60" : run ? "border-accent/60" : "border-line"}`}
+      className={`flex min-w-0 flex-col gap-2 rounded border p-3 ${blocked ? "border-amber-400/60" : run ? "border-accent/60" : "border-line"}`}
       aria-live="polite"
     >
-      <span className="flex flex-wrap items-center gap-2">
-        <span className={`cap ${blocked ? "text-amber-300!" : run ? "text-accent!" : ""}`}>
-          LIVE · {STATE_TEXT[live.state] ?? live.state}
+      <span className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className={`text-xs font-medium ${blocked ? "text-amber-300" : run ? "text-accent" : "text-ink-2"}`}>
+          {t("work.live.state", { state })}
         </span>
-        <span className="text-[13px]">{a.name}</span>
-        {a.role && <span className="cap">{a.role.replace(/_/g, " ")}</span>}
+        <span className="min-w-0 truncate text-[13px]">{a.name}</span>
+        {a.role && <span className="text-xs text-ink-2">{a.role.replace(/_/g, " ")}</span>}
         <span className="ml-auto flex items-center gap-1.5">
           <EngineBadge label={run?.label ?? a.engine_label} />
           <span
-            title={a.worker_online ? (a.worker_waiting ? "worker waiting for work" : "worker online") : "no worker seen in the last minutes"}
+            title={
+              a.worker_online
+                ? a.worker_waiting
+                  ? t("work.live.worker_waiting")
+                  : t("work.live.worker_online")
+                : t("work.live.worker_offline")
+            }
             className={`h-1.5 w-1.5 rounded-full ${a.worker_online ? "bg-emerald-400" : "bg-dim"}`}
           />
         </span>
@@ -65,19 +73,19 @@ export default function TaskLive({ taskRef, version, onChange }: { taskRef: stri
 
       {blocked &&
         live.blocked.map((b) => (
-          <span key={b.code + b.text} className="text-[12px] leading-snug text-amber-300">
+          <span key={b.code + b.text} className="text-xs leading-snug break-words text-amber-300">
             {b.text}
           </span>
         ))}
 
       {run ? (
-        <span className="cap">
-          run {run.id} · started {time(run.started_at)} · last heartbeat {time(run.heartbeat_at)}
+        <span className="text-xs text-ink-2">
+          {t("work.live.run", { id: run.id, start: time(run.started_at), beat: time(run.heartbeat_at) })}
         </span>
       ) : (
         live.runs[0] && (
-          <span className="cap">
-            last run {live.runs[0].id} · {live.runs[0].status}
+          <span className="text-xs break-words text-ink-2">
+            {t("work.live.last_run", { id: live.runs[0].id, status: label("runstatus", live.runs[0].status) })}
             {live.runs[0].detail ? ` · ${live.runs[0].detail}` : ""}
           </span>
         )
@@ -92,13 +100,13 @@ export default function TaskLive({ taskRef, version, onChange }: { taskRef: stri
       {live.notes.length > 0 && (
         <ol className="flex flex-col gap-1">
           {live.notes.slice(0, 5).map((n, i) => (
-            <li key={i} className="flex gap-2 text-[12px] leading-snug">
-              <span className="cap w-14 shrink-0">{time(n.at)}</span>
-              <span className="min-w-0 flex-1">
+            <li key={i} className="flex gap-2 text-xs leading-snug">
+              <span className="w-16 shrink-0 text-ink-2 tabular-nums">{time(n.at)}</span>
+              <span className="min-w-0 flex-1 break-words">
                 <Markdown
                   compact
-                  className="md-muted text-[12px]!"
-                  text={`${n.progress != null && n.progress > 0 ? `**${n.progress}%** · ` : ""}${n.note ?? ""}`}
+                  className="md-muted text-xs!"
+                  text={`${n.progress != null && n.progress > 0 ? `**${n.progress} %** · ` : ""}${n.note ?? ""}`}
                 />
               </span>
             </li>

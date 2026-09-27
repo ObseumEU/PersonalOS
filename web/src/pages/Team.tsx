@@ -18,7 +18,7 @@ export default function Team() {
   return (
     <div className="flex flex-col gap-4">
       <PageHeader kicker={t("team.kicker")} title={t("nav.team")} sub={t("team.sub")} />
-      <nav className="-mx-1 flex gap-1 overflow-x-auto border-b border-line px-1" aria-label={t("nav.team")}>
+      <nav className="-mx-1 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-line px-1" aria-label={t("nav.team")}>
         {TABS.map((x) => (
           <button
             key={x.id}
