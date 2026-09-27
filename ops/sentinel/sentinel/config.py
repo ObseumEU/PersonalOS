@@ -95,7 +95,7 @@ def load(path: str | None = None) -> dict:
         with open(path, encoding="utf-8") as f:
             _merge(cfg, json.load(f))
     env = os.environ.get
-    cfg["pos_url"] = env("SENTINEL_POS_URL", "http://api:8000").rstrip("/")
+    cfg["pos_url"] = env("SENTINEL_POS_URL", "http://pos-api:8000").rstrip("/")
     cfg["token"] = env("SENTINEL_TOKEN", "")
     cfg["docker_host"] = env("DOCKER_HOST", "unix:///var/run/docker.sock")
     cfg["nexus_dsn"] = env("SENTINEL_NEXUS_DSN", "")

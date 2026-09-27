@@ -103,7 +103,7 @@ class Pool:
         self.spawn = spawn or self._spawn
         self.clock = clock
         self.lazy = lazy
-        self.probe = probe or (lambda slug, key: has_work(os.environ.get("POS_URL", "http://api:8000"), key))
+        self.probe = probe or (lambda slug, key: has_work(os.environ.get("POS_URL", "http://pos-api:8000"), key))
         self.children: dict[str, tuple[object, str]] = {}
         self.failures: dict[str, int] = {}
         self.not_before: dict[str, float] = {}

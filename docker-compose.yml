@@ -64,7 +64,7 @@ services:
     working_dir: /repo
     command: ["python", "-m", "pos.selfdeploy", "--repo", "/repo", "--watch", "60"]
     environment:
-      POS_URL: http://api:8000
+      POS_URL: http://pos-api:8000
       POS_DEPLOYER_KEY: ${DEPLOYER_KEY:-}
       DEPLOY_HEALTH_URL: http://web/api/health
       DEPLOY_TEST_CMD: ${DEPLOY_TEST_CMD:-cd backend && pip install -q -e .[dev] && python -m pytest -q}
@@ -82,7 +82,7 @@ services:
       api:
         condition: service_healthy
     environment:
-      POS_URL: http://api:8000
+      POS_URL: http://pos-api:8000
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       POOL_KEYS_DIR: /run/pos-keys
       # Each agent's effort, tools, caps and work folder come from its agents/<slug>/agent.json
@@ -158,7 +158,7 @@ services:
     environment:
       DOCKER_HOST: tcp://docker-proxy:2375
       SENTINEL_TOKEN: ${POS_SENTINEL_TOKEN:-}
-      SENTINEL_POS_URL: ${SENTINEL_POS_URL:-http://api:8000}
+      SENTINEL_POS_URL: ${SENTINEL_POS_URL:-http://pos-api:8000}
       SENTINEL_NEXUS_DSN: ${SENTINEL_NEXUS_DSN:-}
       SENTINEL_LITELLM_KEY: ${SENTINEL_LITELLM_KEY:-}
       SENTINEL_TEST_HOOK: ${SENTINEL_TEST_HOOK:-0}

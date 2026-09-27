@@ -1,9 +1,9 @@
 """Run one agent as a Codex worker.
 
-    POS_URL=http://api:8000 POS_AGENT_KEY=pos_… python -m pos_worker
+    POS_URL=http://pos-api:8000 POS_AGENT_KEY=pos_… python -m pos_worker
 
 Environment:
-    POS_URL          PersonalOS API (inside compose: http://api:8000)
+    POS_URL          PersonalOS API (inside compose: http://pos-api:8000)
     POS_MCP_URL      MCP endpoint the agent's Codex uses (default POS_URL + /mcp)
     POS_AGENT_KEY    the agent's API key (shown once when the agent is created); when empty,
                      read from POS_AGENT_KEY_FILE (default /run/pos-key/key), which the core

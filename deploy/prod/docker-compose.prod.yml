@@ -40,8 +40,10 @@ services:
     networks:
       default:
         aliases:
-          - pos-api  # web's nginx upstream (web/nginx.conf); "api" is ambiguous on proxy
+          - pos-api  # the name everyone uses for the api (nginx, POS_URL, sentinel); "api" is ambiguous on proxy
       proxy:
+        aliases:
+          - pos-api  # the sentinel also reaches it over proxy; Nexus's "api" lives there too
     security_opt:
       - no-new-privileges:true
     logging: &logging
@@ -111,12 +113,12 @@ services:
     logging: *logging
 
   # The sentinel joins the networks of what it watches. "api" is ambiguous there (Nexus has one too),
-  # so it reaches PersonalOS by container name. The loopback port serves /healthz and /fallback to the
+  # so it reaches PersonalOS by its unique alias pos-api (on default and proxy). The loopback port serves /healthz and /fallback to the
   # host's Nexus service monitor (the fallback path when PersonalOS itself is down).
   sentinel:
     extra_hosts: *lan_hosts
     environment:
-      SENTINEL_POS_URL: ${SENTINEL_POS_URL:-http://personalos-api-1:8000}
+      SENTINEL_POS_URL: ${SENTINEL_POS_URL:-http://pos-api:8000}
     ports:
       - "127.0.0.1:${SENTINEL_PORT:-8097}:8097"
     networks:
