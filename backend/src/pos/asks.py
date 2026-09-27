@@ -270,6 +270,8 @@ def _resume(conn: sqlite3.Connection, ctx: Ctx, a: sqlite3.Row, why: str) -> Non
     if src and src["status"] == "waiting":
         versioning.update(conn, ctx, tasks.ENTITY, a["source_task_id"],
                           {"status": "next", "progress_note": why[:500]}, action="resume")
+        # The answer is what it waited for: an old back-off (a failed run, T-167) must not hold it a day.
+        conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (a["source_task_id"],))
 
 
 def _tell(conn: sqlite3.Connection, ctx: Ctx, a: sqlite3.Row, body: str) -> None:

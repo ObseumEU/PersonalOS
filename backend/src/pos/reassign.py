@@ -186,7 +186,9 @@ def reassign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = "
         changes["description_generated"] = 1
     versioning.update(conn, ctx, tasks.ENTITY, task_id, changes, action="reassign")
 
-    # Tell the new assignee what the task is and what it is for.
+    # Tell the new assignee what the task is and what it is for. The DM itself wakes its waiting
+    # workers (pos.chat.send), which may leave their wait before the wake below: count them here.
+    waiting_before = wake.waiting(target["id"]) if target["kind"] in AGENT_KINDS else 0
     message_id = None
     if target["id"] != ctx.actor_id:
         desc = (changes.get("notes") or row["notes"] or "").strip()
@@ -205,7 +207,7 @@ def reassign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = "
         "cancelled_runs": cancelled, "message_id": message_id, "forced": bool(reasons),
         "waiting_for": [r["text"] for r in reasons]})
     conn.commit()
-    woke = wake.wake(target["id"]) if target["kind"] in AGENT_KINDS else 0
+    woke = max(wake.wake(target["id"]), waiting_before) if target["kind"] in AGENT_KINDS else 0
     if prev_id and prev_id != target["id"]:
         wake.wake(prev_id)  # its worker re-checks and sees the run is cancelled
     return {

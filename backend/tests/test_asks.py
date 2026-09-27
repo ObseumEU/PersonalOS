@@ -183,9 +183,11 @@ def test_a_blocking_chat_question_waits_shows_in_needs_me_and_the_reply_resumes(
     assert items[0]["message_link"] == f"/chat?c={out['channel_id']}&m={out['id']}"
     assert items[0]["title"].startswith("Čím se spíná světlo v garáži")
     assert not [i for i in needs_me.collect(c, me)["items"] if i["kind"] == "mention"]  # one item, not two
-    # the owner answers in the DM: the ticket is done and the task is back in the queue
+    # the owner answers in the DM: the ticket is done and the task is back in the queue, back-off or not
+    c.execute("UPDATE tasks SET retry_after = '2099-01-01T00:00:00+00:00' WHERE id = ?", (t["id"],))
     chat.send(c, me, out["channel_id"], "Shelly relé na kanálu 2.")
     assert tasks.get(c, me, t["id"])["status"] == "next"
+    assert c.execute("SELECT retry_after FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] is None
     assert not [i for i in needs_me.collect(c, me)["items"] if i["kind"] == "ask"]
     c.close()
 
