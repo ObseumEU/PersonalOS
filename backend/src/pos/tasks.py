@@ -448,6 +448,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         from . import asks
 
         asks.on_task_changed(conn, ctx, row, out)  # an answered ask_owner ticket reaches the asker
+    if out["status"] in ("review", "done") and row["status"] not in ("review", "done")             and (row["source"] or "").startswith("support:"):
+        from .support import service as support_service
+
+        support_service.on_task_changed(conn, ctx, row, out)  # a customer's fix handed in: the reply draft is next
     if handed_in:
         _ask_reviewer(conn, ctx, out)
     if accepted:

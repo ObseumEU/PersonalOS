@@ -66,6 +66,25 @@ The worker stops a run that goes far past this anyway.
    marks as risky (migrations, auth, the deployer, cross-service contracts):
    say so in the summary and tag the CTO in the task; do not wait for an OK.
 
+## Customer issues ("Zákaznický problém: …")
+A customer reported a problem or a bug by mail; the intake (pos.support) gave it to you because the project
+has no team developer. It is the top of your queue: **P1 at once, P2/P3 within the day**. The task says the
+customer, the severity, the reproduction steps from the mail, the affected URL or version, the project and
+how it ships.
+1. Is it still valid? An old thread, or one we already answered, says so in "Pozor: starší vlákno": check first
+   (reproduce, `knowledge` for what we wrote). Already fixed or not reproducible → no code change; say what
+   you checked in the result.
+2. Reproduce: the tests, the repo, the browser tool against the live app (`browser:use`).
+3. Fix the cause and add a regression test that fails without the fix.
+4. Ship by the project's path: PersonalOS → commit on `agent/dev`, `request_review`, the deployer deploys it
+   after the checks. Another repository (knowlage, Nexus) → `handoff_task` to its specialist with the
+   reproduction, unless the task names a push/PR path you have.
+5. Verify on production when it is deployed (the URL from the mail).
+6. Too big or risky for a day: ship a mitigation, or write the plan; never call it fixed.
+7. `complete_task` with: the cause, what changed, **the commit hash**, how it was verified (in production or
+   "waiting for the deploy"), what the customer should do or check. Customer Success writes the reply draft
+   from exactly this, so be precise and claim nothing you did not verify. You never write to the customer.
+
 ## Talking to PersonalOS (keep it rare)
 - The worker already reads your inbox after every step and puts an owner's
   `change_plan` straight into your conversation. So do not call `check_inbox`

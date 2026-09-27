@@ -238,8 +238,6 @@ def matches(rule: dict, event: dict) -> bool:
 def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
     """Store an event and turn it into a task by the first matching rule.
     The same (source, ref) twice is ignored."""
-    from .guard.external import scan, wrap_external
-
     source = event.get("source")
     if source not in SOURCES or source == "any":
         raise tasks.Invalid(f"source must be one of {SOURCES[:-1]}")
@@ -276,6 +274,30 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
         )
         return {"event_id": cur.lastrowid, "task_id": None, "skipped": skipped}
 
+    from . import support
+
+    if source == "gmail" and support.intake_enabled():
+        # Customer mail first goes through the customer-issue intake (pos.support, a job): a problem or a
+        # bug becomes one "Zákaznický problém" task for the project's developer; anything else comes back
+        # here (route_event) and the rules route it as before (invoices → CFO, leads → Growth, …).
+        cur = conn.execute(
+            """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
+               VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)""",
+            (source, event.get("kind"), ref, title[:300], json.dumps(event, ensure_ascii=False, default=str),
+             ctx.actor_id, now_iso(), support.PENDING))
+        return {"event_id": cur.lastrowid, "task_id": None, "queued": "customer_issue_intake"}
+    return route_event(conn, ctx, event)
+
+
+def route_event(conn: sqlite3.Connection, ctx: Ctx, event: dict, *, event_id: int | None = None,
+                note: str = "") -> dict:
+    """The event becomes a task by the first matching rule (inbox when none). event_id: the event is
+    already stored (deferred by the customer-issue intake) and is updated instead of inserted. note: a
+    line for the task's purpose (e.g. the intake's classification)."""
+    from . import monitor
+    from .guard.external import scan, wrap_external
+
+    source, title, ref = event["source"], (event.get("title") or "").strip(), event.get("ref")
     rule = next((r for r in list_rules(conn) if matches(r, event)), None)
     body = event.get("body") or ""
     wrapped = wrap_external(source, body, ref=event.get("url") or ref) if body else ""
@@ -288,6 +310,7 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
         purpose = monitor.purpose(event)
     notes = "\n\n".join(x for x in (
         purpose,
+        note,
         f"From {event['author']}" if event.get("author") else "",
         event.get("url") or "",
         wrapped,
@@ -299,19 +322,24 @@ def ingest(conn: sqlite3.Connection, ctx: Ctx, event: dict) -> dict:
     if rule:
         fields.update({"assignee": rule["assignee"], "priority": rule["priority"], "topic": rule["topic"]})
     task = tasks.create(conn, ctx, {k: v for k, v in fields.items() if v is not None})
-    cur = conn.execute(
-        """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (source, event.get("kind"), ref, title[:300], json.dumps(event, ensure_ascii=False, default=str),
-         rule["id"] if rule else None, task["id"], ctx.actor_id, now_iso(), ",".join(signals)),
-    )
+    if event_id is not None:
+        conn.execute("UPDATE events SET rule_id = ?, task_id = ?, signals = ? WHERE id = ?",
+                     (rule["id"] if rule else None, task["id"], ",".join(signals), event_id))
+        new_id = event_id
+    else:
+        new_id = conn.execute(
+            """INSERT INTO events (source, kind, ref, title, payload, rule_id, task_id, received_by, received_at, signals)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (source, event.get("kind"), ref, title[:300], json.dumps(event, ensure_ascii=False, default=str),
+             rule["id"] if rule else None, task["id"], ctx.actor_id, now_iso(), ",".join(signals)),
+        ).lastrowid
     if rule:
         conn.execute("UPDATE routing_rules SET hits = hits + 1 WHERE id = ?", (rule["id"],))
     audit.log(conn, ctx, "event", "task", task["id"], source=source, rule=rule["name"] if rule else None,
               suspicious=signals or None)
     if source in monitor.INCIDENT_SOURCES:
         monitor.after_route(conn, ctx, event, task)
-    return {"event_id": cur.lastrowid, "task_id": task["id"], "task_ref": task["ref"],
+    return {"event_id": new_id, "task_id": task["id"], "task_ref": task["ref"],
             "rule": rule["name"] if rule else None, "assignee": task["assignee_name"], "suspicious": signals}
 
 

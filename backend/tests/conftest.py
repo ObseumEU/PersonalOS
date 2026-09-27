@@ -26,3 +26,5 @@ def isolated_codex_home(tmp_path, monkeypatch):
     # mechanics stay testable; test_autonomy.py turns them on.
     monkeypatch.setenv("POS_AUTONOMY", "0")
     monkeypatch.delenv("POS_WORKER_KEYS_DIR", raising=False)
+    # New mail is routed at once here; test_support.py turns the customer-issue intake on.
+    monkeypatch.setenv("POS_SUPPORT_INTAKE", "0")

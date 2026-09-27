@@ -40,6 +40,9 @@
   ],
   "note": "Customer Support (the old Mail agent) is merged into this role (docs/REORG.md): the rule 'New e-mail → Customer Success triage' routes mail events here.",
   "grants": [
-    "tool:knowledge"
+    "tool:knowledge",
+    "tool:gmail_create_draft",
+    "tool:support_issue_open",
+    "tool:support_threads"
   ]
 }
