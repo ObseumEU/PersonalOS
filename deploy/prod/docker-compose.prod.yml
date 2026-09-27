@@ -89,13 +89,20 @@ services:
       - ${POS_DEV_WORK:-./data/dev-work}:/dev-work:ro
     logging: *logging
 
+  # The Software Engineer's clone (branch agent/dev) is /work/PersonalOS. The deployer's .git is
+  # mounted read-only (the git data only, not the checkout's .env or data/) as the remote `deployer`,
+  # so the agent fetches the current main without GitHub credentials (T-186).
   agent-pool:
     extra_hosts: *lan_hosts  # the Playwright browser runs in this container too
+    environment:
+      WORKER_DEPLOYER_REPO: /mnt/deployer-repo
+      WORKER_DEPLOYER_CLONES: /work/PersonalOS
     volumes: !override
       - ${CODEX_HOME_HOST:-./data/codex}:/codex
       - agent-pool-work:/work
       - ${POS_DEV_WORK:-./data/dev-work}/PersonalOS:/work/PersonalOS
       - ./data/worker-keys/pool:/run/pos-keys:ro
+      - ${POS_CHECKOUT:-.}/.git:/mnt/deployer-repo:ro
     logging: *logging
 
   # Computer use (tool:computer): one desktop session at a time on svr03 (memory is tight).

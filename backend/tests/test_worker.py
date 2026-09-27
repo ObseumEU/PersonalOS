@@ -225,6 +225,37 @@ def test_worker_entry_point_imports_and_reads_config(monkeypatch):
     assert main.claude_extra_mcp()["kb"]["type"] == "http"
 
 
+def test_deployer_remote_lets_the_workdir_fetch_main(tmp_path, monkeypatch):
+    import importlib
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git not installed")
+    main = importlib.import_module("pos_worker.__main__")
+    monkeypatch.setenv("HOME", str(tmp_path))  # the global safe.directory goes to a throwaway config
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / ".gitconfig"))
+
+    def git(*args, cwd):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    repo, work = tmp_path / "deployer-repo", tmp_path / "work"
+    for d in (repo, work):
+        d.mkdir()
+        git("init", "-q", "-b", "main", cwd=d)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "main head", cwd=repo)
+
+    monkeypatch.setenv("WORKER_DEPLOYER_REPO", str(repo))
+    main.deployer_remote(str(work))
+    main.deployer_remote(str(work))  # a restart keeps one remote and one safe.directory entry
+    git("fetch", "-q", "deployer", "main", cwd=work)
+    assert git("log", "-1", "--format=%s", "deployer/main", cwd=work) == "main head"
+    assert git("config", "--global", "--get-all", "safe.directory", cwd=work).split() == [str(repo)]
+
+    monkeypatch.setenv("WORKER_DEPLOYER_REPO", str(tmp_path / "missing"))
+    main.deployer_remote(str(work))  # no mount: nothing changes, no error
+
+
 def test_second_worker_of_the_same_agent_does_not_take_a_task_in_progress(setup, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
     monkeypatch.delenv("POS_CODEX_DISABLED")
@@ -694,3 +725,26 @@ def test_triage_check_calls_haiku_without_tools_and_reads_its_json(tmp_path, mon
     assert not triage.enabled_for(task)
     monkeypatch.setenv("WORKER_TRIAGE", "all")
     assert triage.enabled_for({"source": "manual"})
+
+
+def test_deployer_remote_reaches_the_pools_engineer_clone(tmp_path, monkeypatch):
+    """In the agent pool the worker's own folder is /work/<slug>; the engineer's clone is
+    /work/PersonalOS (WORKER_DEPLOYER_CLONES)."""
+    import subprocess
+
+    from pos_worker import __main__ as main
+
+    repo = tmp_path / "deployer"
+    clone = tmp_path / "PersonalOS"
+    for d in (repo, clone):
+        d.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=d, check=True)
+    own = tmp_path / "software-engineer"
+    own.mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("WORKER_DEPLOYER_REPO", str(repo))
+    monkeypatch.setenv("WORKER_DEPLOYER_CLONES", str(clone))
+    main.deployer_remote(str(own))
+    url = subprocess.run(["git", "remote", "get-url", "deployer"], cwd=clone, capture_output=True, text=True).stdout
+    assert url.strip() == "file://" + str(repo)
