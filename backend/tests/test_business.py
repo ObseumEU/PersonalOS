@@ -3,6 +3,7 @@ escalation dedup, the review SLA, idle agents, one cost ledger, business KPIs, t
 always gets published, knowledge for agents, business routing and the per-task step cap."""
 
 import json
+import sys
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -510,3 +511,22 @@ def test_rollout_switches_models_scales_budgets_and_closes_gmail(conn, owner, tm
     again = biz_rollout.plan(conn)
     assert not again["models"] and not again["budgets"] and not again["settings"] and not again["tasks"]
     assert out["ledger"] == {"fixed": 0}
+
+
+def test_rollout_script_applies_in_a_fresh_interpreter(conn, owner, tmp_path):
+    """`python -m pos.biz_rollout --apply` imports what it needs itself (it crashed with KeyError: 'actor')."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    cfo = _agent(conn, owner, tmp_path, "CFO", "cfo")
+    conn.execute("UPDATE actors SET engine = 'codex', model = 'gpt-5' WHERE id = ?", (cfo.actor_id,))
+    conn.commit()
+    db = conn.execute("PRAGMA database_list").fetchone()["file"]
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = {**os.environ, "PYTHONPATH": src + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    r = subprocess.run([sys.executable, "-m", "pos.biz_rollout", "--apply", "--db", db],
+                       capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stderr
+    a = conn.execute("SELECT engine, model FROM actors WHERE id = ?", (cfo.actor_id,)).fetchone()
+    assert (a["engine"], a["model"]) == ("claude", "claude-opus-5-5")

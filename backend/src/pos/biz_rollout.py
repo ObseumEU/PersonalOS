@@ -24,7 +24,8 @@ import argparse
 import json
 import sys
 
-from . import actors, agents_code, audit, business, tasks, versioning, weekly
+# `agents` registers the "actor" entity with versioning; run as a script nothing else imports it.
+from . import actors, agents, agents_code, audit, business, tasks, versioning, weekly  # noqa: F401
 from .core import Ctx, now_iso
 
 OPUS = "claude-opus-5-5"
