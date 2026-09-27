@@ -1,0 +1,20 @@
+{
+  "name": "Kniha Developer",
+  "purpose": "Vývojář projektu Kniha: kód v repu ObseumEU/Kniha, jen tento projekt.",
+  "role": "developer",
+  "team": "kniha",
+  "reports_to": "Kniha Lead",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-sonnet-5",
+  "effort": "medium"
+}
