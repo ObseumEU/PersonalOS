@@ -339,11 +339,52 @@ def archive_no_commit(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason:
             reassign.reassign(conn, ctx, task_id, to, note, force=True)
         except tasks.Invalid:  # refused (e.g. a private task the lead may not see): to the owner
             tasks.assign(conn, ctx, task_id, {"type": "human", "id": actors.owner_id(conn)})
+    # Reviews it holds go to the same member, and a result waiting for review reaches them now.
+    reviews = [r["id"] for r in conn.execute(
+        """SELECT id FROM tasks WHERE reviewer_id = ? AND archived_at IS NULL
+           AND status NOT IN ('done', 'someday')""", (agent_id,))]
+    for task_id in reviews:
+        tasks.hand_review(conn, ctx, task_id, to, f"{row['name']} je archivovaný")
     versioning.archive(conn, ctx, "actor", agent_id)
     conn.execute("UPDATE api_keys SET revoked_at = ? WHERE actor_id = ? AND revoked_at IS NULL", (now_iso(), agent_id))
+    ended = end_grants(conn, ctx, agent_id, f"{row['name']} je archivovaný")
     audit.log(conn, ctx, action, "actor", agent_id, reason=reason, runs=stopped or None,
-              handed_over=[tasks.display_id(i) for i in open_ids] or None)
-    return {"runs_stopped": stopped, "tasks_handed_over": open_ids, "to": to}
+              handed_over=[tasks.display_id(i) for i in open_ids] or None,
+              reviews_moved=[tasks.display_id(i) for i in reviews] or None, grants_ended=ended or None)
+    return {"runs_stopped": stopped, "tasks_handed_over": open_ids, "reviews_moved": reviews, "to": to,
+            "grants_ended": ended}
+
+
+def end_grants(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str) -> int:
+    """An archived member holds no access: every active grant ends (kept in the history)."""
+    from .access import service as access
+    from .access import store as access_store
+
+    if not access_store.ready(conn):
+        return 0
+    ids = [r["id"] for r in conn.execute("SELECT id FROM access_grants WHERE agent_id = ? AND ended_at IS NULL",
+                                         (agent_id,))]
+    if ids:
+        access._end(conn, "access_grants", ids, ctx.actor_id, "revoked", reason)
+        access.refresh_cache(conn, agent_id)
+    return len(ids)
+
+
+def successor_of(conn: sqlite3.Connection, actor_id: int) -> int:
+    """Who takes over an archived member's work: its successor from the 2026-09 reorganisation
+    (roles.LEGACY), else its lead if active, else the owner."""
+    from . import roles
+
+    row = actors.get(conn, actor_id)
+    new = roles.LEGACY.get(row["name"])
+    if new:
+        succ = actors.find_by_name(conn, new)
+        if succ is not None and succ["id"] != actor_id:
+            return succ["id"]
+    lead = row["reports_to"] if "reports_to" in row.keys() else None
+    if lead and not actors.get(conn, lead)["archived_at"]:
+        return lead
+    return actors.owner_id(conn)
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str = "") -> dict:

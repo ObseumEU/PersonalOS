@@ -173,6 +173,12 @@ def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
     client.__enter__()
     conn = connect(settings.db_path)
     old, t, done = _legacy(conn, tmp_path)
+    owner = Ctx(actors.owner_id(conn))
+    # a result the Dev agent reviews, waiting for its review
+    rev = tasks.create(conn, owner, {"title": "Mail rule", "notes": "x", "definition_of_done": "y",
+                                     "assignee": {"type": "agent", "id": old["Mail agent"]}, "status": "next"})
+    conn.execute("UPDATE tasks SET status = 'review', reviewer_id = ? WHERE id = ?", (old["Dev agent"], rev["id"]))
+    conn.commit()
     monkeypatch.setenv("POS_AGENTS_AS_CODE", "1")
 
     dry = reorg.run(conn, tmp_path, apply=False)
@@ -200,6 +206,24 @@ def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
     assert "Daily standup" in {s["name"] for s in schedules.list_schedules(
         conn, actor_id=actors.find_by_name(conn, "COO")["id"])}                  # the COO's own standup
     assert report["archive"]
+    # the review moved the proper way: versioned, and the Software Engineer was told and woken
+    assert tasks.get(conn, owner, rev["id"])["reviewer_id"] == se["id"]
+    assert conn.execute("""SELECT 1 FROM chat_inbox i JOIN chat_messages m ON m.id = i.message_id
+                           WHERE i.actor_id = ? AND m.body LIKE ?""", (se["id"], f"{rev['ref']}%review%")).fetchone()
+    assert conn.execute("SELECT 1 FROM history WHERE entity = 'task' AND entity_id = ? AND action = 'reviewer'",
+                        (rev["id"],)).fetchone()
+    # an archived agent keeps no access and gets no work
+    assert not conn.execute("SELECT 1 FROM access_grants WHERE agent_id = ? AND ended_at IS NULL",
+                            (old["Dev agent"],)).fetchone()
+    with pytest.raises(tasks.Invalid):
+        tasks.create(conn, owner, {"title": "More", "assignee": {"type": "agent", "id": old["Dev agent"]}})
+    gone = tasks.create(conn, owner, {"title": "Old one", "notes": "x", "definition_of_done": "y",
+                                      "assignee": {"type": "agent", "id": se["id"]}, "status": "done"})
+    conn.execute("UPDATE tasks SET assignee_id = ?, assignee_name = 'Dev agent' WHERE id = ?",
+                 (old["Dev agent"], gone["id"]))
+    with pytest.raises(tasks.Invalid):                                             # T-026: no reopening onto it
+        tasks.update(conn, owner, gone["id"], {"status": "next"})
+    assert tasks.update(conn, owner, gone["id"], {"status": "next", "assignee": {"type": "agent", "id": se["id"]}})
     again = reorg.run(conn, tmp_path, apply=True)                                  # idempotent
     assert not any(again[k] for k in ("create", "org", "routing", "schedules", "tasks", "archive"))
     conn.close()

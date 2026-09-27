@@ -212,13 +212,14 @@ def step_tasks(conn, ctx, apply: bool) -> list[str]:
             if status not in ("next", "working") and conn.execute(
                     "SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()["status"] != status:
                 versioning.update(conn, ctx, "task", tid, {"status": status}, action="reorg")
-        rev = conn.execute("SELECT COUNT(*) FROM tasks WHERE reviewer_id = ? AND archived_at IS NULL "
-                           "AND status NOT IN ('done', 'someday')", (o["id"],)).fetchone()[0]
+        rev = [r["id"] for r in conn.execute(
+            "SELECT id FROM tasks WHERE reviewer_id = ? AND archived_at IS NULL AND status NOT IN ('done', 'someday')",
+            (o["id"],))]
         if rev:
-            out.append(f"{rev} open task(s) reviewed by {old} -> {new}")
-            if apply:
-                conn.execute("UPDATE tasks SET reviewer_id = ? WHERE reviewer_id = ? AND archived_at IS NULL "
-                             "AND status NOT IN ('done', 'someday')", (n["id"], o["id"]))
+            out.append(f"{len(rev)} open task(s) reviewed by {old} -> {new}")
+            if apply:  # versioned, and a result waiting for review now reaches the new reviewer (DM + wake)
+                for tid in rev:
+                    tasks.hand_review(conn, ctx, tid, n["id"], f"převzato po {old} (reorganizace, docs/REORG.md)")
     return out
 
 

@@ -89,6 +89,8 @@ def resolve_assignee(conn: sqlite3.Connection, ctx: Ctx, value) -> dict:
             return {"assignee_type": "external", "assignee_id": None, "assignee_name": name}
         if value.get("id"):
             row = actors.get(conn, int(value["id"]))
+            if row["archived_at"]:
+                raise Invalid(f"{row['name']} is archived: give the task to its successor or its lead")
             return {"assignee_type": row["kind"], "assignee_id": row["id"], "assignee_name": row["name"]}
         value = value.get("name") or kind
     v = str(value).strip().lstrip("@")
@@ -370,6 +372,8 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         from . import business
 
         business.ensure_schema(conn)
+    if changes.get("status") in ("inbox", "next", "working") and "assignee_id" not in extra:
+        _refuse_archived(conn, row)  # reopening work for a member who is gone (T-026 went to the archived Dev agent)
     if "visibility" in changes and changes["visibility"] != row["visibility"]:
         from .integrations import check_visibility_change
 
@@ -437,6 +441,48 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
 
 
 # ------------------------------------------------------------------ review between colleagues (3.2)
+
+def _refuse_archived(conn: sqlite3.Connection, row) -> None:
+    if row["assignee_id"] and row["assignee_type"] in ("ai", "agent", "human"):
+        a = conn.execute("SELECT name, archived_at FROM actors WHERE id = ?", (row["assignee_id"],)).fetchone()
+        if a and a["archived_at"]:
+            raise Invalid(f"{display_id(row['id'])} is assigned to {a['name']}, who is archived: "
+                          "reassign it to its successor first")
+
+
+def hand_review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, reviewer_id: int, why: str) -> bool:
+    """Move a task's review to another member the proper way: a versioned change, and when the
+    result is waiting for review now, the new reviewer hears of it (DM + wake), unlike a raw
+    UPDATE (the 2026-09 reorganisation moved T-070/071/072/075/092/105 silently). True when
+    the reviewer was told."""
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        raise NotFound(display_id(task_id))
+    if row["reviewer_id"] != reviewer_id:
+        versioning.update(conn, ctx, ENTITY, task_id, {"reviewer_id": reviewer_id}, action="reviewer")
+    if row["status"] != "review":
+        return False
+    return notify_reviewer(conn, ctx, task_id, why)
+
+
+def notify_reviewer(conn: sqlite3.Connection, ctx: Ctx, task_id: int, why: str) -> bool:
+    """Tell the reviewer of a task waiting for review (again): a DM with the task, and wake it."""
+    from . import chat, wake
+
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None or row["status"] != "review" or row["archived_at"]:
+        return False
+    rid = reviewer_of(conn, row)
+    r = actors.get(conn, rid)
+    if r["archived_at"] or r["is_owner"] or rid == ctx.actor_id:
+        return False  # the owner sees Needs review on the board; nobody DMs themself
+    chat.send_dm(conn, ctx, rid, f"{display_id(task_id)} '{row['title']}' waits for your review ({why}). "
+                                 "Accept it or return it with what should change (review_task).",
+                 priority="fyi", attachments=[{"type": "task", "id": task_id}], system=True)
+    if r["kind"] != "human":
+        wake.wake(rid)
+    return True
+
 
 def resolve_project(conn: sqlite3.Connection, ctx: Ctx, value) -> int:
     """A project by id or slug that the caller can see."""
@@ -595,6 +641,7 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
         raise Forbidden(why)
     if accept:  # update() records the accept and retires a one-shot agent
         return update(conn, ctx, task_id, {"status": "done", **({"progress_note": comment} if comment else {})})
+    _refuse_archived(conn, row)
     versioning.update(conn, ctx, ENTITY, task_id, {
         "status": "next", "progress": 0, "completed_at": None,
         "returned_count": row["returned_count"] + 1,
