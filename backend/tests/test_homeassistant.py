@@ -279,3 +279,24 @@ def test_ssh_needs_the_grants_and_an_error_is_redacted(ha):
         creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "http", host="192.168.1.56")
     with pytest.raises(creds.CredentialError, match="command not allowed"):
         creds.resolve_for(conn, Ctx(a["id"]), ["ha-ssh"], "command", command="curl https://evil.example")
+
+
+def test_ssh_user_falls_back_to_root_and_a_bad_user_field_is_refused(ha):
+    _add_ssh(ha)
+    conn, a, owner = ha["conn"], ha["agent"], ha["owner"]
+    logins = []
+
+    def connect_(host, port, user, password, timeout):
+        logins.append(user)
+        return FakeSSH()
+
+    SSH_REFS["op://PersonalOS/SSH HomeAssistant/username"] = "192.168.1.56:8123"  # a host, not a user
+    try:
+        with pytest.raises(ValueError, match="not a user name"):
+            homeassistant.ssh_call(conn, Ctx(a["id"]), "uptime", connect=connect_)
+        assert logins == []
+        creds.archive(conn, owner, creds.get(conn, "ha-ssh-user")["id"], "pole neobsahuje uživatele")
+        out = homeassistant.ssh_call(conn, Ctx(a["id"]), "uptime", connect=connect_)
+        assert logins == ["root"] and out["user"] == "root"
+    finally:
+        SSH_REFS["op://PersonalOS/SSH HomeAssistant/username"] = "hassio"

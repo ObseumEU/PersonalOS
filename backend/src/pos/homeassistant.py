@@ -16,6 +16,8 @@ note, a summary afterwards) is in its instructions.
 """
 
 import json
+import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -23,7 +25,7 @@ from .core import Ctx
 
 CREDENTIAL = "home-assistant"
 SSH_CREDENTIAL = "ha-ssh"            # the SSH password (1Password "SSH HomeAssistant" / password)
-SSH_USER_CREDENTIAL = "ha-ssh-user"  # the SSH user name (the same item / username)
+SSH_USER_CREDENTIAL = "ha-ssh-user"  # the SSH user name, optional (else POS_HA_SSH_USER, default root)
 SSH_COMMAND = "ha_ssh"               # the credentials' only allowed command: this tool, nothing on the worker
 MAX_MESSAGES = 20
 MAX_RESULT = 60_000
@@ -89,6 +91,18 @@ def ws_call(conn: sqlite3.Connection, ctx: Ctx, messages: list[dict], task_id: i
             "count": len(results)}
 
 
+USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
+
+
+def _registered(conn: sqlite3.Connection, name: str) -> bool:
+    from .credentials import service as creds
+
+    try:
+        return not creds.get(conn, name)["archived_at"]
+    except Exception:  # noqa: BLE001 - NotFound: not registered
+        return False
+
+
 def _ssh_target(c: dict) -> str:
     """The host the ha-ssh credential pins: its first plain host (an IP or a name, no port, no wildcard)."""
     for h in c["allowed_hosts"]:
@@ -98,8 +112,6 @@ def _ssh_target(c: dict) -> str:
 
 
 def known_hosts_path() -> Path:
-    import os
-
     return Path(os.environ.get("POS_DATA_DIR") or "data") / "ha_ssh_known_hosts"
 
 
@@ -137,10 +149,16 @@ def ssh_call(conn: sqlite3.Connection, ctx: Ctx, command: str, timeout: int = 12
     timeout = max(5, min(int(timeout or 120), SSH_MAX_TIMEOUT))
     c = creds.get(conn, SSH_CREDENTIAL)
     host = _ssh_target(c)
-    values = creds.resolve_for(conn, ctx, [SSH_CREDENTIAL, SSH_USER_CREDENTIAL], "command", host=host,
-                               task_id=task_id, command=f"{SSH_COMMAND} {host}")
+    names = [SSH_CREDENTIAL] + ([SSH_USER_CREDENTIAL] if _registered(conn, SSH_USER_CREDENTIAL) else [])
+    values = creds.resolve_for(conn, ctx, names, "command", host=host, task_id=task_id,
+                               command=f"{SSH_COMMAND} {host}")
     password = values[SSH_CREDENTIAL]["value"]
-    user = values[SSH_USER_CREDENTIAL]["value"].strip()
+    user = (values[SSH_USER_CREDENTIAL]["value"].strip() if SSH_USER_CREDENTIAL in values
+            else os.environ.get("POS_HA_SSH_USER", "root"))
+    if not USER_RE.match(user):
+        values.clear()
+        raise ValueError(f"{SSH_USER_CREDENTIAL}: the 1Password field is not a user name (like root); the owner "
+                         "fixes the item or archives the credential (then POS_HA_SSH_USER, default root)")
     red = Redactor({SSH_CREDENTIAL: password})
     if connect is None:
         connect = _paramiko_connect

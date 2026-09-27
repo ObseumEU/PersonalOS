@@ -40,8 +40,9 @@ web page **Přístupy** (`/credentials`) and a panel on each agent's page.
 
 A dedicated tool can also use credentials inside the API. `ha_ssh(command)`
 (pos.homeassistant) runs one shell command on the Home Assistant host over SSH
-with `ha-ssh` (the password) and `ha-ssh-user` (the user name), both from the
-1Password item "SSH HomeAssistant". Both credentials allow only the pseudo
+with `ha-ssh` (the password, 1Password item "SSH HomeAssistant") and the
+optional `ha-ssh-user` (the user name; without it `POS_HA_SSH_USER`, default
+`root`, the Terminal & SSH add-on's user). The credentials allow only the pseudo
 command `ha_ssh` and the hosts 192.168.1.56 and homeassistant.local, so they
 work nowhere else: not over HTTP and not in `run_with_credentials`. The tool
 itself needs the owner's grant `tool:ha_ssh`. The host key is pinned on first
