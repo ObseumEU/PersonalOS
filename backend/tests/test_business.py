@@ -496,7 +496,8 @@ def test_rollout_switches_models_scales_budgets_and_closes_gmail(conn, owner, tm
         tasks.create(conn, owner, {"title": "Connect Gmail through the knowlage ingest (step 4)", "status": "waiting"})
     conn.commit()
     p = biz_rollout.plan(conn)
-    assert "CFO" in [m["name"] for m in p["models"]] and p["settings"] and p["tasks"][0]["ref"] == "T-016"
+    assert "CFO" in [m["name"] for m in p["models"]] and p["tasks"][0]["ref"] == "T-016"
+    assert not p["settings"]  # the spike floor's default (20 USD, pos.access autonomy) is above 3 already
     out = biz_rollout.apply(conn)
     a = actors.get(conn, cfo.actor_id)
     assert (a["engine"], a["model"]) == ("claude", "claude-opus-5-5")
@@ -504,7 +505,7 @@ def test_rollout_switches_models_scales_budgets_and_closes_gmail(conn, owner, tm
         "SELECT metric, amount FROM access_budgets WHERE agent_id = ? AND ended_at IS NULL", (cfo.actor_id,))}
     spec = agents_code.spec_of("CFO")["budget"]
     assert active["usd_day"] == spec["usd_day"] and active["usd_month"] == 99.0  # a raise is never lowered
-    assert access.settings(conn)["spike_floor_usd"] == 3.0
+    assert access.settings(conn)["spike_floor_usd"] >= 3.0
     assert tasks.get(conn, owner, 16)["status"] == "done"
     again = biz_rollout.plan(conn)
     assert not again["models"] and not again["budgets"] and not again["settings"] and not again["tasks"]

@@ -292,6 +292,8 @@ def worker_profile(name: str, base: Path | None = None) -> dict:
         out["effort"] = s["effort"]
     if isinstance(out.get("max_steps"), (int, float)) and 0 < out["max_steps"] < MIN_STEPS:
         out["max_steps"] = MIN_STEPS
+        if isinstance(out.get("max_steps_owner"), (int, float)):  # the owner's own tasks keep their higher cap
+            out["max_steps_owner"] = max(out["max_steps_owner"], 2 * MIN_STEPS)
     if isinstance(out.get("max_usd_run"), (int, float)):
         out["max_usd_run"] = round(out["max_usd_run"] * RUN_USD_SCALE, 2)
     return out
