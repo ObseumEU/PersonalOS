@@ -495,7 +495,7 @@ def local_files(conn: sqlite3.Connection, ctx: Ctx, project_id: int) -> list[dic
 
     ensure_schema(conn)
     rows = conn.execute(
-        f"""SELECT f.*, pf.added_at AS linked_at FROM project_files pf JOIN files f ON f.id = pf.file_id
+        """SELECT f.*, pf.added_at AS linked_at FROM project_files pf JOIN files f ON f.id = pf.file_id
             WHERE pf.project_id = ? AND f.archived_at IS NULL ORDER BY pf.added_at DESC""", (project_id,)).fetchall()
     out = []
     for r in rows:
