@@ -38,3 +38,35 @@ docker compose logs -f deployer
 
 The deployer needs the server's checkout mounted at `/repo` with push access
 to `origin`, and the Docker socket to rebuild the stack.
+
+## Promote mode: merge conflicts
+
+In promote mode (the server: `--promote-from dev/agent/dev`) a branch that does
+not merge into main is never retried as the same attempt:
+
+1. the deployer rebases the branch onto the current main **once**, in a
+   scratch worktree (the agent's branch is untouched); a clean rebase goes on
+   through the tests, the build and the health check like any merge. No
+   automatic rebase for commits that touch protected paths (it would drop the
+   owner's signatures);
+2. otherwise the branch's owner (the author agent, else the Software
+   Engineer) gets **one** task per branch, titled "Rebase <branch> onto main",
+   with the conflicting files, the hunks and the instruction to rebase; a
+   later refusal of the same branch is a comment on it;
+3. the tip is **parked**: when main moves, later ticks only check it silently
+   (`git merge-tree`, no report, no task) and try it again only once it merges
+   cleanly, or when a new commit arrives on the branch.
+
+Every refusal records a one-line reason (`deploys.reason`). The pipeline's
+health (attempts, the reject rate, refusals by stage, top reasons, repeats of
+the same commit at the same stage) is `GET /api/deploys/health?days=7` and the
+`deploy_health` MCP tool (`ops:observe`, the SRE and the Monitor).
+
+## Tests
+
+The tests run in parallel (pytest-xdist): `cd backend && python -m pytest -q -n auto`
+(the worker package is on the tests' path, no PYTHONPATH needed). The same
+command is the deployer's `DEFAULT_TEST` and CI's (`.github/workflows/tests.yml`,
+with `ruff check .` and the web typecheck and build). Tests read policy numbers
+(budgets, caps, step caps, spike thresholds) from the code's constants, never
+literals, so changing a policy does not break a deploy.

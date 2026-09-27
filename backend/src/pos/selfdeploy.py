@@ -34,13 +34,23 @@ DEPLOY_REMOTE (origin), DEPLOY_GIT_NAME / DEPLOY_GIT_EMAIL (who the deployer's o
 revert commits are by; default "PersonalOS Deployer" when the checkout has no identity).
 A revert that fails too is never reverted again (one attempt per range). DEPLOY_REQUIRE_REVIEW=1 (promote mode): the QA Reviewer
 approves each new tip first (pos.deploy_review); until then the tick waits.
+
+A merge conflict (promote mode) is never retried as such: the deployer first rebases the branch onto
+the current main once, in a scratch worktree (never for commits that touch protected paths, whose
+owner signatures a rebase would drop); a clean rebase goes on through the tests like any merge.
+Otherwise the branch's owner gets one task (per branch) with the conflicting files and hunks and
+the instruction to rebase, and the tip is parked: later ticks only re-check it silently
+(git merge-tree) when main moves, and try it again only once it merges cleanly or a new commit
+arrives. Every rejection carries a one-line reason (GET /api/deploys/health sums them up).
 """
 
 import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,8 +59,10 @@ import httpx
 
 from . import tools
 from .guard import gitcheck
+from .guard.protected import protected_among
 
-DEFAULT_TEST = "cd backend && python -m pytest -q"
+# Parallel (pytest-xdist); the worker package is on the tests' path (backend/pyproject.toml).
+DEFAULT_TEST = "cd backend && python -m pytest -q -n auto -p no:cacheprovider"
 DEFAULT_UP = "docker compose up -d --build api web"
 
 
@@ -65,6 +77,7 @@ class Result:
     reverted_sha: str | None = None
     commits: list[str] = field(default_factory=list)
     branch: str = ""  # what was deployed: main (follow mode) or the promoted branch
+    reason: str = ""  # one line: why it did not ship (the stage says where)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -230,7 +243,7 @@ class Reporter:
         r = self.http.post("/api/deploys", headers=self.auth, json={
             "old_sha": res.old, "new_sha": res.new, "status": res.status, "stage": res.stage,
             "log": res.log[-8000:], "author": res.author, "reverted_sha": res.reverted_sha,
-            "commits": len(res.commits), "branch": res.branch,
+            "commits": len(res.commits), "branch": res.branch, "reason": res.reason or reason_of(res),
         })
         r.raise_for_status()
         return r.json()
@@ -253,32 +266,99 @@ def tick(repo: Path, reporter: Reporter, *, remote: str, branch: str, test_cmd: 
     return res
 
 
-# A rejection at these stages may be fixed on main (a conflict resolved there) or in the
-# deployer itself (its missing git identity): the same tip is tried again once main moves.
-RETRY_ON_NEW_BASE = ("merge",)
+def reason_of(res: Result) -> str:
+    """A one-line reason for a rejection, from its stage and log (the deploy-health summary groups them)."""
+    if res.status in ("ok", "nothing"):
+        return ""
+    lines = [ln.strip() for ln in (res.log or "").splitlines() if ln.strip()]
+    if res.stage == "tests":
+        failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))]
+        pick = failed[0] if failed else (lines[-1] if lines else "")
+        extra = f" (+{len(failed) - 1} more)" if len(failed) > 1 else ""
+        return f"tests: {pick[:200]}{extra}"
+    return f"{res.stage}: {(lines[0] if lines else res.status)[:200]}"
 
 
-def _remember(state: Path, tip: str, base: str, stage: str) -> None:
-    state.write_text(json.dumps({"tip": tip, "base": base, "stage": stage}), encoding="utf-8")
-
-
-def _should_try(state: Path, tip: str, base: str) -> bool:
-    """Not the same attempt again: a tip is tried once, unless it failed at a stage main can fix
-    (RETRY_ON_NEW_BASE) and main has moved since. The old state file held a bare sha and did not
-    say why the tip failed (deploys 7 and 8: the missing git identity), so such a tip gets one
-    more try. Deleting .pos-promote-state retries the tip by hand."""
+def _load(state: Path) -> dict | None:
+    """The last attempt: None without one, {} for the old format (a bare sha)."""
     if not state.exists():
-        return True
-    raw = state.read_text(encoding="utf-8").strip()
+        return None
     try:
-        last = json.loads(raw)
+        last = json.loads(state.read_text(encoding="utf-8").strip())
     except ValueError:
-        last = None
-    if not isinstance(last, dict):
-        return True  # the old format (a bare sha): one more try with the fixed deployer
+        return {}
+    return last if isinstance(last, dict) else {}
+
+
+def _remember(state: Path, tip: str, base: str, stage: str, conflict: list[str] | None = None) -> None:
+    data: dict = {"tip": tip, "base": base, "stage": stage}
+    if conflict is not None:
+        data["conflict"] = sorted(conflict)
+    state.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _should_try(state: Path, tip: str, base: str, clean=None) -> bool:
+    """Not the same attempt again: a tip is tried once. A tip parked on a merge conflict is tried
+    again only once it merges cleanly into the new main (`clean(tip, base)`, a silent
+    `git merge-tree` check: no report, no task); the same (tip, base) pair never twice. The old
+    state file held a bare sha and did not say why the tip failed (deploys 7 and 8: the missing
+    git identity), so such a tip gets one more try. Deleting .pos-promote-state retries by hand."""
+    last = _load(state)
+    if not last:
+        return True  # no attempt yet, or the old format: one more try with the fixed deployer
     if last.get("tip") != tip:
         return True
-    return last.get("stage") in RETRY_ON_NEW_BASE and last.get("base") != base
+    if last.get("stage") != "merge" or last.get("base") == base:
+        return False
+    return bool(clean and clean(tip, base))  # still conflicting (or cannot tell): stays parked
+
+
+def merges_cleanly(wt: Path, tip: str, base: str) -> bool:
+    """Would `tip` merge into `base` without conflicts? Checked without touching the worktree."""
+    p = subprocess.run(["git", "merge-tree", "--write-tree", "--quiet", base, tip], cwd=wt,
+                       capture_output=True, text=True)
+    return p.returncode == 0
+
+
+def _conflict_detail(repo: Path) -> tuple[list[str], str]:
+    """The conflicting files and their hunks (with the conflict markers) of a stopped merge or rebase."""
+    files = [f for f in git(repo, "diff", "--name-only", "--diff-filter=U").splitlines() if f]
+    hunks = subprocess.run(["git", "diff", "--diff-filter=U"], cwd=repo, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace").stdout
+    return files, hunks
+
+
+def auto_rebase(wt: Path, base: str, tip: str) -> tuple[str | None, list[str], str]:
+    """Rebase `tip` onto `base` once, in a scratch worktree (the deploy worktree and the agent's
+    branch stay untouched). Returns (the rebased tip, [], "") or (None, conflicting files, hunks)."""
+    scratch = Path(tempfile.mkdtemp(prefix="pos-rebase-"))
+    subprocess.run(["git", "worktree", "prune"], cwd=wt, capture_output=True)
+    try:
+        git(wt, "worktree", "add", "--detach", "--force", str(scratch), tip)
+        r = subprocess.run(["git", *identity(wt), "rebase", base], cwd=scratch, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            files, hunks = _conflict_detail(scratch)
+            subprocess.run(["git", "rebase", "--abort"], cwd=scratch, capture_output=True)
+            return None, files, hunks or (r.stdout + r.stderr)
+        return git(scratch, "rev-parse", "HEAD"), [], ""
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(scratch)], cwd=wt, capture_output=True)
+        shutil.rmtree(scratch, ignore_errors=True)
+        subprocess.run(["git", "worktree", "prune"], cwd=wt, capture_output=True)
+
+
+def _touches_protected(wt: Path, commits: list[str]) -> bool:
+    return any(protected_among(gitcheck.changed_paths(wt, c)) for c in commits)
+
+
+def conflict_log(source: str, target: str, files: list[str], hunks: str, why: str) -> str:
+    listing = "\n".join(f"  - {f}" for f in files) or "  (git named no file)"
+    return (f"CONFLICT: {source} does not merge into {target}. Conflicting files:\n{listing}\n\n"
+            f"Not promoted: {why}. The deployer will not try this commit again.\n"
+            f"What to do: rebase your branch onto the current {target} (git fetch, then git rebase "
+            f"<remote>/{target}), resolve the conflicts in the files above, run the tests, and commit. "
+            f"The new commit is picked up on the next tick.\n\nHunks:\n{hunks[-3500:]}")
 
 
 def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, target: str, test_cmd: str,
@@ -295,14 +375,18 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     tip = git(wt, "rev-parse", source)
     if subprocess.run(["git", "merge-base", "--is-ancestor", tip, base], cwd=wt).returncode == 0:
         return Result(base, tip, "nothing")  # everything on the branch is already in main
-    if not _should_try(state, tip, base):
-        return Result(base, tip, "nothing")  # already tried this commit; wait for a new one
+    if not _should_try(state, tip, base, lambda t, b: merges_cleanly(wt, t, b)):
+        last = _load(state) or {}
+        parked = last.get("stage") == "merge"
+        if parked and last.get("base") != base:  # checked against this main too: not again
+            _remember(state, tip, base, "merge", last.get("conflict") or [])
+        return Result(base, tip, "nothing", stage="parked" if parked else "")  # wait for a new commit
     commits = [c for c in git(wt, "rev-list", f"{base}..{tip}").splitlines() if c]
     res = Result(base, tip, "ok", author=author_of(wt, base, tip), commits=commits, branch=source)
 
-    def fail(stage: str, log: str) -> Result:
+    def fail(stage: str, log: str, conflict: list[str] | None = None) -> Result:
         res.status, res.stage, res.log = "rejected", stage, log
-        _remember(state, tip, base, stage)
+        _remember(state, tip, base, stage, conflict)
         reporter.report(res)
         return res
 
@@ -324,13 +408,37 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
             return Result(base, tip, "nothing", stage="review", log=f"waiting for review {verdict.get('task') or ''}")
         if verdict.get("status") == "returned":
             return fail("review", f"returned by the QA review: {verdict.get('note') or ''}")
-    merge = subprocess.run(
-        ["git", *identity(wt), "merge", "--no-ff", "--no-edit", "-m",
-         f"Merge {source}: {subject}\n\nPromoted by the PersonalOS deployer after checks.\n\nAgent: {res.author or 'unknown'}",
-         tip], cwd=wt, capture_output=True, text=True)
-    if merge.returncode != 0:
+    def merge(rev: str, note: str = "") -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *identity(wt), "merge", "--no-ff", "--no-edit", "-m",
+             f"Merge {source}: {subject}\n\nPromoted by the PersonalOS deployer after checks{note}.\n\n"
+             f"Agent: {res.author or 'unknown'}", rev], cwd=wt, capture_output=True, text=True)
+
+    first = merge(tip)
+    if first.returncode != 0:
+        files, hunks = _conflict_detail(wt)
         subprocess.run(["git", "merge", "--abort"], cwd=wt, capture_output=True)
-        return fail("merge", (merge.stdout + merge.stderr)[-4000:] + f"\n\nMerge {target} into {source} and resolve the conflicts.")
+        git(wt, "reset", "--hard", base)
+        why = ""
+        if _touches_protected(wt, commits):
+            why = "no automatic rebase: the branch changes protected paths (a rebase drops the owner's signatures)"
+        else:
+            rebased, r_files, r_hunks = auto_rebase(wt, base, tip)
+            if rebased is None:
+                files, hunks = r_files or files, r_hunks or hunks
+                why = f"an automatic rebase onto {target} {base[:10]} conflicted too"
+            elif merge(rebased, f" (rebased onto {target} automatically)").returncode != 0:
+                subprocess.run(["git", "merge", "--abort"], cwd=wt, capture_output=True)
+                git(wt, "reset", "--hard", base)
+                why = "the automatic rebase did not merge either"
+            else:
+                res.log = (f"{source} conflicted with {target}; promoted a clean automatic rebase ({rebased[:10]}). "
+                           f"Rebase {source} onto {target} before the next commit.")
+        if why:
+            more = " ..." if len(files) > 5 else ""
+            res.reason = f"merge conflict in {', '.join(files[:5]) or '?'}{more}"
+            return fail("merge", conflict_log(source, target, files, hunks or (first.stdout + first.stderr), why),
+                        conflict=files)
     if test_cmd:
         ok, log = sh(test_cmd, wt)
         if not ok:

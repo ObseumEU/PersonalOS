@@ -468,6 +468,16 @@ def register_mcp(mcp, session) -> None:
             return _metrics_snapshot(conn, c, host)
 
 
+    @mcp.tool(description="The deploy pipeline's health (pos.selfdeploy) over the last days (default 7, at most "
+                          "90): attempts, the reject rate, rejections by stage and top reasons, and repeats (the same "
+                          "commit refused at the same stage more than once).")
+    def deploy_health(ctx: Context, days: int = 7) -> dict:
+        from .api_deploys import health
+
+        with session(ctx, "deploy_health", days=days) as (conn, c):
+            return health(conn, max(1, min(days, 90)))
+
+
 _loki_query = loki_query
 _metrics_snapshot = metrics_snapshot
 

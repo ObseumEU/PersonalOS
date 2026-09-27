@@ -713,6 +713,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE tasks ADD COLUMN retry_after TEXT;
     """,
+    # 29: why a deploy did not ship, in one line (pos.selfdeploy.reason_of; GET /api/deploys/health).
+    """
+    ALTER TABLE deploys ADD COLUMN reason TEXT NOT NULL DEFAULT '';
+    """,
 ]
 
 

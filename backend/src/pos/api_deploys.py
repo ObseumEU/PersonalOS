@@ -6,6 +6,8 @@ member who made the change, with the log.
 """
 
 import sqlite3
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -38,6 +40,7 @@ class DeployIn(BaseModel):
     reverted_sha: str | None = None
     commits: int = 0
     branch: str = ""  # the branch promoted (agent/dev), or main in follow mode; "" from an older deployer
+    reason: str = ""  # one line: why it did not ship (pos.selfdeploy.reason_of); "" from an older deployer
 
 
 @router.get("/last")
@@ -107,9 +110,15 @@ def _refusal_task(conn: sqlite3.Connection, ctx: Ctx, body: DeployIn) -> str:
         if who and not actors.get(conn, who)["is_owner"]:
             wake.wake(who)
         return tasks.display_id(open_["id"])
+    conflict = body.stage == "merge"
     t = tasks.create(conn, ctx, {
-        "title": f"Your change {rng} {what} ({body.stage})",
-        "notes": f"Purpose: find out why your change did not ship and fix it, so main deploys again.\n"
+        "title": (f"Rebase {branch} onto main: {body.reason or 'merge conflict'}"[:200] if conflict
+                  else f"Your change {rng} {what} ({body.stage})"),
+        "notes": (f"Purpose: {branch} conflicts with main; rebase it onto the current main and resolve the "
+                  f"conflicts, so it deploys again. The deployer tried one automatic rebase; it has parked "
+                  f"this commit and waits for a new one (it does not retry the same conflict).\n"
+                  if conflict else
+                  "Purpose: find out why your change did not ship and fix it, so main deploys again.\n") +
                  f"Source: the self-deploy pipeline ({body.status} at stage {body.stage}).\n"
                  f"Branch: {branch}\n\n"
                  f"The deployer checked {body.commits} commit(s). Stage: {body.stage}. Author: {body.author or '?'}.\n"
@@ -135,10 +144,12 @@ def record(body: DeployIn, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ctx
     if body.status == "error":  # the platform may be down: the SRE restores it (one open ticket, not one per tick)
         task_ref = _restore_ticket(conn, ctx, body, task_ref) or task_ref
     cur = conn.execute(
-        """INSERT INTO deploys (old_sha, new_sha, status, stage, log, author, reverted_sha, commits, task_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO deploys (old_sha, new_sha, status, stage, log, author, reverted_sha, commits, task_id,
+                                created_at, reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (body.old_sha, body.new_sha, body.status, body.stage, body.log[-20000:], body.author, body.reverted_sha,
-         body.commits, tasks.parse_id(task_ref) if task_ref else None, now_iso()),
+         body.commits, tasks.parse_id(task_ref) if task_ref else None, now_iso(),
+         body.reason[:300] if body.status != "ok" else ""),
     )
     audit.log(conn, ctx, f"deploy:{body.status}", "deploy", cur.lastrowid, stage=body.stage, author=body.author,
               range=f"{body.old_sha[:10]}..{body.new_sha[:10]}")
@@ -193,6 +204,35 @@ def review(body: ReviewAsk, conn=Depends(get_db), ctx: Ctx = Depends(deployer_ct
                                  commits=body.commits)
     except tasks.Invalid as e:
         raise HTTPException(422, str(e)) from e
+
+
+def health(conn: sqlite3.Connection, days: int = 7) -> dict:
+    """The deploy pipeline's health over the last `days`: how many attempts did not ship (the
+    reject rate), where and why, and the repeats (the same commit refused at the same stage more
+    than once: the retry loop the deployer must not have). For the SRE and Grafana."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = conn.execute("SELECT new_sha, status, stage, reason, created_at FROM deploys WHERE created_at >= ? "
+                        "ORDER BY id", (since,)).fetchall()
+    failed = [r for r in rows if r["status"] != "ok"]
+    seen = Counter((r["new_sha"], r["stage"]) for r in failed)
+    repeats = [{"sha": sha[:10], "stage": stage, "times": n} for (sha, stage), n in seen.items() if n > 1]
+    last_ok = next((r["created_at"] for r in reversed(rows) if r["status"] == "ok"), None)
+    return {
+        "days": days, "attempts": len(rows), "ok": len(rows) - len(failed), "not_shipped": len(failed),
+        "reject_rate": round(len(failed) / len(rows), 3) if rows else 0.0,
+        "by_status": dict(Counter(r["status"] for r in rows)),
+        "by_stage": dict(Counter(r["stage"] or "?" for r in failed)),
+        "top_reasons": [{"reason": k, "count": n} for k, n in
+                        Counter(r["reason"] or r["stage"] or "?" for r in failed).most_common(5)],
+        "repeats": sorted(repeats, key=lambda x: -x["times"]),
+        "repeat_attempts": sum(x["times"] - 1 for x in repeats),
+        "last_ok_at": last_ok,
+    }
+
+
+@router.get("/health", dependencies=[Depends(require_user)])
+def deploy_health(days: int = 7, conn=Depends(get_db)):
+    return health(conn, max(1, min(days, 90)))
 
 
 @router.get("", dependencies=[Depends(require_user)])

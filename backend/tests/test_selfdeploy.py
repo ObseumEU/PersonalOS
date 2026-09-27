@@ -282,14 +282,16 @@ def test_promote_merges_without_a_git_identity_and_retries_an_old_rejection(tmp_
     assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"
 
 
-def test_a_merge_rejection_is_retried_once_main_moves(tmp_path):
+def test_a_merge_rejection_is_retried_only_once_it_merges_cleanly(tmp_path):
     import json
 
     state = tmp_path / ".pos-promote-state"
     assert selfdeploy._should_try(state, "t1", "b1")
-    selfdeploy._remember(state, "t1", "b1", "merge")
+    selfdeploy._remember(state, "t1", "b1", "merge", ["a.py"])
     assert not selfdeploy._should_try(state, "t1", "b1")      # same tip, same main: not again
-    assert selfdeploy._should_try(state, "t1", "b2")          # main moved: a conflict may be gone
+    assert not selfdeploy._should_try(state, "t1", "b2")      # main moved, nobody checked: parked
+    assert not selfdeploy._should_try(state, "t1", "b2", lambda t, b: False)  # still conflicting: parked
+    assert selfdeploy._should_try(state, "t1", "b2", lambda t, b: True)       # main resolved it: try again
     selfdeploy._remember(state, "t1", "b1", "tests")
     assert not selfdeploy._should_try(state, "t1", "b2")      # failed tests need a new commit
     assert selfdeploy._should_try(state, "t2", "b1")
@@ -331,3 +333,109 @@ def test_refusals_of_one_branch_are_one_task_for_the_engineer_never_the_owner(re
     assert tasks.get(conn, owner, tasks.parse_id(other["task"]))["assignee_id"] == se
     assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'deployer' AND assignee_id = ?",
                             (owner.actor_id,)).fetchone()
+
+
+def _promote_setup(tmp_path):
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "work"  # the agent's clone, on its branch
+    git(tmp_path, "clone", str(origin), str(work))
+    (work / "check.py").write_text(CHECK)
+    commit(work, {"app.txt": "good v1\n"}, "initial")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-q", "-b", "agent/dev")
+    other = tmp_path / "other"  # someone else merging to main meanwhile
+    git(tmp_path, "clone", str(origin), str(other))
+    deploy = tmp_path / "deploy"
+    git(work, "worktree", "add", "--detach", str(deploy), "main")
+    kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
+              up_cmd="", health_url=None)
+    return origin, work, other, deploy, kw
+
+
+def _on_main(other, files, msg):
+    git(other, "pull", "-q", "--ff-only", "origin", "main")
+    sha = commit(other, files, msg)
+    git(other, "push", "-q", "origin", "HEAD:main")
+    return sha
+
+
+def test_a_conflict_is_one_task_and_is_never_retried_until_a_new_commit(tmp_path, reporter):
+    """10 of 20 deploys were refused on conflicts, the same one 8 times: main kept moving and the
+    deployer retried the same tip each time. Now: one automatic rebase, one task, then parked."""
+    rep, client, conn = reporter
+    origin, work, other, deploy, kw = _promote_setup(tmp_path)
+    commit(work, {"app.txt": "good from the branch\n"}, "Branch change\n\nAgent: Software Engineer")
+    _on_main(other, {"app.txt": "good from main\n"}, "Main change")
+
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "rejected" and res.stage == "merge"
+    assert "app.txt" in res.reason and "rebase" in res.log and "<<<<<<<" in res.log
+    deploys = client.get("/api/deploys").json()
+    assert len(deploys) == 1 and deploys[0]["reason"].startswith("merge conflict in app.txt")
+    t = tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])
+    assert t["title"].startswith("Rebase agent/dev onto main") and t["assignee_name"] == "Software Engineer"
+    assert "app.txt" in t["notes"] and "<<<<<<<" in t["notes"]
+
+    # main moves on (unrelated changes) three times: silently re-checked, never another attempt or report
+    for i in range(3):
+        _on_main(other, {f"other{i}.txt": "x"}, f"Unrelated {i}")
+        again = selfdeploy.promote_tick(deploy, rep, **kw)
+        assert again.status == "nothing" and again.stage == "parked"
+    assert len(client.get("/api/deploys").json()) == 1
+
+    # a new commit that still conflicts: tried once more, the same task gets a comment
+    commit(work, {"app.txt": "good from the branch, again\n"}, "Another try\n\nAgent: Software Engineer")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).stage == "merge"
+    deploys = client.get("/api/deploys").json()
+    assert len(deploys) == 2 and deploys[0]["task_id"] == deploys[1]["task_id"]
+    assert conn.execute("SELECT COUNT(*) FROM tasks WHERE source = 'deployer' AND status != 'done'"
+                        ).fetchone()[0] == 1
+    health = client.get("/api/deploys/health").json()
+    assert health["attempts"] == 2 and health["reject_rate"] == 1.0 and health["repeats"] == []
+    assert health["by_stage"] == {"merge": 2}
+
+    # main takes the branch's side: the parked tip merges cleanly now and ships
+    _on_main(other, {"app.txt": "good from the branch, again\n"}, "Take the branch's version")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "ok"
+
+
+def test_a_conflict_that_a_rebase_resolves_ships_without_a_task(tmp_path, reporter):
+    """The branch's first commit is already on main (an earlier automatic rebase promoted a copy)
+    and main changed the same lines since: a merge conflicts, a rebase drops the copy and is clean."""
+    rep, client, conn = reporter
+    origin, work, other, deploy, kw = _promote_setup(tmp_path)
+    first = commit(work, {"app.txt": "good v2\n"}, "Improve\n\nAgent: Software Engineer")
+    git(other, "pull", "-q", "--ff-only", "origin", "main")
+    git(other, "fetch", "-q", str(work), "agent/dev")
+    git(other, "-c", "user.name=PersonalOS Deployer", "-c", "user.email=d@pos", "cherry-pick", first)
+    git(other, "push", "-q", "origin", "HEAD:main")
+    _on_main(other, {"app.txt": "good v3\n"}, "Improve more")
+    commit(work, {"notes.txt": "new\n"}, "Add notes\n\nAgent: Software Engineer")
+
+    assert not selfdeploy.merges_cleanly(deploy, git(work, "rev-parse", "HEAD"),
+                                         git(other, "rev-parse", "HEAD"))
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok" and "automatic rebase" in res.log
+    assert git(tmp_path, "--git-dir", str(origin), "show", "main:app.txt") == "good v3"
+    assert git(tmp_path, "--git-dir", str(origin), "show", "main:notes.txt") == "new"
+    assert "rebased onto main automatically" in git(tmp_path, "--git-dir", str(origin), "log", "-1",
+                                                    "--format=%B", "main")
+    assert git(work, "rev-parse", "HEAD") == git(work, "rev-parse", "agent/dev")  # the branch is untouched
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'deployer'").fetchone()
+    assert "pos-rebase-" not in git(deploy, "worktree", "list")  # the scratch worktree is gone
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # the same tip is not promoted twice
+
+
+def test_reason_of_a_rejection_and_the_repeat_count(reporter):
+    rep, client, conn = reporter
+    tests_log = "....F\nFAILED tests/test_x.py::test_a - assert 1 == 2\nFAILED tests/test_x.py::test_b\n2 failed"
+    r = selfdeploy.Result("a" * 40, "b" * 40, "rejected", stage="tests", log=tests_log, branch="dev/agent/dev")
+    assert selfdeploy.reason_of(r) == "tests: FAILED tests/test_x.py::test_a - assert 1 == 2 (+1 more)"
+    rep.report(r)
+    rep.report(r)  # the same commit refused at the same stage twice: a repeat
+    rep.report(selfdeploy.Result("a" * 40, "c" * 40, "ok", branch="dev/agent/dev"))
+    h = client.get("/api/deploys/health").json()
+    assert h["attempts"] == 3 and h["ok"] == 1 and h["reject_rate"] == round(2 / 3, 3)
+    assert h["repeats"] == [{"sha": "b" * 10, "stage": "tests", "times": 2}] and h["repeat_attempts"] == 1
+    assert h["top_reasons"][0]["count"] == 2 and h["last_ok_at"]
