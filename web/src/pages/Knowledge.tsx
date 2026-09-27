@@ -27,7 +27,24 @@ export default function Knowledge() {
   const [files, setFiles] = useState<FileItem[] | null>(null);
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [topics, setTopics] = useState<Topic[] | null>(null);
-  const [graph, setGraph] = useState(params.get("graph") === "1");
+  // The 3D graph is shown by default; ?graph=0 or the remembered toggle hides it.
+  const [graph, setGraph] = useState(() => {
+    if (params.get("graph")) return params.get("graph") !== "0";
+    try {
+      return localStorage.getItem("pos.knowledge.graph") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const toggleGraph = () =>
+    setGraph((g) => {
+      try {
+        localStorage.setItem("pos.knowledge.graph", g ? "0" : "1");
+      } catch {
+        /* storage blocked: the toggle still works for this visit */
+      }
+      return !g;
+    });
 
   useEffect(() => {
     filesApi.list().then(setFiles, () => setFiles([]));
@@ -90,14 +107,14 @@ export default function Knowledge() {
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </label>
-        <button className={graph ? "btn-accent" : "btn"} onClick={() => setGraph((g) => !g)} aria-pressed={graph}>
+        <button className={graph ? "btn-accent" : "btn"} onClick={toggleGraph} aria-pressed={graph}>
           <Network size={14} /> {graph ? t("knowledge.graph_hide") : t("knowledge.graph_show")}
         </button>
       </div>
 
       {graph && (
         <Suspense fallback={<p className="text-sm text-ink-2">{t("act.loading")}</p>}>
-          <KnowledgePanel title={t("knowledge.graph")} className="h-[420px]" />
+          <KnowledgePanel title={t("knowledge.graph")} className="h-[360px] sm:h-[560px]" />
         </Suspense>
       )}
 
