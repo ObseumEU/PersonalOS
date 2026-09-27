@@ -171,8 +171,10 @@ def test_agent_files_give_the_ha_specialist_and_the_engineer_higher_caps():
     se = agents_code.worker_profile("Software Engineer")
     assert ha["max_steps"] >= 80 and ha["max_steps_owner"] > ha["max_steps"]
     assert se["max_steps"] >= 120 and se["max_steps_owner"] > se["max_steps"]
+    from pos.hiring import MODELS
     for spec in agents_code.specs():
-        assert spec.get("model") == "claude-opus-5-5" and spec.get("effort") == "medium", spec["name"]
+        # HR may hire on any allowed model (e.g. Sonnet for low-budget agents)
+        assert spec.get("model") in MODELS and spec.get("effort") == "medium", spec["name"]
         assert spec.get("engine") == "claude", spec["name"]
 
 
