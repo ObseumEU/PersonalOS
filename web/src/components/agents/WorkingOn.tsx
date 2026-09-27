@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { TaskLink } from "../../taskSheet";
 import { t } from "../../i18n";
 
 /**
@@ -34,9 +34,9 @@ export function WorkingOnText({ w, withTitle = false, className = "" }: { w: Wor
     <span className={className} title={w.title ?? undefined}>
       {t("working.on")}{" "}
       {w.task_ref ? (
-        <Link to={`/tasks?task=${w.task_ref}`} className="font-mono text-accent hover:underline">
+        <TaskLink taskRef={w.task_ref} className="font-mono text-accent hover:underline">
           {w.task_ref}
-        </Link>
+        </TaskLink>
       ) : (
         t("working.run")
       )}

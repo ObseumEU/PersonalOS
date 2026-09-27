@@ -1,6 +1,6 @@
 import { Check, X } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { type Approval, agentsApi } from "../agentsApi";
 import { ActorChip } from "../components/agents/bits";
 import { confirmDialog } from "../components/overlay";
@@ -58,9 +58,9 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
         </a>
       )}
       {a.task_ref && (
-        <Link to={`/tasks?view=agents&task=${a.task_ref}`} className="text-xs text-accent hover:underline">
+        <TaskLink taskRef={a.task_ref} className="text-xs text-accent hover:underline">
           {t("appr.for_task", { ref: a.task_ref })}
-        </Link>
+        </TaskLink>
       )}
       {a.status === "pending" && (
         <span className="flex flex-wrap gap-2">

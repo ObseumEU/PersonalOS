@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -87,9 +88,9 @@ export default function Calendar() {
                   </div>
                 ))}
                 {dated.map((x) => (
-                  <Link
+                  <TaskLink
                     key={`${x.ref}-${x.kind}`}
-                    to={`/tasks?task=${x.ref}`}
+                    taskRef={x.ref}
                     className="flex min-w-0 flex-col gap-1 rounded border border-dashed border-line px-2 py-1.5 text-xs leading-snug break-words hover:border-accent"
                   >
                     <span className={x.kind === "deadline" ? "text-amber-300" : "text-ink-2"}>
@@ -99,7 +100,7 @@ export default function Calendar() {
                     <span className="min-w-0">
                       <AssigneeChip type={x.assignee_type} name={x.assignee_name} />
                     </span>
-                  </Link>
+                  </TaskLink>
                 ))}
               </div>
             );

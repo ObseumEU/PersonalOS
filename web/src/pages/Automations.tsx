@@ -1,4 +1,5 @@
 import { Archive, Pause, Pencil, Play, Zap } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -141,9 +142,9 @@ export default function Automations() {
               key={l.task_ref}
               className="grid grid-cols-1 gap-1 border-b border-line px-4 py-2 text-sm md:grid-cols-[70px_minmax(0,1fr)_140px_90px] md:gap-2"
             >
-              <Link to={`/tasks?view=agents&task=${l.task_ref}`} className="font-mono text-xs text-accent">
+              <TaskLink taskRef={l.task_ref} className="font-mono text-xs text-accent">
                 {l.task_ref}
-              </Link>
+              </TaskLink>
               <span className="min-w-0 truncate">
                 {l.member}{" "}
                 {l.remote_task_id && <span className="text-xs text-ink-2">{t("auto.remote_id", { id: l.remote_task_id })}</span>}
@@ -253,9 +254,9 @@ function RoutineRow({
         title={r.last ? t("auto.ran", { ago: ago(r.last) }) : t("auto.never_ran")}
       >
         {r.lastRef ? (
-          <Link to={`/tasks?task=${r.lastRef}`} className="hover:text-accent">
+          <TaskLink taskRef={r.lastRef} className="hover:text-accent">
             {r.lastText}
-          </Link>
+          </TaskLink>
         ) : (
           r.lastText
         )}

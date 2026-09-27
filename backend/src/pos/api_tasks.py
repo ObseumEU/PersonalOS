@@ -96,8 +96,17 @@ def _fields(body: BaseModel) -> dict:
 @router.get("/tasks")
 def list_tasks(view: str = "today", topic: str | None = None, assignee_id: int | None = None, scope: str = "all",
                conn=Depends(get_db), ctx=Depends(get_ctx)):
-    """`scope`: mine (assigned to me), team (me and everyone below me) or all."""
-    return tasks.list_tasks(conn, ctx, view, topic=topic, assignee_id=assignee_id, scope=scope)
+    """`scope`: mine (assigned to me), team (me and everyone below me) or all.
+    `board` (every open task and what finished in the last week) carries each task's cached summary."""
+    if view != "board":
+        return tasks.list_tasks(conn, ctx, view, topic=topic, assignee_id=assignee_id, scope=scope)
+    from . import task_summary
+
+    out = tasks.list_tasks(conn, ctx, view, topic=topic, assignee_id=assignee_id, scope=scope, limit=500)
+    cached = task_summary.cached_for(conn, [t["id"] for t in out])
+    for t in out:
+        t["summary"] = cached.get(t["id"])
+    return out
 
 
 @router.get("/weekly-review")
@@ -259,6 +268,78 @@ def clarify(task_id: str, body: ClarifyIn, conn=Depends(get_db), ctx=Depends(get
     t = tasks.clarify(conn, ctx, tasks.parse_id(task_id), body.action, body.fields)
     conn.commit()
     return t
+
+
+@router.get("/tasks/{task_id}/summary")
+def task_summary(task_id: str, generate: bool = True, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The task's 2–3 line TL;DR (one cached claude-haiku-4-5 call, platform cost; a fallback without it)."""
+    from . import task_summary as ts
+
+    return ts.summary(conn, ctx, tasks.parse_id(task_id), generate=generate)
+
+
+@router.get("/tasks/{task_id}/related")
+def task_related(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """What the task detail links to: the owner's open asks raised from this task, the task an
+    ask ticket is for, pending approvals on it (owner only) and the tasks its text mentions."""
+    import json
+    import re
+
+    tid = tasks.parse_id(task_id)
+    task = tasks.get(conn, ctx, tid)
+    viewer = actors.get(conn, ctx.actor_id)
+
+    def brief(i: int) -> dict | None:
+        try:
+            t = tasks.get(conn, ctx, i)
+        except (NotFound, Forbidden):
+            return None
+        return {"id": t["id"], "ref": t["ref"], "title": t["title"], "status": t["status"],
+                "assignee_name": t.get("assignee_name"), "assignee_type": t.get("assignee_type")}
+
+    has_asks = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'owner_asks'").fetchone() is not None
+    asks_open, ask_for = [], None
+    if has_asks:
+        for a in conn.execute(
+                """SELECT o.*, x.name AS asker_name FROM owner_asks o JOIN actors x ON x.id = o.asker_id
+                   JOIN tasks t ON t.id = o.ticket_id
+                   WHERE o.source_task_id = ? AND o.status = 'open' AND t.status != 'done' AND t.archived_at IS NULL
+                   ORDER BY o.id DESC LIMIT 10""", (tid,)):
+            b = brief(a["ticket_id"])
+            if b:
+                b.update(notes=conn.execute("SELECT notes FROM tasks WHERE id = ?", (a["ticket_id"],)).fetchone()[0],
+                         asker_name=a["asker_name"], blocking=bool(a["blocking"]), kind=a["kind"])
+                asks_open.append(b)
+        a = conn.execute("""SELECT o.*, x.name AS asker_name FROM owner_asks o JOIN actors x ON x.id = o.asker_id
+                            WHERE o.ticket_id = ? ORDER BY o.id DESC LIMIT 1""", (tid,)).fetchone()
+        if a:
+            ask_for = {"asker_name": a["asker_name"], "blocking": bool(a["blocking"]), "kind": a["kind"],
+                       "status": a["status"], "task": brief(a["source_task_id"]) if a["source_task_id"] else None}
+    approvals_ = []
+    if viewer["is_owner"]:
+        for r in conn.execute(
+                """SELECT a.id, a.action, a.details, a.created_at, r.name AS requested_by_name FROM approvals a
+                   LEFT JOIN actors r ON r.id = a.requested_by
+                   WHERE a.task_id = ? AND a.status = 'pending' ORDER BY a.id""", (tid,)):
+            details = json.loads(r["details"] or "{}")
+            why = str(details.get("why") or details.get("reason") or details.get("summary") or "")
+            shown = {k: v for k, v in details.items() if k not in ("why", "reason", "summary", "screenshot")}
+            approvals_.append({"id": r["id"], "action": r["action"], "why": why[:400], "at": r["created_at"],
+                               "requested_by_name": r["requested_by_name"], "details": shown})
+    text = " ".join(filter(None, [task.get("notes"), task.get("progress_note"), task.get("definition_of_done")]))
+    seen = {tid, task.get("parent_id"), *(a["id"] for a in asks_open)}
+    if ask_for and ask_for["task"]:
+        seen.add(ask_for["task"]["id"])
+    mentioned = []
+    for m in re.finditer(r"\bT-(\d{1,6})\b", text):
+        i = int(m.group(1))
+        if i in seen or len(mentioned) >= 12:
+            continue
+        seen.add(i)
+        b = brief(i)
+        if b:
+            mentioned.append(b)
+    return {"asks_open": asks_open, "ask_for": ask_for, "approvals": approvals_, "mentioned": mentioned}
 
 
 @router.get("/tasks/{task_id}/history")

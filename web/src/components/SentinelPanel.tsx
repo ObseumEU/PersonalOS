@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { TaskLink } from "../taskSheet";
 import { api } from "../api";
 import { fmtDateTime, label, plural, t } from "../i18n";
 import { Panel } from "./ui";
@@ -98,9 +98,9 @@ export default function SentinelPanel() {
           </span>
           <span className="col-start-2 md:col-start-auto">
             {i.task_ref && (
-              <Link to={`/tasks?view=agents&task=${i.task_ref}`} className="font-mono text-xs text-accent">
+              <TaskLink taskRef={i.task_ref} className="font-mono text-xs text-accent">
                 {i.task_ref}
-              </Link>
+              </TaskLink>
             )}
           </span>
           <span className="col-start-2 text-xs text-ink-2 md:col-start-auto md:text-right">{fmtDateTime(i.opened_at)}</span>

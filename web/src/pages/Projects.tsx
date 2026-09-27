@@ -1,4 +1,5 @@
 import { ArrowLeft, Plus } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState, type DragEvent, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
@@ -223,10 +224,10 @@ function ProjectDetail({ slug }: { slug: string }) {
                   onDragStart={(e) => e.dataTransfer.setData("text/task", x.ref)}
                   className="flex min-w-0 cursor-grab flex-col gap-1 border-b border-line px-3 py-2 last:border-0 hover:bg-raised"
                 >
-                  <Link to={`/tasks?view=next&task=${x.ref}`} className="text-[13px] break-words hover:text-accent">
+                  <TaskLink taskRef={x.ref} className="text-[13px] break-words hover:text-accent">
                     <span className="mr-1.5 font-mono text-xs text-ink-2">{x.ref}</span>
                     {x.title}
-                  </Link>
+                  </TaskLink>
                   <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                     <AssigneeChip type={x.assignee_type} name={x.assignee_name} />
                     <StatePill task={x} />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TaskLink } from "../taskSheet";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
@@ -19,9 +20,9 @@ function TaskList({ items, empty, view }: { items: Task[]; empty: string; view: 
   return (
     <>
       {items.slice(0, 12).map((task) => (
-        <Link
+        <TaskLink
           key={task.id}
-          to={`/tasks?view=${view}&task=${task.ref}`}
+          taskRef={task.ref}
           className="flex min-w-0 items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised"
         >
           <span className="hidden shrink-0 font-mono text-xs text-ink-2 sm:inline">{task.ref}</span>
@@ -30,7 +31,7 @@ function TaskList({ items, empty, view }: { items: Task[]; empty: string; view: 
           <span className="max-w-[40%] min-w-0 shrink-0">
             <AssigneeChip type={task.assignee_type} name={task.assignee_name} />
           </span>
-        </Link>
+        </TaskLink>
       ))}
     </>
   );

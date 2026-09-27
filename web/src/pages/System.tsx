@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { TaskLink } from "../taskSheet";
 import { api } from "../api";
 import { type Engines, agentsApi } from "../agentsApi";
 import BudgetPanel from "../components/BudgetPanel";
@@ -170,9 +170,9 @@ export default function System() {
             </span>
             <span className="min-w-0">
               {d.task_ref && (
-                <Link to={`/tasks?view=agents&task=${d.task_ref}`} className="font-mono text-xs text-accent">
+                <TaskLink taskRef={d.task_ref} className="font-mono text-xs text-accent">
                   {d.task_ref}
-                </Link>
+                </TaskLink>
               )}
             </span>
             <span className="text-right text-xs text-ink-2">{fmtDateTime(d.created_at)}</span>

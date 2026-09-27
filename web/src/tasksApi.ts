@@ -4,7 +4,7 @@ import { markdownSnippet } from "./markdownText";
 
 export type AssigneeType = "human" | "ai" | "agent" | "external";
 export type Status = "inbox" | "next" | "working" | "review" | "waiting" | "someday" | "done";
-export type View = "inbox" | "today" | "upcoming" | "next" | "agents" | "waiting" | "review" | "someday" | "done";
+export type View = "board" | "inbox" | "today" | "upcoming" | "next" | "agents" | "waiting" | "review" | "someday" | "done";
 
 export type Step = {
   title: string;
@@ -72,6 +72,24 @@ export type Task = {
   steps_done?: number;
   steps?: Task[];
   parent?: { id: number; ref: string; title: string };
+  created_by?: number | null;
+  project_id?: number | null;
+  /** The cached TL;DR (board view only; null until the detail was opened once). */
+  summary?: string | null;
+  usage?: { runs: number; tokens: number; cache_read_tokens: number; cost_usd: number };
+};
+
+/** The task detail's TL;DR (GET /api/tasks/{ref}/summary). */
+export type Summary = { text: string; source: "llm" | "fallback"; fresh: boolean; at: string | null };
+
+export type TaskBrief = { id: number; ref: string; title: string; status: Status; assignee_name: string | null; assignee_type: AssigneeType | null };
+
+/** What the detail links to (GET /api/tasks/{ref}/related). */
+export type Related = {
+  asks_open: (TaskBrief & { notes: string; asker_name: string; blocking: boolean; kind: string })[];
+  ask_for: { asker_name: string; blocking: boolean; kind: string; status: string; task: TaskBrief | null } | null;
+  approvals: { id: number; action: string; why: string; at: string; requested_by_name: string | null; details: Record<string, unknown> }[];
+  mentioned: TaskBrief[];
 };
 
 export type Comment = {
@@ -89,9 +107,18 @@ export type Comment = {
 export type Scope = "mine" | "team" | "all";
 
 export type Actor = { id: number; kind: "human" | "ai" | "agent"; name: string; is_owner: number };
-export type Version = { version: number; action: string; at: string; actor_name: string | null; run_id: number | null };
+export type Version = {
+  version: number;
+  action: string;
+  at: string;
+  actor_name: string | null;
+  actor_id?: number | null;
+  run_id: number | null;
+  /** The task as it was after this version. */
+  data?: Partial<Task>;
+};
 /** Open tasks per view; `to_review` = results waiting for me as their reviewer (the same number Home shows). */
-export type Counts = Record<Exclude<View, "done">, number> & { to_review?: number };
+export type Counts = Record<Exclude<View, "done" | "board">, number> & { to_review?: number };
 
 /** Why a member cannot take a task now. Soft reasons (pause, kill switch, budget) pass on the owner's say. */
 export type Blocker = { code: string; text: string; soft: boolean };
@@ -176,7 +203,7 @@ export const tasksApi = {
     api<Task>(`/api/tasks/${ref}`, { method: "PATCH", body: JSON.stringify(changes) }),
   addStep: (ref: string, title: string, assignee?: string) =>
     post<Task>(`/api/tasks/${ref}/steps`, { title, ...(assignee ? { assignee } : {}) }),
-  complete: (ref: string) => post<Task>(`/api/tasks/${ref}/complete`),
+  complete: (ref: string, note?: string) => post<Task>(`/api/tasks/${ref}/complete`, note ? { note } : {}),
   review: (ref: string, accept: boolean, comment?: string) => post<Task>(`/api/tasks/${ref}/review`, { accept, comment }),
   intervene: (ref: string, note: string) => post<Task>(`/api/tasks/${ref}/intervene`, { note }),
   archive: (ref: string) => post<Task>(`/api/tasks/${ref}/archive`),
@@ -192,6 +219,8 @@ export const tasksApi = {
   reassign: (ref: string, to: number | string, note?: string, force = false) =>
     post<ReassignResult>(`/api/tasks/${ref}/reassign`, { to, note: note || null, force }),
   live: (ref: string) => api<TaskLive>(`/api/tasks/${ref}/live`),
+  summary: (ref: string, generate = true) => api<Summary>(`/api/tasks/${ref}/summary?generate=${generate}`),
+  related: (ref: string) => api<Related>(`/api/tasks/${ref}/related`),
 };
 
 export const PRIORITY_LABEL: Record<number, string> = { 1: t("work.priority.1"), 2: t("work.priority.2"), 3: t("work.priority.3") };

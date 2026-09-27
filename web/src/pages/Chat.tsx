@@ -1,4 +1,5 @@
 import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { type OrgMember, agentsApi } from "../agentsApi";
@@ -43,7 +44,7 @@ function Body({ text, names }: { text: string; names: string[] }) {
       if (part.startsWith("`")) return <code key={k} className="rounded-[3px] bg-raised px-1 font-mono text-[12px]">{part.slice(1, -1)}</code>;
       if (part.startsWith("**")) return <strong key={k} className="font-medium">{part.slice(2, -2)}</strong>;
       if (part.startsWith("http")) return <a key={k} href={part} target="_blank" rel="noreferrer noopener" className="break-all text-accent underline decoration-accent/40">{part}</a>;
-      if (/^T-\d+$/i.test(part)) return <Link key={k} to={`/tasks?task=${part.toUpperCase()}`} className="rounded-[3px] bg-accent/10 px-1 font-mono text-[12px] text-accent">{part.toUpperCase()}</Link>;
+      if (/^T-\d+$/i.test(part)) return <TaskLink key={k} taskRef={part.toUpperCase()} className="rounded-[3px] bg-accent/10 px-1 font-mono text-[12px] text-accent">{part.toUpperCase()}</TaskLink>;
       return <span key={k} className="rounded-[3px] bg-accent/15 px-0.5 text-accent">{part}</span>;
     });
   const blocks = text.split(/```(?:\w+\n)?/);

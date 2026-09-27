@@ -64,6 +64,7 @@ export default function App() {
         <Route path="/work" element={<Navigate to="/tasks" replace />} />
         <Route path="/tasks" element={<Work><Tasks /></Work>} />
         <Route path="/tasks/inbox" element={<InboxClarify />} />
+        <Route path="/tasks/:ref" element={<Work><Tasks /></Work>} />
         <Route path="/projects" element={<Work><Projects /></Work>} />
         <Route path="/projects/:slug" element={<Work><Projects /></Work>} />
         <Route path="/calendar" element={<Work><Calendar /></Work>} />

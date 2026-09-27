@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { TaskLink } from "../taskSheet";
 import { api } from "../api";
 import { LOCALE, label, t } from "../i18n";
 import { Panel } from "./ui";
@@ -79,9 +79,9 @@ export default function ObservabilityPanel() {
           </span>
           <span className="hidden sm:inline">
             {a.task_ref && (
-              <Link to={`/tasks?view=agents&task=${a.task_ref}`} className="font-mono text-xs text-accent">
+              <TaskLink taskRef={a.task_ref} className="font-mono text-xs text-accent">
                 {a.task_ref}
-              </Link>
+              </TaskLink>
             )}
           </span>
           <span className="hidden text-right text-xs text-ink-2 sm:inline">{t("obs.since", { when: when(a.starts_at) })}</span>

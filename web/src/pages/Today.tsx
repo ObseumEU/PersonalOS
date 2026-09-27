@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { TaskLink } from "../taskSheet";
 import { Link } from "react-router-dom";
 import NeedsInbox from "../components/NeedsInbox";
 import QuickAnswer from "../components/QuickAnswer";
@@ -72,9 +73,9 @@ export default function Today() {
                     className="h-[15px] w-[15px] accent-accent"
                     onChange={() => tasksApi.complete(x.ref).then(refresh)}
                   />
-                  <Link to={`/tasks?view=today&task=${x.ref}`} className="truncate text-sm hover:text-accent">
+                  <TaskLink taskRef={x.ref} className="truncate text-sm hover:text-accent">
                     {x.title}
-                  </Link>
+                  </TaskLink>
                   <AssigneeChip type={x.assignee_type} name={x.assignee_name} />
                   <span className={`hidden text-right text-xs sm:inline ${due.urgent ? "text-accent" : "text-ink-2"}`}>{due.text}</span>
                 </div>

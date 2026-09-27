@@ -83,6 +83,18 @@ def test_owner_comment_and_resolution_reach_the_asker_and_resume(conn):
     assert again["deduped"] and again["ask_status"] == "answered"
 
 
+def test_owner_answering_closes_the_ask_even_when_the_asker_could_review(conn):
+    """Finishing an ask ticket is the answer: done at once, never a result handed to the asker for review."""
+    me, ai, t = _agent_task(conn)
+    out = asks.ask(conn, ai, title="Pick the relay", why="The garage light is not in HA.", task_id=t["id"])
+    conn.execute("UPDATE tasks SET reviewer_id = ? WHERE id = ?", (ai.actor_id, out["ticket_id"]))
+    done = tasks.complete(conn, me, out["ticket_id"], "The Sonoff relay")
+    assert done["status"] == "done"
+    assert tasks.get(conn, me, t["id"])["status"] == "next"
+    row = conn.execute("SELECT status FROM owner_asks WHERE ticket_id = ?", (out["ticket_id"],)).fetchone()
+    assert row["status"] == "answered"
+
+
 def test_approvals_ping_the_owner_and_tell_the_requester(conn):
     me, ai, t = _agent_task(conn)
     a = approvals.request(conn, ai, "email.send", {"why": "The client asked for the offer."}, t["id"])

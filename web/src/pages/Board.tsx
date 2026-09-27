@@ -1,6 +1,7 @@
 import { Lock } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import { approvalHref, taskHref } from "../taskSheet";
 import { type BoardCard, type BoardRow, agentsApi } from "../agentsApi";
 import { ActorChip, StatusDot } from "../components/agents/bits";
 import { PageHeader, Panel } from "../components/ui";
@@ -12,7 +13,8 @@ const COLUMNS: (keyof Omit<BoardRow, "actor">)[] = ["queued", "working", "needs_
 const GATES: [string, string][] = [1, 2, 3, 4, 5, 6, 7].map((i) => [t(`work.gate.${i}.a`), t(`work.gate.${i}.b`)]);
 
 function Card({ c, col }: { c: BoardCard; col: string }) {
-  const to = c.approval_id ? "/approvals" : `/tasks?view=agents&task=${c.ref}`;
+  const loc = useLocation();
+  const to = c.approval_id ? approvalHref(loc, c.approval_id) : (c.ref ? taskHref(loc, c.ref) : "/tasks");
   return (
     <Link
       to={to}

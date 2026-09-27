@@ -1,4 +1,5 @@
 import { Archive, Pause, Play, Plus, Zap } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -126,9 +127,9 @@ function Rows({ items, onChange, onError }: { items: Schedule[]; onChange: () =>
               title={s.last_run_at ? t("sched.ran", { ago: ago(s.last_run_at), n: s.runs }) : t("auto.never_ran")}
             >
               {s.last_task_ref ? (
-                <Link to={`/tasks?task=${s.last_task_ref}`} className="hover:text-accent">
+                <TaskLink taskRef={s.last_task_ref} className="hover:text-accent">
                   {resultText(s.last_result)}
-                </Link>
+                </TaskLink>
               ) : (
                 resultText(s.last_result)
               )}

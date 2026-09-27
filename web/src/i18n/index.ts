@@ -13,9 +13,10 @@ import home from "./cs/home";
 import knowledge from "./cs/knowledge";
 import settings from "./cs/settings";
 import team from "./cs/team";
+import tickets from "./cs/tickets";
 import work from "./cs/work";
 
-export const cs: Record<string, string> = { ...common, ...home, ...chat, ...agents, ...work, ...knowledge, ...settings, ...team };
+export const cs: Record<string, string> = { ...common, ...home, ...chat, ...agents, ...work, ...knowledge, ...settings, ...team, ...tickets };
 
 export type Vars = Record<string, string | number | null | undefined>;
 

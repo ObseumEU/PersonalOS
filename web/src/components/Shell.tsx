@@ -7,6 +7,7 @@ import { useSubsystems } from "../knowledgeApi";
 import { useNeedsMe } from "../needsMeApi";
 import { KNOWLEDGE_TABS, SECTIONS, SETTINGS, SETTINGS_ROOT, type SubSection, sectionOf } from "../sections";
 import { OverlayHost } from "./overlay";
+import TaskSheetHost from "./tasks/TaskSheet";
 
 export function Mark({ size = 22 }: { size?: number }) {
   return (
@@ -265,6 +266,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
         </button>
       </nav>
       {more && <MoreSheet onClose={() => setMore(false)} onLogout={onLogout} />}
+      <TaskSheetHost />
       <OverlayHost />
     </div>
   );

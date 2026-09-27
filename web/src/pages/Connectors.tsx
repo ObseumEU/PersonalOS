@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { TaskLink } from "../taskSheet";
 import { api } from "../api";
 import { confirmDialog, toast } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
@@ -346,9 +346,9 @@ export default function Connectors() {
                     <span className="truncate text-xs text-ink-2">{e.rule_name ?? t("conn.no_rule")}</span>
                     <span className="truncate">
                       {e.task_ref && (
-                        <Link to={`/tasks?view=agents&task=${e.task_ref}`} className="text-accent hover:underline">
+                        <TaskLink taskRef={e.task_ref} className="text-accent hover:underline">
                           {e.task_ref}
-                        </Link>
+                        </TaskLink>
                       )}{" "}
                       <span className="text-ink-2">{e.assignee_name ?? t("conn.inbox")}</span>
                     </span>

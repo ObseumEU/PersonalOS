@@ -184,6 +184,9 @@ def _view_sql(view: str, actor_id: int | None = None) -> tuple[str, list, str]:
         return f"{top} AND status = 'someday'", [], "created_at DESC"
     if view == "done":
         return "status = 'done'", [], "completed_at DESC"
+    if view == "board":  # the task board: every open task, and what finished in the last seven days
+        since = (today() - timedelta(days=7)).isoformat()
+        return ("(status != 'done' OR completed_at >= ?)", [since], "updated_at DESC, id DESC")
     raise Invalid(f"view must be one of {VIEWS}")
 
 
@@ -586,6 +589,8 @@ def may_finish(conn: sqlite3.Connection, ctx: Ctx, row) -> bool:
     yourself (no one else reviews it), or someone who may review it anyway."""
     if row["assignee_id"] in (None, ctx.actor_id) and reviewer_of(conn, row) == ctx.actor_id:
         return True
+    if row["source"] == "ask_owner" and row["assignee_id"] == ctx.actor_id:
+        return True  # an answer to an agent's question is not work for the asker to review (pos.asks)
     return row["assignee_id"] != ctx.actor_id and may_review(conn, ctx, row)[0]
 
 

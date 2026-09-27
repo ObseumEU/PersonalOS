@@ -1,4 +1,5 @@
 import { KeyRound, Pause, Pencil, Play, RotateCcw, Send, Square, UserCheck } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
@@ -383,9 +384,9 @@ function Overview({ a, messages, onChange }: { a: Full; messages: Message[]; onC
         <Panel title={t("agent.queue")} right={t("agent.queue_right", { next: a.queued, review: a.review })} bodyClassName="max-h-[360px] overflow-y-auto">
           {a.queue.length === 0 && <p className="px-4 py-3 text-sm text-ink-2">{t("agent.no_tasks")}</p>}
           {a.queue.map((x) => (
-            <Link
+            <TaskLink
               key={x.id}
-              to={`/tasks?view=agents&task=${x.ref}`}
+              taskRef={x.ref}
               className={`flex flex-col gap-1 border-b border-line px-4 py-2.5 last:border-0 hover:bg-raised ${x.status === "working" ? "bg-raised shadow-[inset_2px_0_0_var(--color-accent)]" : ""}`}
             >
               <span className="flex items-center gap-2">
@@ -393,7 +394,7 @@ function Overview({ a, messages, onChange }: { a: Full; messages: Message[]; onC
                 <StatePill task={x} />
               </span>
               <span className="text-[13px]">{x.title}</span>
-            </Link>
+            </TaskLink>
           ))}
         </Panel>
       </div>
@@ -403,9 +404,9 @@ function Overview({ a, messages, onChange }: { a: Full; messages: Message[]; onC
           <div className="px-4 py-3">
             {lastResult ? (
               <>
-                <Link to={`/tasks?task=${lastResult.ref}`} className="text-sm hover:text-accent">
+                <TaskLink taskRef={lastResult.ref} className="text-sm hover:text-accent">
                   <span className="font-mono text-xs text-ink-2">{lastResult.ref}</span> {lastResult.title}
-                </Link>
+                </TaskLink>
                 <Markdown text={markdownSnippet(lastResult.progress_note ?? "", 400)} compact className="mt-1 text-ink-2" />
               </>
             ) : lastRun ? (

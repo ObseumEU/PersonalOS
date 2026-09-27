@@ -1,4 +1,5 @@
 import { Archive, ArrowLeft, Plus } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { confirmDialog, toast } from "../components/overlay";
@@ -202,10 +203,10 @@ function TopicPage({ slug }: { slug: string }) {
             return (
               <div key={task.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
                 <span className="w-11 shrink-0 font-mono text-xs text-ink-2">{task.ref}</span>
-                <Link to={`/tasks?view=next&task=${task.ref}`} className="flex min-w-0 flex-1 basis-40 items-center gap-2 hover:text-accent">
+                <TaskLink taskRef={task.ref} className="flex min-w-0 flex-1 basis-40 items-center gap-2 hover:text-accent">
                   <span className="truncate text-sm">{task.title}</span>
                   <StatePill task={task} />
-                </Link>
+                </TaskLink>
                 {/* Same picker and endpoint as Tasks: the new agent is told and starts at once. */}
                 <AgentPicker task={task} onReassigned={() => load()} />
                 <span className={`w-16 shrink-0 text-right text-xs ${due.urgent ? "text-accent" : "text-ink-2"}`}>{due.text}</span>
@@ -286,11 +287,11 @@ function TopicPage({ slug }: { slug: string }) {
             bodyClassName="max-h-[240px] overflow-y-auto"
           >
             {topic.done.map((task) => (
-              <Link key={task.id} to={`/tasks?view=done&task=${task.ref}`} className="flex min-w-0 items-center gap-3 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
+              <TaskLink key={task.id} taskRef={task.ref} className="flex min-w-0 items-center gap-3 border-b border-line px-4 py-2 last:border-0 hover:bg-raised">
                 <span className="shrink-0 font-mono text-xs text-ink-2">{task.ref}</span>
                 <span className="min-w-0 truncate text-sm text-ink-3 line-through">{task.title}</span>
                 {task.completed_at && <span className="ml-auto shrink-0 text-xs text-ink-2">{fmtDate(task.completed_at)}</span>}
-              </Link>
+              </TaskLink>
             ))}
           </Panel>
         )}

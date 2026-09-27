@@ -1,48 +1,15 @@
-import { Archive, CalendarDays, CheckCheck, Clock, Inbox, ListChecks, Orbit, Sun, Users, type LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import AgentPicker from "../components/tasks/AgentPicker";
-import { Energy, StatePill, fmtMinutes } from "../components/tasks/bits";
-import TaskDetail from "../components/tasks/TaskDetail";
-import { agendaApi } from "./Calendar";
-import { MockDot, PageHeader, Panel } from "../components/ui";
+import { ChevronDown, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { getMe } from "../api";
+import { Avatar, StatusChip, fmtMinutes, toneOf } from "../components/tasks/bits";
+import { oneLine, shortAge } from "../components/tasks/text";
+import { MockDot, PageHeader } from "../components/ui";
 import { plural, t } from "../i18n";
-import {
-  type Actor,
-  type Counts,
-  NO_DESCRIPTION,
-  PRIORITY_LABEL,
-  type Scope,
-  type Task,
-  type View,
-  descriptionPreview,
-  dueLabel,
-  tasksApi,
-} from "../tasksApi";
-
-const VIEWS: { id: View; icon: LucideIcon }[] = [
-  { id: "inbox", icon: Inbox },
-  { id: "today", icon: Sun },
-  { id: "upcoming", icon: CalendarDays },
-  { id: "next", icon: ListChecks },
-  { id: "agents", icon: Orbit },
-  { id: "review", icon: CheckCheck },
-  { id: "waiting", icon: Users },
-  { id: "someday", icon: Archive },
-  { id: "done", icon: Clock },
-];
-
-const viewLabel = (id: View) => t(`work.view.${id}`);
-
-/** The number shown next to a view. "Ke kontrole" counts what waits for me as reviewer (as Home does). */
-function viewCount(counts: Counts, id: View): number {
-  if (id === "done") return 0;
-  if (id === "review") return counts.to_review ?? counts.review;
-  return counts[id];
-}
-
-// Own focused work per day before the calendar sync exists (phase 4).
-const DAY_CAPACITY_MIN = 6 * 60;
+import { useNeedsMe } from "../needsMeApi";
+import { setSheetOrder, taskHref } from "../taskSheet";
+import { type Task, type View, dueLabel, tasksApi } from "../tasksApi";
+import { agendaApi } from "./Calendar";
 
 export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
   const [text, setText] = useState("");
@@ -71,7 +38,7 @@ export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
           id="capture"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={t("work.capture.placeholder")}
+          placeholder={t("tk.list.capture")}
           className="min-w-0 flex-1 truncate bg-transparent text-sm outline-none placeholder:text-ink-3"
         />
         <kbd className="hidden rounded-sm border border-line px-1.5 text-xs text-ink-2 sm:inline">Enter</kbd>
@@ -81,72 +48,8 @@ export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
   );
 }
 
-function Row({
-  task,
-  selected,
-  hideTopic,
-  onSelect,
-  onToggle,
-  onReassigned,
-}: {
-  task: Task;
-  selected: boolean;
-  hideTopic: boolean;
-  onSelect: () => void;
-  onToggle: () => void;
-  onReassigned: () => void;
-}) {
-  const due = dueLabel(task);
-  const done = task.status === "done";
-  const preview = descriptionPreview(task.notes);
-  return (
-    <div
-      className={`grid grid-cols-[18px_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1 border-b border-line px-3.5 py-2 sm:grid-cols-[18px_52px_minmax(0,1fr)_auto_64px_18px_76px] ${
-        selected ? "bg-raised shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-raised/60"
-      }`}
-    >
-      <input
-        type="checkbox"
-        checked={done}
-        onChange={onToggle}
-        aria-label={t("work.row.complete", { title: task.title })}
-        className="h-[15px] w-[15px] accent-accent"
-      />
-      <span className="hidden truncate font-mono text-xs text-ink-2 sm:inline">{task.ref}</span>
-      <button type="button" onClick={onSelect} className="flex min-w-0 flex-col gap-0.5 text-left">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className={`truncate text-sm ${done ? "text-ink-3 line-through" : ""}`}>{task.title}</span>
-          {task.steps_total ? (
-            <span className="shrink-0 text-xs text-ink-2 tabular-nums">
-              {task.steps_done}/{task.steps_total}
-            </span>
-          ) : null}
-          <StatePill task={task} />
-          {task.topic && !hideTopic && <span className="hidden shrink-0 text-xs text-ink-2 xl:inline">#{task.topic}</span>}
-        </span>
-        {preview ? (
-          <span
-            className="line-clamp-2 text-xs leading-snug break-words text-ink-2"
-            title={task.description_generated ? t("work.row.generated") : undefined}
-          >
-            {preview}
-          </span>
-        ) : (
-          <span className="text-xs text-ink-3 italic">{NO_DESCRIPTION}</span>
-        )}
-        {due.text && <span className={`text-xs sm:hidden ${due.urgent ? "text-accent" : "text-ink-2"}`}>{due.text}</span>}
-      </button>
-      <AgentPicker task={task} onReassigned={onReassigned} />
-      <span className="hidden text-xs text-ink-2 sm:inline" title={t("work.row.estimate")}>
-        {task.assignee_type === "human" || !task.assignee_type ? fmtMinutes(task.estimate_min) : "—"}
-      </span>
-      <span className="hidden sm:inline">
-        <Energy level={task.energy} />
-      </span>
-      <span className={`hidden text-right text-xs sm:inline ${due.urgent ? "text-accent" : "text-ink-2"}`}>{due.text}</span>
-    </div>
-  );
-}
+// Own focused work per day before the calendar sync exists (phase 4).
+const DAY_CAPACITY_MIN = 6 * 60;
 
 function CapacityBar({ tasks }: { tasks: Task[] }) {
   const [free, setFree] = useState<number | null>(null);
@@ -169,7 +72,7 @@ function CapacityBar({ tasks }: { tasks: Task[] }) {
     .reduce((s, task) => s + (task.estimate_min ?? 0), 0);
   const pct = capacity ? Math.min(100, (mine / capacity) * 100) : 100;
   return (
-    <div className="flex flex-col gap-2 border-b border-line px-3.5 py-3">
+    <div className="flex flex-col gap-2 border-b border-line px-4 py-3">
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
         <span className="text-[13px] font-medium">{t("work.cap.title")}</span>
         {free === null && <MockDot why={t("work.cap.mock")} />}
@@ -184,197 +87,286 @@ function CapacityBar({ tasks }: { tasks: Task[] }) {
         <span className={`absolute inset-y-0 left-0 ${pct > 80 ? "bg-amber-300" : "bg-ink"}`} style={{ width: `${pct}%` }} />
         <span className="absolute -inset-y-1 left-[80%] w-px bg-accent" />
       </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        <span className="text-xs text-ink">{t("work.cap.legend_work")}</span>
-        <span className="text-xs text-accent">{t("work.cap.legend_limit")}</span>
-        <span className="ml-auto hidden text-xs text-ink-2 sm:inline">{t("work.cap.agents_free")}</span>
-      </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ groups */
+
+// "you" is exactly what Home's "Čeká na tebe" lists (asks, approvals, results to review), so the numbers agree;
+// "mine" is my own open work.
+type Group = "you" | "mine" | "progress" | "review" | "done" | "later";
+const GROUPS: Group[] = ["you", "mine", "progress", "review", "done", "later"];
+const FILTERS: Group[] = ["you", "mine", "progress", "review", "done"];
+
+function groupOf(task: Task, meId: number | null, needs: Set<string>): Group {
+  if (needs.has(task.ref)) return "you";
+  if (task.status === "done") return "done";
+  if (task.status === "someday") return "later";
+  if (task.status === "review") return "review";
+  if (meId != null && (task.assignee_id === meId || (!task.assignee_id && task.owner_id === meId))) return "mine";
+  return "progress";
+}
+
+// Other lists, for whoever still wants them (GTD views); the default is everything, grouped.
+const VIEWS: View[] = ["board", "today", "inbox", "upcoming", "waiting", "someday"];
+
+function Row({ task, meId, selected, href, need }: { task: Task; meId: number | null; selected: boolean; href: string; need?: string }) {
+  const due = dueLabel(task);
+  const line = oneLine(task);
+  const done = task.status === "done";
+  return (
+    <li>
+      <Link
+        to={href}
+        aria-current={selected ? "true" : undefined}
+        className={`grid grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-line px-4 py-3 outline-none focus-visible:bg-raised sm:grid-cols-[32px_minmax(0,1fr)_auto_52px] ${
+          selected ? "bg-accent/[0.08] shadow-[inset_3px_0_0_var(--color-accent)]" : "hover:bg-raised/70"
+        }`}
+      >
+        <Avatar type={task.assignee_type} name={task.assignee_name} size={30} />
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className={`truncate text-[14px] ${done ? "text-ink-2" : "text-ink"}`}>{task.title}</span>
+          {line && <span className="truncate text-[13px] text-ink-2">{line}</span>}
+        </span>
+        <span className="flex flex-col items-end gap-1">
+          <StatusChip tone={need === "ask" || need === "approval" ? "you" : toneOf(task, meId)} progress={task.status === "working" ? task.progress : null} />
+          {due.urgent && <span className="text-xs text-orange-200">{due.text}</span>}
+        </span>
+        <span className="hidden text-right text-xs text-ink-2 tabular-nums sm:block" title={new Date(task.updated_at).toLocaleString()}>
+          {shortAge(task.updated_at)}
+        </span>
+      </Link>
+    </li>
+  );
+}
+
+function GroupList({
+  g,
+  items,
+  meId,
+  selected,
+  hrefOf,
+  collapsed,
+  needKinds,
+}: {
+  needKinds: Map<string, string>;
+  g: Group;
+  items: Task[];
+  meId: number | null;
+  selected: string | null;
+  hrefOf: (ref: string) => string;
+  collapsed: boolean;
+}) {
+  const limit = g === "done" ? 6 : g === "later" ? 0 : Infinity;
+  const [open, setOpen] = useState(!collapsed);
+  const shown = open || !Number.isFinite(limit) ? items : items.slice(0, limit);
+  const hidden = items.length - shown.length;
+  return (
+    <section aria-labelledby={`grp-${g}`}>
+      <h2
+        id={`grp-${g}`}
+        className="sticky top-0 z-[1] flex items-center gap-2 border-b border-line bg-surface/95 px-4 pt-4 pb-2 backdrop-blur"
+      >
+        <span className={`text-[13px] font-medium ${g === "you" ? "text-orange-200" : "text-ink"}`}>{t(`tk.group.${g}`)}</span>
+        <span className="rounded-full bg-raised px-2 text-xs text-ink-2 tabular-nums">{items.length}</span>
+      </h2>
+      <ul>
+        {shown.map((task) => (
+          <Row key={task.id} task={task} meId={meId} selected={task.ref === selected} href={hrefOf(task.ref)} need={needKinds.get(task.ref)} />
+        ))}
+      </ul>
+      {hidden > 0 && (
+        <button type="button" onClick={() => setOpen(true)} className="flex w-full items-center gap-1.5 px-4 py-2.5 text-[13px] text-accent hover:bg-raised">
+          <ChevronDown size={14} /> {t("tk.list.show_more", { n: hidden })}
+        </button>
+      )}
+    </section>
   );
 }
 
 export default function Tasks() {
   const [params, setParams] = useSearchParams();
-  const view = (params.get("view") as View) || "today";
-  const topic = params.get("topic") ?? undefined;
-  const scope = (params.get("scope") as Scope) || "all";
-  const selected = params.get("task");
+  const loc = useLocation();
+  const { ref: selectedRef } = useParams();
+  const selected = selectedRef?.toUpperCase() ?? null;
+  const view = (params.get("view") as View) || "board";
+  const topic = params.get("topic") ?? "";
+  const who = params.get("who") ?? "";
+  const show = (params.get("show") as Group | null) ?? null;
+  const [q, setQ] = useState("");
   const [tasks, setTasks] = useState<Task[] | null>(null);
-  const [counts, setCounts] = useState<Counts | null>(null);
-  const [topics, setTopics] = useState<{ topic: string; open: number }[]>([]);
-  const [actors, setActors] = useState<Actor[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [meId, setMeId] = useState<number | null>(null);
+  const needs = useNeedsMe();
 
+  useEffect(() => {
+    getMe().then((m) => setMeId(m.actor_id ?? null), () => undefined);
+  }, []);
   const refresh = useCallback(() => {
-    tasksApi.list(view, topic, scope).then(setTasks, (e) => setError(e.message));
-    tasksApi.counts().then(setCounts);
-    tasksApi.topics().then(setTopics);
-  }, [view, topic, scope]);
+    tasksApi.list(view, topic || undefined).then(
+      (x) => {
+        setTasks(x);
+        setError(null);
+      },
+      (e) => setError(e.message),
+    );
+  }, [view, topic]);
   useEffect(refresh, [refresh]);
   useEffect(() => {
-    tasksApi.actors().then(setActors);
-  }, []);
+    window.addEventListener("pos:tasks", refresh);
+    return () => window.removeEventListener("pos:tasks", refresh);
+  }, [refresh]);
 
   const set = (next: Record<string, string | null>) => {
     const p = new URLSearchParams(params);
     Object.entries(next).forEach(([k, v]) => (v ? p.set(k, v) : p.delete(k)));
     setParams(p);
   };
-  const toggle = (task: Task) =>
-    (task.status === "done" ? tasksApi.update(task.ref, { status: "next" }) : tasksApi.complete(task.ref)).then(refresh, (e) =>
-      setError(e.message),
-    );
 
-  const groups =
-    view === "today"
-      ? ([1, 2, 3, null] as const)
-          .map((p) => ({ p, items: (tasks ?? []).filter((task) => task.priority === p) }))
-          .filter((g) => g.items.length)
-      : [{ p: undefined, items: tasks ?? [] }];
-  const currentLabel = viewLabel(VIEWS.find((v) => v.id === view)?.id ?? "today");
-  const toReview = counts ? (counts.to_review ?? counts.review) : 0;
-  const n = tasks?.length ?? 0;
+  // What waits for me, by task: an ask or an approval reads "Čeká na tebe", a result to review "Ke kontrole".
+  const needKinds = useMemo(() => {
+    const m = new Map<string, string>();
+    (needs?.items ?? []).forEach((i) => i.ref && i.kind !== "mention" && m.set(i.ref, i.kind));
+    return m;
+  }, [needs]);
+  const needRefs = useMemo(() => new Set(needKinds.keys()), [needKinds]);
+  const people = useMemo(() => {
+    const m = new Map<number, string>();
+    (tasks ?? []).forEach((x) => x.assignee_id && x.assignee_name && m.set(x.assignee_id, x.assignee_name));
+    return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1], "cs"));
+  }, [tasks]);
+  const topics = useMemo(() => [...new Set((tasks ?? []).map((x) => x.topic).filter(Boolean) as string[])].sort(), [tasks]);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (tasks ?? []).filter((x) => {
+      if (who === "me" ? x.assignee_id !== meId : who && String(x.assignee_id) !== who) return false;
+      if (needle && !`${x.ref} ${x.title} ${x.summary ?? ""} ${x.notes}`.toLowerCase().includes(needle)) return false;
+      return true;
+    });
+  }, [tasks, q, who, meId]);
+
+  const grouped = useMemo(() => {
+    const by: Record<Group, Task[]> = { you: [], mine: [], progress: [], review: [], done: [], later: [] };
+    filtered.forEach((x) => by[groupOf(x, meId, needRefs)].push(x));
+    return by;
+  }, [filtered, meId, needRefs]);
+  const visible = GROUPS.filter((g) => grouped[g].length && (!show || show === g));
+
+  // ← → in the panel walk this list, in the order shown.
+  useEffect(() => {
+    setSheetOrder(visible.flatMap((g) => grouped[g].map((x) => x.ref)));
+  }, [grouped, visible.join()]);
+  useEffect(() => () => setSheetOrder([]), []);
+
+  const hrefOf = (r: string) => taskHref(loc, r);
+  const n = (g: Group) => grouped[g].length;
+  const summaryLine = [
+    n("you") && `${n("you")} ${plural(n("you"), t("tk.sub.you1"), t("tk.sub.you2"), t("tk.sub.you5"))}`,
+    n("mine") && t("tk.sub.mine", { n: n("mine") }),
+    n("progress") && t("tk.sub.progress", { n: n("progress") }),
+    n("review") && t("tk.sub.review", { n: n("review") }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div className="flex flex-col gap-5 lg:h-[calc(100vh-3rem)]">
-      <PageHeader
-        kicker={t("work.tasks.kicker")}
-        title={t("nav.tasks")}
-        sub={
-          counts &&
-          [
-            t("work.tasks.sub", { today: counts.today, inbox: counts.inbox, agents: counts.agents, waiting: counts.waiting }),
-            toReview ? t("work.tasks.sub_review", { n: toReview }) : "",
-          ]
-            .filter(Boolean)
-            .join(" · ")
-        }
-      />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 lg:flex-row">
-        <nav aria-label={t("work.tasks.views_aria")} className="flex min-w-0 shrink-0 gap-1 overflow-x-auto lg:w-48 lg:flex-col lg:overflow-visible">
-          <span className="hidden px-2.5 pb-1 text-xs text-ink-2 lg:block">{t("work.tasks.views")}</span>
-          {VIEWS.map(({ id, icon: Icon }) => {
-            const c = counts ? viewCount(counts, id) : 0;
-            return (
-              <button
-                key={id}
-                type="button"
-                onClick={() => set({ view: id, task: null, topic: null })}
-                title={id === "review" ? t("work.tasks.review_count_title") : undefined}
-                className={`flex h-[34px] shrink-0 items-center gap-2.5 rounded px-2.5 text-[13px] ${
-                  id === view ? "bg-raised text-ink shadow-[inset_2px_0_0_var(--color-accent)]" : "text-ink-2 hover:bg-raised"
-                }`}
-              >
-                <Icon size={15} strokeWidth={1.5} className={id === view ? "text-accent" : "text-ink-3"} />
-                {viewLabel(id)}
-                {c > 0 && (
-                  <span className={`ml-auto pl-2 text-xs tabular-nums ${id === "inbox" || id === "review" ? "text-accent" : "text-ink-2"}`}>
-                    {c}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          {topics.length > 0 && (
-            <>
-              <span className="hidden px-2.5 pt-4 pb-1 text-xs text-ink-2 lg:block">{t("nav.topics")}</span>
-              {topics.map((tp) => (
+    <div className="flex flex-col gap-5">
+      <PageHeader kicker={t("tk.list.kicker")} title={t("nav.tasks")} sub={tasks ? summaryLine || t("tk.list.calm") : undefined} />
+      <section className="panel flex min-w-0 flex-col">
+        <div className="flex flex-col gap-3 border-b border-line p-4">
+          <Capture onCaptured={() => refresh()} />
+          <div className="flex flex-col gap-3">
+            <div role="group" aria-label={t("tk.list.filter")} className="-mx-1 flex gap-1.5 overflow-x-auto px-1 sm:flex-wrap sm:overflow-visible">
+              {[null, ...FILTERS].map((g) => (
                 <button
-                  key={tp.topic}
+                  key={g ?? "all"}
                   type="button"
-                  onClick={() => set({ topic: topic === tp.topic ? null : tp.topic, view: view === "today" ? "next" : view })}
-                  className={`hidden h-[30px] min-w-0 items-center gap-2.5 rounded px-2.5 text-[13px] lg:flex ${
-                    tp.topic === topic ? "bg-raised text-ink" : "text-ink-2 hover:bg-raised"
+                  aria-pressed={show === g}
+                  onClick={() => set({ show: g })}
+                  className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[13px] ${
+                    show === g ? "border-accent bg-accent/10 text-ink" : "border-line text-ink-2 hover:text-ink"
                   }`}
                 >
-                  <span className="text-xs text-ink-2">#</span>
-                  <span className="min-w-0 truncate">{tp.topic}</span>
-                  <span className="ml-auto text-xs text-ink-2 tabular-nums">{tp.open}</span>
+                  {g ? t(`tk.group.${g}`) : t("tk.list.all")}
+                  <span className={`text-xs tabular-nums ${g === "you" && n("you") ? "text-orange-200" : "text-ink-2"}`}>
+                    {g ? n(g) : filtered.length}
+                  </span>
                 </button>
-              ))}
-            </>
-          )}
-        </nav>
-
-        <Panel
-          title={topic ? `${currentLabel} · #${topic}` : currentLabel}
-          right={
-            <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
-              {(["mine", "team", "all"] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => set({ scope: s === "all" ? null : s })}
-                  className={`text-xs ${s === scope ? "text-accent" : "text-ink-2 hover:text-ink"}`}
-                >
-                  {t(`work.scope.${s}`)}
-                </button>
-              ))}
-              <span className="hidden text-xs text-ink-2 sm:inline">
-                ·{" "}
-                {view === "today"
-                  ? t("work.tasks.sort_today")
-                  : view === "review" && counts
-                    ? t("work.tasks.review_right", { mine: toReview, all: counts.review })
-                    : t("work.tasks.count", { n, word: plural(n, t("work.word.task1"), t("work.word.task2"), t("work.word.task5")) })}
-              </span>
-              <Link to="/weekly-review" className="hidden text-xs text-ink-2 hover:text-accent md:inline">
-                {t("work.tasks.weekly")}
-              </Link>
-            </span>
-          }
-          className="min-w-0 flex-1"
-          bodyClassName="flex flex-col overflow-y-auto"
-        >
-          <div className="border-b border-line p-3.5">
-            <Capture onCaptured={() => refresh()} />
-          </div>
-          {view === "review" && counts && (
-            <p className="border-b border-line px-3.5 py-2 text-xs text-ink-2 sm:hidden">
-              {t("work.tasks.review_right", { mine: toReview, all: counts.review })}
-            </p>
-          )}
-          {view === "inbox" && n > 0 && (
-            <Link to="/tasks/inbox" className="border-b border-line px-3.5 py-2.5 text-xs text-accent hover:bg-raised">
-              {t("work.tasks.clarify_link")}
-            </Link>
-          )}
-          {view === "today" && tasks && <CapacityBar tasks={tasks} />}
-          {tasks?.length === 0 && (
-            <p className="p-6 text-center text-sm text-ink-2">
-              {view === "inbox" ? t("work.tasks.empty.inbox") : view === "today" ? t("work.tasks.empty.today") : t("work.tasks.empty")}
-            </p>
-          )}
-          {groups.map((g) => (
-            <div key={String(g.p)}>
-              {g.p !== undefined && (
-                <div className="flex flex-wrap items-baseline gap-x-2.5 px-3.5 pt-3.5 pb-2">
-                  <span className="text-[13px] font-medium">{g.p ? PRIORITY_LABEL[g.p] : t("work.priority.none")}</span>
-                  {g.p ? <span className="text-xs text-ink-2">{t(`work.priority.hint.${g.p}`)}</span> : null}
-                </div>
-              )}
-              {g.items.map((task) => (
-                <Row
-                  key={task.id}
-                  task={task}
-                  selected={task.ref === selected}
-                  hideTopic={!!selected}
-                  onSelect={() => set({ task: task.ref })}
-                  onToggle={() => toggle(task)}
-                  onReassigned={refresh}
-                />
               ))}
             </div>
-          ))}
-          {error && <p className="p-3.5 text-xs break-words text-red-400">{error}</p>}
-        </Panel>
-
-        {selected && (
-          <div className="flex min-h-0 min-w-0 lg:w-[380px] lg:shrink-0">
-            <TaskDetail taskRef={selected} actors={actors} onChanged={refresh} onClose={() => set({ task: null })} />
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-line bg-bg px-2.5 focus-within:border-accent sm:w-52 sm:flex-none">
+                <Search size={14} className="shrink-0 text-ink-3" aria-hidden />
+                <span className="sr-only">{t("tk.list.search")}</span>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("tk.list.search")} className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-ink-3" />
+                {q && (
+                  <button type="button" onClick={() => setQ("")} aria-label={t("tk.list.clear")} className="text-ink-2 hover:text-ink">
+                    <X size={13} />
+                  </button>
+                )}
+              </label>
+              <label className="sr-only" htmlFor="who">
+                {t("tk.list.who")}
+              </label>
+              <select id="who" value={who} onChange={(e) => set({ who: e.target.value || null })} className="h-8 max-w-[11rem] rounded-md border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent">
+                <option value="">{t("tk.list.who_all")}</option>
+                <option value="me">{t("tk.list.who_me")}</option>
+                {people
+                  .filter(([id]) => id !== meId)
+                  .map(([id, name]) => (
+                    <option key={id} value={id}>
+                      {name}
+                    </option>
+                  ))}
+              </select>
+              {topics.length > 1 || topic ? (
+                <>
+                  <label className="sr-only" htmlFor="topic">
+                    {t("tk.list.topic")}
+                  </label>
+                  <select id="topic" value={topic} onChange={(e) => set({ topic: e.target.value || null })} className="h-8 max-w-[10rem] rounded-md border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent">
+                    <option value="">{t("tk.list.topic_all")}</option>
+                    {(topic && !topics.includes(topic) ? [topic, ...topics] : topics).map((x) => (
+                      <option key={x} value={x}>
+                        #{x}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              ) : null}
+              <label className="sr-only" htmlFor="view">
+                {t("tk.list.view")}
+              </label>
+              <select id="view" value={view} onChange={(e) => set({ view: e.target.value === "board" ? null : e.target.value })} className="h-8 rounded-md border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent">
+                {VIEWS.map((v) => (
+                  <option key={v} value={v}>
+                    {t(`tk.view.${v}`)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
+        </div>
+        {view === "inbox" && (tasks?.length ?? 0) > 0 && (
+          <Link to="/tasks/inbox" className="border-b border-line px-4 py-2.5 text-[13px] text-accent hover:bg-raised">
+            {t("work.tasks.clarify_link")}
+          </Link>
         )}
-      </div>
+        {view === "today" && tasks && <CapacityBar tasks={tasks} />}
+        {!tasks && !error && <p className="p-6 text-sm text-ink-2">{t("act.loading")}</p>}
+        {tasks && visible.length === 0 && <p className="p-8 text-center text-sm text-ink-2">{q || who ? t("tk.list.none_filtered") : t("tk.list.none")}</p>}
+        {visible.map((g) => (
+          <GroupList key={`${g}${view}`} g={g} items={grouped[g]} meId={meId} selected={selected} hrefOf={hrefOf} collapsed={g === "done" || g === "later"} needKinds={needKinds} />
+        ))}
+        {error && <p className="p-4 text-xs break-words text-red-400">{error}</p>}
+        <div className="flex justify-end px-4 py-3">
+          <Link to="/weekly-review" className="text-xs text-ink-2 hover:text-accent">
+            {t("work.tasks.weekly")}
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

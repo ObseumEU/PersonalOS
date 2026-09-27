@@ -1,10 +1,11 @@
-import { AtSign, Check, CheckCheck, ExternalLink, HelpCircle, MessageSquare, ShieldCheck, X } from "lucide-react";
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { AtSign, Check, CheckCheck, ExternalLink, Hand, HelpCircle, MessageSquare, ShieldCheck, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { agentsApi } from "../agentsApi";
 import { chatApi } from "../chatApi";
 import { ago, label, plural, t } from "../i18n";
 import { type NeedsItem, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
+import { approvalHref, setSheetOrder, taskHref } from "../taskSheet";
 import { tasksApi } from "../tasksApi";
 import { toast } from "./overlay";
 import { Panel } from "./ui";
@@ -23,6 +24,9 @@ function Item({ it }: { it: NeedsItem }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const { Icon, key, cls } = KIND[it.kind];
+  const loc = useLocation();
+  // Tasks, asks, reviews and approvals open in the panel over this page, at "Co potřebuju od tebe".
+  const open = it.ref ? taskHref(loc, it.ref, "needs") : it.kind === "approval" ? approvalHref(loc, it.id) : it.link;
 
   const run = async (p: () => Promise<unknown>, done: string) => {
     setBusy(true);
@@ -66,7 +70,7 @@ function Item({ it }: { it: NeedsItem }) {
               {ago(it.at)}
             </span>
           </span>
-          <Link to={it.link} className="text-sm break-words hover:text-accent">
+          <Link to={open} className="text-sm break-words hover:text-accent">
             {it.kind === "approval" && it.action ? label("approval", it.action) : it.title}
           </Link>
           {it.detail && <p className="line-clamp-2 text-[13px] break-words text-ink-2">{it.detail}</p>}
@@ -108,9 +112,15 @@ function Item({ it }: { it: NeedsItem }) {
             {t("act.done")}
           </button>
         )}
-        <Link to={it.link} className="btn">
-          <ExternalLink size={13} /> {t("act.open")}
-        </Link>
+        {it.kind === "mention" ? (
+          <Link to={it.link} className="btn">
+            <ExternalLink size={13} /> {t("act.open")}
+          </Link>
+        ) : (
+          <Link to={open} className="btn">
+            <Hand size={13} /> {t("tk.act.handle")}
+          </Link>
+        )}
       </div>
       {mode && (
         <form
@@ -149,6 +159,11 @@ function Item({ it }: { it: NeedsItem }) {
 export default function NeedsInbox() {
   const needs = useNeedsMe();
   const c = needs?.counts;
+  // ← → in the panel step through this list.
+  useEffect(() => {
+    setSheetOrder([...new Set((needs?.items ?? []).map((i) => i.ref).filter((r): r is string => !!r))]);
+  }, [needs]);
+  useEffect(() => () => setSheetOrder([]), []);
   return (
     <Panel
       title={t("needs.title")}

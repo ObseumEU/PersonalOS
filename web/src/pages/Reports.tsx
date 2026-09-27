@@ -1,6 +1,7 @@
 import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, Minus, Printer, RefreshCw } from "lucide-react";
+import { TaskLink } from "../taskSheet";
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -266,16 +267,16 @@ function TaskList({ items, empty, extra }: { items: { ref: string; title: string
   return (
     <>
       {items.map((x, i) => (
-        <Link
+        <TaskLink
           key={x.ref + i}
-          to={`/tasks?task=${x.ref}`}
+          taskRef={x.ref}
           className="flex min-w-0 items-center gap-2 border-b border-line px-4 py-2 text-[13px] last:border-0 hover:bg-raised"
         >
           <span className="shrink-0 font-mono text-xs text-ink-2">{x.ref}</span>
           <span className="min-w-0 flex-1 truncate">{x.title}</span>
           {extra?.(i)}
           {x.assignee && <span className="max-w-[35%] truncate text-xs text-ink-2">{x.assignee}</span>}
-        </Link>
+        </TaskLink>
       ))}
     </>
   );
