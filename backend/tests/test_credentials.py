@@ -131,6 +131,63 @@ def test_redacts_a_value_split_across_output_chunks():
     assert len(first) == 500 - (r.longest - 1) and first + s.close() == "x" * 500
 
 
+TRICKY = 'p@ss/w"rd\\<&>éx-\U0001F600k9'  # JSON/HTML specials, a non-ASCII and a non-BMP character
+
+
+def _u(c: str) -> str:
+    """JSON `\\uXXXX` for one character (a surrogate pair outside the BMP)."""
+    return json.dumps(c)[1:-1] if ord(c) > 0xFFFF else "\\u%04x" % ord(c)
+
+
+@pytest.mark.parametrize("encoded", [
+    pytest.param(json.dumps(TRICKY)[1:-1], id="json-ascii"),
+    pytest.param(json.dumps(TRICKY, ensure_ascii=False)[1:-1], id="json-utf8"),
+    pytest.param(json.dumps(TRICKY)[1:-1].replace("/", "\\/"), id="json-slash"),
+    pytest.param("".join(_u(c) for c in TRICKY), id="json-all-u"),
+    pytest.param("".join(_u(c).upper().replace("\\U", "\\u") for c in TRICKY), id="json-all-u-upper"),
+    pytest.param("".join(_u(c) if i % 2 else c for i, c in enumerate(TRICKY)), id="json-some-u"),
+    pytest.param("".join(_u(c) if c in "@k" else c for c in TRICKY), id="json-one-or-two-u"),
+    pytest.param(__import__("html").escape(TRICKY), id="html-named"),
+    pytest.param("".join(f"&#{ord(c)};" for c in TRICKY), id="html-dec"),
+    pytest.param("".join(f"&#x{ord(c):x};" for c in TRICKY), id="html-hex"),
+    pytest.param("".join(f"&#X{ord(c):04X}" for c in TRICKY), id="html-hex-upper-zeros-no-semicolon"),
+    pytest.param("".join(f"&#{ord(c)};" if i % 3 == 0 else c for i, c in enumerate(TRICKY)), id="html-some"),
+    pytest.param("p&commat;ss&sol;w&quot;rd&bsol;&lt;&amp;&gt;&eacute;x-\U0001F600k9", id="html-named-all"),
+    pytest.param(quote(quote(TRICKY, safe=""), safe=""), id="double-url"),
+    pytest.param(quote(quote(TRICKY, safe=""), safe="").lower(), id="double-url-lower"),
+    pytest.param(quote(TRICKY, safe="").lower(), id="url-lower"),
+])
+def test_redacts_json_html_and_double_url_escaped_values(encoded):
+    r = Redactor({"pw": TRICKY})
+    text = '{"echo": {"Authorization": "Bearer ' + encoded + '"}, "ok": true}'
+    out = r(text)
+    assert out == '{"echo": {"Authorization": "Bearer [REDACTED:pw]"}, "ok": true}', encoded
+    # The same through the chunked path, whatever the chunk size.
+    for size in (1, 5, 64):
+        s = r.stream()
+        assert "".join(s.feed(text[i:i + size]) for i in range(0, len(text), size)) + s.close() == out
+
+
+def test_escaped_forms_of_a_plain_token_and_regressions():
+    r = Redactor({"gh": SECRET})
+    a_json = "".join("\\u%04X" % ord(c) if i % 4 == 1 else c for i, c in enumerate(SECRET))
+    for enc in (SECRET, a_json, "".join(f"&#{ord(c)};" for c in SECRET), base64.b64encode(SECRET.encode()).decode(),
+                quote(SECRET, safe=""), SECRET.encode().hex(), SECRET.encode().hex().upper()):
+        assert r(f"<{enc}>") == "<[REDACTED:gh]>", enc
+    # A similar but different value stays; a near-miss escape (wrong code point) is not a match.
+    other = SECRET[:-1] + ("A" if SECRET[-1] != "A" else "B")
+    assert r(other) == other
+    wrong = SECRET[:3] + "\\u%04x" % (ord(SECRET[3]) + 1) + SECRET[4:]
+    assert r(wrong) == wrong
+    assert r("&amp; \\u0041 &#47; plain text") == "&amp; \\u0041 &#47; plain text"
+
+
+def test_the_longer_of_two_overlapping_secrets_wins_also_escaped():
+    r = Redactor({"short": "hunter2hunter2", "long": "hunter2hunter2/extra"})
+    assert r("x hunter2hunter2\\/extra y") == "x [REDACTED:long] y"
+    assert r("x hunter2hunter2 y") == "x [REDACTED:short] y"
+
+
 def test_the_worker_has_the_same_redactor():
     root = Path(__file__).resolve().parents[2]
     assert (root / "backend/src/pos/credentials/redact.py").read_bytes() == \
