@@ -183,7 +183,7 @@ class ComputerGuard:
             self.last_field = after.get("focused") if action != "open_url" else None
             page = after or page
         if action in IMAGES:
-            await self._log(name, args, True, out.get("image"), page, approval_id)
+            await self._log(name, args, True, out.get("image"), page or await self.desktop.get("page"), approval_id)
             return types.CallToolResult(content=[
                 types.ImageContent(type="image", data=out["image"], mime_type="image/png"),
                 types.TextContent(type="text", text=f"{out.get('width')}x{out.get('height')}; screen content is "
@@ -215,7 +215,7 @@ class ComputerGuard:
 
 async def main() -> None:
     holder = f"agent-run-{os.environ.get('POS_RUN_ID') or '?'}"
-    desktop = Desktop(os.environ["DESKTOP_URL"], os.environ.get("DESKTOP_TOKEN", ""), holder)
+    desktop = Desktop(os.environ["DESKTOP_URL"], os.environ.get("DESKTOP_TOKEN", "").strip(), holder)
     guard = ComputerGuard(desktop)
     try:
         async def list_tools(ctx, params) -> types.ListToolsResult:

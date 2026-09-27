@@ -80,11 +80,15 @@ class Session:
             if subprocess.run(["xdpyinfo"], env=env, capture_output=True).returncode == 0:
                 break
             time.sleep(0.1)
+        os.makedirs(os.path.join(self.dir, ".fluxbox"), exist_ok=True)
+        with open(os.path.join(self.dir, ".fluxbox", "overlay"), "w") as f:
+            f.write("background: none\n")  # no wallpaper tool: no "fbsetbg" message box on the screen
         self.procs.append(subprocess.Popen(["fluxbox"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                            start_new_session=True))
         self.procs.append(subprocess.Popen([
             BROWSER, "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-dev-shm-usage",
-            "--disable-gpu", "--disable-extensions", "--renderer-process-limit=2",
+            "--disable-gpu", "--disable-extensions", "--renderer-process-limit=2", "--test-type",
+            "--disable-sync", "--disable-features=SigninIntercept,Translate",
             "--js-flags=--max-old-space-size=256", "--password-store=basic",
             f"--user-data-dir={os.path.join(self.dir, 'profile')}", "--remote-debugging-address=127.0.0.1",
             "--remote-debugging-port=9222", "--window-position=0,0", f"--window-size={WIDTH},{HEIGHT}",
@@ -150,6 +154,7 @@ class Session:
           const label = (el) => {
             if (!el) return null;
             const b = el.closest('button, a, input, textarea, select, [role=button], [role=link]') || el;
+            if (b === document.body || b === document.documentElement) return b.tagName.toLowerCase();
             const t = (b.getAttribute('aria-label') || b.value || b.innerText || b.title || b.placeholder
                        || b.name || '').toString().trim().slice(0, 80);
             const kind = b.tagName.toLowerCase() + (b.type ? '[' + b.type + ']' : '');
@@ -380,7 +385,7 @@ def main() -> None:
     desktop = Desktop()
     threading.Thread(target=desktop.reaper, daemon=True).start()
     port = int(os.environ.get("DESKTOP_PORT", "8100"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(desktop, os.environ.get("DESKTOP_TOKEN", "")))
+    server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(desktop, os.environ.get("DESKTOP_TOKEN", "").strip()))
     signal.signal(signal.SIGTERM, lambda *_: (desktop.close(desktop.session.id) if desktop.session else None,
                                               os._exit(0)))
     server.serve_forever()
