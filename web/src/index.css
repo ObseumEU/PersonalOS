@@ -100,6 +100,15 @@ body {
 }
 .breathe { animation: breathe 3s ease-in-out infinite; }
 
+/* Knowledge graph toast: drops in, fades out. */
+@keyframes kg-toast {
+  0% { opacity: 0; transform: translate(-50%, -6px); }
+  12%, 80% { opacity: 1; transform: translate(-50%, 0); }
+  100% { opacity: 0; transform: translate(-50%, 0); }
+}
+.kg-toast { transform: translateX(-50%); animation: kg-toast 1.8s ease-out forwards; }
+@media (prefers-reduced-motion: reduce) { .kg-toast { animation: none; } }
+
 /* Chat typing indicator: three dots that bounce in turn. */
 .typing-dots { display: inline-flex; align-items: center; gap: 3px; height: 1em; }
 .typing-dots > span {
