@@ -133,13 +133,15 @@ def autonomy_caps() -> list[str]:
     """What every active agent holds by default: every permission group of the platform's
     tools except access:manage (the grant tools stay the owner's), plus a tool grant for each
     pos tool whose group is not a permission (e.g. tool:ha_ssh; its credentials are checked
-    inside). Outbound is not here: constitution rule 1 keeps each send in the approval queue."""
+    inside), and the headless browser (tool:browser). Not here: outbound (constitution rule 1
+    keeps each send in the approval queue) and the one shared desktop sandbox (tool:computer,
+    host capacity; granted at once on request)."""
     from .. import agents, mcp_server
 
     perms = {p for p in agents.PERMISSIONS if p != PERM}
     tools = {f"tool:{t}" for t, group in mcp_server.TOOL_PERMISSIONS.items()
              if group not in agents.PERMISSIONS and not t.startswith("access_")}
-    return sorted(perms | tools)
+    return sorted(perms | tools | {"tool:browser"})
 
 
 def autonomy_on() -> bool:

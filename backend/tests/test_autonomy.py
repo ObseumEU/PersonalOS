@@ -35,7 +35,13 @@ def test_a_new_agent_holds_every_platform_capability_but_the_owners(app):
     have = access.effective(conn, agent)
     assert set(access.autonomy_caps()) <= have
     assert {"tasks:write", "tasks:review", "agents:create", "messages:send", "browser:use", "ops:observe",
-            "tool:ha_ssh"} <= have
+            "tool:ha_ssh", "tool:browser"} <= have
+    from pos import browser
+
+    assert browser.may_browse(conn, agent) and not browser.may_use_computer(conn, agent)
+    assert access.request_access(conn, Ctx(agent), what="capability", capability="tool:computer",
+                                 why="a GUI-only admin page")["status"] == "granted"
+    assert browser.may_use_computer(conn, agent)
     assert "access:manage" not in have and not any(c.startswith("tool:access_") for c in have)
     assert "outbound:*" not in have                                    # constitution rule 1: unchanged
     for tool in ("create_task", "chat_send", "schedule_list", "note_create", "search", "hire_agent", "loki_query"):
