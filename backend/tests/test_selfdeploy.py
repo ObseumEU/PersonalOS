@@ -172,3 +172,35 @@ def test_promote_rolls_production_back_when_health_fails_and_respects_the_kill_s
     killswitch.freeze(conn, Ctx(actors.owner_id(conn)), "test")
     conn.commit()
     assert rep.frozen() is True
+
+
+def test_restore_owner_gives_root_owned_files_back(tmp_path, monkeypatch):
+    """The deployer runs as root: after a tick, everything it wrote in .git (and, after a
+    deploy, the working tree, not node_modules or data) goes back to the checkout's owner."""
+    import os
+
+    repo = tmp_path / "co"
+    (repo / ".git" / "objects" / "ab").mkdir(parents=True)
+    (repo / ".git" / "objects" / "ab" / "cdef").write_text("x")
+    (repo / "backend").mkdir()
+    (repo / "backend" / "a.py").write_text("x")
+    (repo / "web" / "node_modules" / "m").mkdir(parents=True)
+    (repo / "data").mkdir()
+    (repo / "data" / "pos.db").write_text("x")
+    owners = {str(repo): 1000}
+    changed = []
+    monkeypatch.setattr(selfdeploy, "_is_root", lambda: True)
+    monkeypatch.setattr(selfdeploy, "_owner", lambda p: (owners.get(str(p), 0), 1000))
+    monkeypatch.setattr(selfdeploy, "_chown", lambda p, u, g: (changed.append(os.path.relpath(p, repo)),
+                                                               owners.__setitem__(str(p), u)))
+    monkeypatch.setattr(selfdeploy, "git", lambda *a: str(repo / ".git"))
+    assert selfdeploy.restore_owner(repo, tree=False) == 4  # .git, objects, ab, cdef
+    assert all(c.startswith(".git") for c in changed)
+    changed.clear()
+    assert selfdeploy.restore_owner(repo, tree=True) == 3
+    assert {c.replace(os.sep, "/") for c in changed} == {"backend", "backend/a.py", "web"}
+    assert selfdeploy.restore_owner(repo, tree=True) == 0  # nothing left to give back
+    monkeypatch.setattr(selfdeploy, "_is_root", lambda: False)
+    owners.clear()
+    owners[str(repo)] = 1000
+    assert selfdeploy.restore_owner(repo) == 0  # not root: a no-op

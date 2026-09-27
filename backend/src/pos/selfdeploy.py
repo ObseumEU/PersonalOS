@@ -303,6 +303,63 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     return res
 
 
+# Not walked when giving files back: dependencies and the stacks' data (their owners are the containers').
+OWNER_SKIP = {"node_modules", ".venv", "venv", "data", "dist", ".pytest_cache"}
+
+
+def _is_root() -> bool:
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def _owner(path: str) -> tuple[int, int]:
+    st = os.lstat(path)
+    return st.st_uid, st.st_gid
+
+
+def _chown(path: str, uid: int, gid: int) -> None:
+    os.lchown(path, uid, gid)
+
+
+def restore_owner(repo: Path, tree: bool = True) -> int:
+    """The deployer container runs as root (it drives docker), so its git fetch, checkout
+    and merge leave root-owned objects and files in the owner's checkout, and the owner's
+    own `git fetch` then fails. After every tick, give back to the checkout's owner every
+    entry under the git directory (and, after a deploy, the working tree) that is not
+    theirs. A no-op unless running as root on a checkout owned by someone else."""
+    if not _is_root():
+        return 0
+    try:
+        uid, gid = _owner(str(repo))
+    except OSError:
+        return 0
+    if uid == 0:
+        return 0
+    try:
+        common = Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+    except (subprocess.CalledProcessError, OSError):
+        common = repo / ".git"
+    roots = [common] + ([repo] if tree else [])
+    fixed = 0
+
+    def give(path: str) -> None:
+        nonlocal fixed
+        try:
+            if _owner(path)[0] != uid:
+                _chown(path, uid, gid)
+                fixed += 1
+        except OSError:
+            pass
+
+    for top in roots:
+        give(str(top))
+        for root, dirs, files in os.walk(top):
+            if top == repo:
+                dirs[:] = [d for d in dirs if d not in OWNER_SKIP and Path(root, d) != common]
+            for name in (*dirs, *files):
+                give(os.path.join(root, name))
+    return fixed
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=".")
@@ -334,12 +391,16 @@ def main() -> None:
                 res = tick(Path(a.repo), reporter, **kw)
         except subprocess.CalledProcessError as e:
             # e.g. no access to the remote yet (a missing deploy key): say so and try again, never crash-loop
+            restore_owner(Path(a.repo))
             err = (e.stderr or "").strip().splitlines()
             print(f"git {' '.join(e.cmd[1:3])} failed: {err[-1] if err else e}", flush=True)
             if a.once or not a.watch:
                 raise
             time.sleep(max(a.watch, 300))
             continue
+        fixed = restore_owner(Path(a.repo), tree=res.status != "nothing")
+        if fixed:
+            print(f"gave {fixed} root-owned files back to the checkout's owner", flush=True)
         if res.status != "nothing":
             print(f"{res.old[:10]}..{res.new[:10]}: {res.status} {res.stage}", flush=True)
         if a.once or not a.watch:
