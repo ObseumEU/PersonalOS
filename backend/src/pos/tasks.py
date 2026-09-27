@@ -201,12 +201,18 @@ def _scope_sql(conn: sqlite3.Connection, ctx: Ctx, scope: str) -> tuple[str, lis
     raise Invalid("scope must be mine, team or all")
 
 
-def list_tasks(conn: sqlite3.Connection, ctx: Ctx, view: str = "today", *, topic: str | None = None,
-               assignee_id: int | None = None, limit: int = 200, scope: str = "all") -> list[dict]:
+def _view_for(conn: sqlite3.Connection, ctx: Ctx, view: str) -> tuple[str, list, str]:
+    """The view's SQL for this member; lists and counts share it, so they agree."""
     cond, params, order = _view_sql(view, ctx.actor_id)
     if view == "to_review" and actors.get(conn, ctx.actor_id)["is_owner"]:
         # results handed in before reviewers existed wait for the owner
         cond, params = "status = 'review' AND (reviewer_id = ? OR reviewer_id IS NULL)", [ctx.actor_id]
+    return cond, params, order
+
+
+def list_tasks(conn: sqlite3.Connection, ctx: Ctx, view: str = "today", *, topic: str | None = None,
+               assignee_id: int | None = None, limit: int = 200, scope: str = "all") -> list[dict]:
+    cond, params, order = _view_for(conn, ctx, view)
     scond, sparams = _scope_sql(conn, ctx, scope)
     cond, params = f"{cond} AND {scond}", [*params, *sparams]
     vis, vparams = visible_sql(ENTITY, ctx.actor_id)
@@ -240,7 +246,7 @@ def counts(conn: sqlite3.Connection, ctx: Ctx) -> dict[str, int]:
     for view in VIEWS:
         if view == "done":
             continue
-        cond, params, _ = _view_sql(view, ctx.actor_id)
+        cond, params, _ = _view_for(conn, ctx, view)
         out[view] = conn.execute(
             f"SELECT COUNT(*) FROM tasks WHERE archived_at IS NULL AND {cond} AND {vis}", [*params, *vparams]
         ).fetchone()[0]

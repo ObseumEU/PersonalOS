@@ -1,0 +1,130 @@
+"""What needs the signed-in member now ("Čeká na tebe"): one list, one count.
+
+The Home inbox, the sidebar badge and the phone tab bar all read this, so the
+number is the same everywhere. Four kinds, newest first within each:
+
+- approval: a pending approval (only the owner decides them);
+- ask: an open ticket an agent raised for this member (`ask_owner`) or any
+  other open task an agent assigned to them;
+- review: a result handed in for this member's review (the Tasks view
+  `to_review`, the same SQL);
+- mention: an unread chat message that @mentions them. Pings that only
+  announce an ask or an approval above are left out (the item is already
+  in the list).
+"""
+
+import json
+import re
+import sqlite3
+
+from . import actors, tasks
+from .core import Ctx
+
+KINDS = ("approval", "ask", "review", "mention")
+_APPROVAL_PING = re.compile(r"schválení #\d+")
+MENTION_LIMIT = 30
+
+
+def _approvals(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    if not viewer["is_owner"]:
+        return []
+    rows = conn.execute(
+        """SELECT a.*, r.name AS requested_by_name, r.kind AS requested_by_kind FROM approvals a
+           LEFT JOIN actors r ON r.id = a.requested_by WHERE a.status = 'pending' ORDER BY a.id DESC""").fetchall()
+    out = []
+    for r in rows:
+        details = json.loads(r["details"] or "{}")
+        why = str(details.get("why") or details.get("reason") or details.get("summary") or "")
+        out.append({
+            "kind": "approval", "key": f"approval:{r['id']}", "id": r["id"],
+            "title": str(r["action"]).replace("_", " "), "detail": why[:240],
+            "from_name": r["requested_by_name"], "from_kind": r["requested_by_kind"], "at": r["created_at"],
+            "ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
+            "link": "/approvals",
+        })
+    return out
+
+
+def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    """Open tasks for this member that an agent put there (asks first)."""
+    rows = conn.execute(
+        """SELECT t.*, c.name AS from_name, c.kind AS from_kind FROM tasks t
+           LEFT JOIN actors c ON c.id = t.created_by
+           WHERE t.archived_at IS NULL AND t.assignee_id = ? AND t.status NOT IN ('done', 'review', 'someday')
+             AND (t.source = 'ask_owner' OR (c.kind IN ('ai', 'agent') AND t.status != 'inbox'))
+           ORDER BY CASE t.source WHEN 'ask_owner' THEN 0 ELSE 1 END, COALESCE(t.priority, 4), t.id DESC""",
+        (viewer["id"],)).fetchall()
+    asker = {}
+    if _has_table(conn, "owner_asks"):
+        for a in conn.execute("""SELECT o.ticket_id, o.kind, o.blocking, x.name, x.kind AS akind FROM owner_asks o
+                                 JOIN actors x ON x.id = o.asker_id WHERE o.status = 'open'"""):
+            asker[a["ticket_id"]] = a
+    out = []
+    for r in rows:
+        a = asker.get(r["id"])
+        out.append({
+            "kind": "ask", "key": f"ask:{r['id']}", "id": r["id"], "ref": tasks.display_id(r["id"]),
+            "title": r["title"], "detail": "", "ask_kind": a["kind"] if a else None,
+            "blocking": bool(a["blocking"]) if a else False,
+            "from_name": a["name"] if a else r["from_name"], "from_kind": a["akind"] if a else r["from_kind"],
+            "at": r["created_at"], "link": f"/tasks?task={tasks.display_id(r['id'])}",
+        })
+    return out
+
+
+def _reviews(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:
+    out = []
+    for t in tasks.list_tasks(conn, ctx, "to_review", limit=100):
+        out.append({
+            "kind": "review", "key": f"review:{t['id']}", "id": t["id"], "ref": t["ref"], "title": t["title"],
+            "detail": (t.get("progress_note") or "")[:240], "from_name": t.get("assignee_name"),
+            "from_kind": t.get("assignee_type"), "at": t["updated_at"],
+            "link": f"/tasks?view=review&task={t['ref']}",
+        })
+    return out
+
+
+def _mentions(conn: sqlite3.Connection, viewer: sqlite3.Row, skip: set[int]) -> list[dict]:
+    rows = conn.execute(
+        """SELECT m.id, m.channel_id, m.body, m.created_at, m.reply_to, a.name AS from_name, a.kind AS from_kind,
+                  c.kind AS channel_kind, c.name AS channel_name
+           FROM chat_messages m
+           JOIN channel_members cm ON cm.channel_id = m.channel_id AND cm.actor_id = ?
+           JOIN channels c ON c.id = m.channel_id AND c.archived_at IS NULL
+           JOIN actors a ON a.id = m.author_id
+           WHERE m.id > cm.last_read_message_id AND m.archived_at IS NULL AND m.author_id != ?
+             AND EXISTS (SELECT 1 FROM json_each(m.mentions) j WHERE j.value = ?)
+           ORDER BY m.id DESC LIMIT ?""",
+        (viewer["id"], viewer["id"], viewer["id"], MENTION_LIMIT * 2)).fetchall()
+    out = []
+    for r in rows:
+        if r["id"] in skip or _APPROVAL_PING.search(r["body"]):
+            continue
+        where = f"#{r['channel_name']}" if r["channel_kind"] == "group" else "DM"
+        out.append({
+            "kind": "mention", "key": f"mention:{r['id']}", "id": r["id"], "channel_id": r["channel_id"],
+            "thread": r["reply_to"] or r["id"], "title": f"{r['from_name']} v {where}", "detail": r["body"][:280],
+            "from_name": r["from_name"], "from_kind": r["from_kind"], "at": r["created_at"], "ref": None,
+            "link": f"/chat?c={r['channel_id']}",
+        })
+    return out[:MENTION_LIMIT]
+
+
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (name,)).fetchone() is not None
+
+
+def collect(conn: sqlite3.Connection, ctx: Ctx) -> dict:
+    """{count, counts: {kind: n}, items: [...]} for the signed-in member."""
+    viewer = actors.get(conn, ctx.actor_id)
+    asks_ = _asks(conn, viewer)
+    ask_ids = {a["id"] for a in asks_}
+    reviews = [r for r in _reviews(conn, ctx) if r["id"] not in ask_ids]
+    # The chat pings of asks: the ticket is already in the list.
+    skip: set[int] = set()
+    if _has_table(conn, "owner_asks"):
+        skip = {r["message_id"] for r in conn.execute(
+            "SELECT message_id FROM owner_asks WHERE message_id IS NOT NULL")}
+    items = [*_approvals(conn, viewer), *asks_, *reviews, *_mentions(conn, viewer, skip)]
+    counts = {k: sum(1 for i in items if i["kind"] == k) for k in KINDS}
+    return {"count": len(items), "counts": counts, "items": items}

@@ -313,3 +313,11 @@ def freeze(body: FreezeIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
 @router.post("/system/unfreeze")
 def unfreeze(conn=Depends(get_db), ctx=Depends(get_ctx)):
     return killswitch.unfreeze(conn, ctx)
+
+
+@router.get("/needs-me")
+def needs_me(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """What waits for the signed-in member: approvals, asks, reviews, @mentions (one count everywhere)."""
+    from . import needs_me as nm
+
+    return nm.collect(conn, ctx)
