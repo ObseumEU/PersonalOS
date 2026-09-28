@@ -175,9 +175,12 @@ def health(s: Store, t: dict, check: dict, result: dict, now: float) -> list[Obs
                        f"{name} is failing ({result.get('detail') or result.get('status')})", 1,
                        {"url": check["url"], "fails_in_a_row": fails, "last": result.get("detail") or result.get("status")},
                        check.get("restart")))
-    if result.get("level") == "error":
-        out.append(Obs(check["service"], "sync_error", name, "medium", f"{name}: reports sync level error", 1,
-                       {"url": check["url"]}))
+    # a sync error is a degradation, not an outage: low, and only after a streak of checks
+    sync = (s.meta(f"sync_streak:{name}") or 0) + 1 if result.get("level") == "error" else 0
+    s.set_meta(f"sync_streak:{name}", sync)
+    if sync >= t["sync_error_streak"]:
+        out.append(Obs(check["service"], "sync_error", name, "low", f"{name}: reports sync level error",
+                       sync if sync == t["sync_error_streak"] else 1, {"url": check["url"], "checks_in_a_row": sync}))
     days = result.get("tls_days")
     if days is not None and days < t["tls_days_warn"]:
         out.append(Obs(check["service"], "tls", name, "high" if days < t["tls_days_high"] else "medium",

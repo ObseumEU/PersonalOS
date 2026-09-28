@@ -61,6 +61,7 @@ DEFAULTS: dict = {
         "health_fails": 3,             # consecutive failed checks before an incident
         "down_streak": 3,              # ticks a watched container is not running
         "unhealthy_streak": 3,
+        "sync_error_streak": 5,        # consecutive "sync level error" checks before an incident
         "restart_loop": 3,             # restarts within restart_window_min
         "restart_window_min": 15,
         "tls_days_warn": 14,

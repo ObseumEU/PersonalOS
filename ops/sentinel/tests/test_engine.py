@@ -378,3 +378,27 @@ def test_backup_age_thresholds_check_rows_and_metrics(sen, clock, tmp_path, caps
     assert 'probe_success{app="backup-stale"} 1' in m and 'probe_success{app="backup-old"} 0' in m
     out = capsys.readouterr().out
     assert '"check": "backup"' in out and '"level": "error"' in out
+
+
+# ------------------------------------------------------------------ sync level error (T-265)
+
+def test_a_steady_sync_error_is_one_incident_even_after_the_monitor_closes_it(sen, clock, monkeypatch):
+    from sentinel import checks
+
+    sen.cfg["http"] = [{"name": "knowlage-api", "service": "knowlage", "url": "http://kb/api/health",
+                        "json_level": "sync"}]
+    monkeypatch.setattr(checks, "http_check", lambda *a, **k: {"ok": True, "status": 200, "level": "error"})
+    opened = []
+    for i in range(10):
+        opened += sen.tick()["opened"]
+        if i == 5:  # the Monitor classifies it "transient" and resolves it while it goes on
+            sen.inc.resolve(opened[0], "closed by the Monitor agent", classification="transient")
+        clock.advance(60)
+    assert len(opened) == 1                                             # nothing before 5 checks in a row
+    row = sen.inc.get(opened[0])
+    assert row["status"] == "open" and row["count"] == 10 and row["severity"] == "low"
+    assert sen.s.one("SELECT COUNT(*) AS n FROM incidents WHERE kind = 'sync_error'")["n"] == 1
+    # once it is quiet for its quiet period it resolves
+    monkeypatch.setattr(checks, "http_check", lambda *a, **k: {"ok": True, "status": 200, "level": "ok"})
+    clock.advance(31 * 60)
+    assert sen.tick()["resolved"] == [opened[0]]
