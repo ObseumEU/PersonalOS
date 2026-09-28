@@ -185,6 +185,33 @@ def health(s: Store, t: dict, check: dict, result: dict, now: float) -> list[Obs
     return out
 
 
+def backup_status(t: dict, age_h: float | None) -> str:
+    if age_h is None or age_h > t["backup_fail_h"]:
+        return "fail"
+    return "warn" if age_h > t["backup_warn_h"] else "ok"
+
+
+def backup(s: Store, t: dict, name: str, result: dict, now: float) -> list[Obs]:
+    """The age of one backup: a check row (backup-<name>, service backup) and an incident over the thresholds."""
+    status = backup_status(t, result.get("age_h"))
+    check = f"backup-{name}"
+    row = s.one("SELECT fails FROM checks WHERE name = ?", check)
+    fails = 0 if status == "ok" else (row["fails"] if row else 0) + 1
+    s.x("""INSERT INTO checks (name, service, ok, fails, last_ok, last_fail, detail) VALUES (?, 'backup', ?, ?, ?, ?, ?)
+           ON CONFLICT (name) DO UPDATE SET ok = excluded.ok, fails = excluded.fails,
+             last_ok = COALESCE(excluded.last_ok, checks.last_ok), last_fail = COALESCE(excluded.last_fail, checks.last_fail),
+             detail = excluded.detail""",
+        check, int(status == "ok"), fails, now if status == "ok" else None, None if status == "ok" else now,
+        json.dumps({"age_h": result.get("age_h"), "status": status, "detail": result.get("detail") or ""}))
+    if status == "ok":
+        return []
+    what = f"{result['age_h']:.0f} h old" if result.get("age_h") is not None else result.get("detail") or "not found"
+    return [Obs("backup", "backup_age", name, "high" if status == "fail" else "medium",
+                f"backup {name}: last backup {what}", 1,
+                {"age_h": result.get("age_h"), "status": status, "detail": result.get("detail") or "",
+                 "warn_h": t["backup_warn_h"], "fail_h": t["backup_fail_h"]})]
+
+
 def containers(s: Store, t: dict, service_of, items: list[dict], now: float) -> list[Obs]:
     """items: inspected containers {name, status, health, restart_count, started_at, oom, exit_code, image, created}."""
     out = []

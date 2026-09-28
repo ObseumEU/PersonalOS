@@ -1,5 +1,6 @@
 """One sentinel tick: measure, judge, remediate, tell PersonalOS."""
 
+import json
 import logging
 import secrets
 import threading
@@ -32,6 +33,7 @@ class Sentinel:
         self.started_at = clock()
         self.host: dict = {}
         self.apps: dict = {}
+        self.backups: dict = {}
         self.last_tick: float | None = None
         self.tick_ms = 0
         self.pos_fail_streak = 0
@@ -65,6 +67,9 @@ class Sentinel:
             if now - (self.s.meta("apps_at") or 0) >= 60 * self.cfg["apps_every_min"] - 5:
                 self.s.set_meta("apps_at", now)
                 obs += self._guard("apps", lambda: self._apps(now))
+            if now - (self.s.meta("backups_at") or 0) >= 60 * self.cfg["backups_every_min"] - 5:
+                self.s.set_meta("backups_at", now)
+                obs += self._guard("backups", lambda: self._backups(now))
             out = self.process(obs, now)
             self.s.prune(now)
         self.last_tick = now
@@ -171,6 +176,33 @@ class Sentinel:
         out += detect.budgets(self.t, b)
         return out
 
+    def _backups(self, now: float) -> list[Obs]:
+        """Age of each backup: an incident over the thresholds, one JSON line each (Alloy labels it
+        service="backup" in Loki) and backup_age_hours / probe_success on /metrics."""
+        out = []
+        for name, path in self.cfg["backups"].items():
+            r = checks.backup_age(path, now)
+            status = detect.backup_status(self.t, r["age_h"])
+            self.backups[name] = {"age_h": r["age_h"], "status": status, "detail": r.get("detail") or ""}
+            level = {"ok": "info", "warn": "warn", "fail": "error"}[status]
+            print(json.dumps({"level": level, "check": "backup", "backup": name, "age_h": r["age_h"],
+                              "status": status, "detail": r.get("detail") or "", "path": path,
+                              "warn_h": self.t["backup_warn_h"], "fail_h": self.t["backup_fail_h"]}), flush=True)
+            out += detect.backup(self.s, self.t, name, r, now)
+        return out
+
+    def metrics(self) -> str:
+        """Prometheus text for Alloy: backup ages, and probe_success (0 over the fail threshold or
+        missing) so metrics_snapshot lists a stale backup under failing_checks."""
+        lines = ["# TYPE backup_age_hours gauge"]
+        for name, b in sorted(self.backups.items()):
+            if b["age_h"] is not None:
+                lines.append(f'backup_age_hours{{backup="{name}"}} {b["age_h"]}')
+        lines.append("# TYPE probe_success gauge")
+        for name, b in sorted(self.backups.items()):
+            lines.append(f'probe_success{{app="backup-{name}"}} {int(b["status"] != "fail")}')
+        return "\n".join(lines) + "\n"
+
     # ------------------------------------------------------------- heartbeat and the fallback path
     def status(self, now: float | None = None) -> dict:
         now = now or self.clock()
@@ -196,7 +228,7 @@ class Sentinel:
                 "checks": [{"name": c["name"], "service": c["service"], "ok": bool(c["ok"]), "fails": c["fails"]}
                            for c in checks_],
                 "open_incidents": open_, "counters": counters, "host": self.host, "apps": self.apps,
-                "errors": self.errors[:5]}
+                "backups": self.backups, "errors": self.errors[:5]}
 
     def _heartbeat(self, now: float) -> None:
         ok = self.pos.heartbeat(self.status(now))

@@ -127,6 +127,10 @@ services:
       - sentinel-state:/state
       - ./.git:/repos/personalos:ro
       - ${NEXUS_GIT_DIR:-/opt/server/nexus-process-pilot/app/.git}:/repos/nexus:ro
+      # backup directories, read-only: only the newest mtime is read (docs/SENTINEL.md, "Backups")
+      - ${POS_BACKUP_DIR:-./data/backups}:/backups/personalos:ro
+      - ${KNOWLAGE_BACKUP_DIR:-/opt/server/kb/backups}:/backups/knowlage:ro
+      - ${NEXUS_BACKUP_DIR:-/opt/server/nexus-process-pilot/app/backups}:/backups/nexus:ro
     security_opt:
       - no-new-privileges:true
     read_only: true

@@ -96,6 +96,7 @@ def cfg(tmp_path):
              litellm_url="http://litellm", litellm_key="", test_hook=True, state_dir=str(tmp_path), listen="127.0.0.1:0")
     c["http"] = []
     c["apps_every_min"] = 10_000  # app probes are tested on their own
+    c["backups"] = {}             # so are backups
     return c
 
 

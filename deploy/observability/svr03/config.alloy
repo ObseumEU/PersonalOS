@@ -90,6 +90,13 @@ loki.process "apps" {
   stage.labels {
     values = {level = "", http = ""}
   }
+  // The sentinel's backup-age lines ({"check":"backup",...}, every 15 min) go under service="backup".
+  stage.match {
+    selector = "{container=~\".*sentinel.*\"} |= `\"check\": \"backup\"`"
+    stage.static_labels {
+      values = {service = "backup"}
+    }
+  }
   // A container that floods (a crash loop printing stack traces) cannot crowd out the rest.
   stage.limit {
     rate                = 50
@@ -347,6 +354,13 @@ prometheus.relabel "litellm" {
     regex  = "hashed_api_key|client_ip|user_agent|end_user|user_email|org_id|org_alias|model_id"
     action = "labeldrop"
   }
+}
+
+// Sentinel: backup_age_hours{backup} and probe_success{app="backup-<name>"} (0 when > 48 h or missing).
+prometheus.scrape "sentinel" {
+  targets         = [{"__address__" = "personalos-sentinel-1:8097", "job" = "sentinel"}]
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.obs.receiver]
 }
 
 prometheus.scrape "nexus" {

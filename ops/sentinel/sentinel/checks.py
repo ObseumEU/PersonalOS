@@ -90,6 +90,36 @@ def host(proc: str = "/proc", disks: list[str] | None = None) -> dict:
     return out
 
 
+def backup_age(path: str, now: float, max_depth: int = 3, max_entries: int = 20_000) -> dict:
+    """Age in hours of the newest file (or snapshot directory) under a backup
+    directory, a few levels deep. age_h None: missing, unreadable or empty."""
+    newest, seen = 0.0, 0
+    stack = [(path, 0)]
+    try:
+        os.stat(path)
+    except OSError:
+        return {"age_h": None, "detail": "missing"}
+    while stack and seen < max_entries:
+        d, depth = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    seen += 1
+                    try:
+                        st = e.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    newest = max(newest, st.st_mtime)
+                    if e.is_dir(follow_symlinks=False) and depth + 1 < max_depth:
+                        stack.append((e.path, depth + 1))
+        except OSError as e:
+            if d == path:
+                return {"age_h": None, "detail": f"unreadable: {type(e).__name__}"}
+    if not newest:
+        return {"age_h": None, "detail": "empty"}
+    return {"age_h": round(max(0.0, now - newest) / 3600, 1), "newest": newest, "detail": ""}
+
+
 def _get_json(url: str, token: str | None = None, timeout: float = 10.0):
     req = Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
     with urlopen(req, timeout=timeout) as r:

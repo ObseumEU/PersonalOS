@@ -303,11 +303,14 @@ def test_metrics_snapshot(app, monkeypatch):
             return [{"metric": {"mountpoint": "/"}, "value": [0, "0.63"]}]
         if "probe_success" in expr:
             return [{"metric": {"app": "litellm"}, "value": [0, "0"]}]
+        if "backup_age_hours" in expr:
+            return [{"metric": {"backup": "nexus"}, "value": [0, "30.04"]}]
         return []
     monkeypatch.setattr(observability, "_prom_query", prom)
     out = observability.metrics_snapshot(app["conn"], Ctx(app["mid"]), "svr03")
     assert out["swap_used"] == 0.75 and out["disk_used"] == {"/": 0.63}
     assert out["top_memory"] == [{"container": "kb-kb-1", "mb": 640}] and out["failing_checks"] == ["litellm"]
+    assert out["backup_age_h"] == {"nexus": 30.0}
     assert all('host="svr03"' in e for e in seen)
     with pytest.raises(Invalid):
         observability.metrics_snapshot(app["conn"], Ctx(app["mid"]), 'svr03"} or vector(1) or {x="')
