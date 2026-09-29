@@ -63,8 +63,8 @@ be copied into `.env`. A key set in `.env` still wins.
 
 ## Owner steps
 
-- DNS: `personalos.obseum.cz` → the same address as `knowlage.obseum.cz` in the
-  router (like knowlage). Until then the PC has a hosts entry.
+- DNS: `personalos.obseum.cz` resolves to 192.168.1.108 through the split-horizon
+  resolvers (LAN `lan-dns` on svr03, VPN hub dnsmasq), see `docs/NETWORK.md`.
 - GitHub: the server checkout needs read access to `ObseumEU/PersonalOS`, and
   the deployer needs push access to `main` (a deploy key with write access).
 
