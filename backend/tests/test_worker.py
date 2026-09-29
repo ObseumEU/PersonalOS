@@ -768,3 +768,27 @@ def test_deployer_remote_reaches_the_pools_engineer_clone(tmp_path, monkeypatch)
     main.deployer_remote(str(own))
     url = subprocess.run(["git", "remote", "get-url", "deployer"], cwd=clone, capture_output=True, text=True).stdout
     assert url.strip() == "file://" + str(repo)
+
+
+def test_worker_step_survives_an_unreachable_api(caplog):
+    """A redeploy drops the idle poll (RemoteProtocolError, T-046): one warning line, no traceback."""
+    import httpx
+
+    def down(request):
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=request)
+
+    slept = []
+    http = httpx.Client(base_url="http://testserver", transport=httpx.MockTransport(down))
+    worker = Worker(PosClient("http://testserver", "k", http=http), lambda *a: None, sleep=slept.append)
+    with caplog.at_level("WARNING", logger="pos_worker"):
+        assert worker.step() == "api_down"
+    assert slept == [10]
+    assert all(r.exc_info is None for r in caplog.records)
+    assert "unreachable" in caplog.text
+
+    def broken(request):  # a 4xx is a real error, not an outage: it still gets the traceback
+        return httpx.Response(404, json={"detail": "no"})
+
+    http = httpx.Client(base_url="http://testserver", transport=httpx.MockTransport(broken))
+    worker = Worker(PosClient("http://testserver", "k", http=http), lambda *a: None, sleep=slept.append)
+    assert worker.step() == "crashed"

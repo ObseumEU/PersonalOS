@@ -71,6 +71,13 @@ def transient(e: Exception) -> bool:
     return isinstance(e, (httpx.TransportError, OSError, TimeoutError))
 
 
+def api_down(e: Exception) -> bool:
+    """PersonalOS itself is unreachable or failing (not a local error such as a missing binary)."""
+    import httpx
+
+    return isinstance(e, (httpx.TransportError, httpx.HTTPStatusError)) and transient(e)
+
+
 CHAT_REASONS = ("dm", "mention", "reply", "routed")  # a chat message addressed to the agent: it answers mid-run
 
 
@@ -172,7 +179,7 @@ class Worker:
 
     # ------------------------------------------------------------- main loop
 
-    IDLE = ("idle", "read_messages", "held", "blocked", "skipped")  # nothing ran: the idle clock keeps going
+    IDLE = ("idle", "read_messages", "held", "blocked", "skipped", "api_down")  # nothing ran: the idle clock keeps going
 
     def run_forever(self) -> str:
         """Returns why it ended (exit_idle_s only): "idle", or "blocked" when its run was refused
@@ -196,7 +203,11 @@ class Worker:
         """One iteration; returns what happened (for tests and logs)."""
         try:
             return self._step()
-        except Exception:  # noqa: BLE001 - a bad run must never kill the worker
+        except Exception as e:  # noqa: BLE001 - a bad run must never kill the worker
+            if api_down(e):  # PersonalOS down (a redeploy drops the idle poll): one line, no traceback
+                log.warning("PersonalOS unreachable (%s); trying again", str(e)[:120] or type(e).__name__)
+                self.sleep(10)
+                return "api_down"
             log.exception("step failed; carrying on")
             self.sleep(10)
             return "crashed"
