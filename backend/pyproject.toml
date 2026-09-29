@@ -18,6 +18,8 @@ dependencies = [
     "websockets>=13",
     # SSH to the Home Assistant host with a password from 1Password (pos.homeassistant.ha_ssh).
     "paramiko>=3.4",
+    # Web Push to the installed app (pos.push): VAPID signing and payload encryption.
+    "pywebpush>=2.0",
 ]
 
 [project.optional-dependencies]

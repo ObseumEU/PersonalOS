@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     scheduler: bool = True
     # Largest file upload, in megabytes (POS_MAX_UPLOAD_MB).
     max_upload_mb: int = 200
+    # Web Push to the installed app (pos.push, docs/MOBILE.md): the VAPID key pair as base64url
+    # (generated on the server into .env, never printed). Both empty: push is off.
+    vapid_private_key: str = ""
+    vapid_public_key: str = ""
+    vapid_subject: str = "mailto:admin@obseum.cz"
 
     @property
     def db_path(self) -> Path:

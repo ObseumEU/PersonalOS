@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { t } from "../i18n";
+import { t } from "../i18n/core";
 
 /* Toasts (with an optional undo) and a confirmation dialog, rendered once by the Shell. */
 

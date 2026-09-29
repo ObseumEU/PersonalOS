@@ -16,6 +16,7 @@ import {
   MessagesSquare,
   Plug,
   Settings,
+  Smartphone,
   Workflow,
   Wrench,
 } from "lucide-react";
@@ -69,6 +70,7 @@ export const SETTINGS: (SubSection & { blurb: string })[] = [
   { path: "/automations", key: "nav.automations", icon: Workflow, blurb: "settings.blurb.automations" },
   { path: "/system", key: "nav.system", icon: Box, blurb: "settings.blurb.system" },
   { path: "/reports", key: "nav.reports", icon: BarChart3, blurb: "settings.blurb.reports" },
+  { path: "/settings/mobile", key: "nav.mobile", icon: Smartphone, blurb: "settings.blurb.mobile" },
 ];
 export const SETTINGS_ROOT = { path: "/settings", key: "nav.settings", icon: Settings };
 

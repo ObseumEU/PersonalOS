@@ -23,10 +23,17 @@ class DmIn(BaseModel):
     to: int | str
 
 
+class AttachmentIn(BaseModel):
+    type: str = "file"
+    id: int
+
+
 class MessageIn(BaseModel):
-    body: str
+    body: str = ""
     reply_to: int | None = None
     priority: str | None = None
+    # Files uploaded first (POST /api/files), e.g. a photo from the phone (at most 10).
+    attachments: list[AttachmentIn] = []
 
 
 class EditIn(BaseModel):
@@ -90,10 +97,30 @@ def messages(channel_id: int, before: int | None = None, after: int | None = Non
     return chat.messages(conn, ctx.actor_id, channel_id, before=before, after=after, limit=limit)
 
 
+def _file_attachments(conn, ctx, items: list[AttachmentIn]) -> tuple[list[dict], list[str]]:
+    """Files the sender may read, as message attachments, and a line per file for the text
+    (agents read the text: they see which file to open)."""
+    from . import files
+
+    if len(items) > 10:
+        raise tasks.Invalid("at most 10 attachments")
+    out, lines = [], []
+    for a in items:
+        if a.type != "file":
+            raise tasks.Invalid(f"unknown attachment type {a.type}")
+        f = files.get(conn, ctx, a.id)  # NotFound / Forbidden when the sender cannot read it
+        out.append({"type": "file", "id": f["id"], "name": f["name"], "mime": f.get("mime"),
+                    "preview": f.get("preview")})
+        lines.append(f"📎 {f['name']} (soubor #{f['id']})")
+    return out, lines
+
+
 @router.post("/channels/{channel_id}/messages", status_code=201)
 def send(channel_id: int, body: MessageIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
-    return _wrap(lambda: chat.send(conn, ctx, channel_id, body.body, reply_to=body.reply_to,
-                                   priority=body.priority or None))
+    atts, lines = _file_attachments(conn, ctx, body.attachments) if body.attachments else ([], [])
+    text = "\n".join([x for x in [body.body.strip(), *lines] if x])
+    return _wrap(lambda: chat.send(conn, ctx, channel_id, text, reply_to=body.reply_to,
+                                   priority=body.priority or None, attachments=atts or None))
 
 
 @router.get("/channels/{channel_id}/members")

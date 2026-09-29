@@ -130,24 +130,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # A person's chat message to a busy agent gets a fast answer when its run is inside a long step.
         fast_task = (asyncio.create_task(fastlane.loop(settings.db_path))
                      if settings.scheduler and os.environ.get("POS_FASTLANE", "1") != "0" else None)
+        from . import push
+
+        # Web Push to the installed app (pos.push): only when the VAPID keys are set.
+        push_task = (asyncio.create_task(push.loop(settings.db_path, settings))
+                     if settings.scheduler and push.configured(settings) else None)
         if settings.scheduler and os.environ.get("POS_CLAUDE_SELFCHECK") == "1":
             asyncio.get_running_loop().run_in_executor(None, _claude_selfcheck, settings.db_path)
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
-            for task in (hr_task, sched_task, fast_task):
+            for task in (hr_task, sched_task, fast_task, push_task):
                 if task:
                     task.cancel()
 
     app = FastAPI(title="PersonalOS", description=description, lifespan=lifespan)
     app.dependency_overrides[get_settings] = lambda: settings
     app.add_middleware(MCPAuth, settings=settings)
+    from .devices import DeviceSessions
+
+    # Inside the session middleware: a revoked or expired device loses its session (pos.devices).
+    app.add_middleware(DeviceSessions, settings=settings)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
         session_cookie="pos_session",
-        max_age=60 * 60 * 24 * 30,
+        # The cookie may live long (the installed app); pos.devices decides how long a device stays signed in
+        # (30 days of no use in a browser, a year in the app) and lets the owner revoke it.
+        max_age=60 * 60 * 24 * 400,
         same_site="lax",
         https_only=settings.secure_cookies,
     )
@@ -169,6 +180,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_agents.router)
     app.include_router(api_worker.router)
     app.include_router(api_chat.router)
+    from . import api_push
+
+    app.include_router(api_push.router)  # Web Push for the installed app (pos.push)
     app.include_router(api_connectors.router)
     app.include_router(api_connectors.hooks)
     app.include_router(api_connectors.machine)

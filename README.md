@@ -21,7 +21,8 @@ independent **subsystems** over **A2A**.
 git clone --recurse-submodules https://github.com/ObseumEU/PersonalOS.git
 ```
 
-See [docs/PLAN.md](docs/PLAN.md) for the architecture and roadmap.
+See [docs/PLAN.md](docs/PLAN.md) for the architecture and roadmap. The phone and desktop app
+(an installable PWA at `/m`, with notifications) is in [docs/MOBILE.md](docs/MOBILE.md).
 
 ## Layout
 

@@ -1,5 +1,5 @@
 import { ApiError, api } from "./api";
-import { LOCALE, t } from "./i18n";
+import { LOCALE, t } from "./i18n/core";
 import type { Task, Version } from "./tasksApi";
 import type { CalEvent } from "./pages/Calendar";
 

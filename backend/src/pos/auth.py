@@ -19,6 +19,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     password: str
     email: str | None = None
+    # The installed app (/m): the device stays signed in for a year of use, not 30 days (pos.devices).
+    app: bool = False
 
 
 class AcceptRequest(BaseModel):
@@ -85,6 +87,7 @@ def login(body: LoginRequest, request: Request, settings: Settings = Depends(get
             conn.close()
         request.session.clear()
         request.session["actor_id"] = actor_id
+        _new_device(request, settings, actor_id, owner_login=False, app=body.app)
         return _me(request, settings)
     if settings.password and not hmac.compare_digest(
         body.password.encode(), settings.password.encode()
@@ -92,11 +95,54 @@ def login(body: LoginRequest, request: Request, settings: Settings = Depends(get
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong password")
     request.session.clear()
     request.session["user"] = "owner"
+    _new_device(request, settings, None, owner_login=True, app=body.app)
     return _me(request, settings)
+
+
+def _new_device(request: Request, settings: Settings, actor_id: int | None, *, owner_login: bool, app: bool) -> None:
+    """Every login is a device (pos.devices): listed in Nastavení, revocable."""
+    from . import actors, devices
+    from .db import connect
+
+    if not settings.password:
+        return
+    conn = connect(settings.db_path)
+    try:
+        sid = devices.create(conn, actor_id or actors.owner_id(conn), owner_login=owner_login,
+                             user_agent=request.headers.get("user-agent", ""), app=app)
+        conn.commit()
+    finally:
+        conn.close()
+    request.session["sid"] = sid
+
+
+def _me_id(request: Request, settings: Settings) -> int:
+    from . import actors
+    from .db import connect
+
+    aid = session_actor(request)
+    if aid:
+        return aid
+    conn = connect(settings.db_path)
+    try:
+        return actors.owner_id(conn)
+    finally:
+        conn.close()
 
 
 @router.post("/logout")
 def logout(request: Request, settings: Settings = Depends(get_settings)) -> Me:
+    sid = request.session.get("sid")
+    if sid:  # signing out ends this device: its session and its push subscriptions
+        from . import devices
+        from .db import connect
+
+        conn = connect(settings.db_path)
+        try:
+            devices.revoke(conn, _me_id(request, settings), sid)
+            conn.commit()
+        finally:
+            conn.close()
     request.session.clear()
     return Me(authenticated=not settings.password, login_required=bool(settings.password))
 
@@ -136,6 +182,7 @@ def accept(body: AcceptRequest, request: Request, settings: Settings = Depends(g
         conn.close()
     request.session.clear()
     request.session["actor_id"] = actor_id
+    _new_device(request, settings, actor_id, owner_login=False, app=False)
     return _me(request, settings)
 
 
@@ -152,6 +199,57 @@ def change_password(body: PasswordRequest, request: Request, settings: Settings 
         accounts.set_password(conn, aid, body.old, body.new)
     except accounts.AuthError as e:
         raise HTTPException(422, str(e)) from e
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ devices (pos.devices)
+
+@router.get("/devices", dependencies=[Depends(require_user)])
+def device_list(request: Request, settings: Settings = Depends(get_settings)) -> list[dict]:
+    """The signed-in devices of this member; `current` is the one asking."""
+    from . import devices
+    from .db import connect
+
+    conn = connect(settings.db_path)
+    try:
+        return devices.list_for(conn, _me_id(request, settings), request.session.get("sid"))
+    finally:
+        conn.close()
+
+
+@router.post("/devices/{sid}/revoke", dependencies=[Depends(require_user)])
+def device_revoke(sid: str, request: Request, settings: Settings = Depends(get_settings)) -> dict:
+    from . import devices
+    from .db import connect
+
+    conn = connect(settings.db_path)
+    try:
+        if not devices.revoke(conn, _me_id(request, settings), sid):
+            raise HTTPException(404, "no such device")
+        conn.commit()
+    finally:
+        conn.close()
+    if sid == request.session.get("sid"):
+        request.session.clear()
+    return {"ok": True}
+
+
+@router.post("/devices/current/app", dependencies=[Depends(require_user)])
+def device_is_app(request: Request, settings: Settings = Depends(get_settings)) -> dict:
+    """The installed app runs on this device: keep it signed in for the app's lifetime (a year of use)."""
+    from . import devices
+    from .db import connect
+
+    sid = request.session.get("sid")
+    if not sid:
+        return {"ok": False}
+    conn = connect(settings.db_path)
+    try:
+        devices.ensure_schema(conn)
+        devices.set_app(conn, sid)
+        conn.commit()
     finally:
         conn.close()
     return {"ok": True}

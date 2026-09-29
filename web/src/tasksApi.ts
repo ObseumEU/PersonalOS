@@ -1,5 +1,5 @@
 import { api } from "./api";
-import { LOCALE, t } from "./i18n";
+import { LOCALE, t } from "./i18n/core";
 import { markdownSnippet } from "./markdownText";
 
 export type AssigneeType = "human" | "ai" | "agent" | "external";

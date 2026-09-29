@@ -15,6 +15,7 @@ import InboxClarify from "./pages/InboxClarify";
 import Login from "./pages/Login";
 import Invite from "./pages/Invite";
 import Knowledge from "./pages/Knowledge";
+import MobileAppSettings from "./pages/MobileAppSettings";
 import Settings from "./pages/Settings";
 import SectionTabs from "./components/SectionTabs";
 import { t } from "./i18n";
@@ -88,6 +89,7 @@ export default function App() {
         <Route path="/assistant" element={<AssistantChat />} />
         {/* Nastavení */}
         <Route path="/settings" element={<Settings />} />
+        <Route path="/settings/mobile" element={<MobileAppSettings />} />
         <Route path="/credentials" element={<Credentials />} />
         <Route path="/connectors" element={<Connectors />} />
         <Route path="/tools" element={<Tools />} />
