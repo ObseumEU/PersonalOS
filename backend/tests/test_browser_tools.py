@@ -445,7 +445,7 @@ def test_codex_mounts_the_same_browser_server_with_long_enough_timeouts():
     assert b["tool_timeout_sec"] >= 900 and b["startup_timeout_sec"] >= 30
     # `codex exec` cannot ask: without these the tools fail ("requires approval, but approval policy is
     # never") or are missing from the first turn (the model starts before the server has listed them)
-    assert b["default_tools_approval_mode"] == "approve" and b["startup_readiness"] == "catalog"
+    assert b["default_tools_approval_mode"] == "approve" and b["required"] is True
     args = CodexSession(config=lines)._args(resume=False)
     assert args.count("-c") == len(lines) and "mcp_servers.browser.args=[\"-m\", \"pos_worker.browser_guard\"]" in args
 
