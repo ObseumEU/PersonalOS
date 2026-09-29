@@ -717,6 +717,20 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE deploys ADD COLUMN reason TEXT NOT NULL DEFAULT '';
     """,
+    # 30: a DM is one flat conversation (pos.chat.send): an answer there quotes the message it answers
+    # (quote_of) instead of opening a thread. Threads in channels keep a read marker per person
+    # (chat_thread_reads; root_id 0 is the baseline: everything before this migration counts as read).
+    """
+    ALTER TABLE chat_messages ADD COLUMN quote_of INTEGER REFERENCES chat_messages(id);
+    CREATE TABLE chat_thread_reads (
+        actor_id     INTEGER NOT NULL REFERENCES actors(id),
+        root_id      INTEGER NOT NULL,
+        last_read_id INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (actor_id, root_id)
+    );
+    INSERT INTO chat_thread_reads (actor_id, root_id, last_read_id)
+        SELECT id, 0, (SELECT COALESCE(MAX(id), 0) FROM chat_messages) FROM actors WHERE kind = 'human';
+    """,
 ]
 
 

@@ -3,8 +3,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { type Channel, type ChatMember, chatApi } from "../chatApi";
 import { t } from "../i18n/core";
+import ThreadList, { useThreads } from "../chat/ThreadList";
 import { stripToolMarkup } from "../toolMarkup";
-import { onChatEvent, usePresence } from "./live";
+import { isMessageEvent, onChatEvent, usePresence } from "./live";
 import { ActionSheet, Avatar, Dots, SheetButton, TopBar, when } from "./ui";
 
 const isSystem = (c: Channel) => c.kind === "group" && c.name === "system";
@@ -76,8 +77,21 @@ function Row({ c, me, members, typing, working, pinned }: { c: Channel; me: numb
   );
 }
 
+// Threads change when a reply comes in (anywhere) or a thread is read.
+const onReply = (reload: () => void) => onChatEvent((ev) => isMessageEvent(ev) && !!ev.message.reply_to && reload());
+
 export default function ChatList() {
   const [channels, setChannels] = useState<Channel[] | null>(null);
+  const [tab, setTab] = useState<"all" | "threads">(() => (sessionStorage.getItem("pos:m-chat-tab") === "threads" ? "threads" : "all"));
+  const threads = useThreads(onReply);
+  const pick = (v: "all" | "threads") => {
+    setTab(v);
+    try {
+      sessionStorage.setItem("pos:m-chat-tab", v);
+    } catch {
+      /* private mode: the tab is not remembered */
+    }
+  };
   const [systemOpen, setSystemOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const members = useMembers();
@@ -132,6 +146,26 @@ export default function ChatList() {
           </button>
         }
       />
+      <div role="tablist" aria-label={t("m.chat.title")} className="flex gap-2 px-4 pt-2 pb-1">
+        {(["all", "threads"] as const).map((v) => (
+          <button
+            key={v}
+            role="tab"
+            aria-selected={tab === v}
+            onClick={() => pick(v)}
+            className={`flex h-9 items-center gap-1.5 rounded-full border px-4 text-[14px] ${tab === v ? "border-accent bg-accent/15 text-accent" : "border-line text-ink-2"}`}
+          >
+            {v === "all" ? t("m.chat.all") : t("m.chat.threads")}
+            {v === "threads" && (threads?.unread ?? 0) > 0 && (
+              <span className="rounded-full bg-accent px-1.5 font-mono text-[11px] leading-[18px] text-bg">{threads!.unread}</span>
+            )}
+          </button>
+        ))}
+      </div>
+      {tab === "threads" ? (
+        <ThreadList data={threads} onOpen={(it) => navigate(`/m/chat/${it.channel_id}?thread=${it.root.id}`)} />
+      ) : (
+      <>
       {channels === null && <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>}
       {channels !== null && mine.length === 0 && <p className="px-4 py-6 text-sm text-ink-2">{t("m.chat.empty_list")}</p>}
       {ceoDm ? (
@@ -158,6 +192,8 @@ export default function ChatList() {
           </button>
           {systemOpen && system.map((c) => <Row key={c.id} c={c} {...rowProps} typing={false} />)}
         </>
+      )}
+      </>
       )}
       {picking && (
         <ActionSheet title={t("m.chat.new_dm")} onClose={() => setPicking(false)}>

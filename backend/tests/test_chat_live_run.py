@@ -163,7 +163,8 @@ def test_fast_lane_falls_back_to_a_code_reply(db, tmp_path, monkeypatch):
     msg = chat.send_dm(db, owner, aid, "Stihneš to do pěti?")
     _age(db, msg["id"])
     out = fastlane.respond(db, aid, msg["id"])
-    assert out["mode"] == "code" and out["reply_to"] == msg["id"]
+    # A DM has no threads: the fast answer goes into the conversation, quoting the question.
+    assert out["mode"] == "code" and out["reply_to"] is None and out["quote_of"] == msg["id"]
     assert f"Pracuju na {t['ref']}" in out["body"] and "Bash: pytest -q" in out["body"] and "12 min" in out["body"]
     assert "rychlý model teď neodpovídá" in out["body"]
 

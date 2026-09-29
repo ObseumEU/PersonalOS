@@ -4,110 +4,24 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { agentsApi } from "../agentsApi";
 import { api } from "../api";
 import { type Channel, type ChatMessage, chatApi } from "../chatApi";
+import Messenger, { type FileAtt, useSender, visibleBody } from "../chat/Messenger";
+import { applyReply, upsert } from "../chat/timeline";
 import { toast } from "../components/overlay";
 import { filesApi } from "../filesApi";
 import { t } from "../i18n/core";
 import { type Task } from "../tasksApi";
 import { useMembers, workLabel } from "./ChatList";
 import { isMessageEvent, onChatEvent, usePresence } from "./live";
-import { ActionSheet, Avatar, Body, Dots, SheetButton, TopBar, when } from "./ui";
+import { ActionSheet, Avatar, SheetButton, TopBar } from "./ui";
 
-type FileAtt = { type: "file"; id: number; name: string; mime?: string | null; preview?: string };
 const APPROVAL_REF = /schválení #(\d+)/i;
-const PRIORITY_CLS: Record<string, string> = { change_plan: "border-accent/60 text-accent", stop: "border-amber-400/70 text-amber-300", fyi: "border-line text-ink-2" };
 
-function Attachments({ m }: { m: ChatMessage }) {
-  const files = m.attachments.filter((a) => a.type === "file") as unknown as FileAtt[];
-  if (!files.length) return null;
-  return (
-    <div className="mt-1.5 flex flex-wrap gap-1.5">
-      {files.map((f) =>
-        f.preview === "image" || f.mime?.startsWith("image/") ? (
-          <a key={f.id} href={filesApi.contentUrl(f.id)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-            <img src={filesApi.contentUrl(f.id)} alt={f.name} loading="lazy" className="max-h-56 max-w-[70vw] rounded-lg border border-line object-cover" />
-          </a>
-        ) : (
-          <a
-            key={f.id}
-            href={filesApi.contentUrl(f.id)}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-10 items-center gap-2 rounded-lg border border-line bg-bg/60 px-3 text-[13px]"
-          >
-            <FileText size={16} className="text-ink-2" /> <span className="max-w-[50vw] truncate">{f.name}</span>
-          </a>
-        ),
-      )}
-    </div>
-  );
-}
-
-/** The body without the "📎 name (soubor #12)" lines the server adds for agents (the chips show them). */
-const visibleBody = (m: ChatMessage) => (m.attachments.some((a) => a.type === "file") ? m.body.replace(/^📎 .+ \(soubor #\d+\)$/gm, "").trim() : m.body);
-
-function Bubble({
-  m, mine, showName, names, replies, onTap, onThread,
-}: {
-  m: ChatMessage;
-  mine: boolean;
-  showName: boolean;
-  names: string[];
-  replies?: number;
-  onTap: () => void;
-  onThread?: () => void;
-}) {
-  const text = visibleBody(m);
-  return (
-    <div className={`flex gap-2 px-3 py-1 ${mine ? "flex-row-reverse" : ""}`}>
-      {!mine && (showName ? <Avatar name={m.author_name} size={30} human={m.author_kind === "human"} /> : <span className="w-[30px] shrink-0" />)}
-      <div className={`flex max-w-[82%] min-w-0 flex-col ${mine ? "items-end" : "items-start"}`}>
-        {showName && !mine && (
-          <span className="mb-0.5 flex flex-wrap items-center gap-1.5 px-1 text-[12px]">
-            <span className={m.author_kind === "human" ? "text-ink" : "text-accent"}>{m.author_name}</span>
-            {m.meeting && <span className="rounded-[3px] border border-line px-1 text-[11px] text-ink-2">{m.meeting.kind === "decision" ? t("chat.meeting_decision") : t("chat.meeting")}</span>}
-          </span>
-        )}
-        <button
-          onClick={onTap}
-          aria-label={t("m.chat.actions")}
-          className={`rounded-2xl px-3.5 py-2 text-left ${mine ? "rounded-br-md bg-accent/15 text-ink" : "rounded-bl-md border border-line bg-surface"} ${m.meeting?.kind === "decision" ? "border-emerald-400/60!" : ""}`}
-        >
-          {m.priority && m.priority !== "fyi" && (
-            <span className={`mb-1 inline-block rounded-[3px] border px-1 text-[11px] ${PRIORITY_CLS[m.priority]}`}>{t(`priority.${m.priority}`)}</span>
-          )}
-          {text && <Body text={text} names={names} />}
-          <Attachments m={m} />
-          <span className="mt-0.5 block text-right text-[11px] text-ink-2">
-            {when(m.created_at)}
-            {m.edited_at ? ` · ${t("chat.edited")}` : ""}
-          </span>
-        </button>
-        {(m.reactions.length > 0 || (replies ?? 0) > 0) && (
-          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 px-1">
-            {m.reactions.map((r) => (
-              <span key={r.emoji} className="rounded-full border border-line px-1.5 text-[12px]">
-                {r.emoji} {r.count > 1 ? r.count : ""}
-              </span>
-            ))}
-            {(replies ?? 0) > 0 && onThread && (
-              <button onClick={onThread} className="flex h-8 items-center gap-1 text-[13px] text-accent">
-                <MessageSquare size={13} /> {t("m.chat.replies", { n: replies })}
-              </button>
-            )}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function Composer({ channel, replyTo, placeholder, onSent }: { channel: Channel; replyTo: number | null; placeholder: string; onSent: () => void }) {
+/** The composer, pinned to the bottom (above the keyboard, safe-area aware). Sending is optimistic: the parent shows the bubble at once. */
+function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel; replyTo: number | null; placeholder: string; onSend: (body: string, files: FileAtt[]) => void }) {
   const [body, setBody] = useState("");
   const [files, setFiles] = useState<FileAtt[]>([]);
   const [uploading, setUploading] = useState<string | null>(null);
   const [picker, setPicker] = useState(false);
-  const [busy, setBusy] = useState(false);
   const photo = useRef<HTMLInputElement>(null);
   const any = useRef<HTMLInputElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -141,24 +55,14 @@ function Composer({ channel, replyTo, placeholder, onSent }: { channel: Channel;
     }
     setUploading(null);
   };
-  const submit = async () => {
+  const submit = () => {
     const text = body.trim();
-    if ((!text && !files.length) || busy) return;
-    setBusy(true);
-    try {
-      await api(`/api/chat/channels/${channel.id}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ body: text, reply_to: replyTo, attachments: files.map((f) => ({ type: "file", id: f.id })) }),
-      });
-      setBody("");
-      setFiles([]);
-      requestAnimationFrame(grow);
-      onSent();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), { error: true });
-    } finally {
-      setBusy(false);
-    }
+    if ((!text && !files.length) || uploading) return;
+    onSend(text, files);
+    setBody("");
+    setFiles([]);
+    requestAnimationFrame(grow);
+    area.current?.focus(); // the keyboard stays open, like a messenger
   };
   const key = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (desktop && e.key === "Enter" && !e.shiftKey) {
@@ -168,7 +72,7 @@ function Composer({ channel, replyTo, placeholder, onSent }: { channel: Channel;
   };
 
   return (
-    <div className="border-t border-line bg-bg px-2 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]">
+    <div className="shrink-0 border-t border-line bg-bg px-2 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]">
       {(files.length > 0 || uploading) && (
         <div className="flex flex-wrap gap-1.5 px-1 pb-2">
           {files.map((f) => (
@@ -199,8 +103,9 @@ function Composer({ channel, replyTo, placeholder, onSent }: { channel: Channel;
         />
         <button
           aria-label={t("m.chat.send")}
+          onPointerDown={(e) => e.preventDefault() /* keeps the textarea focused: the keyboard does not close */}
           onClick={submit}
-          disabled={busy || (!body.trim() && !files.length)}
+          disabled={!!uploading || (!body.trim() && !files.length)}
           className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-accent text-bg disabled:opacity-40"
         >
           <Send size={18} />
@@ -222,30 +127,37 @@ export default function Conversation() {
   const { id: idParam } = useParams();
   const id = Number(idParam);
   const [params, setParams] = useSearchParams();
-  const thread = Number(params.get("thread")) || null;
+  const threadParam = Number(params.get("thread")) || null;
   const navigate = useNavigate();
   const [channel, setChannel] = useState<Channel | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
+  const [threadMsgs, setThreadMsgs] = useState<ChatMessage[]>([]);
   const [acting, setActing] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const list = useRef<HTMLDivElement>(null);
   const members = useMembers();
   const presence = usePresence();
   const me = members.find((m) => m.is_owner)?.id ?? 0;
   const names = useMemo(() => members.map((m) => m.name), [members]);
+  const isDm = channel?.kind === "dm";
+  // A DM has no threads (an old link with ?thread= opens the conversation itself).
+  const thread = channel && !isDm ? threadParam : null;
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
 
-  const toBottom = () => requestAnimationFrame(() => list.current?.scrollTo({ top: list.current.scrollHeight }));
   const markRead = useCallback((upTo?: number) => {
     chatApi.read(id, upTo).then(() => window.dispatchEvent(new Event("pos:needs-me")), () => undefined);
   }, [id]);
+  const markThread = useCallback((root: number, upTo?: number) => {
+    chatApi.threadRead(root, upTo).then(() => window.dispatchEvent(new Event("pos:threads")), () => undefined);
+    setMessages((ms) => ms.map((x) => (x.id === root && x.thread ? { ...x, thread: { ...x.thread, unread: 0 } } : x)));
+  }, []);
 
   const load = useCallback(() => {
     chatApi.channel(id).then(setChannel, (e) => setError(e.message));
     chatApi.messages(id).then((p) => {
       setMessages(p.messages);
       setHasMore(p.has_more);
-      toBottom();
       markRead();
     }, (e) => setError(e.message));
   }, [id, markRead]);
@@ -254,9 +166,25 @@ export default function Conversation() {
     window.addEventListener("pos:resume", load);
     return () => window.removeEventListener("pos:resume", load);
   }, [load]);
+
+  // A thread opens with all of it (also one whose root is not on the loaded page, from "Vlákna").
   useEffect(() => {
-    toBottom();
-  }, [thread]);
+    setThreadMsgs([]);
+    if (!thread) return;
+    chatApi.thread(id, thread).then((p) => {
+      setThreadMsgs(p.messages);
+      markThread(thread);
+    }, (e) => setError(e.message));
+  }, [id, thread, markThread]);
+
+  const received = useCallback(
+    (m: ChatMessage) => {
+      setMessages((ms) => (m.reply_to ? applyReply(upsert(ms, m), m, me, threadRef.current) : upsert(ms, m)));
+      const open = threadRef.current;
+      if (open && (m.reply_to === open || m.id === open)) setThreadMsgs((ms) => upsert(ms, m));
+    },
+    [me],
+  );
 
   useEffect(
     () =>
@@ -265,51 +193,43 @@ export default function Conversation() {
         const m = ev.message;
         if (ev.type === "archive") {
           setMessages((ms) => ms.filter((x) => x.id !== m.id));
+          setThreadMsgs((ms) => ms.filter((x) => x.id !== m.id));
           return;
         }
-        const el = list.current;
-        const atBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-        setMessages((ms) => {
-          const known = ms.some((x) => x.id === m.id);
-          let next = known ? ms.map((x) => (x.id === m.id ? m : x)) : [...ms, m];
-          if (!known && m.reply_to) next = next.map((x) => (x.id === m.reply_to ? { ...x, replies: x.replies + 1 } : x));
-          return next;
-        });
-        if (ev.type === "message") {
-          if (atBottom || m.author_id === me) toBottom();
-          if (document.visibilityState === "visible") markRead(m.id);
+        received(m);
+        if (ev.type === "message" && document.visibilityState === "visible") {
+          markRead(m.id);
+          const open = threadRef.current;
+          if (open && m.reply_to === open) markThread(open, m.id);
         }
       }),
-    [id, me, markRead],
+    [id, received, markRead, markThread],
   );
 
-  const older = () => {
-    if (!messages.length) return;
-    const el = list.current;
-    const h = el?.scrollHeight ?? 0;
-    chatApi.messages(id, messages[0].id).then((p) => {
+  const { pending, send, retry, discard } = useSender(channel?.id ?? null, received);
+
+  const older = useCallback(() => {
+    if (!messages.length) return Promise.resolve();
+    return chatApi.messages(id, messages[0].id).then((p) => {
       setMessages((ms) => [...p.messages, ...ms]);
       setHasMore(p.has_more);
-      requestAnimationFrame(() => el && el.scrollTo({ top: el.scrollHeight - h }));
     });
-  };
+  }, [id, messages]);
 
-  const other = channel?.kind === "dm" ? channel.members.find((m) => m.id !== me) : undefined;
+  const other = isDm ? channel?.members.find((m) => m.id !== me) : undefined;
   const otherFull = other ? members.find((m) => m.id === other.id) : undefined;
-  const typing = (presence.typing[String(id)] ?? []).filter((e) => e.id !== me && (!thread || e.thread === thread || e.thread === null));
-  const busyHere = channel?.members.filter((m) => m.kind !== "human" && m.id !== me && presence.working.includes(m.id)) ?? [];
-  const sub = typing.length
-    ? `${typing.map((e) => e.name).join(", ")} ${typing.some((e) => e.state === "typing") ? t("m.chat.typing") : t("m.chat.working")}`
-    : other && other.kind !== "human"
-      ? workLabel(otherFull, presence.working.includes(other.id)) ?? ""
-      : channel?.kind === "group"
-        ? t("chat.members", { n: channel.members.length, vis: t(`chat.vis_short.${channel.visibility}`) })
-        : "";
-
-  const byId = new Map(messages.map((m) => [m.id, m]));
-  const shown = thread ? messages.filter((m) => m.id === thread || m.reply_to === thread) : messages.filter((m) => !m.reply_to || !byId.has(m.reply_to));
-  const canWrite = !!channel && (channel.member || channel.kind === "group") && channel.name !== "system";
+  const typingAll = (presence.typing[String(id)] ?? []).filter((e) => e.id !== me);
+  const typing = isDm ? typingAll : typingAll.filter((e) => (thread ? e.thread === thread : e.thread === null));
   const title = channel ? (channel.kind === "group" ? `#${channel.name}` : channel.title) : "…";
+  const sub = other
+    ? other.kind !== "human"
+      ? workLabel(otherFull, presence.working.includes(other.id)) ?? ""
+      : ""
+    : channel?.kind === "group"
+      ? t("chat.members", { n: channel.members.length, vis: t(`chat.vis_short.${channel.visibility}`) })
+      : "";
+  const canWrite = !!channel && (channel.member || channel.kind === "group") && channel.name !== "system";
+  const root = thread ? threadMsgs.find((m) => m.id === thread) ?? messages.find((m) => m.id === thread) ?? null : null;
 
   const act = async (fn: () => Promise<unknown>, done: string) => {
     setActing(null);
@@ -335,64 +255,54 @@ export default function Conversation() {
   const approve = (m: ChatMessage) => {
     const ref = APPROVAL_REF.exec(m.body);
     if (ref) return act(() => agentsApi.decide(Number(ref[1]), true), t("m.chat.approved"));
-    return act(() => chatApi.send(id, t("m.chat.act.approve_reply"), m.reply_to ?? m.id), t("m.chat.approval_sent"));
+    setActing(null);
+    send(t("m.chat.act.approve_reply"), [], isDm ? m.id : m.reply_to ?? m.id);
   };
 
+  const openThread = (root: number) => setParams({ thread: String(root) });
+
   return (
-    <div className="fixed inset-0 flex flex-col bg-bg">
+    <div className="fixed inset-0 flex h-dvh flex-col bg-bg">
       <TopBar
+        icon={isDm && other ? <Avatar name={channel?.title ?? other.name} size={36} human={other.kind === "human"} /> : undefined}
         title={thread ? t("m.chat.thread") : title}
-        sub={thread ? title : sub}
+        sub={thread ? (channel ? t("m.chat.thread_in", { name: channel.name ?? "" }) : "") : sub ? <span className={other && sub ? "text-accent" : ""}>{sub}</span> : undefined}
         back={() => (thread ? setParams({}) : navigate("/m"))}
       />
-      <div ref={list} className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2">
-        {error && <p className="px-4 py-2 text-sm text-red-400">{error}</p>}
-        {hasMore && (
-          <button onClick={older} className="mx-auto block h-10 px-4 text-[13px] text-ink-2">
-            {t("m.chat.load_older")}
-          </button>
-        )}
-        {channel && shown.length === 0 && <p className="px-4 py-8 text-center text-sm text-ink-2">{t("m.chat.no_messages")}</p>}
-        {shown.map((m, i) => {
-          const prev = shown[i - 1];
-          const grouped = prev && prev.author_id === m.author_id && new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() < 5 * 60000;
-          return (
-            <div key={m.id} className={thread && m.id === thread ? "border-b border-line pb-2 mb-1" : ""}>
-              <Bubble
-                m={m}
-                mine={m.author_id === me}
-                showName={!grouped || (thread !== null && m.id === thread)}
-                names={names}
-                replies={thread ? 0 : m.replies}
-                onTap={() => setActing(m)}
-                onThread={() => setParams({ thread: String(m.id) })}
-              />
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex h-6 items-center gap-2 px-4 text-[12px] text-ink-2" role="status" aria-live="polite">
-        {typing.length > 0 ? (
-          <>
-            <span className="text-accent"><Dots soft={typing.every((e) => e.state === "working")} /></span>
-            <span className="truncate">{sub}</span>
-          </>
-        ) : busyHere.length > 0 && channel?.kind === "group" ? (
-          <span className="truncate">{t("chat.working_here", { names: busyHere.map((m) => m.name).join(", ") })}</span>
-        ) : null}
-      </div>
+      {error && <p className="px-4 py-2 text-sm text-red-400">{error}</p>}
+      {channel && (
+        <Messenger
+          mode={isDm ? "dm" : thread ? "thread" : "channel"}
+          viewKey={`${id}:${thread ?? ""}`}
+          messages={thread ? threadMsgs : messages}
+          root={root}
+          rootChannel={channel.name ?? undefined}
+          me={me}
+          names={names}
+          pending={pending.filter((p) => (thread ? p.reply_to === thread : isDm || p.reply_to === null))}
+          typing={typing}
+          hasMore={!thread && hasMore}
+          onOlder={older}
+          onTap={setActing}
+          onOpenThread={openThread}
+          onRetry={retry}
+          onDiscard={discard}
+          empty={<p className="px-4 py-10 text-center text-sm text-ink-2">{t("m.chat.no_messages")}</p>}
+        />
+      )}
+      {!channel && <div className="flex-1" />}
       {channel && canWrite && (
         <Composer
           channel={channel}
           replyTo={thread}
           placeholder={thread ? t("m.chat.reply_placeholder") : t("m.chat.placeholder", { name: title })}
-          onSent={toBottom}
+          onSend={(body, files) => send(body, files, thread)}
         />
       )}
       {acting && (
         <ActionSheet title={t("m.chat.actions")} onClose={() => setActing(null)}>
-          {!thread && (
-            <SheetButton icon={<MessageSquare size={20} />} onClick={() => { setParams({ thread: String(acting.reply_to ?? acting.id) }); setActing(null); }}>
+          {!thread && !isDm && (
+            <SheetButton icon={<MessageSquare size={20} />} onClick={() => { openThread(acting.reply_to ?? acting.id); setActing(null); }}>
               {t("m.chat.in_thread")}
             </SheetButton>
           )}
@@ -405,10 +315,7 @@ export default function Conversation() {
           <SheetButton icon={<span className="text-[18px]">👍</span>} onClick={() => act(() => chatApi.react(acting.id, "👍"), "👍")}>
             {t("chat.react")}
           </SheetButton>
-          <SheetButton
-            icon={<Copy size={20} />}
-            onClick={() => act(() => navigator.clipboard.writeText(visibleBody(acting)), t("m.chat.copied"))}
-          >
+          <SheetButton icon={<Copy size={20} />} onClick={() => act(() => navigator.clipboard.writeText(visibleBody(acting)), t("m.chat.copied"))}>
             {t("m.chat.act.copy")}
           </SheetButton>
         </ActionSheet>
