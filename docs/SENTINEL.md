@@ -31,6 +31,28 @@ only. Every minute:
 | HTTP codes | access lines in the logs | 5xx ≥ 20 and ≥ 20 % (5 min), 429 ≥ 20, 401 ≥ 100, "usage limit"/quota lines ≥ 3 |
 | LiteLLM spend | `/key/list`, `/team/list` with a viewer key | spend ≥ 90 % of `max_budget` |
 | Log errors | docker logs since the last tick, fingerprinted | a new fingerprint ≥ 5 in 5 min; a known one > 10× its 24 h baseline and ≥ 5/min |
+| Backups (every 15 min) | mtime of the newest file or snapshot dir (3 levels deep) in each backup directory | older than 26 h (medium), older than 48 h, missing or empty (high) |
+
+**Backups.** Three read-only mounts in `deploy/prod/docker-compose.prod.yml`
+(no new container, no extra memory; the sentinel only stats files):
+
+| Backup | Host path (env, default) | In the container |
+|---|---|---|
+| PersonalOS `data/` | `POS_BACKUP_DIR`, `./data/backups` | `/backups/personalos` |
+| knowlage `kb_data` | `KNOWLAGE_BACKUP_DIR`, `/opt/server/kb/backups` | `/backups/knowlage` |
+| Nexus `backups/` | `NEXUS_BACKUP_DIR`, `/opt/server/nexus-process-pilot/app/backups` | `/backups/nexus` |
+
+Point the env at the directory the backup job actually writes (not the live
+data: the live SQLite changes every minute and would always look fresh). The
+sentinel runs as uid 10001 and needs read and execute on the directory. Thresholds:
+`backup_warn_h` 26, `backup_fail_h` 48 in `thresholds`; paths in `backups`
+(both overridable in `sentinel.json`). Each run gives:
+- a check row `backup-<name>` (service `backup`) in `/api/status` and the heartbeat, plus `backups: {name: {age_h, status}}`;
+- one JSON line per backup (`{"level": "info|warn|error", "check": "backup", "backup", "age_h", "status", …}`),
+  which Alloy on svr03 labels `service="backup"`: `{host="svr03", service="backup"}` in Loki;
+- `GET /metrics` (no token, scraped by Alloy as `job="sentinel"`): `backup_age_hours{backup}` and
+  `probe_success{app="backup-<name>"}` (0 above 48 h or missing). `metrics_snapshot("svr03")` shows them as
+  `backup_age_h` and, when stale, under `failing_checks`.
 
 **Fingerprints.** An error line is normalized (timestamps, UUIDs, e-mails,
 keys, IPs, URLs, paths, hex and long ids, quoted values, numbers →

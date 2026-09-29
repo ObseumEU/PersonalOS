@@ -1,0 +1,31 @@
+{
+  "name": "Kniha Content Creator",
+  "purpose": "Obsah pro Knihu: posty, scénáře videí, e-maily a sociální sítě.",
+  "role": "content",
+  "team": "kniha",
+  "reports_to": "Kniha Marketing Lead",
+  "permissions": [
+    "approvals:request",
+    "messages:send",
+    "tasks:claim",
+    "tasks:read"
+  ],
+  "budget_class": "low",
+  "lifetime": "long_lived",
+  "runtime": "codex_worker",
+  "worker": "pool",
+  "engine": "claude",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "profile": {
+    "workdir": "/work/kniha",
+    "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch",
+    "claude_tools": "Read|Glob|Grep|Write|Edit|WebSearch|WebFetch|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git checkout:*)|Bash(git switch:*)|Bash(git branch:*)|Bash(git merge:*)|Bash(git restore:*)|Bash(git rev-parse:*)|Bash(ls:*)|Bash(cat /work/kniha/.deploy/:*)",
+    "max_usd_run": 2,
+    "max_steps": 200,
+    "max_steps_owner": 300
+  },
+  "grants": [
+    "tool:knowledge"
+  ]
+}

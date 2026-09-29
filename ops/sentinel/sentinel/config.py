@@ -61,6 +61,7 @@ DEFAULTS: dict = {
         "health_fails": 3,             # consecutive failed checks before an incident
         "down_streak": 3,              # ticks a watched container is not running
         "unhealthy_streak": 3,
+        "sync_error_streak": 5,        # consecutive "sync level error" checks before an incident
         "restart_loop": 3,             # restarts within restart_window_min
         "restart_window_min": 15,
         "tls_days_warn": 14,
@@ -78,12 +79,16 @@ DEFAULTS: dict = {
         "quota_min": 3,
         "auth_401_min": 100,
         "budget_ratio": 0.9,
+        "backup_warn_h": 26, "backup_fail_h": 48,   # age of the newest file in a backup directory
         "warmup_min": 30,              # learn fingerprints without opening incidents after a fresh start
         "quiet_min": 30,               # auto-resolve after this long without a new observation
         "quiet_min_health": 10,
     },
     "apps_every_min": 5,
     "tls_every_min": 60,
+    # backup name → directory in the container (read-only mounts, see docs/SENTINEL.md)
+    "backups": {"personalos": "/backups/personalos", "knowlage": "/backups/knowlage", "nexus": "/backups/nexus"},
+    "backups_every_min": 15,
     "repos": {"personalos": "/repos/personalos", "nexus": "/repos/nexus"},
 }
 

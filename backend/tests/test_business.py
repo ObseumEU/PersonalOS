@@ -172,7 +172,8 @@ def test_agent_files_give_the_ha_specialist_and_the_engineer_higher_caps():
     assert ha["max_steps"] >= agents_code.MIN_STEPS and ha["max_steps_owner"] > ha["max_steps"]
     assert se["max_steps"] >= agents_code.MIN_STEPS and se["max_steps_owner"] > se["max_steps"]
     for spec in agents_code.specs():
-        assert spec.get("model") == hiring.DEFAULT_MODEL and spec.get("effort") == hiring.DEFAULT_EFFORT, spec["name"]
+        # HR may hire on any allowed model (e.g. Sonnet for low-budget agents)
+        assert spec.get("model") in hiring.MODELS and spec.get("effort") == hiring.DEFAULT_EFFORT, spec["name"]
         assert spec.get("engine") == "claude", spec["name"]
 
 

@@ -68,9 +68,19 @@ class Incidents:
                           service, kind, key)
 
     def observe(self, o: Obs, now: float | None = None) -> tuple[int, str]:
-        """Returns (incident id, 'opened' | 'absorbed')."""
+        """Returns (incident id, 'opened' | 'absorbed'). An incident resolved by hand within
+        its quiet period of the last observation is reopened and absorbs it."""
         now = now or self.clock()
         row = self.open_for(o.service, o.kind, o.key)
+        if row is None:
+            # closed by hand (the Monitor's "transient") while it was still being observed: the same
+            # episode goes on, so reopen that incident instead of opening a new one every tick
+            row = self.s.one("SELECT * FROM incidents WHERE status = 'resolved' AND service = ? AND kind = ? "
+                             "AND key = ? AND classification IS NOT NULL AND last_seen >= ? ORDER BY id DESC LIMIT 1",
+                             o.service, o.kind, o.key, now - self.quiet_s(o.kind))
+            if row is not None:
+                self.s.x("UPDATE incidents SET status = 'open', resolved_at = NULL WHERE id = ?", row["id"])
+                self.note(row["id"], "reopened: observed again before its quiet period", now)
         if row is None:
             before = self.s.one("SELECT COUNT(*) AS n FROM incidents WHERE service = ? AND kind = ? AND key = ? "
                                 "AND opened_at >= ?", o.service, o.kind, o.key, now - 86400)["n"]

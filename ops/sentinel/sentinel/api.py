@@ -137,6 +137,9 @@ def make_handler(sen: Sentinel):
                 if sen.pos_down_since:
                     return self._send(503, sen.fallback_text(time.time()), "text/plain")
                 return self._send(200, "PersonalOS reachable\n", "text/plain")
+            if u.path == "/metrics":  # backup ages only, scraped by Alloy
+                with sen.lock:
+                    return self._send(200, sen.metrics(), "text/plain; version=0.0.4")
             if not self._authorized():
                 return None
             if u.path == "/api/status":

@@ -407,6 +407,7 @@ SNAPSHOT = {
     "restarts_1h": 'container:restarts:1h{host="%s"} > 0',
     "oom_1h": 'container:oom_events:1h{host="%s"} > 0',
     "failing_checks": 'probe_success{host="%s"} == 0',
+    "backup_age_h": 'backup_age_hours{host="%s"}',
 }
 
 
@@ -438,6 +439,8 @@ def metrics_snapshot(conn: sqlite3.Connection, ctx: Ctx, host: str = "svr03") ->
                         sorted(val, key=lambda x: -x[1])]
         elif key in ("restarts_1h", "oom_1h"):
             out[key] = {m.get("container", "?"): int(v) for m, v in val}
+        elif key == "backup_age_h":
+            out[key] = {m.get("backup", "?"): round(v, 1) for m, v in val}
         else:
             out[key] = sorted({m.get("app") or m.get("instance", "?") for m, _ in val})
     if errors:
@@ -462,7 +465,8 @@ def register_mcp(mcp, session) -> None:
     @mcp.tool(description="A metrics snapshot of one host from Prometheus (host: svr03 or agent): CPU, memory, swap, "
                           "disk per mount, load per CPU, root filesystem read-only, the 8 heaviest containers by "
                           "memory and 5 by CPU, container restarts and OOM kills in the last hour, failing health "
-                          "checks. Cheap; use it before reading logs.")
+                          "checks (a backup older than 48 h shows as backup-<name>), and the age in hours of the "
+                          "last backup (backup_age_h: personalos, knowlage, nexus). Cheap; use it before reading logs.")
     def metrics_snapshot(ctx: Context, host: str = "svr03") -> dict:
         with session(ctx, "metrics_snapshot", host=host) as (conn, c):
             return _metrics_snapshot(conn, c, host)

@@ -175,14 +175,44 @@ def health(s: Store, t: dict, check: dict, result: dict, now: float) -> list[Obs
                        f"{name} is failing ({result.get('detail') or result.get('status')})", 1,
                        {"url": check["url"], "fails_in_a_row": fails, "last": result.get("detail") or result.get("status")},
                        check.get("restart")))
-    if result.get("level") == "error":
-        out.append(Obs(check["service"], "sync_error", name, "medium", f"{name}: reports sync level error", 1,
-                       {"url": check["url"]}))
+    # a sync error is a degradation, not an outage: low, and only after a streak of checks
+    sync = (s.meta(f"sync_streak:{name}") or 0) + 1 if result.get("level") == "error" else 0
+    s.set_meta(f"sync_streak:{name}", sync)
+    if sync >= t["sync_error_streak"]:
+        out.append(Obs(check["service"], "sync_error", name, "low", f"{name}: reports sync level error",
+                       sync if sync == t["sync_error_streak"] else 1, {"url": check["url"], "checks_in_a_row": sync}))
     days = result.get("tls_days")
     if days is not None and days < t["tls_days_warn"]:
         out.append(Obs(check["service"], "tls", name, "high" if days < t["tls_days_high"] else "medium",
                        f"{name}: TLS certificate expires in {days:.0f} days", 1, {"days_left": days}))
     return out
+
+
+def backup_status(t: dict, age_h: float | None) -> str:
+    if age_h is None or age_h > t["backup_fail_h"]:
+        return "fail"
+    return "warn" if age_h > t["backup_warn_h"] else "ok"
+
+
+def backup(s: Store, t: dict, name: str, result: dict, now: float) -> list[Obs]:
+    """The age of one backup: a check row (backup-<name>, service backup) and an incident over the thresholds."""
+    status = backup_status(t, result.get("age_h"))
+    check = f"backup-{name}"
+    row = s.one("SELECT fails FROM checks WHERE name = ?", check)
+    fails = 0 if status == "ok" else (row["fails"] if row else 0) + 1
+    s.x("""INSERT INTO checks (name, service, ok, fails, last_ok, last_fail, detail) VALUES (?, 'backup', ?, ?, ?, ?, ?)
+           ON CONFLICT (name) DO UPDATE SET ok = excluded.ok, fails = excluded.fails,
+             last_ok = COALESCE(excluded.last_ok, checks.last_ok), last_fail = COALESCE(excluded.last_fail, checks.last_fail),
+             detail = excluded.detail""",
+        check, int(status == "ok"), fails, now if status == "ok" else None, None if status == "ok" else now,
+        json.dumps({"age_h": result.get("age_h"), "status": status, "detail": result.get("detail") or ""}))
+    if status == "ok":
+        return []
+    what = f"{result['age_h']:.0f} h old" if result.get("age_h") is not None else result.get("detail") or "not found"
+    return [Obs("backup", "backup_age", name, "high" if status == "fail" else "medium",
+                f"backup {name}: last backup {what}", 1,
+                {"age_h": result.get("age_h"), "status": status, "detail": result.get("detail") or "",
+                 "warn_h": t["backup_warn_h"], "fail_h": t["backup_fail_h"]})]
 
 
 def containers(s: Store, t: dict, service_of, items: list[dict], now: float) -> list[Obs]:

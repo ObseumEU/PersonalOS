@@ -347,3 +347,58 @@ def test_a_steady_5xx_rate_counts_each_event_once_and_never_escalates(cfg, clock
     for o in detect.ingest_logs(s, t, "api", "api", lines, now):
         inc.observe(o, now)
     assert [k for k, r in inc.due(now) if r["kind"] == "http_5xx"] == ["incident_escalated"]
+
+
+# ------------------------------------------------------------------ backups
+
+def test_backup_age_thresholds_check_rows_and_metrics(sen, clock, tmp_path, capsys):
+    import os
+
+    fresh, stale, old = tmp_path / "fresh", tmp_path / "stale", tmp_path / "old"
+    for d, hours in ((fresh, 2), (stale, 30), (old, 50)):
+        (d / "2026-09-26").mkdir(parents=True)
+        f = d / "2026-09-26" / "db.sqlite.gz"
+        f.write_text("x")
+        t = clock() - hours * 3600
+        for p in (f, f.parent):
+            os.utime(p, (t, t))
+    sen.cfg["backups"] = {"fresh": str(fresh), "stale": str(stale), "old": str(old),
+                          "gone": str(tmp_path / "missing")}
+    sen.tick()
+    b = sen.backups
+    assert b["fresh"]["status"] == "ok" and b["fresh"]["age_h"] == 2.0
+    assert b["stale"]["status"] == "warn" and b["old"]["status"] == "fail"
+    assert b["gone"] == {"age_h": None, "status": "fail", "detail": "missing"}
+    sev = {r["key"]: r["severity"] for r in sen.s.q("SELECT key, severity FROM incidents WHERE kind = 'backup_age'")}
+    assert sev == {"stale": "medium", "old": "high", "gone": "high"}
+    rows = {r["name"]: r["ok"] for r in sen.s.q("SELECT name, ok FROM checks WHERE service = 'backup'")}
+    assert rows == {"backup-fresh": 1, "backup-stale": 0, "backup-old": 0, "backup-gone": 0}
+    m = sen.metrics()
+    assert 'backup_age_hours{backup="stale"} 30.0' in m and 'backup_age_hours{backup="gone"}' not in m
+    assert 'probe_success{app="backup-stale"} 1' in m and 'probe_success{app="backup-old"} 0' in m
+    out = capsys.readouterr().out
+    assert '"check": "backup"' in out and '"level": "error"' in out
+
+
+# ------------------------------------------------------------------ sync level error (T-265)
+
+def test_a_steady_sync_error_is_one_incident_even_after_the_monitor_closes_it(sen, clock, monkeypatch):
+    from sentinel import checks
+
+    sen.cfg["http"] = [{"name": "knowlage-api", "service": "knowlage", "url": "http://kb/api/health",
+                        "json_level": "sync"}]
+    monkeypatch.setattr(checks, "http_check", lambda *a, **k: {"ok": True, "status": 200, "level": "error"})
+    opened = []
+    for i in range(10):
+        opened += sen.tick()["opened"]
+        if i == 5:  # the Monitor classifies it "transient" and resolves it while it goes on
+            sen.inc.resolve(opened[0], "closed by the Monitor agent", classification="transient")
+        clock.advance(60)
+    assert len(opened) == 1                                             # nothing before 5 checks in a row
+    row = sen.inc.get(opened[0])
+    assert row["status"] == "open" and row["count"] == 10 and row["severity"] == "low"
+    assert sen.s.one("SELECT COUNT(*) AS n FROM incidents WHERE kind = 'sync_error'")["n"] == 1
+    # once it is quiet for its quiet period it resolves
+    monkeypatch.setattr(checks, "http_check", lambda *a, **k: {"ok": True, "status": 200, "level": "ok"})
+    clock.advance(31 * 60)
+    assert sen.tick()["resolved"] == [opened[0]]
