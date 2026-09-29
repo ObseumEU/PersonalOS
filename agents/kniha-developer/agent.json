@@ -20,7 +20,7 @@
   "profile": {
     "workdir": "/work/kniha",
     "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch",
-    "claude_tools": "Read|Glob|Grep|Write|Edit|WebSearch|WebFetch|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git checkout:*)|Bash(git switch:*)|Bash(git branch:*)|Bash(git merge:*)|Bash(git restore:*)|Bash(git rev-parse:*)|Bash(ls:*)|Bash(cat /work/kniha/.deploy/:*)|Bash(npm ci:*)|Bash(npm install:*)|Bash(npm run:*)|Bash(npm test:*)|Bash(npx vite build:*)|Bash(npx tsc:*)|Bash(npx --yes ffmpeg-static:*)|Bash(node:*)|Bash(du:*)|Bash(mkdir:*)|Bash(cp:*)|Bash(mv:*)|Bash(curl -sI:*)|Bash(curl -s:*)|Bash(git -C:*)|Bash(git worktree:*)|Bash(git cherry-pick:*)|Bash(cd:*)|Bash(pwd:*)",
+    "claude_tools": "Read|Glob|Grep|Write|Edit|WebSearch|WebFetch|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git checkout:*)|Bash(git switch:*)|Bash(git branch:*)|Bash(git merge:*)|Bash(git restore:*)|Bash(git rev-parse:*)|Bash(ls:*)|Bash(cat /work/kniha/.deploy/:*)|Bash(npm ci:*)|Bash(npm install:*)|Bash(npm run:*)|Bash(npm test:*)|Bash(npx vite build:*)|Bash(npx tsc:*)|Bash(npx --yes ffmpeg-static:*)|Bash(node:*)|Bash(du:*)|Bash(mkdir:*)|Bash(cp:*)|Bash(mv:*)|Bash(curl -sI:*)|Bash(curl -s:*)|Bash(git -C:*)|Bash(git worktree:*)|Bash(git cherry-pick:*)|Bash(cd:*)|Bash(pwd:*)|Bash(npm --prefix:*)|Bash(npx --prefix:*)|Bash(git -C /work/kniha/web:*)",
     "max_usd_run": 3,
     "max_steps": 200,
     "max_steps_owner": 300
