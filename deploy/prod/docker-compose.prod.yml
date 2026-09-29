@@ -91,6 +91,9 @@ services:
         cd backend && pip install -q -e .[dev] -e ../worker && python -m pytest -q -n auto -p no:cacheprovider && cd ../web && npm ci --silent && npm run build
       DEPLOY_UP_CMD: >-
         docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml up -d --build api web
+      # Run from a detached helper container after a deploy that changed the deployer's code (T-305).
+      DEPLOY_SELF_CMD: >-
+        docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml up -d --build --no-deps deployer
       DEPLOY_HEALTH_URL: http://web/api/health
     volumes: !override
       - ${POS_CHECKOUT}:${POS_CHECKOUT}

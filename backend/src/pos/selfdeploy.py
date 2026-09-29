@@ -42,6 +42,10 @@ Otherwise the branch's owner gets one task (per branch) with the conflicting fil
 the instruction to rebase, and the tip is parked: later ticks only re-check it silently
 (git merge-tree) when main moves, and try it again only once it merges cleanly or a new commit
 arrives. Every rejection carries a one-line reason (GET /api/deploys/health sums them up).
+
+DEPLOY_SELF_CMD: the compose command that recreates the deployer itself (e.g. `docker compose
+… up -d --build --no-deps deployer`). After a deploy that changed the deployer's own code it runs
+in a detached helper container, never inside the deployer, which it stops (T-305).
 """
 
 import argparse
@@ -49,6 +53,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -115,6 +120,43 @@ def sh(cmd: str, repo: Path, timeout: int = 1800) -> tuple[bool, str]:
     p = subprocess.run(cmd, cwd=repo, shell=True, capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=timeout)
     return p.returncode == 0, (p.stdout + p.stderr)[-6000:]
+
+
+# What the deployer's image is built from (ops/deployer.Dockerfile): a change here needs a new deployer.
+SELF_PATHS = ("backend/src/", "backend/pyproject.toml", "ops/deployer.Dockerfile")
+
+
+def deployer_changed(repo: Path, old: str, new: str) -> bool:
+    try:
+        files = git(repo, "diff", "--name-only", old, new).splitlines()
+    except subprocess.CalledProcessError:
+        return False
+    return any(f.startswith(SELF_PATHS) for f in files)
+
+
+def restart_self(cmd: str, repo: Path) -> tuple[bool, str]:
+    """Recreate the deployer's own container. `docker compose up deployer` run in here would stop
+    this container halfway (T-305: SIGKILL, then nobody to start it again), so it runs in a
+    detached one-off container from the deployer's own image, with the docker socket and the
+    checkout at the same path, and waits a few seconds for this tick to finish first."""
+    me = os.environ.get("HOSTNAME", "")
+    p = subprocess.run(["docker", "inspect", "-f", "{{.Config.Image}}", me], capture_output=True, text=True)
+    image = p.stdout.strip()
+    if p.returncode != 0 or not image:
+        return False, f"cannot find the deployer's own image ({me}): {p.stderr.strip()}"
+    p = subprocess.run(["docker", "run", "-d", "--rm", "--name", f"pos-deployer-restart-{int(time.time())}",
+                        "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", f"{repo}:{repo}",
+                        "-w", str(repo), "--entrypoint", "sh", image, "-c", f"sleep 5 && {cmd}"],
+                       capture_output=True, text=True)
+    return p.returncode == 0, (p.stdout + p.stderr).strip()[-2000:]
+
+
+def _stop(signum, frame):  # noqa: ARG001
+    """As PID 1 in its container Python ignores SIGTERM unless it has a handler, so `docker stop`
+    waited out the grace period and killed it (exit 137, T-305). Exit cleanly instead; a running
+    subprocess.run kills its child on the way out and the next start resumes (.pos-promote-state)."""
+    print("SIGTERM: stopping", flush=True)
+    raise SystemExit(0)
 
 
 def healthy(url: str, wait_s: int = 90) -> tuple[bool, str]:
@@ -544,6 +586,8 @@ def main() -> None:
     a = ap.parse_args()
     if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
         open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
+    signal.signal(signal.SIGTERM, _stop)
+    self_cmd = os.environ.get("DEPLOY_SELF_CMD", "")
     reporter = Reporter(os.environ.get("POS_URL", "http://localhost:8000"), os.environ["POS_DEPLOYER_KEY"])
     kw = dict(remote=os.environ.get("DEPLOY_REMOTE", "origin"), branch=os.environ.get("DEPLOY_BRANCH", "main"),
               test_cmd=os.environ.get("DEPLOY_TEST_CMD", DEFAULT_TEST), up_cmd=os.environ.get("DEPLOY_UP_CMD", DEFAULT_UP),
@@ -577,6 +621,9 @@ def main() -> None:
             print(f"gave {fixed} root-owned files back to the checkout's owner", flush=True)
         if res.status != "nothing":
             print(f"{res.old[:10]}..{res.new[:10]}: {res.status} {res.stage}", flush=True)
+        if res.status == "ok" and self_cmd and deployer_changed(Path(a.repo), res.old, res.new):
+            ok, out = restart_self(self_cmd, Path(a.repo))
+            print(f"recreating the deployer from a helper container: {'started' if ok else 'failed'} {out}", flush=True)
         if a.once or not a.watch:
             break
         time.sleep(a.watch)
