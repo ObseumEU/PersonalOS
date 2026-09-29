@@ -94,7 +94,7 @@ services:
     logging: *logging
 
   hook:
-    image: caddy:2.10-alpine
+    image: caddy:2.11-alpine
     container_name: obs-hook
     restart: unless-stopped
     environment:
