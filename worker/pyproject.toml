@@ -3,7 +3,7 @@ name = "pos-worker"
 version = "0.1.0"
 description = "Runs one PersonalOS agent as a Codex CLI worker"
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.27", "mcp>=2.2,<3"]
+dependencies = ["httpx>=0.27", "mcp>=2.2,<3", "Pillow>=10"]
 
 [build-system]
 requires = ["setuptools>=69"]

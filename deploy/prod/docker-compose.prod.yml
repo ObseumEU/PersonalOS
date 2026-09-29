@@ -39,7 +39,7 @@ services:
       POS_PROMETHEUS_URL: ${POS_PROMETHEUS_URL:-http://192.168.1.186:9090}
     # Memory (svr03 runs deep in swap): limits from the 7-day working-set peaks (Prometheus,
     # container:memory_working_set_bytes, 2026-09-29) plus headroom. api 406 MB, web 8, deployer 590,
-    # agent-pool 1140 (its 3g limit is in docker-compose.yml), sentinel 41.
+    # agent-pool 1140 (its 4g limit is in docker-compose.yml), sentinel 41.
     mem_limit: ${POS_API_MEM:-1g}
     mem_reservation: 256m
     networks:

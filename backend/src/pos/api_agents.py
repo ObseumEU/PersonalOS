@@ -274,7 +274,61 @@ def browser_screenshot(rel: str, settings: Settings = Depends(get_settings)):
     path = browser.screenshot_path(settings.data_dir, rel)
     if path is None:
         raise HTTPException(404, "no such screenshot")
-    return FileResponse(path, media_type="image/png", headers={"X-Content-Type-Options": "nosniff"})
+    return FileResponse(path, media_type="image/jpeg" if path.suffix == ".jpg" else "image/png",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"})
+
+
+@router.get("/runs/{run_id}/live")
+def run_live(run_id: int, conn=Depends(get_db), settings: Settings = Depends(get_settings)):
+    """The live view of a run's browser (or desktop): the newest frame's metadata. Asking marks the run
+    as watched, so its guard sends a frame every few seconds while this page polls."""
+    from . import browser
+
+    row = conn.execute("SELECT id, status, actor_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such run")
+    if row["status"] == "running":
+        browser.mark_watching(settings.data_dir, run_id)
+    got = browser.live_frame(settings.data_dir, run_id)
+    if got is None:
+        return {"run_id": run_id, "running": row["status"] == "running", "frame": False}
+    img, info = got
+    return {"run_id": run_id, "running": row["status"] == "running", "frame": True,
+            "version": int(img.stat().st_mtime * 1000), **{k: info.get(k) for k in ("url", "kind", "step", "at")}}
+
+
+@router.get("/runs/{run_id}/live.img")
+def run_live_image(run_id: int, settings: Settings = Depends(get_settings)):
+    from fastapi.responses import FileResponse
+
+    from . import browser
+
+    got = browser.live_frame(settings.data_dir, run_id)
+    if got is None:
+        raise HTTPException(404, "no frame")
+    img, info = got
+    return FileResponse(img, media_type=info.get("mime") or "image/jpeg",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@router.get("/agents/{agent_id}/browser-profile")
+def agent_browser_profile(agent_id: int, conn=Depends(get_db), settings: Settings = Depends(get_settings)):
+    """Whether the agent keeps browser logins (browser:profile) and for which sites; never the cookies."""
+    from . import browser
+
+    return {"granted": browser.may_keep_profile(conn, agent_id),
+            **browser.profile_info(settings.data_dir, settings.session_secret, agent_id)}
+
+
+@router.delete("/agents/{agent_id}/browser-profile")
+def clear_agent_browser_profile(agent_id: int, conn=Depends(get_db), ctx=Depends(get_ctx),
+                                settings: Settings = Depends(get_settings)):
+    """The owner clears an agent's kept logins: its next run logs in again."""
+    from . import actors, browser
+
+    if not actors.get(conn, ctx.actor_id)["is_owner"]:
+        raise HTTPException(403, "only the owner clears an agent's browser logins")
+    return {"cleared": browser.clear_profile(conn, ctx, settings.data_dir, agent_id)}
 
 
 @router.get("/approvals")

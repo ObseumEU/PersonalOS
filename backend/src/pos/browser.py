@@ -28,6 +28,8 @@ The same check covers computer use (`computer_*` tools, the desktop sandbox):
 """
 
 import base64
+import contextlib
+import json
 import os
 import re
 import sqlite3
@@ -228,17 +230,31 @@ def shots_dir(data_dir: Path) -> Path:
     return data_dir / "files" / "browser"
 
 
-def save_screenshot(data_dir: Path, actor_id: int, tool: str, png_b64: str | None) -> str | None:
-    if not png_b64:
+def _image(b64: str | None, limit: int = 8 * 1024 * 1024) -> tuple[bytes, str] | None:
+    """(bytes, suffix) of a PNG or JPEG screenshot; None for anything else."""
+    if not b64:
         return None
     try:
-        raw = base64.b64decode(png_b64, validate=True)
+        raw = base64.b64decode(b64, validate=True)
     except ValueError:
         return None
-    if len(raw) > 8 * 1024 * 1024:
+    if len(raw) > limit:
         return None
+    if raw.startswith(b"\x89PNG"):
+        return raw, ".png"
+    if raw.startswith(b"\xff\xd8\xff"):
+        return raw, ".jpg"
+    return None
+
+
+def save_screenshot(data_dir: Path, actor_id: int, tool: str, b64: str | None) -> str | None:
+    got = _image(b64)
+    if got is None:
+        return None
+    raw, suffix = got
     now = datetime.now(timezone.utc)
-    rel = Path(str(actor_id)) / now.strftime("%Y%m%d") / f"{now.strftime('%H%M%S%f')}-{re.sub(r'[^a-z_]', '', tool)}.png"
+    name = f"{now.strftime('%H%M%S%f')}-{re.sub(r'[^a-z_]', '', tool)}{suffix}"
+    rel = Path(str(actor_id)) / now.strftime("%Y%m%d") / name
     path = shots_dir(data_dir) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
@@ -281,18 +297,174 @@ def record(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, body: dict) -> di
     shot = save_screenshot(data_dir, ctx.actor_id, tool, body.get("screenshot"))
     kind = "computer" if tool.startswith("computer_") else "browser"
     extra = {k: str(body[k])[:300] for k in ("download", "note") if body.get(k)}
-    audit.log(conn, _run_ctx(conn, ctx, body.get("run_id")), f"{kind}:{tool.removeprefix(kind + '_')}",
+    rctx = _run_ctx(conn, ctx, body.get("run_id"))
+    audit.log(conn, rctx, f"{kind}:{tool.removeprefix(kind + '_')}",
               "task" if body.get("task_id") else None,
               body.get("task_id"), url=body.get("url"), args=redact(tool, body.get("args") or {}),
               ok=bool(body.get("ok", True)), screenshot=shot, approval_id=body.get("approval_id"), **extra)
     conn.commit()
+    if shot and rctx.run_id:  # the last step is also the live view's frame
+        save_live(data_dir, rctx.run_id, body.get("screenshot"),
+                  {"url": body.get("url"), "kind": kind, "step": tool.removeprefix(kind + "_")})
     return {"screenshot": shot}
 
 
 def screenshot_path(data_dir: Path, rel: str) -> Path | None:
     base = shots_dir(data_dir).resolve()
     p = (base / rel).resolve()
-    return p if p.is_file() and base in p.parents and p.suffix == ".png" else None
+    return p if p.is_file() and base in p.parents and p.suffix in (".png", ".jpg") else None
+
+
+# ------------------------------------------------------------------ the live view
+
+LIVE_WATCH_S = 20  # a run page polled this recently counts as watched: the guard sends frames
+
+
+def live_dir(data_dir: Path) -> Path:
+    return shots_dir(data_dir) / "live"
+
+
+def save_live(data_dir: Path, run_id: int, b64: str | None, meta: dict) -> bool:
+    """The newest frame of a run's browser or desktop (one file per run, overwritten)."""
+    got = _image(b64, 4 * 1024 * 1024)
+    if got is None:
+        return False
+    raw, suffix = got
+    d = live_dir(data_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"{int(run_id)}.tmp"
+    tmp.write_bytes(raw)
+    tmp.replace(d / f"{int(run_id)}.img")
+    info = {k: (str(v)[:500] if v is not None else None) for k, v in meta.items()}
+    info.update(mime="image/png" if suffix == ".png" else "image/jpeg",
+                at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    (d / f"{int(run_id)}.json").write_text(json.dumps(info), encoding="utf-8")
+    return True
+
+
+def live_frame(data_dir: Path, run_id: int) -> tuple[Path, dict] | None:
+    d = live_dir(data_dir)
+    img, meta = d / f"{int(run_id)}.img", d / f"{int(run_id)}.json"
+    if not img.is_file():
+        return None
+    try:
+        info = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        info = {}
+    return img, info
+
+
+def mark_watching(data_dir: Path, run_id: int) -> None:
+    d = live_dir(data_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{int(run_id)}.watch").touch()
+
+
+def watching(data_dir: Path, run_id: int) -> bool:
+    try:
+        age = datetime.now().timestamp() - (live_dir(data_dir) / f"{int(run_id)}.watch").stat().st_mtime
+    except (OSError, ValueError):
+        return False
+    return age < LIVE_WATCH_S
+
+
+def prune_live(data_dir: Path, keep_s: float = 7 * 86400) -> None:
+    d = live_dir(data_dir)
+    if not d.is_dir():
+        return
+    cutoff = datetime.now().timestamp() - keep_s
+    for f in d.iterdir():
+        with contextlib.suppress(OSError):
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+
+
+# ------------------------------------------------------------------ kept logins (browser:profile)
+
+PROFILE_GRANT = "browser:profile"
+PROFILE_MAX_BYTES = 5 * 1024 * 1024
+
+
+def may_keep_profile(conn: sqlite3.Connection, actor_id: int) -> bool:
+    """The owner's grant browser:profile (or the older scope:browser-profile:<name>)."""
+    from . import agents
+
+    perms = agents.permissions_of(conn, actor_id)
+    return PROFILE_GRANT in perms or any(p.startswith("scope:browser-profile:") for p in perms)
+
+
+def profiles_dir(data_dir: Path) -> Path:
+    return data_dir / "browser-profiles"
+
+
+def _profile_key(secret: str, actor_id: int) -> bytes:
+    """A key per agent, derived from the server's secret (POS_BROWSER_PROFILE_KEY, else the session
+    secret): one agent's saved logins can never be opened with another's key."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    master = (os.environ.get("POS_BROWSER_PROFILE_KEY") or secret or "").encode()
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=b"pos-browser-profile-v1",
+                info=f"agent:{int(actor_id)}".encode()).derive(master)
+
+
+def save_profile(data_dir: Path, secret: str, actor_id: int, state: dict) -> int:
+    """The agent's cookies and site storage (Playwright's storage state), encrypted (AES-GCM) at rest."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    raw = json.dumps(state, separators=(",", ":")).encode()
+    if len(raw) > PROFILE_MAX_BYTES:
+        raise ValueError(f"the browser profile is too big ({len(raw) // 1024} KB)")
+    nonce = os.urandom(12)
+    aad = f"agent:{int(actor_id)}".encode()
+    blob = b"PBP1" + nonce + AESGCM(_profile_key(secret, actor_id)).encrypt(nonce, raw, aad)
+    d = profiles_dir(data_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"{int(actor_id)}.tmp"
+    tmp.write_bytes(blob)
+    with contextlib.suppress(OSError):
+        os.chmod(tmp, 0o600)
+    tmp.replace(d / f"{int(actor_id)}.bin")
+    return len(raw)
+
+
+def load_profile(data_dir: Path, secret: str, actor_id: int) -> dict | None:
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    try:
+        blob = (profiles_dir(data_dir) / f"{int(actor_id)}.bin").read_bytes()
+    except OSError:
+        return None
+    if not blob.startswith(b"PBP1") or len(blob) < 32:
+        return None
+    try:
+        raw = AESGCM(_profile_key(secret, actor_id)).decrypt(blob[4:16], blob[16:], f"agent:{int(actor_id)}".encode())
+    except InvalidTag:  # another key (the secret changed) or another agent's file: as if there were none
+        return None
+    return json.loads(raw)
+
+
+def profile_info(data_dir: Path, secret: str, actor_id: int) -> dict:
+    """For the owner: whether logins are kept and for which sites (never the cookies themselves)."""
+    path = profiles_dir(data_dir) / f"{int(actor_id)}.bin"
+    if not path.is_file():
+        return {"exists": False}
+    state = load_profile(data_dir, secret, actor_id) or {}
+    sites = {str(c.get("domain") or "").lstrip(".") for c in state.get("cookies") or []}
+    sites |= {urlparse(str(o.get("origin") or "")).hostname or "" for o in state.get("origins") or []}
+    return {"exists": True, "bytes": path.stat().st_size, "sites": sorted(s for s in sites if s),
+            "updated_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")}
+
+
+def clear_profile(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, actor_id: int) -> bool:
+    path = profiles_dir(data_dir) / f"{int(actor_id)}.bin"
+    existed = path.is_file()
+    with contextlib.suppress(OSError):
+        path.unlink()
+    audit.log(conn, ctx, "browser:profile_cleared", "actor", actor_id, existed=existed)
+    conn.commit()
+    return existed
 
 
 # ------------------------------------------------------------------ grants (tool:browser, tool:computer)
@@ -302,7 +474,8 @@ WORKER_TOOLS = {"browser": "a headless browser (Playwright MCP behind the guard;
                            "and posting on the owner's personal channels ask)",
                 "computer": "a desktop sandbox (screen, mouse, keyboard) for tasks that need a real GUI"}
 # scope:browser:<host[:port]>: the agent does anything there, deleting included (owner only).
-# scope:browser-profile:<name>: a persistent browser profile, logins kept between runs (owner only).
+# browser:profile (older: scope:browser-profile:<name>): the agent's logins kept between runs, encrypted
+# by PersonalOS (owner only; the owner clears them on the agent's page).
 SCOPES = ("browser", "browser-profile")
 
 

@@ -15,9 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git 
 # its headless Chromium and the system libraries it needs, so it runs in the container.
 # (browser_guard adds --isolated --headless; Chromium comes from the Playwright
 # version @playwright/mcp itself depends on.)
+# Pinned: the guard's tools map onto this version's tool names and arguments (target refs, the
+# snapshot mode, browser_run_code_unsafe); verify a newer one with backend/tests/browser_e2e.py first.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PLAYWRIGHT_MCP="playwright-mcp --browser chromium --no-sandbox"
-RUN npm install -g @playwright/mcp@latest \
+RUN npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
     && cd "$(npm root -g)/@playwright/mcp" && npx --no-install playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 

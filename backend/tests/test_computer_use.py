@@ -24,8 +24,6 @@ from pos.db import connect
 from pos.main import create_app
 
 pytest.importorskip("pos_worker")
-import mcp_types as types  # noqa: E402
-
 from pos_worker import browser_guard, computer, mounts, prompt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -237,52 +235,13 @@ def test_mounts_only_with_the_grant(monkeypatch):
 def test_the_guidance_is_only_for_agents_with_the_tools():
     assert prompt.web_guide({"permissions": ["tasks:read"]}) == ""
     g = prompt.web_guide({"permissions": ["tool:browser"]})
-    assert "browser_snapshot" in g and "Ú1" in g and "computer_screenshot" not in g
+    assert "browser_get_page_text" in g and "browser_find" in g and "browser_batch" in g and "browser_login" in g
+    assert "Ú1" in g and "Ú2" in g and "CAPTCHA" in g and "computer_screenshot" not in g
     assert "computer_screenshot" in prompt.web_guide({"permissions": ["tool:browser", "tool:computer"]})
     assert "# Browser and computer use" in prompt.stable_prompt({"name": "X", "permissions": ["tool:browser"]})
 
 
-# ------------------------------------------------------------------ the browser guard
-
-def _guard(monkeypatch, tmp_path, run_id="11"):
-    monkeypatch.setenv("POS_AGENT_KEY", "k")
-    monkeypatch.setenv("POS_RUN_ID", run_id)
-    monkeypatch.setenv("WORKER_WORKDIR", str(tmp_path))
-    monkeypatch.setenv("PLAYWRIGHT_MCP", "playwright-mcp --browser chromium --no-sandbox")
-    return browser_guard.Guard()
-
-
-def test_each_run_gets_a_fresh_isolated_profile_unless_a_profile_is_granted(monkeypatch, tmp_path):
-    a = _guard(monkeypatch, tmp_path, "1").playwright().args
-    b = _guard(monkeypatch, tmp_path, "2").playwright().args
-    assert "--isolated" in a and "--headless" in a and "--user-data-dir" not in a
-    assert a[a.index("--output-dir") + 1] != b[b.index("--output-dir") + 1]
-    cfg = json.loads(Path(a[a.index("--config") + 1]).read_text())
-    assert "--js-flags=--max-old-space-size=256" in cfg["browser"]["launchOptions"]["args"]
-    g = _guard(monkeypatch, tmp_path, "3")
-    g.profile = "GitHub"
-    args = g.playwright().args
-    assert "--isolated" not in args and args[args.index("--user-data-dir") + 1].endswith(str(Path(".browser-profiles") / "github"))
-
-
-class FakePW:
-    """Playwright MCP stand-in: records calls; the page echoes what was typed (like a snapshot would)."""
-
-    def __init__(self):
-        self.calls, self.typed = [], ""
-
-    async def call_tool(self, name, args):
-        self.calls.append((name, args))
-        if name == "browser_take_screenshot":
-            return types.CallToolResult(content=[types.ImageContent(type="image", data=PNG, mime_type="image/png")])
-        if name == "browser_type":
-            self.typed = args["text"]
-            return types.CallToolResult(content=[types.TextContent(
-                type="text", text=f"await page.getByRole('textbox').fill('{args['text']}')")])
-        if name == "browser_evaluate":
-            return types.CallToolResult(content=[types.TextContent(type="text", text='"http://router.lan/login"')])
-        return types.CallToolResult(content=[types.TextContent(type="text", text=f"- textbox: {self.typed}")])
-
+# ------------------------------------------------------------------ the browser guard (more: test_browser_tools.py)
 
 class FakePos:
     def __init__(self, decision="allow"):
@@ -312,58 +271,6 @@ class FakePos:
                 return {"status": "rejected"}
 
         return R()
-
-
-def test_browser_login_never_shows_the_value_and_redacts_it_afterwards(monkeypatch, tmp_path):
-    g = _guard(monkeypatch, tmp_path)
-    monkeypatch.setenv("POS_CRED_SESSION", "sess")
-    g.pos, pw = FakePos(), FakePW()
-    res = asyncio.run(g.call(pw, "browser_login", {"credential": "router", "element": "Password", "ref": "e3"}))
-    shown = " ".join(getattr(c, "text", "") for c in res.content)
-    assert not res.is_error and "Filled router" in shown and SECRET not in shown and "[REDACTED:router]" in shown
-    assert pw.typed == SECRET  # it did reach the page
-    assert any(n == "browser_evaluate" and "TextSecurity" in a.get("function", "") for n, a in pw.calls)  # masked
-    snap = asyncio.run(g.call(pw, "browser_snapshot", {}))
-    assert SECRET not in snap.content[0].text and "[REDACTED:router]" in snap.content[0].text
-    assert 'trust="untrusted"' in snap.content[0].text
-    logged = [b for p, b, _ in g.pos.posts if p.endswith("/log")]
-    assert logged and SECRET not in json.dumps(logged)
-    cred = [(b, h) for p, b, h in g.pos.posts if p.endswith("/credential")]
-    assert cred[0][0]["url"] == "http://router.lan/login" and cred[0][1] == {"X-POS-Cred-Session": "sess"}
-
-
-def test_an_outbound_action_waits_for_the_owner_and_is_not_done_when_rejected(monkeypatch, tmp_path):
-    g = _guard(monkeypatch, tmp_path)
-    g.pos, pw, g.poll_s = FakePos("approval"), FakePW(), 0
-    res = asyncio.run(g.call(pw, "browser_click", {"element": "Post comment", "ref": "e9"}))
-    assert res.is_error and "approval #5 is rejected" in res.content[0].text
-    assert not any(n == "browser_click" for n, _ in pw.calls)
-    checks = [b for p, b, _ in g.pos.posts if p.endswith("/check")]
-    assert checks[0]["dry_run"] and checks[1]["screenshot"] == PNG and checks[1]["run_id"] == "11"
-
-
-def test_screenshots_are_capped_per_run_and_land_on_the_trace(monkeypatch, tmp_path):
-    monkeypatch.setenv("BROWSER_MAX_SCREENSHOTS", "2")
-    g = _guard(monkeypatch, tmp_path)
-    g.pos, pw = FakePos(), FakePW()
-    got = [asyncio.run(g.call(pw, "browser_take_screenshot", {})) for _ in range(3)]
-    assert [r.is_error for r in got] == [False, False, True] and "browser_snapshot" in got[2].content[0].text
-    assert sum(1 for p, b, _ in g.pos.posts if p.endswith("/log") and b["screenshot"] == PNG) == 2
-
-
-def test_downloads_go_to_the_workspace_programs_and_big_files_to_quarantine(monkeypatch, tmp_path):
-    monkeypatch.setenv("BROWSER_MAX_DOWNLOAD_MB", "1")
-    g = _guard(monkeypatch, tmp_path)
-    g.out_dir.mkdir(parents=True)
-    (g.out_dir / "report.pdf").write_bytes(b"%PDF-1.7 hello")
-    (g.out_dir / "setup.exe").write_bytes(b"MZ\x90\x00")
-    (g.out_dir / "notes.txt").write_bytes(b"#!/bin/sh\nrm -rf /")  # a script by content
-    (g.out_dir / "big.zip").write_bytes(b"0" * (2 * 1024 * 1024))
-    (g.out_dir / "page-2026.png").write_bytes(b"png")  # a Playwright screenshot, not a download
-    notes = g.scan_downloads()
-    assert (tmp_path / "downloads" / "report.pdf").is_file()
-    assert {p.name for p in (g.out_dir / "quarantine").iterdir()} == {"setup.exe", "notes.txt", "big.zip"}
-    assert len(notes) == 4 and g.scan_downloads() == []
 
 
 def test_browser_slots_cap_concurrent_browsers(tmp_path):

@@ -96,7 +96,7 @@ def kind_of(capability: str) -> str:
         return "credential"
     if cap in agents.PERMISSIONS:
         return "permission"
-    if cap.startswith(("scope:browser:", "scope:browser-profile:")):
+    if cap == "browser:profile" or cap.startswith(("scope:browser:", "scope:browser-profile:")):
         # Where an agent submits without approval, and a browser profile that keeps logins (pos.browser).
         return "owner_only"
     if head == "tool":
