@@ -649,6 +649,12 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         parent = conn.execute("SELECT * FROM chat_messages WHERE id = ?", (reply_to,)).fetchone()
         if parent is None or parent["channel_id"] != channel_id:
             raise ChatError(f"message {reply_to} is not in this channel")
+    # A DM is one conversation, like a messenger: an answer goes into it, quoting the message it
+    # answers, never into a hidden thread (the owner did not see the CEO's answers on his phone).
+    # Threads stay for group channels (and a meeting, which lives in its thread).
+    quote_of = None
+    if reply_to is not None and ch["kind"] == "dm" and meeting is None:
+        quote_of, reply_to, parent = reply_to, None, None
     if not system:
         dup = _duplicate(conn, ctx.actor_id, channel_id, body, reply_to)
         if dup is not None:  # a double submit or a retried call: the message is there already
@@ -695,6 +701,7 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     atts += [r for r in refs if r not in atts]
     row = versioning.insert(conn, ctx, "chat_message", {
         "channel_id": channel_id, "author_id": ctx.actor_id, "body": body, "reply_to": reply_to,
+        **({"quote_of": quote_of} if quote_of else {}),
         "mentions": json.dumps(mentioned), "attachments": json.dumps(atts), "priority": priority,
         "trust": _trust(ctx, author), "created_at": now_iso(),
     })
@@ -726,6 +733,8 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
                      (mid, aid, reason, runs[aid], now if quiet else None))
     conn.execute("UPDATE channel_members SET last_read_message_id = ? WHERE channel_id = ? AND actor_id = ?",
                  (mid, channel_id, ctx.actor_id))
+    if reply_to is not None and author["kind"] == "human":  # he wrote in the thread: he has read it
+        _thread_read(conn, ctx.actor_id, _thread_of(conn, reply_to) or reply_to, mid)
     audit.log(conn, ctx, "chat_send", "chat_message", mid, channel=channel_id, priority=priority,
               mentions=mentioned, inbox=sorted(inbox), **({"system": True} if system else {}),
               **({"routed": sorted(routed)} if routed else {}), **({"ack": True} if ack else {}),
@@ -1165,6 +1174,8 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
     from . import meetings
 
     marks = meetings.annotations(conn, ids)
+    quotes = _quotes(conn, rows, names)
+    threads = {} if for_agent else _thread_summaries(conn, [r["id"] for r in rows if replies.get(r["id"])], viewer, names)
     out = []
     for r in rows:
         author = names.get(r["author_id"])
@@ -1177,6 +1188,11 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
                             for a in json.loads(r["attachments"] or "[]")]
         d["reactions"] = reacts.get(r["id"], [])
         d["replies"] = replies.get(r["id"], 0)
+        d["quote_of"] = r["quote_of"] if "quote_of" in r.keys() else None
+        if d["quote_of"] in quotes:
+            d["quote"] = quotes[d["quote_of"]]
+        if r["id"] in threads:
+            d["thread"] = threads[r["id"]]
         if r["id"] in marks:
             d["meeting"] = marks[r["id"]]
         body = r["body"] if not r["archived_at"] else ""
@@ -1185,6 +1201,109 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
         d["body"] = body
         out.append(d)
     return out
+
+
+def _snippet(body: str, n: int = 120) -> str:
+    text = " ".join((body or "").split())
+    return text[:n] + ("…" if len(text) > n else "")
+
+
+def _quotes(conn: sqlite3.Connection, rows, names) -> dict[int, dict]:
+    """The messages quoted by these (a DM answer's quote_of): who wrote them and how they began."""
+    ids = sorted({r["quote_of"] for r in rows if "quote_of" in r.keys() and r["quote_of"]})
+    if not ids:
+        return {}
+    out = {}
+    for q in conn.execute(f"SELECT id, author_id, body, archived_at FROM chat_messages "
+                          f"WHERE id IN ({','.join('?' for _ in ids)})", ids):
+        a = names.get(q["author_id"])
+        out[q["id"]] = {"id": q["id"], "author_id": q["author_id"], "author_name": a["name"] if a else "?",
+                        "body": "" if q["archived_at"] else _snippet(q["body"])}
+    return out
+
+
+def _thread_base(conn: sqlite3.Connection, viewer: int) -> int:
+    row = conn.execute("SELECT last_read_id FROM chat_thread_reads WHERE actor_id = ? AND root_id = 0",
+                       (viewer,)).fetchone()
+    return row["last_read_id"] if row else 0
+
+
+def _thread_read(conn: sqlite3.Connection, actor_id: int, root_id: int, upto: int) -> None:
+    conn.execute("""INSERT INTO chat_thread_reads (actor_id, root_id, last_read_id) VALUES (?, ?, ?)
+                    ON CONFLICT (actor_id, root_id) DO UPDATE
+                    SET last_read_id = MAX(last_read_id, excluded.last_read_id)""", (actor_id, root_id, upto))
+
+
+def _thread_summaries(conn: sqlite3.Connection, roots: list[int], viewer: int, names) -> dict[int, dict]:
+    """Under a message with replies (a thread in a channel): who answered (the last few, newest
+    first), the last reply in one line, when, and how many replies the viewer has not read."""
+    if not roots:
+        return {}
+    marks = ",".join("?" for _ in roots)
+    base = _thread_base(conn, viewer)
+    reads = {r["root_id"]: r["last_read_id"] for r in conn.execute(
+        f"SELECT root_id, last_read_id FROM chat_thread_reads WHERE actor_id = ? AND root_id IN ({marks})",
+        [viewer, *roots])}
+    out: dict[int, dict] = {}
+    for r in conn.execute(f"""SELECT id, reply_to, author_id, body, created_at FROM chat_messages
+                              WHERE archived_at IS NULL AND reply_to IN ({marks}) ORDER BY id DESC""", roots):
+        seen = reads.get(r["reply_to"], base)
+        s = out.setdefault(r["reply_to"], {"repliers": [], "last": None, "unread": 0, "last_read_id": seen})
+        a = names.get(r["author_id"])
+        if s["last"] is None:
+            s["last"] = {"id": r["id"], "author_id": r["author_id"], "author_name": a["name"] if a else "?",
+                         "body": _snippet(r["body"], 140), "created_at": r["created_at"]}
+        if len(s["repliers"]) < 3 and all(x["id"] != r["author_id"] for x in s["repliers"]):
+            s["repliers"].append({"id": r["author_id"], "name": a["name"] if a else "?",
+                                  "kind": a["kind"] if a else "agent"})
+        if r["id"] > seen and r["author_id"] != viewer:
+            s["unread"] += 1
+    return out
+
+
+def threads(conn: sqlite3.Connection, viewer: int, *, unread_only: bool = False, limit: int = 40) -> dict:
+    """The threads in the viewer's channels, the latest activity first ("Vlákna"): each root
+    message with its summary and channel, and the unread total."""
+    limit = max(1, min(limit, 100))
+    rows = conn.execute(
+        """SELECT r.reply_to AS root, MAX(r.id) AS last_id FROM chat_messages r
+           JOIN channels c ON c.id = r.channel_id
+           JOIN channel_members cm ON cm.channel_id = c.id AND cm.actor_id = ?
+           WHERE r.reply_to IS NOT NULL AND r.archived_at IS NULL AND c.kind = 'group' AND c.archived_at IS NULL
+           GROUP BY r.reply_to ORDER BY last_id DESC LIMIT 300""", (viewer,)).fetchall()
+    roots = [r["root"] for r in rows]
+    names = _names(conn)
+    summaries = _thread_summaries(conn, roots, viewer, names)
+    total = sum(s["unread"] for s in summaries.values())
+    keep = [r for r in roots if not unread_only or summaries.get(r, {}).get("unread")][:limit]
+    if not keep:
+        return {"threads": [], "unread": total}
+    msgs = {r["id"]: r for r in conn.execute(
+        f"SELECT * FROM chat_messages WHERE archived_at IS NULL AND id IN ({','.join('?' for _ in keep)})", keep)}
+    chans = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM channels WHERE kind = 'group'")}
+    views = {v["id"]: v for v in _view(conn, [msgs[i] for i in keep if i in msgs], viewer, names, False)}
+    out = []
+    for i in keep:
+        v = views.get(i)
+        if v is None:
+            continue
+        v["body"] = _snippet(v["body"], 280)
+        out.append({"root": v, "channel_id": v["channel_id"], "channel_name": chans.get(v["channel_id"], "?"),
+                    "replies": v["replies"], "thread": summaries.get(i)})
+    return {"threads": out, "unread": total}
+
+
+def mark_thread_read(conn: sqlite3.Connection, ctx: Ctx, root_id: int, message_id: int | None = None) -> dict:
+    """The viewer read a thread (up to message_id, else all of it)."""
+    root = _message_row(conn, root_id)
+    _check_read(conn, _channel(conn, root["channel_id"]), ctx.actor_id)
+    root_id = root["reply_to"] or root["id"]
+    if message_id is None:
+        message_id = conn.execute("SELECT COALESCE(MAX(id), ?) FROM chat_messages WHERE reply_to = ?",
+                                  (root_id, root_id)).fetchone()[0]
+    _thread_read(conn, ctx.actor_id, root_id, message_id)
+    conn.commit()
+    return {"root": root_id, "last_read_id": message_id}
 
 
 def message_view(conn: sqlite3.Connection, message_id: int, viewer: int) -> dict:

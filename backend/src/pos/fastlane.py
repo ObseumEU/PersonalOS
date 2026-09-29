@@ -245,8 +245,10 @@ def respond(conn: sqlite3.Connection, actor_id: int, message_id: int) -> dict | 
         except Exception as e:  # noqa: BLE001 - never silence: the code-built status goes out instead
             log.info("fast lane model failed for %s: %s", actor_id, e)
             body = code_reply(snap, "rychlý model teď neodpovídá")
+    # Answered meanwhile: in its thread, or anywhere later in a DM (a DM has no threads, pos.chat.send).
     if conn.execute("SELECT 1 FROM chat_messages WHERE channel_id = ? AND author_id = ? AND id > ? "
-                    "AND reply_to = ? AND archived_at IS NULL", (m["channel_id"], actor_id, m["id"], thread)).fetchone():
+                    "AND (reply_to = ? OR (SELECT kind FROM channels WHERE id = channel_id) = 'dm') "
+                    "AND archived_at IS NULL", (m["channel_id"], actor_id, m["id"], thread)).fetchone():
         chat.typing_clear(m["channel_id"], actor_id)  # the run answered meanwhile: no second answer
         return None
     try:

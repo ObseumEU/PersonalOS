@@ -5,7 +5,7 @@ import { LOCALE } from "../i18n/core";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 
 /** The top bar of a screen: back arrow (optional), title and subtitle, actions on the right. */
-export function TopBar({ title, sub, back, right }: { title: ReactNode; sub?: ReactNode; back?: () => void; right?: ReactNode }) {
+export function TopBar({ title, sub, back, right, icon }: { title: ReactNode; sub?: ReactNode; back?: () => void; right?: ReactNode; icon?: ReactNode }) {
   return (
     <header className="sticky top-0 z-20 flex min-h-14 items-center gap-2 border-b border-line bg-bg/95 px-2 pt-[env(safe-area-inset-top)] backdrop-blur">
       {back ? (
@@ -15,6 +15,7 @@ export function TopBar({ title, sub, back, right }: { title: ReactNode; sub?: Re
       ) : (
         <span className="w-2" />
       )}
+      {icon}
       <div className="flex min-w-0 flex-1 flex-col py-1.5">
         <h1 className="truncate text-[17px] font-medium leading-tight">{title}</h1>
         {sub && <div className="truncate text-[12px] leading-tight text-ink-2">{sub}</div>}

@@ -1,10 +1,13 @@
-import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
+import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, MessagesSquare, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
 import { TaskLink } from "../taskSheet";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { type OrgMember, agentsApi } from "../agentsApi";
 import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, type TypingEntry, chatApi } from "../chatApi";
+import Messenger, { ThreadChip, replyCount, useSender } from "../chat/Messenger";
+import ThreadList, { useThreads } from "../chat/ThreadList";
+import { applyReply, upsert as upsertMsg } from "../chat/timeline";
 import { WorkingDot, WorkingOnText, workingOn } from "../components/agents/WorkingOn";
 import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
@@ -189,7 +192,7 @@ function MessageItem({
       ) : (
         <Body text={m.body} names={names} />
       )}
-      {(m.reactions.length > 0 || (m.replies > 0 && !compact)) && (
+      {m.reactions.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {m.reactions.map((r) => (
             <button
@@ -200,13 +203,9 @@ function MessageItem({
               {r.emoji} <span className="font-mono text-xs text-ink-2">{r.count}</span>
             </button>
           ))}
-          {m.replies > 0 && !compact && (
-            <button onClick={onOpenThread} className="flex items-center gap-1 text-xs text-accent">
-              <MessageSquare size={12} /> {t(m.replies === 1 ? "chat.reply_one" : m.replies < 5 ? "chat.reply_few" : "chat.reply_many", { n: m.replies })}
-            </button>
-          )}
         </div>
       )}
+      {m.replies > 0 && !compact && onOpenThread && <ThreadChip count={m.replies} thread={m.thread} onOpen={onOpenThread} />}
       <div className="absolute top-1 right-3 hidden items-center gap-0.5 rounded border border-line bg-surface p-0.5 group-hover:flex group-focus-within:flex">
         <button aria-label={t("chat.reply_thread")} title={t("chat.reply_thread")} onClick={onReply} className="p-1 text-ink-2 hover:text-accent"><MessageSquare size={14} /></button>
         <button aria-label={t("chat.react")} title={t("chat.react")} onClick={() => setPicking((p) => !p)} className="p-1 text-ink-2 hover:text-accent"><SmilePlus size={14} /></button>
@@ -281,7 +280,7 @@ function NoticeGroups({ messages, names }: { messages: ChatMessage[]; names: str
 }
 
 function Composer({
-  channel, members, replyTo, onCancelReply, onSent, placeholder,
+  channel, members, replyTo, onCancelReply, onSent, placeholder, send,
 }: {
   channel: Channel;
   members: ChatMember[];
@@ -289,6 +288,8 @@ function Composer({
   onCancelReply?: () => void;
   onSent?: () => void;
   placeholder?: string;
+  /** Optimistic sending (the messenger view shows the bubble at once); else the composer posts and waits. */
+  send?: (text: string, priority: Priority | null) => void;
 }) {
   const [body, setBody] = useState("");
   const [priority, setPriority] = useState<Priority | "">("");
@@ -335,6 +336,14 @@ function Composer({
   const submit = () => {
     const text = body.trim();
     if (!text) return;
+    if (send) {
+      send(text, priority || null);
+      setBody("");
+      setPriority("");
+      setError(null);
+      onSent?.();
+      return;
+    }
     chatApi.send(channel.id, text, replyTo?.id ?? null, priority || null).then(
       () => {
         setBody("");
@@ -487,6 +496,9 @@ function RailItem({ c, active, working, typing, pinned, onClick }: { c: Channel;
   );
 }
 
+// "Vlákna" reloads on "pos:threads": the page's stream sends it when a reply comes in anywhere.
+const onReplyEvent = () => () => undefined;
+
 const railHeading = "flex items-center gap-1.5 px-2.5 pt-3 pb-1 text-xs font-medium text-ink-2";
 
 export default function Chat() {
@@ -498,7 +510,9 @@ export default function Chat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [presence, setPresence] = useState<Presence>({ working: [], typing: {} });
-  const [thread, setThread] = useState<number | null>(null);
+  const thread = Number(params.get("t")) || null;
+  const threadsView = params.get("v") === "threads";
+  const [threadMsgs, setThreadMsgs] = useState<ChatMessage[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [systemOpen, setSystemOpen] = useState(false);
@@ -508,8 +522,11 @@ export default function Chat() {
   const listRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef(current);
   currentRef.current = current;
+  const meRef = useRef(0);
 
   const me = members.find((m) => m.is_owner)?.id ?? 0;
+  meRef.current = me;
+  const threads = useThreads(onReplyEvent);
   const channel = channels.find((c) => c.id === current) ?? null;
   const names = useMemo(() => members.map((m) => m.name), [members]);
   const working = useMemo(() => new Set(presence.working), [presence]);
@@ -537,7 +554,7 @@ export default function Chat() {
   // The CEO is the owner's single channel: its DM opens by default on desktop ("Zeptej se CEO"); without a CEO, #team.
   const ceoMember = members.find((m) => m.is_ceo);
   useEffect(() => {
-    if (!current && !params.get("dm") && channels.length && members.length && window.matchMedia("(min-width: 768px)").matches) {
+    if (!current && !params.get("dm") && !params.get("v") && channels.length && members.length && window.matchMedia("(min-width: 768px)").matches) {
       const dm = ceoMember ? channels.find((c) => c.kind === "dm" && c.member && c.members.some((m) => m.id === ceoMember.id)) : undefined;
       if (dm) setParams({ c: String(dm.id) }, { replace: true });
       else if (ceoMember) setParams({ dm: String(ceoMember.id) }, { replace: true });
@@ -556,8 +573,32 @@ export default function Chat() {
     }, () => undefined);
   }, []);
 
+  const setThread = useCallback(
+    (root: number | null) => setParams(current ? (root ? { c: String(current), t: String(root) } : { c: String(current) }) : {}),
+    [current, setParams],
+  );
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+  const markThread = useCallback((root: number, upTo?: number) => {
+    chatApi.threadRead(root, upTo).then(() => window.dispatchEvent(new Event("pos:threads")), () => undefined);
+    setMessages((ms) => ms.map((x) => (x.id === root && x.thread ? { ...x, thread: { ...x.thread, unread: 0 } } : x)));
+  }, []);
   useEffect(() => {
-    setThread(null);
+    setThreadMsgs([]);
+    if (!current || !thread) return;
+    chatApi.thread(current, thread).then((p) => {
+      setThreadMsgs(p.messages);
+      markThread(thread);
+    }, (e) => setError(e.message));
+  }, [current, thread, markThread]);
+  const received = useCallback((m: ChatMessage) => {
+    setMessages((ms) => (m.reply_to ? applyReply(upsertMsg(ms, m), m, meRef.current, threadRef.current) : upsertMsg(ms, m)));
+    const open = threadRef.current;
+    if (open && (m.reply_to === open || m.id === open)) setThreadMsgs((ms) => upsertMsg(ms, m));
+  }, []);
+  const sender = useSender(current, received);
+
+  useEffect(() => {
     if (!current) return;
     chatApi.messages(current).then((p) => {
       setMessages(p.messages);
@@ -577,6 +618,13 @@ export default function Chat() {
       requestAnimationFrame(() => el && el.scrollTo({ top: el.scrollHeight - h }));
     });
   };
+  const olderDm = () => {
+    if (!current || !messages.length) return Promise.resolve();
+    return chatApi.messages(current, messages[0].id).then((p) => {
+      setMessages((ms) => [...p.messages, ...ms]);
+      setHasMore(p.has_more);
+    });
+  };
 
   // Live updates over Server-Sent Events.
   useEffect(() => {
@@ -586,28 +634,26 @@ export default function Chat() {
       clearTimeout(refresh);
       refresh = setTimeout(loadChannels, 400);
     };
-    const upsert = (m: ChatMessage) =>
-      setMessages((ms) => {
-        let next = ms.some((x) => x.id === m.id) ? ms.map((x) => (x.id === m.id ? m : x)) : [...ms, m];
-        if (m.reply_to) next = next.map((x) => (x.id === m.reply_to && !ms.some((y) => y.id === m.id) ? { ...x, replies: x.replies + 1 } : x));
-        return next;
-      });
     const onMsg = (e: MessageEvent) => {
       const ev = JSON.parse(e.data) as StreamEvent;
       if (!("message" in ev)) return;
       if (ev.channel_id === currentRef.current) {
-        if (ev.type === "archive") setMessages((ms) => ms.filter((x) => x.id !== ev.message.id));
-        else {
+        if (ev.type === "archive") {
+          setMessages((ms) => ms.filter((x) => x.id !== ev.message.id));
+          setThreadMsgs((ms) => ms.filter((x) => x.id !== ev.message.id));
+        } else {
           const el = listRef.current;
           const atBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          upsert(ev.message);
+          received(ev.message);
           if (ev.type === "message") {
-            if (atBottom) scrollDown();
+            if (atBottom && !ev.message.reply_to) scrollDown();
             markRead(ev.channel_id, ev.message.id);
+            if (threadRef.current && ev.message.reply_to === threadRef.current) markThread(threadRef.current, ev.message.id);
           }
         }
       }
       if (ev.type === "message" || ev.type === "archive") reloadSoon();
+      if (ev.type === "message" && ev.message.reply_to) window.dispatchEvent(new Event("pos:threads"));
     };
     ["message", "edit", "archive", "reaction"].forEach((x) => es.addEventListener(x, onMsg as EventListener));
     es.addEventListener("channel", reloadSoon);
@@ -618,7 +664,7 @@ export default function Chat() {
       clearTimeout(refresh);
       es.close();
     };
-  }, [loadChannels, markRead]);
+  }, [loadChannels, markRead, received, markThread]);
 
   // Who is who: active members come from /api/org (archived ones are not in it).
   const orgById = useMemo(() => new Map(org.map((m) => [m.id, m])), [org]);
@@ -655,8 +701,9 @@ export default function Chat() {
   const typingHere = (presence.typing[String(current)] ?? []).filter((e) => e.id !== me);
   const typingIds = new Set(typingHere.map((e) => e.id));
   const workingHere = channel?.members.filter((m) => m.kind !== "human" && working.has(m.id) && !typingIds.has(m.id)) ?? [];
-  const rootMsg = thread ? byId.get(thread) : undefined;
-  const threadReplies = thread ? messages.filter((m) => m.reply_to === thread) : [];
+  const rootMsg = thread ? threadMsgs.find((m) => m.id === thread) ?? byId.get(thread) : undefined;
+  const threadReplies = thread ? threadMsgs.filter((m) => m.reply_to === thread) : [];
+  const isDm = channel?.kind === "dm";
   const dmWith = members.filter((m) => m.id !== me && !allDms.some((c) => c.members.some((x) => x.id === m.id)));
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
 
@@ -670,7 +717,7 @@ export default function Chat() {
       compact={compact}
       parent={m.reply_to ? byId.get(m.reply_to) : undefined}
       onReply={() => setThread(m.reply_to ?? m.id)}
-      onOpenThread={() => setThread(m.reply_to ?? m.id)}
+      onOpenThread={channel?.kind === "dm" ? undefined : () => setThread(m.reply_to ?? m.id)}
       onReact={(e) => act(chatApi.react(m.id, e))}
       onEdit={(b) => act(chatApi.edit(m.id, b))}
       onArchive={() => act(chatApi.archive(m.id))}
@@ -695,7 +742,7 @@ export default function Chat() {
         <Panel
           title={t("chat.channels")}
           right={<span className="flex items-center gap-1.5"><WorkingDot on={live} />{live ? t("nav.live") : t("chat.offline")}</span>}
-          className={`min-w-0 ${current ? "hidden md:flex" : "flex"}`}
+          className={`min-w-0 ${current || threadsView ? "hidden md:flex" : "flex"}`}
           bodyClassName="overflow-y-auto"
         >
           {creating && <NewChannel members={members} me={me} onClose={() => setCreating(false)} onCreated={(c) => { setCreating(false); loadChannels(); setParams({ c: String(c.id) }); }} />}
@@ -712,6 +759,15 @@ export default function Chat() {
                 <Pin size={13} className="shrink-0 text-accent" /> {t("chat.ask_ceo")}
               </button>
             ) : null}
+            <button
+              onClick={() => setParams({ v: "threads" })}
+              aria-current={threadsView ? "true" : undefined}
+              className={`mt-1 flex h-[34px] w-full items-center gap-2 rounded px-2.5 text-left text-[13px] transition ${threadsView ? "bg-raised text-ink shadow-[inset_2px_0_0_var(--color-accent)]" : (threads?.unread ?? 0) > 0 ? "text-ink hover:bg-raised" : "text-ink-2 hover:bg-raised"}`}
+            >
+              <MessagesSquare size={14} className="shrink-0 text-ink-2" />
+              <span className={(threads?.unread ?? 0) > 0 ? "font-medium" : ""}>{t("m.chat.threads")}</span>
+              {(threads?.unread ?? 0) > 0 && <span className="ml-auto rounded-sm bg-accent/15 px-1.5 font-mono text-xs text-accent">{threads!.unread}</span>}
+            </button>
             <span className={`${railHeading} ${ceoDm || ceoId ? "" : "pt-1"}`}>
               {t("chat.groups")}
               <button aria-label={t("chat.new_channel")} title={t("chat.new_channel")} onClick={() => setCreating(true)} className="ml-auto text-ink-2 hover:text-accent"><Plus size={14} /></button>
@@ -759,7 +815,13 @@ export default function Chat() {
         </Panel>
 
         {/* Conversation */}
-        <div className={`${current ? "flex" : "hidden md:flex"} min-h-0 min-w-0 gap-4`}>
+        {threadsView && (
+          <Panel className="min-w-0" bodyClassName="overflow-y-auto" title={t("m.chat.threads")} right={threads?.unread ? t("m.chat.unread_n", { n: threads.unread }) : undefined}>
+            <button onClick={() => setParams({})} className="flex items-center gap-1 px-4 pt-2 text-xs text-ink-2 md:hidden"><ArrowLeft size={14} /> {t("chat.back")}</button>
+            <ThreadList data={threads} onOpen={(it) => setParams({ c: String(it.channel_id), t: String(it.root.id) })} />
+          </Panel>
+        )}
+        <div className={`${threadsView ? "hidden" : current ? "flex" : "hidden md:flex"} min-h-0 min-w-0 gap-4`}>
           <Panel
             className="min-w-0 flex-1"
             bodyClassName="flex min-h-0 flex-col"
@@ -785,33 +847,92 @@ export default function Chat() {
                     {channel.members.length > 8 && <span className="text-xs text-ink-2">+{channel.members.length - 8}</span>}
                   </span>
                 </div>
-                <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-2">
-                  {hasMore && <button onClick={loadOlder} className="mx-auto block py-2 text-xs text-ink-2 hover:text-ink">{t("act.load_more")}</button>}
-                  {!channel.member && channel.kind === "dm" && <p className="px-4 py-2 text-xs text-ink-2">{t("chat.oversight_note")}</p>}
-                  {messages.length === 0 && <p className="px-4 py-6 text-sm text-ink-2">{isSystem(channel) ? t("chat.system_empty") : t("chat.empty")}</p>}
-                  {isSystem(channel) ? <NoticeGroups messages={messages} names={names} /> : messages.map((m) => item(m))}
-                </div>
-                <TypingLine entries={typingHere} />
-                {workingHere.length > 0 && (
+                {isDm ? (
+                  <Messenger
+                    mode="dm"
+                    viewKey={String(channel.id)}
+                    messages={messages}
+                    me={channel.member ? me : otherOf(channel)?.id ?? me}
+                    names={names}
+                    pending={sender.pending}
+                    typing={typingHere}
+                    hasMore={hasMore}
+                    onOlder={olderDm}
+                    onRetry={sender.retry}
+                    onDiscard={sender.discard}
+                    actions={(m) => (
+                      <span className="flex items-center rounded border border-line bg-surface">
+                        {["👍", "✅", "👀"].map((e) => (
+                          <button key={e} aria-label={`${t("chat.react")} ${e}`} onClick={() => act(chatApi.react(m.id, e))} className="px-1.5 py-1 text-[13px] hover:bg-raised">{e}</button>
+                        ))}
+                      </span>
+                    )}
+                    top={!channel.member ? <p className="px-4 py-2 text-xs text-ink-2">{t("chat.oversight_note")}</p> : undefined}
+                    empty={<p className="px-4 py-6 text-sm text-ink-2">{t("chat.empty")}</p>}
+                  />
+                ) : (
+                  <>
+                    <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-2">
+                      {hasMore && <button onClick={loadOlder} className="mx-auto block py-2 text-xs text-ink-2 hover:text-ink">{t("act.load_more")}</button>}
+                      {messages.length === 0 && <p className="px-4 py-6 text-sm text-ink-2">{isSystem(channel) ? t("chat.system_empty") : t("chat.empty")}</p>}
+                      {isSystem(channel) ? <NoticeGroups messages={messages} names={names} /> : messages.filter((m) => !m.reply_to).map((m) => item(m))}
+                    </div>
+                    <TypingLine entries={typingHere.filter((e) => e.thread === null)} />
+                  </>
+                )}
+                {workingHere.length > 0 && !isDm && (
                   <div className="flex items-center gap-2 px-4 pb-1 text-xs text-ink-2" title={t("chat.working_title")}>
                     <WorkingDot on />
                     {t("chat.working_here", { names: workingHere.map((m) => m.name).join(", ") })}
                   </div>
                 )}
-                {(channel.member || channel.kind === "group") && !isSystem(channel) ? <Composer channel={channel} members={members} onSent={scrollDown} placeholder={ceoDm && channel.id === ceoDm.id ? t("chat.ceo_placeholder") : undefined} /> : null}
+                {(channel.member || channel.kind === "group") && !isSystem(channel) ? (
+                  <Composer
+                    channel={channel}
+                    members={members}
+                    onSent={isDm ? undefined : scrollDown}
+                    send={isDm ? (text, priority) => sender.send(text, [], null, priority) : undefined}
+                    placeholder={ceoDm && channel.id === ceoDm.id ? t("chat.ceo_placeholder") : undefined}
+                  />
+                ) : null}
               </>
             )}
             {!channel && <p className="p-6 text-sm text-ink-2">{t("chat.choose")}</p>}
           </Panel>
 
           {/* Thread: side panel on desktop, full screen on a phone. */}
-          {rootMsg && channel && (
+          {rootMsg && channel && !isDm && (
             <Panel
-              title={t(threadReplies.length === 1 ? "chat.reply_one" : threadReplies.length > 1 && threadReplies.length < 5 ? "chat.reply_few" : "chat.reply_many", { n: threadReplies.length })}
+              title={`${t("m.chat.thread")} · ${replyCount(threadReplies.length)}`}
               right={<button aria-label={t("chat.close_thread")} onClick={() => setThread(null)}><X size={13} /></button>}
-              className="fixed inset-2 z-30 lg:static lg:inset-auto lg:w-[340px] lg:shrink-0"
+              className="fixed inset-2 z-30 lg:static lg:inset-auto lg:w-[380px] lg:shrink-0"
               bodyClassName="flex min-h-0 flex-col"
             >
+              {!rootMsg.meeting ? (
+                <>
+                  <Messenger
+                    mode="thread"
+                    viewKey={`t${rootMsg.id}`}
+                    messages={threadMsgs}
+                    root={rootMsg}
+                    rootChannel={channel.name ?? undefined}
+                    me={me}
+                    names={names}
+                    pending={sender.pending.filter((p) => p.reply_to === rootMsg.id)}
+                    typing={typingHere.filter((e) => e.thread === rootMsg.id)}
+                    onRetry={sender.retry}
+                    onDiscard={sender.discard}
+                  />
+                  <Composer
+                    channel={channel}
+                    members={members}
+                    replyTo={rootMsg}
+                    send={(text, priority) => sender.send(text, [], rootMsg.id, priority)}
+                    placeholder={t("chat.reply_placeholder")}
+                  />
+                </>
+              ) : (
+              <>
               <div className="min-h-0 flex-1 overflow-y-auto py-2">
                 {item(rootMsg, true)}
                 <div className="mx-4 my-1 border-t border-line" />
@@ -824,6 +945,8 @@ export default function Chat() {
               </div>
               <TypingLine entries={typingHere.filter((e) => e.thread === rootMsg.id)} />
               <Composer channel={channel} members={members} replyTo={rootMsg} placeholder={t("chat.reply_placeholder")} />
+              </>
+              )}
             </Panel>
           )}
         </div>

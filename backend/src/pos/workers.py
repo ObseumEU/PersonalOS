@@ -358,9 +358,9 @@ def answered(conn: sqlite3.Connection, message: sqlite3.Row, agent_id: int) -> b
     by the agent in the channel after it, another member's reply in its thread, or
     the chat task for it is done. The platform's automatic replies do not count."""
     if conn.execute("""SELECT 1 FROM chat_messages WHERE channel_id = ? AND id > ? AND archived_at IS NULL
-                       AND body NOT LIKE ? AND (author_id = ? OR (reply_to = ? AND author_id != ?))""",
+                       AND body NOT LIKE ? AND (author_id = ? OR ((reply_to = ? OR quote_of = ?) AND author_id != ?))""",
                     (message["channel_id"], message["id"], AUTOREPLY_PREFIX + "%", agent_id, message["id"],
-                     message["author_id"])).fetchone():
+                     message["id"], message["author_id"])).fetchone():
         return True
     for (tid,) in conn.execute("""SELECT entity_id FROM audit_log WHERE action = 'chat_task' AND entity = 'task'
                                   AND json_extract(detail, '$.message') = ?""", (message["id"],)).fetchall():
@@ -381,9 +381,9 @@ def _nudge(conn: sqlite3.Connection, message: sqlite3.Row, agent) -> None:
     from . import availability, chat
     from .core import Ctx
 
-    if conn.execute("""SELECT 1 FROM chat_messages WHERE channel_id = ? AND reply_to = ? AND author_id = ?
-                       AND body LIKE ?""", (message["channel_id"], message["id"], agent["id"],
-                                            AUTOREPLY_PREFIX + "%")).fetchone():
+    if conn.execute("""SELECT 1 FROM chat_messages WHERE channel_id = ? AND (reply_to = ? OR quote_of = ?)
+                       AND author_id = ? AND body LIKE ?""", (message["channel_id"], message["id"], message["id"],
+                                                            agent["id"], AUTOREPLY_PREFIX + "%")).fetchone():
         return
     why = availability.why_not(conn, agent["id"])
     reason = why["reason"] if why else "se ke zprávě zatím nedostal (odpověď čeká déle než 10 minut)"

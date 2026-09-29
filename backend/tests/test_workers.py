@@ -52,7 +52,9 @@ def _owner(conn):
 
 
 def _replies(conn, message_id):
-    return conn.execute("SELECT * FROM chat_messages WHERE reply_to = ? ORDER BY id", (message_id,)).fetchall()
+    # In a channel an answer is in the message's thread; in a DM it quotes it (a DM has no threads).
+    return conn.execute("SELECT * FROM chat_messages WHERE reply_to = ? OR quote_of = ? ORDER BY id",
+                        (message_id, message_id)).fetchall()
 
 
 def _chat_task(conn, aid):

@@ -92,9 +92,10 @@ def archive_channel(channel_id: int, conn=Depends(get_db), ctx=Depends(get_ctx))
 
 @router.get("/channels/{channel_id}/messages")
 def messages(channel_id: int, before: int | None = None, after: int | None = None, limit: int = 50,
-             conn=Depends(get_db), ctx=Depends(get_ctx)):
-    """Cursor paging by message id: `before` for older, `after` for newer."""
-    return chat.messages(conn, ctx.actor_id, channel_id, before=before, after=after, limit=limit)
+             thread: int | None = None, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Cursor paging by message id: `before` for older, `after` for newer; `thread` keeps one
+    thread (its root and replies: a thread opened from "Vlákna")."""
+    return chat.messages(conn, ctx.actor_id, channel_id, before=before, after=after, limit=limit, thread=thread)
 
 
 def _file_attachments(conn, ctx, items: list[AttachmentIn]) -> tuple[list[dict], list[str]]:
@@ -137,6 +138,17 @@ def invite(channel_id: int, body: MemberIn, conn=Depends(get_db), ctx=Depends(ge
 @router.post("/channels/{channel_id}/read")
 def mark_read(channel_id: int, body: ReadIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return chat.mark_read(conn, ctx, channel_id, body.message_id)
+
+
+@router.get("/threads")
+def threads(unread: bool = False, limit: int = 40, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The threads in your channels, the latest activity first, with unread replies ("Vlákna")."""
+    return chat.threads(conn, ctx.actor_id, unread_only=unread, limit=limit)
+
+
+@router.post("/threads/{root_id}/read")
+def thread_read(root_id: int, body: ReadIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    return chat.mark_thread_read(conn, ctx, root_id, body.message_id)
 
 
 class TypingIn(BaseModel):

@@ -66,7 +66,23 @@ export type ChatMessage = {
   archived_at: string | null;
   /** In a meeting thread (pos.meetings): the agenda, a turn (round, kind) or the decision. */
   meeting?: MeetingMark;
+  /** A DM answer quotes the message it answers (a DM has no threads). */
+  quote_of?: number | null;
+  quote?: Quote;
+  /** A thread root in a channel: who answered, the last reply, and what the viewer has not read. */
+  thread?: ThreadSummary;
 };
+
+export type Quote = { id: number; author_id?: number; author_name: string; body: string };
+
+export type ThreadSummary = {
+  repliers: { id: number; name: string; kind: "human" | "ai" | "agent" }[];
+  last: { id: number; author_id: number; author_name: string; body: string; created_at: string } | null;
+  unread: number;
+  last_read_id: number;
+};
+
+export type ThreadItem = { root: ChatMessage; channel_id: number; channel_name: string; replies: number; thread: ThreadSummary | null };
 
 export type MeetingMark = {
   meeting: number;
@@ -96,8 +112,11 @@ export const chatApi = {
   dm: (to: number) => post<Channel>("/api/chat/dm", { to }),
   messages: (id: number, before?: number) =>
     api<Page>(`/api/chat/channels/${id}/messages?limit=50${before ? `&before=${before}` : ""}`),
-  send: (id: number, body: string, reply_to?: number | null, priority?: Priority | null) =>
-    post<ChatMessage>(`/api/chat/channels/${id}/messages`, { body, reply_to, priority }),
+  thread: (id: number, root: number) => api<Page>(`/api/chat/channels/${id}/messages?limit=200&thread=${root}`),
+  threads: (unread = false) => api<{ threads: ThreadItem[]; unread: number }>(`/api/chat/threads${unread ? "?unread=true" : ""}`),
+  threadRead: (root: number, message_id?: number) => post(`/api/chat/threads/${root}/read`, { message_id }),
+  send: (id: number, body: string, reply_to?: number | null, priority?: Priority | null, attachments?: { type: string; id: number }[]) =>
+    post<ChatMessage>(`/api/chat/channels/${id}/messages`, { body, reply_to, priority, attachments: attachments ?? [] }),
   edit: (mid: number, body: string) => api<ChatMessage>(`/api/chat/messages/${mid}`, { method: "PATCH", body: JSON.stringify({ body }) }),
   archive: (mid: number) => post<ChatMessage>(`/api/chat/messages/${mid}/archive`),
   react: (mid: number, emoji: string) => post<ChatMessage>(`/api/chat/messages/${mid}/react`, { emoji }),

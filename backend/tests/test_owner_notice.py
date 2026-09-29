@@ -28,7 +28,9 @@ def env(tmp_path, monkeypatch):
 
 
 def _thread(conn, root):
-    return [dict(r) for r in conn.execute("SELECT * FROM chat_messages WHERE reply_to = ? ORDER BY id", (root,))]
+    # In a DM the notice quotes the message (a DM has no threads); in a channel it is in its thread.
+    return [dict(r) for r in conn.execute("SELECT * FROM chat_messages WHERE reply_to = ? OR quote_of = ? ORDER BY id",
+                                          (root, root))]
 
 
 def test_step_cap_on_a_task_from_the_owners_chat_message_is_reported_in_his_thread(env):
