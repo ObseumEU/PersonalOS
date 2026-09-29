@@ -60,6 +60,69 @@ groups:
           summary: "{{ $labels.host }}: swap {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} used for 10 minutes"
           dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
 
+      - uid: obs-swap-warn
+        title: Swap above 50%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: "host:swap_used:ratio", instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.5]}}]}
+        for: 30m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: swap, severity: warning}
+        annotations:
+          summary: "{{ $labels.host }}: swap {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} used for 30 minutes (memory pressure: see the container memory panel)"
+          dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
+
+      # ops/backup/backup.sh on svr03 writes pos_backup_last_success_timestamp_seconds{target=local|agent186|gdrive}
+      # (obs-alloy textfile collector). No series at all (collector or store gone) alerts too.
+      - uid: obs-backup-stale
+        title: PersonalOS backup older than 26 h
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                (time() - max by (target) (pos_backup_last_success_timestamp_seconds{target=~"local|agent186|gdrive"})) / 3600
+                or on() label_replace(vector(999), "target", "all (no metric)", "", "")
+                unless on() count(pos_backup_last_success_timestamp_seconds) > 0
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [26]}}]}
+        for: 15m
+        noDataState: Alerting
+        execErrState: Error
+        labels: {team: platform, kind: backup, severity: high, host: svr03}
+        annotations:
+          summary: "PersonalOS backup to {{ $labels.target }} is {{ with $values.A }}{{ printf \"%.0f\" .Value }}{{ end }} h old (ops/backup/backup.sh, log in /opt/server/backups/personalos/logs)"
+
+      - uid: obs-backup-drill-stale
+        title: PersonalOS restore drill older than 35 days
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, instant: true, expr: "(time() - max(pos_backup_drill_last_success_timestamp_seconds)) / 86400"}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [35]}}]}
+        for: 1h
+        noDataState: Alerting
+        execErrState: Error
+        labels: {team: platform, kind: backup, severity: warning, host: svr03}
+        annotations:
+          summary: "The monthly restore drill has not passed for {{ with $values.A }}{{ printf \"%.0f\" .Value }}{{ end }} days (ops/backup/restore_drill.sh)"
+
       - uid: obs-disk-high
         title: Disk above 85%
         condition: C

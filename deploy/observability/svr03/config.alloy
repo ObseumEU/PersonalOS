@@ -182,6 +182,11 @@ prometheus.exporter.unix "host" {
   netclass {
     ignored_devices = "^(veth.*|br-.*|docker.*|lo)$"
   }
+  // pos_backup_* (last success per target: local, agent186, gdrive; last drill), written by
+  // ops/backup/backup.sh and restore_drill.sh; alert "PersonalOS backup older than 26 h"
+  textfile {
+    directory = "/host/root/opt/server/backups/personalos/metrics"
+  }
 }
 
 prometheus.exporter.cadvisor "containers" {

@@ -38,11 +38,11 @@ only. Every minute:
 
 | Backup | Host path (env, default) | In the container |
 |---|---|---|
-| PersonalOS `data/` | `POS_BACKUP_DIR`, `./data/backups` | `/backups/personalos` |
-| knowlage `kb_data` | `KNOWLAGE_BACKUP_DIR`, `/opt/server/kb/backups` | `/backups/knowlage` |
-| Nexus `backups/` | `NEXUS_BACKUP_DIR`, `/opt/server/nexus-process-pilot/app/backups` | `/backups/nexus` |
+| PersonalOS `data/` | `POS_BACKUP_DIR`, `/opt/server/backups/personalos/daily` | `/backups/personalos` |
+| knowlage `kb_data` | `KNOWLAGE_BACKUP_DIR`, `/opt/server/backups/personalos/daily` | `/backups/knowlage` |
+| Nexus Postgres | `NEXUS_BACKUP_DIR`, `/opt/server/backups/personalos/daily` | `/backups/nexus` |
 
-Point the env at the directory the backup job actually writes (not the live
+All three are written by the nightly `ops/backup/backup.sh` (one directory per night). Point the env at the directory the backup job actually writes (not the live
 data: the live SQLite changes every minute and would always look fresh). The
 sentinel runs as uid 10001 and needs read and execute on the directory. Thresholds:
 `backup_warn_h` 26, `backup_fail_h` 48 in `thresholds`; paths in `backups`

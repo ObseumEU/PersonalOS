@@ -37,6 +37,11 @@ services:
       POS_GRAFANA_HEALTH_URL: ${POS_GRAFANA_HEALTH_URL:-http://192.168.1.186:3000/api/health}
       POS_LOKI_URL: ${POS_LOKI_URL:-http://192.168.1.186:3100}
       POS_PROMETHEUS_URL: ${POS_PROMETHEUS_URL:-http://192.168.1.186:9090}
+    # Memory (svr03 runs deep in swap): limits from the 7-day working-set peaks (Prometheus,
+    # container:memory_working_set_bytes, 2026-09-29) plus headroom. api 406 MB, web 8, deployer 590,
+    # agent-pool 1140 (its 3g limit is in docker-compose.yml), sentinel 41.
+    mem_limit: ${POS_API_MEM:-1g}
+    mem_reservation: 256m
     networks:
       default:
         aliases:
@@ -65,6 +70,8 @@ services:
       knowlage:
         aliases:
           - personalos
+    mem_limit: 128m
+    mem_reservation: 16m
     logging: *logging
 
   # The deployer promotes the Dev agent's commits: it fetches agent/dev from the
@@ -89,6 +96,11 @@ services:
       - ${POS_CHECKOUT}:${POS_CHECKOUT}
       - /var/run/docker.sock:/var/run/docker.sock
       - ${POS_DEV_WORK:-./data/dev-work}:/dev-work:ro
+    # init reaps the git/docker/pytest children it spawns (~200 zombies after an hour without it);
+    # the test run (pytest -n auto, npm build) is its peak.
+    init: true
+    mem_limit: ${POS_DEPLOYER_MEM:-1536m}
+    mem_reservation: 128m
     logging: *logging
 
   # The Software Engineer's clone (branch agent/dev) is /work/PersonalOS. The deployer's .git is
@@ -105,6 +117,8 @@ services:
       - ${POS_DEV_WORK:-./data/dev-work}/PersonalOS:/work/PersonalOS
       - ./data/worker-keys/pool:/run/pos-keys:ro
       - ${POS_CHECKOUT:-.}/.git:/mnt/deployer-repo:ro
+    init: true  # reaps the CLI runs' children (zombies otherwise pile up)
+    mem_reservation: 512m
     logging: *logging
 
   # Computer use (tool:computer): one desktop session at a time on svr03 (memory is tight).
@@ -130,14 +144,17 @@ services:
       - ./.git:/repos/personalos:ro
       - ${NEXUS_GIT_DIR:-/opt/server/nexus-process-pilot/app/.git}:/repos/nexus:ro
       # backup directories, read-only: only the newest mtime is read (docs/SENTINEL.md, "Backups")
-      - ${POS_BACKUP_DIR:-./data/backups}:/backups/personalos:ro
-      - ${KNOWLAGE_BACKUP_DIR:-/opt/server/kb/backups}:/backups/knowlage:ro
-      - ${NEXUS_BACKUP_DIR:-/opt/server/nexus-process-pilot/app/backups}:/backups/nexus:ro
+      # ops/backup/backup.sh writes all three (SQLite copies and pg_dumps) into one nightly directory
+      - ${POS_BACKUP_DIR:-/opt/server/backups/personalos/daily}:/backups/personalos:ro
+      - ${KNOWLAGE_BACKUP_DIR:-/opt/server/backups/personalos/daily}:/backups/knowlage:ro
+      - ${NEXUS_BACKUP_DIR:-/opt/server/backups/personalos/daily}:/backups/nexus:ro
     security_opt:
       - no-new-privileges:true
     read_only: true
     tmpfs:
       - /tmp:size=16m
+    mem_limit: 256m
+    mem_reservation: 32m
     logging: *logging
   docker-proxy:
     security_opt:
