@@ -58,9 +58,10 @@ def claude_allowed(me: dict) -> list[str]:
 CODEX_TIMEOUTS = {"startup_timeout_sec": 60, "tool_timeout_sec": 1000}
 # `codex exec` never asks: without default_tools_approval_mode every call of a server whose tools do not
 # declare themselves read-only fails ("requires approval, but approval policy is never"); the guard is
-# the approval here. startup_readiness="catalog": the turn starts once the server has listed its tools
-# (otherwise Codex starts the model while the server is still starting and the run has no browser).
-CODEX_EXTRA = ('default_tools_approval_mode="approve"', 'startup_readiness="catalog"')
+# the approval here. required=true: the first turn waits until the server has started and listed its
+# tools (otherwise Codex starts the model while the server is still starting and the run has no browser;
+# startup_readiness alone did not wait, measured 2026-09-29 on Codex 0.159).
+CODEX_EXTRA = ('default_tools_approval_mode="approve"', 'startup_readiness="catalog"', "required=true")
 
 
 def codex_config(servers: dict) -> list[str]:
