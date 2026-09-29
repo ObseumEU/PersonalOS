@@ -315,7 +315,7 @@ def _should_try(state: Path, tip: str, base: str, clean=None) -> bool:
 
 def merges_cleanly(wt: Path, tip: str, base: str) -> bool:
     """Would `tip` merge into `base` without conflicts? Checked without touching the worktree."""
-    p = subprocess.run(["git", "merge-tree", "--write-tree", "--quiet", base, tip], cwd=wt,
+    p = subprocess.run(["git", "merge-tree", "--write-tree", base, tip], cwd=wt,
                        capture_output=True, text=True)
     return p.returncode == 0
 
