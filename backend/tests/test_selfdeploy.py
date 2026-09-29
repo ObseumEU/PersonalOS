@@ -439,3 +439,33 @@ def test_reason_of_a_rejection_and_the_repeat_count(reporter):
     assert h["attempts"] == 3 and h["ok"] == 1 and h["reject_rate"] == round(2 / 3, 3)
     assert h["repeats"] == [{"sha": "b" * 10, "stage": "tests", "times": 2}] and h["repeat_attempts"] == 1
     assert h["top_reasons"][0]["count"] == 2 and h["last_ok_at"]
+def test_a_change_to_the_deployer_recreates_it_from_a_helper_container(repo, monkeypatch):
+    """T-305: the deployer never stops itself; a detached container from its own image runs the compose."""
+    base = git(repo, "rev-parse", "HEAD")
+    web = commit(repo, {"web/src/App.tsx": "x"}, "web only")
+    assert not selfdeploy.deployer_changed(repo, base, web)
+    own = commit(repo, {"backend/src/pos/selfdeploy.py": "x"}, "deployer code")
+    assert selfdeploy.deployer_changed(repo, web, own)
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        out = "personalos-deployer\n" if cmd[1] == "inspect" else "abc123\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setenv("HOSTNAME", "deployer-ctr")
+    monkeypatch.setattr(selfdeploy.subprocess, "run", fake_run)
+    ok, _ = selfdeploy.restart_self("docker compose up -d --build --no-deps deployer", repo)
+    assert ok
+    assert calls[0][-1] == "deployer-ctr"
+    run = calls[1]
+    assert run[:4] == ["docker", "run", "-d", "--rm"] and "personalos-deployer" in run
+    assert f"{repo}:{repo}" in run and run[-1] == "sleep 5 && docker compose up -d --build --no-deps deployer"
+
+
+def test_the_deployer_exits_cleanly_on_sigterm():
+    """T-305: as PID 1 Python ignores SIGTERM without a handler; docker stop then ended in exit 137."""
+    with pytest.raises(SystemExit) as e:
+        selfdeploy._stop(15, None)
+    assert e.value.code == 0

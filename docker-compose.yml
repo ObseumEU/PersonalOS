@@ -74,6 +74,10 @@ services:
     volumes:
       - .:/repo
       - /var/run/docker.sock:/var/run/docker.sock
+    # tini as PID 1 forwards SIGTERM; the deployer exits on it (T-305). The grace period
+    # covers a git step in flight; a test run in flight is killed and retried on start.
+    init: true
+    stop_grace_period: 30s
     restart: unless-stopped
 
   agent-pool:
