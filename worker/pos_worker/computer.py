@@ -201,6 +201,23 @@ class ComputerGuard:
                 "tool": tool, "args": args, "url": page.get("url"), "ok": ok, "screenshot": shot,
                 "approval_id": approval_id, "task_id": self.task_id, "run_id": self.run_id})
 
+    async def live_loop(self, every_s: float = 2.5) -> None:
+        """Frames of the desktop for the owner's live view, only while the run page is open."""
+        if not self.run_id:
+            return
+        watching = False
+        while True:
+            await asyncio.sleep(every_s if watching else 5)
+            with contextlib.suppress(Exception):
+                r = await self.pos.get("/api/worker/browser/live", params={"run_id": self.run_id})
+                watching = bool(r.json().get("watching"))
+            if watching and self.desktop.session:
+                shot = await self._shot()
+                if shot:
+                    with contextlib.suppress(Exception):
+                        await self.pos.post("/api/worker/browser/live", json={
+                            "run_id": self.run_id, "frame": shot, "kind": "computer"})
+
     async def wait_for(self, approval_id) -> str:
         if approval_id is None:
             return "missing"
@@ -217,6 +234,7 @@ async def main() -> None:
     holder = f"agent-run-{os.environ.get('POS_RUN_ID') or '?'}"
     desktop = Desktop(os.environ["DESKTOP_URL"], os.environ.get("DESKTOP_TOKEN", "").strip(), holder)
     guard = ComputerGuard(desktop)
+    live = asyncio.create_task(guard.live_loop())
     try:
         async def list_tools(ctx, params) -> types.ListToolsResult:
             return types.ListToolsResult(tools=TOOLS)
@@ -229,6 +247,7 @@ async def main() -> None:
         async with stdio_server() as (read, write):
             await server.run(read, write, server.create_initialization_options())
     finally:
+        live.cancel()
         await desktop.close()  # the desktop ends with the run
 
 

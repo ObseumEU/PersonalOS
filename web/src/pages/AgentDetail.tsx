@@ -8,6 +8,7 @@ import { type AgentDetail as Detail, agentsApi, type Org, type TraceEntry } from
 import { markdownSnippet } from "../markdownText";
 import { AccessSections, CompanyAccessPanel, Section } from "../components/agents/AccessPanel";
 import { AgentCredentialsPanel } from "./Credentials";
+import { BrowserLive, BrowserProfilePanel, Filmstrip } from "../components/agents/BrowserLive";
 import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
 import { WorkingOnText, workingOn } from "../components/agents/WorkingOn";
 import { StatePill } from "../components/tasks/bits";
@@ -497,6 +498,7 @@ function Activity({ a, advanced, onChange }: { a: Full; advanced: boolean; onCha
   };
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+      <BrowserLive runId={a.runs.find((r) => r.status === "running")?.id ?? null} />
       <Panel title={t("agent.runs")} right={t("agent.runs_right")} className="min-w-0 lg:col-span-6" bodyClassName="max-h-[560px] overflow-y-auto">
         {a.runs.length === 0 && <p className="px-4 py-3 text-sm text-ink-2">{t("agent.no_runs")}</p>}
         {a.runs.map((r) => (
@@ -526,6 +528,7 @@ function Activity({ a, advanced, onChange }: { a: Full; advanced: boolean; onCha
       </Panel>
       <Panel title={t("agent.trace")} className="min-w-0 lg:col-span-6" bodyClassName="max-h-[560px] overflow-y-auto">
         {a.trace.length === 0 && <p className="px-4 py-3 text-sm text-ink-2">{t("agent.no_trace")}</p>}
+        <Filmstrip trace={a.trace} />
         {a.trace.map((e) => {
           const x = traceText(e);
           return (
@@ -546,6 +549,7 @@ function Activity({ a, advanced, onChange }: { a: Full; advanced: boolean; onCha
           );
         })}
       </Panel>
+      <BrowserProfilePanel agentId={a.id} />
     </div>
   );
 }

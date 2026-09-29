@@ -236,13 +236,17 @@ def main() -> None:
             binary=os.environ.get("CODEX_BIN", "codex"),
             workdir=where,
             sandbox=os.environ.get("WORKER_SANDBOX", "workspace-write"),
+            # PersonalOS's own servers (pos, credentials, the browser) decide themselves: pre-approved
+            # for `codex exec`, which cannot ask (mounts.CODEX_EXTRA).
             config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
+                    *(f"mcp_servers.pos.{x}" for x in mounts.CODEX_EXTRA),
                     *([f"mcp_servers.pos.enabled_tools={json.dumps(pos_tools(me)[0])}"] if me.get("pos_tools") else []),
                     *([f'model="{model}"'] if model else []), *extra_config(), *codex_effort(me),
                     *tool_library.codex_config(tools),
                     *mounts.codex_config(browser(me)),
                     *([f'mcp_servers.credentials.command="{sys.executable.replace(chr(92), "/")}"',
-                       'mcp_servers.credentials.args=["-m","pos_worker.credentials"]']
+                       'mcp_servers.credentials.args=["-m","pos_worker.credentials"]',
+                       *(f"mcp_servers.credentials.{x}" for x in mounts.CODEX_EXTRA)]
                       + [f"mcp_servers.credentials.env.{k}={json.dumps(v)}" for k, v in credential_runner(me).items()]
                       if credential_runner(me) else [])],
         )

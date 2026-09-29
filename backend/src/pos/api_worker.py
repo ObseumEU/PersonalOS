@@ -561,7 +561,72 @@ def browser_policy(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     have = agents.permissions_of(conn, ctx.actor_id)
     return {"browser": browser.may_browse(conn, ctx.actor_id), "computer": browser.may_use_computer(conn, ctx.actor_id),
             "action_hosts": browser.action_hosts(conn, ctx.actor_id),
+            "profile": browser.may_keep_profile(conn, ctx.actor_id),
             "profiles": sorted(p.split(":", 2)[2] for p in have if p.startswith("scope:browser-profile:"))}
+
+
+def _live_run(conn, ctx: Ctx, run_id) -> int:
+    """This agent's running run (the guard's frames and saved logins belong to one)."""
+    try:
+        rid = int(run_id or 0)
+    except (TypeError, ValueError):
+        rid = 0
+    row = conn.execute("SELECT actor_id, status FROM runs WHERE id = ?", (rid,)).fetchone() if rid else None
+    if row is None or row["actor_id"] != ctx.actor_id or row["status"] != "running":
+        raise HTTPException(403, "not a running run of this agent")
+    return rid
+
+
+@router.get("/browser/profile")
+def browser_profile_get(run_id: int = 0, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                        settings: Settings = Depends(get_settings)):
+    """The agent's kept logins (browser:profile) for its browser at the start of a run; only to the
+    guard of a running run, decrypted here (the key never leaves PersonalOS)."""
+    from . import browser
+
+    if not browser.may_keep_profile(conn, ctx.actor_id):
+        raise HTTPException(403, "this agent keeps no browser profile (browser:profile)")
+    _live_run(conn, ctx, run_id)
+    return {"state": browser.load_profile(settings.data_dir, settings.session_secret, ctx.actor_id)}
+
+
+@router.put("/browser/profile")
+def browser_profile_put(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                        settings: Settings = Depends(get_settings)):
+    from . import browser
+
+    if not browser.may_keep_profile(conn, ctx.actor_id):
+        raise HTTPException(403, "this agent keeps no browser profile (browser:profile)")
+    _live_run(conn, ctx, body.get("run_id"))
+    state = body.get("state")
+    if not isinstance(state, dict):
+        raise HTTPException(422, "state: Playwright's storage state (cookies, origins)")
+    try:
+        size = browser.save_profile(settings.data_dir, settings.session_secret, ctx.actor_id,
+                                    {"cookies": state.get("cookies") or [], "origins": state.get("origins") or []})
+    except ValueError as e:
+        raise HTTPException(413, str(e)) from e
+    return {"ok": True, "bytes": size}
+
+
+@router.get("/browser/live")
+def browser_live_watching(run_id: int = 0, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                          settings: Settings = Depends(get_settings)):
+    """Whether the owner has the run page open: the guard sends frames only then."""
+    from . import browser
+
+    return {"watching": browser.watching(settings.data_dir, _live_run(conn, ctx, run_id))}
+
+
+@router.post("/browser/live")
+def browser_live_frame(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+                       settings: Settings = Depends(get_settings)):
+    from . import browser
+
+    rid = _live_run(conn, ctx, body.get("run_id"))
+    ok = browser.save_live(settings.data_dir, rid, body.get("frame"),
+                           {"url": body.get("url"), "kind": str(body.get("kind") or "browser")[:10]})
+    return {"ok": ok, "watching": browser.watching(settings.data_dir, rid)}
 
 
 @router.post("/browser/credential")

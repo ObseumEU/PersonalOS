@@ -53,6 +53,16 @@ def claude_allowed(me: dict) -> list[str]:
     return (["mcp__browser"] if has_browser(me) else []) + (["mcp__computer"] if has_computer(me) else [])
 
 
+# Codex's MCP defaults (10 s to start, 60 s per call) are too short here: a browser action may wait
+# for the owner's approval (BROWSER_APPROVAL_WAIT, 900 s) and the desktop for its turn (600 s).
+CODEX_TIMEOUTS = {"startup_timeout_sec": 60, "tool_timeout_sec": 1000}
+# `codex exec` never asks: without default_tools_approval_mode every call of a server whose tools do not
+# declare themselves read-only fails ("requires approval, but approval policy is never"); the guard is
+# the approval here. startup_readiness="catalog": the turn starts once the server has listed its tools
+# (otherwise Codex starts the model while the server is still starting and the run has no browser).
+CODEX_EXTRA = ('default_tools_approval_mode="approve"', 'startup_readiness="catalog"')
+
+
 def codex_config(servers: dict) -> list[str]:
     """The same servers as Codex `-c` overrides (env values given explicitly, not passed through)."""
     lines = []
@@ -60,4 +70,6 @@ def codex_config(servers: dict) -> list[str]:
         lines += [f"mcp_servers.{name}.command={json.dumps(cfg['command'].replace(chr(92), '/'))}",
                   f"mcp_servers.{name}.args={json.dumps(cfg['args'])}"]
         lines += [f"mcp_servers.{name}.env.{k}={json.dumps(v)}" for k, v in cfg.get("env", {}).items()]
+        lines += [f"mcp_servers.{name}.{k}={v}" for k, v in CODEX_TIMEOUTS.items()]
+        lines += [f"mcp_servers.{name}.{x}" for x in CODEX_EXTRA]
     return lines

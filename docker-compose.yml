@@ -97,15 +97,16 @@ services:
       WORKER_CLAUDE_MAX_USD: "1"
       WORKER_MAX_STEPS: "40"
       # Browser use (tool:browser, docs/BROWSER.md): Chromium starts on a run's first browser call; at most
-      # BROWSER_MAX_CONCURRENT at once in this container, each closed above BROWSER_MAX_MB.
-      BROWSER_MAX_CONCURRENT: ${POS_BROWSER_MAX_CONCURRENT:-2}
-      BROWSER_MAX_MB: ${POS_BROWSER_MAX_MB:-700}
-      BROWSER_MAX_SCREENSHOTS: ${POS_BROWSER_MAX_SCREENSHOTS:-10}
+      # BROWSER_MAX_CONCURRENT at once in this container, each restarted above BROWSER_MAX_MB (proportional
+      # memory, PSS: a headless Chromium with Playwright MCP is ~500 MB on an ordinary page).
+      BROWSER_MAX_CONCURRENT: ${POS_BROWSER_MAX_CONCURRENT:-3}
+      BROWSER_MAX_MB: ${POS_BROWSER_MAX_MB:-1200}
+      BROWSER_MAX_SCREENSHOTS: ${POS_BROWSER_MAX_SCREENSHOTS:-15}
       # Computer use (tool:computer): the desktop sandbox below, one session at a time.
       DESKTOP_URL: http://desktop:8100
       DESKTOP_TOKEN: ${POS_DESKTOP_TOKEN:-}
-    # 4 runs (~220 MiB each) + 2 browsers (~350 MiB each) with room to spare.
-    mem_limit: ${POS_POOL_MEM:-3g}
+    # 4 runs (~220 MiB each) + 3 browsers (~500 MiB each, PSS) with room to spare.
+    mem_limit: ${POS_POOL_MEM:-4g}
     networks:
       default:
       desktop:
