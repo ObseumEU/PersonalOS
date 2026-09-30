@@ -7,6 +7,7 @@
 # What it adds:
 #   prometheus : metrics store (14 days), remote-write receiver for svr03's Alloy, blackbox probes
 #   blackbox   : synthetic health checks of the apps on svr03 (through their public names, LAN path)
+#                and a ping of svr03 itself (module icmp)
 #   alloy      : this host's metrics and logs (Loki tenant "Obseum", host="agent")
 #   hook       : relays Grafana's webhook to PersonalOS and adds its bearer token, so no secret
 #                lives in Grafana; reachable only on Grafana's own network
@@ -55,6 +56,9 @@ services:
       - "litellm.obseum.cloud:192.168.1.108"
       - "langfuse.obseum.cloud:192.168.1.108"
       - "grafana.obseum.cloud:192.168.1.108"
+      - "tesco.obseum.cz:192.168.1.108"
+      - "chatpulse.obseum.cz:192.168.1.108"
+      - "audexia.obseum.cz:192.168.1.108"
     networks: [default, grafana]
     mem_limit: 64m
     logging: *logging
@@ -99,6 +103,7 @@ services:
     restart: unless-stopped
     environment:
       POS_GRAFANA_TOKEN: ${POS_GRAFANA_TOKEN:?set in .env}
+      HA_WEBHOOK_ID: ${HA_WEBHOOK_ID:?set in .env}
     volumes:
       - ./hook.Caddyfile:/etc/caddy/Caddyfile:ro
     extra_hosts:

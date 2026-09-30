@@ -34,10 +34,34 @@ scrape_configs:
         labels: {app: langfuse, host: svr03}
       - targets: ["https://grafana.obseum.cloud/api/health"]
         labels: {app: grafana-proxy, host: svr03}
+      - targets: ["https://tesco.obseum.cz/api/health"]
+        labels: {app: tesco, host: svr03}
+      - targets: ["https://chatpulse.obseum.cz/"]
+        labels: {app: chatpulse, host: svr03}
+      - targets: ["https://audexia.obseum.cz/"]
+        labels: {app: audexia, host: svr03}
       - targets: ["http://grafana:3000/api/health"]
         labels: {app: grafana, host: agent}
       - targets: ["http://loki:3100/ready"]
         labels: {app: loki, host: agent}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: obs-blackbox:9115
+
+  # svr03 reachable at all (alert "svr03 down", paged to the phone through Home Assistant).
+  - job_name: blackbox_icmp
+    metrics_path: /probe
+    params:
+      module: [icmp]
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    static_configs:
+      - targets: ["192.168.1.108"]
+        labels: {app: svr03-ping, host: svr03}
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

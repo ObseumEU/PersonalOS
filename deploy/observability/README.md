@@ -48,6 +48,14 @@ health check failing 5 min · app error spike (> 50 error lines / 10 min) · app
 errors · LiteLLM key budget < 10 %. Docker down on .186 stops Grafana itself: PersonalOS checks
 Grafana every 5 minutes and asks the owner after three failures (`grafana_watch`).
 
+**Out-of-band paging** (svr03 hosts PersonalOS, so its alerts cannot arrive while svr03 is down):
+rules labelled `page=phone` (*svr03 down*: ICMP probe `blackbox_icmp` fails 3 min; *svr03 app
+down*: personalos, knowlage, nexus-api/web, tesco, chatpulse, audexia probe fails 3 min while
+svr03 still pings) go only to the contact point *Home Assistant phone* → `obs-hook /ha/outage` →
+HA webhook (`HA_WEBHOOK_ID` in `.env`) → HA automation `server_outage_phone` →
+`notify.mobile_app_david_phone` (high priority; "Back up" on resolve). The reverse: HA pings .186
+(`binary_sensor.192_168_1_186`, automation `agent186_down_phone`, 3 min).
+
 ## PersonalOS side
 
 `POST /api/hooks/grafana` (bearer `POS_GRAFANA_TOKEN`; the same value is in
@@ -69,7 +77,7 @@ docker compose up -d
 
 # .186
 cd /opt/observability/platform        # files from deploy/observability/agent186
-# .env (mode 600): POS_GRAFANA_TOKEN=<same as PersonalOS .env>
+# .env (mode 600): POS_GRAFANA_TOKEN=<same as PersonalOS .env>, HA_WEBHOOK_ID=<the HA automation server_outage_phone webhook id>
 sudo docker compose up -d
 # Grafana provisioning (additive): copy grafana/provisioning/*/obs-platform.yaml,
 # 00-obs-platform.yaml and grafana/dashboards/*.json (into dashboards/files/platform/),

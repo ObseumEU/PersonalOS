@@ -1,5 +1,5 @@
 # Grafana (org Obseum, contact point "PersonalOS") -> PersonalOS event ingestion.
-# Only this one path; the bearer token is added here, so Grafana holds no secret.
+# The bearer token is added here, so Grafana holds no secret. Second path: /ha/outage (below).
 {
 	admin off
 	auto_https off
@@ -13,6 +13,17 @@
 			transport http {
 				tls_server_name personalos.obseum.cz
 			}
+		}
+	}
+	# Contact point "Home Assistant phone": out-of-band paging when svr03 (and with it PersonalOS)
+	# is down. HA (Raspberry Pi 192.168.1.56, its own power/network path) turns the Grafana
+	# payload into a phone notification (automation "Server outage -> phone"). The webhook id
+	# is the only secret and lives in .env, not in Grafana or git.
+	handle /ha/outage {
+		rewrite * /api/webhook/{$HA_WEBHOOK_ID}
+		reverse_proxy http://192.168.1.56:8123 {
+			# HA answers 400 to X-Forwarded-For from a proxy it does not trust.
+			header_up -X-Forwarded-For
 		}
 	}
 	handle {
