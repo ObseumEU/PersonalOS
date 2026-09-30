@@ -20,11 +20,35 @@ contactPoints:
           maxAlerts: 25
         disableResolveMessage: false
 
+  # Out-of-band paging: svr03 hosts PersonalOS, so its own alerts cannot reach the owner when svr03
+  # is down. obs-hook forwards to a Home Assistant webhook (HA on its own Raspberry Pi), whose
+  # automation "Server outage -> phone" sends a high-priority notification to the owner's phone
+  # and a "back up" one on resolve. Only rules labelled page=phone go here.
+  - orgId: 2
+    name: Home Assistant phone
+    receivers:
+      - uid: obs-ha-phone-webhook
+        type: webhook
+        settings:
+          url: http://obs-hook:8080/ha/outage
+          httpMethod: POST
+          maxAlerts: 10
+        disableResolveMessage: false
+
 policies:
   - orgId: 2
     receiver: grafana-default-email
     group_by: ["grafana_folder", "alertname"]
     routes:
+      # svr03 outage -> the phone only (PersonalOS runs on svr03; obs-host-silent covers it there).
+      - receiver: Home Assistant phone
+        object_matchers:
+          - ["page", "=", "phone"]
+        group_by: ["alertname"]
+        group_wait: 10s
+        group_interval: 1m
+        repeat_interval: 4h
+        continue: false
       - receiver: PersonalOS
         object_matchers:
           - ["team", "=", "platform"]
@@ -185,6 +209,55 @@ groups:
         labels: {team: platform, kind: host_silent, severity: critical}
         annotations:
           summary: "{{ $labels.host }}: no metrics for 5+ minutes: Docker, the Alloy collector or the host is down"
+
+  # ---------------------------------------------------------------- svr03 outage (paged to the phone)
+  - orgId: 2
+    name: platform-outage
+    folder: Obseum platform
+    interval: 30s
+    rules:
+      - uid: obs-svr03-down
+        title: svr03 down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: A, expr: 'max(probe_success{job="blackbox_icmp", host="svr03"})', instant: true}
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: lt, params: [1]}}]}
+        for: 3m
+        noDataState: Alerting
+        execErrState: Error
+        labels: {team: platform, page: phone, kind: host_down, severity: critical, host: svr03}
+        annotations:
+          summary: "svr03 (192.168.1.108) does not answer ping for 3 minutes: PersonalOS, knowlage, Nexus and the customer apps are down"
+
+      # Apps on svr03 failing while svr03 itself answers ping (while it does not, "svr03 down" covers them).
+      - uid: obs-svr03-app-down
+        title: svr03 app down
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                min by (app) (probe_success{job="blackbox", host="svr03",
+                app=~"personalos|knowlage|nexus-api|nexus-web|tesco|chatpulse|audexia"})
+                unless on() (max(probe_success{job="blackbox_icmp", host="svr03"}) < 1)
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: lt, params: [1]}}]}
+        for: 3m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, page: phone, kind: health, severity: high, host: svr03}
+        annotations:
+          summary: "{{ $labels.app }} on svr03 is not answering its health check for 3 minutes"
 
   # ---------------------------------------------------------------- containers and apps
   - orgId: 2

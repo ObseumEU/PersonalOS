@@ -7,3 +7,10 @@ modules:
       valid_status_codes: [200]
       follow_redirects: true
       preferred_ip_protocol: ip4
+  # Ping of svr03 (alert "svr03 down" -> Home Assistant -> the owner's phone). Unprivileged ICMP:
+  # Docker's default net.ipv4.ping_group_range lets the non-root exporter ping.
+  icmp:
+    prober: icmp
+    timeout: 5s
+    icmp:
+      preferred_ip_protocol: ip4
