@@ -1,0 +1,16 @@
+# STOPGAP (2026-09-30): a Tesla (MAC 0c:29:8f:05:11:d3) got 192.168.1.108 from the home router's
+# DHCP while svr03 (d8:9e:f3:2e:01:8e) uses it statically. The router's ARP entry flipped between
+# the two, black-holing svr03's traffic (and with it the WireGuard tunnel to the hub) for 20-60 s at
+# a time. This container announces svr03's MAC every second (gratuitous ARP) so the router keeps
+# pointing at svr03. Remove it once the router has a DHCP reservation for svr03 / .108 is outside
+# the DHCP pool and the Tesla has moved to another address.
+# Currently started by hand as: docker run -d --name garp-svr03 --network host --cap-add NET_RAW
+#   --cap-add NET_ADMIN --restart unless-stopped --entrypoint sh lscr.io/linuxserver/wireguard ...
+services:
+  garp-svr03:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: garp-svr03
+    network_mode: host
+    cap_add: [NET_RAW, NET_ADMIN]
+    restart: unless-stopped
+    entrypoint: ["sh", "-c", "while :; do arping -U -c 1 -I enp1s0 192.168.1.108 >/dev/null 2>&1; arping -c 1 -w 1 -I enp1s0 192.168.1.1 >/dev/null 2>&1; sleep 1; done"]
