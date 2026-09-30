@@ -1,0 +1,7 @@
+[Unit]
+Description=Probe the public sites through the hub -> wg0 -> svr03 path (pages HA on failure)
+After=network-online.target wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/public-probe.sh
