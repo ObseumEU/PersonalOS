@@ -270,6 +270,9 @@ _APP_PREFIXES = (("personalos", "personalos"), ("nexus", "nexus"), ("kb-", "know
 # Bare compose service names of the PersonalOS stack (Grafana's `service` label).
 _POS_SERVICES = {"web", "api", "agent-pool", "deployer", "pos", "pos-api", "pos-web", "worker"}
 DEDUP_WINDOW_MIN = 30  # the same app from another source within this long is the same outage
+# The same app, kind and key again within this long after the Monitor triaged and closed it is a
+# recurrence: a note on that task, no new one (prod 2026-09-28/29: knowlage-api sync_error, 12 tasks each closed in ~15 s).
+RECUR_WINDOW_H = 6
 
 
 def canonical_service(inc: dict | sqlite3.Row) -> str:
@@ -295,7 +298,9 @@ def _open_twin(conn: sqlite3.Connection, inc: dict) -> sqlite3.Row | None:
     """An earlier incident of the same app, kind and key whose task or ticket is still open,
     or a quota incident whose reset has not come yet; or the same app reported by the other
     source (the sentinel and Grafana both see one outage) within DEDUP_WINDOW_MIN while its
-    task or ticket is open."""
+    task or ticket is open; or the same app, kind and key that the Monitor triaged (a run on its
+    task) and closed within RECUR_WINDOW_H (the fingerprint recurs: one task, not one per minute).
+    One closed by its resolution before any triage is not a twin: a new episode after it is new."""
     if not inc.get("kind"):
         return None
     now = _utcnow()
@@ -315,6 +320,17 @@ def _open_twin(conn: sqlite3.Connection, inc: dict) -> sqlite3.Row | None:
         if (_source_of(r["incident_id"]) != source and canonical_service(r) == app and app not in ("?", "platform")
                 and r["opened_at"] >= since):
             return r
+    if key:  # the same fingerprint whose task was closed a moment ago: it recurs, it is not new
+        recur = (now - timedelta(hours=RECUR_WINDOW_H)).isoformat(timespec="seconds")
+        for r in conn.execute(
+                """SELECT s.* FROM sentinel_incidents s JOIN tasks t ON t.id = COALESCE(s.ticket_id, s.task_id)
+                   WHERE s.incident_id != ? AND s.dup_of IS NULL AND s.kind = ? AND s.key = ?
+                     AND t.status = 'done' AND EXISTS (SELECT 1 FROM runs r WHERE r.task_id = t.id
+                                                       AND r.status != 'blocked')
+                     AND COALESCE(t.completed_at, t.updated_at) >= ?
+                   ORDER BY s.id DESC LIMIT 20""", (inc.get("incident_id"), str(inc["kind"]), key, recur)):
+            if canonical_service(r) == app:
+                return r
     return None
 
 

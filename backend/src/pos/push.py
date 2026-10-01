@@ -377,6 +377,7 @@ def _deliver(conn, settings, actor_id: int, payload: dict, now: datetime) -> int
     payload = {**payload, "silent": _recently(conn, actor_id, payload["tag"], now), "ts": now_iso()}
     n = send(conn, settings, actor_id, payload, urgent=payload.get("kind") == "urgent")
     _mark(conn, actor_id, f"tag:{payload['tag']}")
+    conn.commit()  # the next delivery is a network call: never hold the write lock across it
     return n
 
 

@@ -237,8 +237,16 @@ def test_the_same_incident_again_is_a_comment_not_a_new_ticket_and_not_counted(a
     _run(conn, mid, first["task_id"])
     monkeypatch.setattr(monitor, "sentinel_post", lambda *a, **k: {"ok": True})
     monitor.incident_close(conn, Ctx(mid, via="mcp"), first["task_id"], "code_bug", "### Co\nChyba, T-9 pro Deva.")
+    # the same fingerprint right after the close recurs: a note on the closed task, no new one
     third = _post(app, _event(3))
-    assert "duplicate_of" not in third and third["task_id"] != first["task_id"]
+    assert third["duplicate_of"] == "abc123-1" and third["task_id"] == first["task_id"]
+    assert tasks.get(conn, app["owner"], first["task_id"])["status"] == "done"
+    # closed longer than the recurrence window ago: the same key is a new incident again
+    old = (datetime.now(timezone.utc) - timedelta(hours=monitor.RECUR_WINDOW_H + 1)).isoformat(timespec="seconds")
+    conn.execute("UPDATE tasks SET completed_at = ?, updated_at = ? WHERE id = ?", (old, old, first["task_id"]))
+    conn.commit()
+    fourth = _post(app, _event(4))
+    assert "duplicate_of" not in fourth and fourth["task_id"] != first["task_id"]
 
 
 def test_quota_with_a_reset_time_is_one_ongoing_incident_that_does_not_use_the_cap(app, monkeypatch):

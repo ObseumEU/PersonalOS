@@ -34,12 +34,13 @@ ALIVE_S = 10  # the alive tick while a run is going (PersonalOS clears the indic
 
 class _AliveTicker:
     """Tells PersonalOS every ALIVE_S seconds that the run's worker is still there,
-    also inside a long tool step. It only keeps the chat "working" indicator; no
-    tokens, no database writes. It stops with the run, so a crashed worker's
-    indicator expires by itself."""
+    also inside a long tool step: it keeps the chat "working" indicator and the run's
+    heartbeat (moved at most once a minute), so the 5-minute silent-run check
+    (pos.scheduler.reap_runs) never kills a run whose worker lives. No tokens. It stops
+    with the run, so a crashed worker's run is found within 5 minutes."""
 
-    def __init__(self, client, run_id: int, every: float = ALIVE_S):
-        self.client, self.run_id, self.every = client, run_id, every
+    def __init__(self, client, run_id: int, every: float | None = None):
+        self.client, self.run_id, self.every = client, run_id, ALIVE_S if every is None else every
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name=f"alive-{run_id}", daemon=True)
 
@@ -254,6 +255,12 @@ class Worker:
             self._call(self.client.finish_run, started["run_id"], "cancelled", "", f"could not claim {ref}: {e}")
             return "skipped"
 
+        # The alive tick covers the whole run, from the claim to the finish (the cheap check, the
+        # session's start, the hand-in too): PersonalOS declares a run dead after 5 silent minutes.
+        with _AliveTicker(self.client, run_id):
+            return self._claimed(ref, task, run_id, started)
+
+    def _claimed(self, ref: str, task: dict, run_id: int, started: dict) -> str:
         engine = started.get("engine") or "codex"
         # The agent's max USD per run from PersonalOS (pos.access); None when it has none.
         self.run_cap_usd = started.get("max_budget_usd")
@@ -306,8 +313,7 @@ class Worker:
         # across runs); Codex gets both at the top of the prompt.
         prompt = build_task_prompt(me, task, self.context, include_guardrails=not claude, include_stable=not claude)
         self.context = []
-        with _AliveTicker(self.client, run_id):
-            outcome = self._session_loop(session, prompt, run_id, ref)
+        outcome = self._session_loop(session, prompt, run_id, ref)  # inside handle_task's alive tick
         return self._after_run(ref, run_id, engine, session, check, outcome)
 
     def _session_loop(self, session, prompt: str, run_id: int, ref: str) -> str:

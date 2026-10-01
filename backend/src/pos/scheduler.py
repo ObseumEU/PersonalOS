@@ -190,26 +190,87 @@ def budget_check(conn: sqlite3.Connection) -> dict:
     return {"level": out["level"], **({"company_cap": out["company_cap"]} if out.get("company_cap") else {})}
 
 
-def reap_runs(conn: sqlite3.Connection, silent_minutes: int = 20) -> dict:
-    """Release runs whose worker went silent (crashed, PC restarted): the run is
-    marked as an error and its task goes back to the queue."""
+SILENT_MINUTES = 5  # the alive tick moves a run's heartbeat every minute, also inside a long tool step
+SILENT_DETAIL = "worker went silent for"
+SILENT_REQUEUES = 1  # a task whose run died this often already goes to the agent's lead instead
+
+
+def _lead_for(conn: sqlite3.Connection, actor_id: int) -> int | None:
+    """Who looks after the agent's stuck work: its lead (reports_to), else the CEO, else the owner."""
+    from . import business
+
+    row = conn.execute("SELECT reports_to FROM actors WHERE id = ?", (actor_id,)).fetchone()
+    lead = row["reports_to"] if row else None
+    for cand in (lead, business.ceo_id(conn), actors.owner_id(conn)):
+        if cand and cand != actor_id:
+            return cand
+    return None
+
+
+def _escalate_silent(conn: sqlite3.Connection, r: sqlite3.Row, deaths: int) -> int | None:
+    """The task's runs keep dying: it waits for the agent's lead instead of a third run."""
+    from . import business, chat, comments, wake
+
+    lead = _lead_for(conn, r["actor_id"])
+    ref = tasks.display_id(r["task_id"])
+    agent = actors.get(conn, r["actor_id"])["name"]
+    why = (f"{deaths} runs of {agent} on this task stopped without a word from its worker "
+           f"(no heartbeat for {SILENT_MINUTES} min)")
+    tasks.update(conn, Ctx(r["actor_id"], via="scheduler"), r["task_id"],
+                 {"status": "waiting", "progress_note": f"{why}; waiting for the lead, not retried automatically."})
+    sys_ctx = business.system_ctx(conn)
+    comments.log(conn, sys_ctx, r["task_id"], f"Escalated to the lead: {why}.", "system")
+    audit.log(conn, sys_ctx, "run_silent_escalate", "task", r["task_id"], run=r["id"], lead=lead, deaths=deaths)
+    if lead:
+        title = conn.execute("SELECT title FROM tasks WHERE id = ?", (r["task_id"],)).fetchone()["title"]
+        try:
+            chat.send_dm(conn, sys_ctx, lead,
+                         f"{ref} '{title}': {why}. It waits for you: look at the runs (get_agent_status), then "
+                         "send it back to the queue, split it, or reassign it.",
+                         priority="fyi", attachments=[{"type": "task", "id": r["task_id"]}], system=True)
+        except Exception:  # noqa: BLE001 - the comment and the audit line still say it
+            log.exception("could not tell the lead about %s", ref)
+        wake.wake(lead)
+    return lead
+
+
+def reap_runs(conn: sqlite3.Connection, silent_minutes: int = SILENT_MINUTES) -> dict:
+    """Release runs whose worker went silent (crashed, PC restarted, the API restarted under it):
+    no heartbeat and no alive tick for `silent_minutes` (the worker ticks /alive every 10 s, also
+    inside a long tool step, and the heartbeat column follows every minute). The run is an error;
+    its task goes back to the queue once; when a run on it died that way before, the task waits
+    for the agent's lead instead (prod 2026-09: the same task's runs died again and again)."""
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=silent_minutes)).isoformat(timespec="seconds")
     stale = conn.execute(
         """SELECT * FROM runs WHERE status = 'running' AND engine IS NOT NULL
            AND COALESCE(heartbeat_at, started_at) < ?""", (cutoff,)
     ).fetchall()
-    released = []
+    released, requeued, escalated = [], [], []
     for r in stale:
-        conn.execute("UPDATE runs SET status = 'error', ended_at = ?, detail = ? WHERE id = ?",
-                     (now_iso(), f"worker went silent for {silent_minutes} min", r["id"]))
-        if r["task_id"]:
-            t = conn.execute("SELECT status, assignee_id FROM tasks WHERE id = ?", (r["task_id"],)).fetchone()
-            if t and t["status"] == "working" and t["assignee_id"] == r["actor_id"]:
-                tasks.update(conn, Ctx(r["actor_id"], via="scheduler"), r["task_id"],
-                             {"status": "next", "progress_note": "The previous run stopped unexpectedly; retrying."})
+        conn.execute("UPDATE runs SET status = 'error', ended_at = ?, detail = ? WHERE id = ? AND status = 'running'",
+                     (now_iso(), f"{SILENT_DETAIL} {silent_minutes} min", r["id"]))
         released.append(r["id"])
+        if not r["task_id"]:
+            continue
+        t = conn.execute("SELECT status, assignee_id FROM tasks WHERE id = ?", (r["task_id"],)).fetchone()
+        if not (t and t["status"] == "working" and t["assignee_id"] == r["actor_id"]):
+            continue
+        deaths = conn.execute("SELECT COUNT(*) FROM runs WHERE task_id = ? AND actor_id = ? AND status = 'error' "
+                              "AND detail LIKE ?", (r["task_id"], r["actor_id"], SILENT_DETAIL + "%")).fetchone()[0]
+        if deaths > SILENT_REQUEUES:
+            _escalate_silent(conn, r, deaths)
+            escalated.append(tasks.display_id(r["task_id"]))
+        else:
+            tasks.update(conn, Ctx(r["actor_id"], via="scheduler"), r["task_id"],
+                         {"status": "next", "progress_note": "The previous run stopped unexpectedly; retrying."})
+            requeued.append(tasks.display_id(r["task_id"]))
     conn.commit()
-    return {"released": released}
+    out: dict = {"released": released}
+    if requeued:
+        out["requeued"] = requeued
+    if escalated:
+        out["escalated"] = escalated
+    return out
 
 
 def claude_selfcheck(conn: sqlite3.Connection) -> dict:
@@ -414,7 +475,7 @@ DEFAULT_JOBS = [
     ("Nightly retrospective", "daily 23:00", "nightly_retrospective"),
     ("Budget check", "every 60m", "budget_check"),
     ("A2A: hand tasks to remote agents and collect results", "every 1m", "a2a_sync"),
-    ("Release runs of workers that went silent", "every 5m", "reap_runs"),
+    ("Release runs of workers that went silent", "every 1m", "reap_runs"),
     ("Schedules of people and agents", "every 1m", "member_schedules"),
     ("Check that the Claude CLI answers with its model", "every 6h", "claude_selfcheck"),
     ("Push files into knowlage (retry what failed)", "every 15m", "knowlage_files"),
@@ -478,6 +539,8 @@ def seed(conn: sqlite3.Connection) -> None:
             "INSERT INTO jobs (name, schedule, action, enabled, next_run_at, created_at) VALUES (?, ?, ?, 1, ?, ?)",
             (name, schedule, action, next_run(schedule, now).isoformat(timespec="seconds"), now_iso()),
         )
+    # A silent run is found within 5 min now (reap_runs): its job runs every minute, not every 5.
+    conn.execute("UPDATE jobs SET schedule = 'every 1m' WHERE action = 'reap_runs' AND schedule = 'every 5m'")
     conn.commit()
     enforce_core(conn)
 

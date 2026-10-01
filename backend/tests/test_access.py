@@ -374,7 +374,8 @@ def test_company_cap_ping_at_80_percent_once_and_daily_digest(app):
     access.set_budget(conn, app["owner"], None, "usd_month", 100.0, "company cap")
     ratio = access.DEFAULT_SETTINGS["cap_alert_ratio"]
     for _ in range(9):
-        _usage(conn, agent, 100.0 * (ratio + 0.01) / 9, hours_ago=30)  # over the ratio, not in the last hour
+        # over the ratio, not in the last hour; 2 h ago stays in this month on the 1st too
+        _usage(conn, agent, 100.0 * (ratio + 0.01) / 9, hours_ago=2)
     assert "usd_month" in access.watch(conn)["cap_alerts"]
     assert access.watch(conn)["cap_alerts"] == []  # once
     access.grant(conn, am, agent, "messages:send", "standups")

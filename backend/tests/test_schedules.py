@@ -99,7 +99,7 @@ def test_limits_kill_switch_and_due_firing(conn, tmp_path):
     for i in range(n):
         schedules.create(conn, ctx, {"name": f"Job {i}", "schedule": "every 1h"})
     with pytest.raises(tasks.Invalid, match=f"limit of {n}"):
-        schedules.create(conn, ctx, {"name": "Job 6", "schedule": "every 1h"})
+        schedules.create(conn, ctx, {"name": "One more job", "schedule": "every 1h"})
     s = schedules.list_schedules(conn, actor_id=agent)[0]
     conn.execute("UPDATE schedules SET next_run_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (s["id"],))
     owner = Ctx(actors.owner_id(conn))

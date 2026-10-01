@@ -27,11 +27,24 @@ def worker_ctx(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> 
     actor_id = actors.actor_for_key(conn, key) if key else None
     if actor_id is None:
         raise HTTPException(401, "unauthorized", headers={"WWW-Authenticate": "Bearer"})
-    if actors.get(conn, actor_id)["kind"] == "human":
+    row = actors.get(conn, actor_id)
+    if row["kind"] == "human":
         raise HTTPException(403, "worker endpoints are for agents")
-    conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
-    conn.commit()
+    # Every worker call (the alive tick every 10 s, heartbeats, polls) would be a write; the
+    # "seen" time moves at most every SEEN_WRITE_S (pos.workers reads it at a 5-min scale).
+    if (row["last_seen_at"] or "") < _seen_cutoff():
+        conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
+        conn.commit()
     return Ctx(actor_id, via="worker")
+
+
+SEEN_WRITE_S = 30
+
+
+def _seen_cutoff() -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(seconds=SEEN_WRITE_S)).isoformat(timespec="seconds")
 
 
 class RunIn(BaseModel):
@@ -427,7 +440,7 @@ ALIVE_WRITE_S = 60  # the alive tick comes every 10 s; the heartbeat column move
 def alive(run_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """The worker's tick between steps (long tool work): keeps a chat run's softer
     "working" indicator and the run itself alive: its heartbeat moves on (at most once a
-    minute), so a step longer than the reaper's 20 min is not released and the task is
+    minute), so a step longer than the reaper's 5 min (pos.scheduler.reap_runs) is not released and the task is
     not offered to a second worker (_live_run_sql)."""
     from datetime import datetime, timedelta, timezone
 

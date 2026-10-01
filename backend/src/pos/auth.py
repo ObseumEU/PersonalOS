@@ -7,6 +7,8 @@ login and every request acts as the owner.
 """
 
 import hmac
+import threading
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -72,19 +74,84 @@ def _me(request: Request, settings: Settings) -> Me:
         conn.close()
 
 
+class LoginLimiter:
+    """Password guessing is slowed per client IP: LIMIT failed logins within WINDOW_S, then
+    the IP waits (429 + Retry-After) BACKOFF_S, doubling with every lock-out in a row up to
+    BACKOFF_MAX_S. A successful login clears the IP. In memory: the API is one process."""
+
+    LIMIT = 10
+    WINDOW_S = 60.0
+    BACKOFF_S = 60.0
+    BACKOFF_MAX_S = 15 * 60.0
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._fails: dict[str, list[float]] = {}
+        self._until: dict[str, float] = {}
+        self._strikes: dict[str, int] = {}
+
+    def retry_after(self, key: str) -> int:
+        """Seconds the key still has to wait (0: it may try)."""
+        with self._lock:
+            left = self._until.get(key, 0.0) - self.clock()
+            return int(left) + 1 if left > 0 else 0
+
+    def failed(self, key: str) -> None:
+        with self._lock:
+            now = self.clock()
+            fails = [t for t in self._fails.get(key, []) if now - t < self.WINDOW_S] + [now]
+            if len(fails) >= self.LIMIT:
+                strikes = self._strikes.get(key, 0) + 1
+                self._strikes[key] = strikes
+                self._until[key] = now + min(self.BACKOFF_S * 2 ** (strikes - 1), self.BACKOFF_MAX_S)
+                fails = []
+            self._fails[key] = fails
+            if len(self._fails) > 10_000:  # a flood of addresses: forget the quiet ones
+                for k in [k for k, v in self._fails.items() if not v or now - v[-1] >= self.WINDOW_S]:
+                    self._fails.pop(k, None)
+
+    def succeeded(self, key: str) -> None:
+        with self._lock:
+            for d in (self._fails, self._until, self._strikes):
+                d.pop(key, None)
+
+
+login_limiter = LoginLimiter()
+
+
+def client_ip(request: Request) -> str:
+    """The caller's address: the first X-Forwarded-For entry (the front proxy, Caddy, sets it
+    to the real client; nginx appends), else the direct peer."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    first = fwd.split(",")[0].strip()
+    return first or (request.client.host if request.client else "?")
+
+
+def _check_rate(key: str) -> None:
+    wait = login_limiter.retry_after(key)
+    if wait:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many login attempts; try again later",
+                            headers={"Retry-After": str(wait)})
+
+
 @router.post("/login")
 def login(body: LoginRequest, request: Request, settings: Settings = Depends(get_settings)) -> Me:
     from . import accounts
     from .db import connect
 
+    ip = client_ip(request)
+    _check_rate(ip)
     if body.email:
         conn = connect(settings.db_path)
         try:
             actor_id = accounts.login(conn, body.email, body.password)
         except accounts.AuthError as e:
+            login_limiter.failed(ip)
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e)) from e
         finally:
             conn.close()
+        login_limiter.succeeded(ip)
         request.session.clear()
         request.session["actor_id"] = actor_id
         _new_device(request, settings, actor_id, owner_login=False, app=body.app)
@@ -92,7 +159,9 @@ def login(body: LoginRequest, request: Request, settings: Settings = Depends(get
     if settings.password and not hmac.compare_digest(
         body.password.encode(), settings.password.encode()
     ):
+        login_limiter.failed(ip)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong password")
+    login_limiter.succeeded(ip)
     request.session.clear()
     request.session["user"] = "owner"
     _new_device(request, settings, None, owner_login=True, app=body.app)

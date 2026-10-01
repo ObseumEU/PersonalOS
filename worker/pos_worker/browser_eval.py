@@ -130,8 +130,11 @@ def run_one(client: PosClient, me: dict, url: str, key: str, engine: str, name: 
         s = CodexSession(workdir=where, config=[*([f'model="{model}"'] if model else []),
                                                 *mounts.codex_config(servers)])
         task = guide + "\n\n" + task
-    for _ in s.run(PROMPT.format(task=task)):
-        pass
+    from .loop import _AliveTicker
+
+    with _AliveTicker(client, run["run_id"]):  # a long eval is not a silent run (pos.scheduler.reap_runs)
+        for _ in s.run(PROMPT.format(task=task)):
+            pass
     elapsed = time.monotonic() - started
     stats = claude_stats(s.lines) if engine == "claude" else codex_stats(s.lines)
     answer = s.last_message or ""

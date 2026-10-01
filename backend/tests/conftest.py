@@ -15,6 +15,10 @@ def isolated_codex_home(tmp_path, monkeypatch):
     for name in [n for n in os.environ if n.upper().startswith("POS_")]:
         monkeypatch.delenv(name)
     monkeypatch.setitem(Settings.model_config, "env_file", None)
+    # Each test starts with a clean login rate limit (pos.auth.LoginLimiter is per process).
+    from pos import auth
+
+    monkeypatch.setattr(auth, "login_limiter", auth.LoginLimiter())
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.setenv("POS_CODEX_DISABLED", "1")
     monkeypatch.setenv("POS_CLAUDE_DISABLED", "1")
