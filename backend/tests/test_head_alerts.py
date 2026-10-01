@@ -160,3 +160,21 @@ def test_a_task_an_agent_gives_the_owner_tells_its_head_and_is_listed(env):
     assert got == {created["ref"]: "owner_assigned", moved["ref"]: "owner_assigned"}
     assert ticket["ref"] not in got and by_owner["ref"] not in got
     assert head_alerts.stuck(conn, e["head"], include_owner_assigned=False)["stuck"] == []
+
+
+def test_platform_pipelines_and_pseudo_tool_failures_do_not_alert_twice(env):
+    """A support draft's owner item (the flow promises no chat ping) and a security hold are the
+    platform's, not the agent's choice; a pseudo-tool failure was already told to the lead ([platforma])."""
+    from pos import pseudo_tools
+
+    e, conn = env, env["conn"]
+    owner_id = e["owner"].actor_id
+    tasks.create(conn, Ctx(e["dev"], via="support"), {"title": "Koncept odpovědi je v Gmailu", "status": "next",
+                                                      "source": "support:owner",
+                                                      "assignee": {"type": "human", "id": owner_id}})
+    tasks.create(conn, Ctx(e["dev"]), {"title": "Bezpečnost", "status": "next", "source": "taint_hold:3",
+                                       "assignee": {"type": "human", "id": owner_id}})
+    t = _task(e, "Prozkoumat repo", e["dev"])
+    assert head_alerts.run_ended(conn, e["dev"], t["id"], "error", f"{pseudo_tools.MARKER}: git clone") is None
+    conn.commit()
+    assert _dms(conn, e["head"]) == []

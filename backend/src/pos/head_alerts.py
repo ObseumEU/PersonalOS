@@ -20,6 +20,8 @@ from . import actors, audit, chat
 from .core import Ctx, Forbidden, NotFound, now_iso
 
 DEDUP_HOURS = 6
+PIPELINES = ("system", "support", "runner", "scheduler")  # Ctx.via of platform flows acting for an agent
+PIPELINE_SOURCES = ("support:", "taint_hold:")
 ALL_SEEING = ("ceo", "coo")  # roles that see every team
 OPEN = ("inbox", "next", "working", "waiting")
 REASONS = {
@@ -76,6 +78,10 @@ def lead_of(conn: sqlite3.Connection, agent_id: int) -> int | None:
 def run_reason(status: str | None, detail: str | None) -> str | None:
     """last_run_failed / budget_exhausted for a run that ended badly; None otherwise
     (ok, still running, cancelled by hand, kill switch, pause)."""
+    from .pseudo_tools import MARKER
+
+    if MARKER in (detail or ""):
+        return None  # the platform already told the lead itself ("[platforma]", pos.pseudo_tools)
     detail = (detail or "").strip().lower()
     if status == "blocked":
         return "budget_exhausted" if detail.startswith(("budget", "company cap")) else None
@@ -240,6 +246,10 @@ def assigned(conn: sqlite3.Connection, ctx: Ctx, task_id: int, before_assignee: 
                 or before_assignee == t["assignee_id"]:
             return
         if actors.get(conn, ctx.actor_id)["kind"] == "human":
+            return
+        # A platform pipeline's item for the owner (a support draft's "Čeká na tebe", a security hold) is
+        # not the agent's choice: no alert (the support flow promises no chat ping).
+        if ctx.via in PIPELINES or (t["source"] or "").startswith(PIPELINE_SOURCES):
             return
         notify(conn, ctx.actor_id, task_id, "owner_assigned")
     except Exception:  # noqa: BLE001
