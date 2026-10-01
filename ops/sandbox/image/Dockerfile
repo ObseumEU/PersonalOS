@@ -4,7 +4,7 @@
 # the manager's egress proxy, which refuses the LAN).
 #
 # Built on the server once (and when this file changes):
-#   docker build -t personalos-sandbox:latest ops/sandbox/image
+#   docker build -t pos-agent-sandbox:latest ops/sandbox/image
 FROM python:3.12-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Europe/Prague

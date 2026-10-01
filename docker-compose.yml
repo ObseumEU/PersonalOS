@@ -143,15 +143,17 @@ services:
     restart: unless-stopped
 
   # Every agent's own computer (docs/SANDBOX.md): this manager starts one container per agent from
-  # personalos-sandbox:latest (ops/sandbox/image; built once on the host) on the internal network
+  # pos-agent-sandbox:latest (ops/sandbox/image; built once on the host) on the internal network
   # `sandbox`, which has no route out; its egress proxy (here, alias sandbox-proxy) reaches only public
   # addresses and the api. The api calls the control API (pos-sandbox:8200) with POS_SANDBOX_TOKEN.
   sandbox:
     profiles: ["agents"]
     build: ./ops/sandbox
+    # Named, so compose's own tag (<project>-sandbox) never lands on the agents' image.
+    image: pos-sandbox-manager:latest
     environment:
       SANDBOX_TOKEN: ${POS_SANDBOX_TOKEN:-}
-      SANDBOX_IMAGE: ${POS_SANDBOX_IMAGE:-personalos-sandbox:latest}
+      SANDBOX_IMAGE: ${POS_SANDBOX_IMAGE:-pos-agent-sandbox:latest}
       SANDBOX_NETWORK: pos-sandbox
       SANDBOX_MAX_ACTIVE: ${POS_SANDBOX_MAX_ACTIVE:-3}
       SANDBOX_IDLE_S: ${POS_SANDBOX_IDLE_S:-900}
