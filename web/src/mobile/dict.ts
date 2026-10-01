@@ -4,9 +4,8 @@ import chat from "../i18n/cs/chat";
 import common from "../i18n/cs/common";
 import home from "../i18n/cs/home";
 import mobile from "../i18n/cs/mobile";
-import report from "../i18n/cs/report";
 import team from "../i18n/cs/team";
 import work from "../i18n/cs/work";
 import { register } from "../i18n/core";
 
-register(common, home, chat, work, team, mobile, report);
+register(common, home, chat, work, team, mobile);

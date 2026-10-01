@@ -1,8 +1,7 @@
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { RefChip } from "../components/RefPreview";
 import { t } from "../i18n/core";
-import { findRefs } from "../refs";
+import type { findRefs as FindRefs, RefKind } from "../refs";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 
 /*
@@ -12,9 +11,39 @@ import { ToolChip, stripToolMarkup } from "../toolMarkup";
  * refs.ts) as chips that open a preview in place. Small on purpose: it ships in the /m bundle.
  */
 
+// The chip (with its preview) loads with the first reference shown; until then the plain text.
+const RefChipLazy = lazy(() => import("../components/RefPreview").then((m) => ({ default: m.RefChip })));
+function RefChip(p: { kind: RefKind; id: string; label?: string; tone?: Tone }) {
+  return (
+    <Suspense fallback={<span>{p.label ?? p.id}</span>}>
+      <RefChipLazy {...p} />
+    </Suspense>
+  );
+}
+
+// The reference patterns load only when a message looks like it has one (they are not in the /m entry).
+const MAYBE_REF = /pozn|note|msg|message|zpr[áa]v|soubor|file|:c\d/i;
+let findRefs: typeof FindRefs | null = null;
+let loading: Promise<void> | null = null;
+function useRefFinder(text: string): void {
+  const [, setReady] = useState(0);
+  const want = !findRefs && MAYBE_REF.test(text);
+  useEffect(() => {
+    if (!want) return;
+    let alive = true;
+    loading ??= import("../refs").then((m) => {
+      findRefs = m.findRefs;
+    });
+    loading.then(() => alive && setReady((n) => n + 1));
+    return () => {
+      alive = false;
+    };
+  }, [want]);
+}
+
 /** Plain text with its references (not tasks: those are linked below) as preview chips. */
 function withRefs(s: string, key: string, tone: Tone): ReactNode[] {
-  const refs = findRefs(s).filter((r) => r.kind !== "task");
+  const refs = findRefs ? findRefs(s).filter((r) => r.kind !== "task") : [];
   if (!refs.length) return [<Fragment key={key}>{s}</Fragment>];
   const out: ReactNode[] = [];
   let at = 0;
@@ -70,7 +99,7 @@ function useInline(names: string[], tone: Tone) {
       if (part.startsWith("[nástroj")) return <ToolChip key={k} label={part.slice(1, -1)} />;
       if (part.startsWith("`")) {
         const inner = part.slice(1, -1).trim();
-        const refs = findRefs(inner).filter((r) => r.kind === "chunk");
+        const refs = findRefs ? findRefs(inner).filter((r) => r.kind === "chunk") : [];
         if (refs.length && !inner.replace(/[\w.-]+:c\d+(?:\/c\d+)*/g, "").replace(/[\s,;]+/g, ""))
           return <Fragment key={k}>{refs.map((r, j) => <RefChip key={`${k}-${j}`} kind="chunk" id={r.id} tone={tone} />)}</Fragment>;
       }
@@ -164,6 +193,7 @@ export function parseBlocks(src: string): Block[] {
 export const isLong = (text: string) => text.length > 700 || text.split("\n").length > 14;
 
 export function Rich({ text, names, tone = "theirs", collapsible = true }: { text: string; names: string[]; tone?: Tone; collapsible?: boolean }) {
+  useRefFinder(text); // re-renders once the reference patterns are loaded
   const inline = useInline(names, tone);
   const clean = useMemo(() => stripToolMarkup(text), [text]);
   const blocks = useMemo(() => parseBlocks(clean), [clean]);

@@ -1,7 +1,9 @@
 import { Download, ExternalLink, FileText, MessageSquare, Quote, SquareCheck, StickyNote, X } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { t } from "../i18n/core";
+import { register, t } from "../i18n/core";
+import report from "../i18n/cs/report";
+import { closeRef, openRef, useCurrentRef } from "../refStore";
 import { type RefKind, refLabel } from "../refs";
 import { loadRef, type RefPreview as Preview } from "../reportApi";
 import { TaskLink } from "../taskSheet";
@@ -12,27 +14,12 @@ import { TaskLink } from "../taskSheet";
  * points somewhere the reader cannot see. Tasks open in the task panel itself.
  */
 
+// The words for chips and the preview (the installed app loads this module only when needed).
+register(report);
+
 const Markdown = lazy(() => import("./Markdown"));
 
-let current: { kind: RefKind; id: string } | null = null;
-const subs = new Set<() => void>();
-export function openRef(kind: RefKind, id: string) {
-  current = { kind, id };
-  subs.forEach((f) => f());
-}
-function closeRef() {
-  current = null;
-  subs.forEach((f) => f());
-}
-function useCurrent() {
-  return useSyncExternalStore(
-    (f) => {
-      subs.add(f);
-      return () => subs.delete(f);
-    },
-    () => current,
-  );
-}
+export { openRef } from "../refStore";
 
 const ICON: Record<RefKind, typeof StickyNote> = { note: StickyNote, msg: MessageSquare, chunk: Quote, task: SquareCheck, file: FileText };
 
@@ -123,7 +110,7 @@ function Body({ p }: { p: Preview }): ReactNode {
 
 /** The drawer: rendered once (Shell, the installed app); on top of the task panel. */
 export function RefPreviewHost() {
-  const cur = useCurrent();
+  const cur = useCurrentRef();
   const [p, setP] = useState<Preview | null>(null);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {

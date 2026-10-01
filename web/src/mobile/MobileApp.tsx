@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api, getMe, logout, type Me } from "../api";
 import { OverlayHost } from "../components/overlay";
-import { RefPreviewHost } from "../components/RefPreview";
+import { useCurrentRef } from "../refStore";
 import { t } from "../i18n/core";
 import { useNeedsMe } from "../needsMeApi";
 import ChatList from "./ChatList";
@@ -17,6 +17,17 @@ import { TopBar } from "./ui";
 const TaskSheetHost = lazy(() => import("../components/tasks/TaskSheet"));
 const MobileSettings = lazy(() => import("./Settings"));
 const ReportPage = lazy(() => import("../pages/ReportPage"));
+const RefPreviewHost = lazy(() => import("../components/RefPreview").then((m) => ({ default: m.RefPreviewHost })));
+
+/** The reference preview (a note, a message, a source) loads the first time one is opened. */
+function RefPreviewSlot() {
+  const cur = useCurrentRef();
+  return cur ? (
+    <Suspense fallback={null}>
+      <RefPreviewSlot />
+    </Suspense>
+  ) : null;
+}
 
 function Mark({ size = 40 }: { size?: number }) {
   return (
@@ -212,7 +223,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <TaskSheetHost />
         </Suspense>
       ) : null}
-      <RefPreviewHost />
+      <RefPreviewSlot />
       <UpdateToast />
       <OverlayHost />
     </div>
