@@ -106,6 +106,16 @@ export function subscribe<T>(topic: Topic, f: (data: T) => void): () => void {
   };
 }
 
+/** Follow the connection state (called at once with the current one). */
+export function onStatus(f: (s: LiveStatus) => void): () => void {
+  start();
+  statusSubs.add(f);
+  f(status);
+  return () => {
+    statusSubs.delete(f);
+  };
+}
+
 export function liveStatus(): LiveStatus {
   return status;
 }

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { subscribe, useLiveStatus } from "./liveStream";
 
 /** One thing that waits for the owner (GET /api/needs-me). */
 export type NeedsItem = {
@@ -52,28 +51,27 @@ export function dropNeedsItem(key: string) {
   subs.forEach((f) => f(state!));
 }
 
-// Pushed by the tab's live stream (liveStream.ts) whenever it changes.
+// Pushed by the tab's live stream (liveStream.ts) whenever it changes; polled only while it is
+// down. Imported on demand, so the installed app's first load (/m budget) does not carry it.
 let streamed = false;
+let streamDown = false;
 function fromStream() {
   if (streamed) return;
   streamed = true;
-  subscribe<NeedsMe>("needs", (s) => {
-    state = s;
-    subs.forEach((f) => f(s));
+  void import("./liveStream").then((live) => {
+    live.subscribe<NeedsMe>("needs", (s) => {
+      state = s;
+      subs.forEach((f) => f(s));
+    });
+    live.onStatus((st) => (streamDown = st === "down"));
   });
 }
 
 export function useNeedsMe(): NeedsMe | null {
   const [s, setS] = useState<NeedsMe | null>(state);
-  const live = useLiveStatus();
-  useEffect(() => {
-    // Polled only while the stream is down.
-    if (live !== "down") return;
-    const t = setInterval(() => document.visibilityState === "visible" && refreshNeedsMe(), 30000);
-    return () => clearInterval(t);
-  }, [live]);
   useEffect(() => {
     fromStream();
+    const poll = setInterval(() => streamDown && document.visibilityState === "visible" && refreshNeedsMe(), 30000);
     subs.add(setS);
     // The stream's first snapshot normally comes within a second; HTTP only if it does not.
     const first = state ? undefined : window.setTimeout(() => !state && refreshNeedsMe(), 2500);
@@ -83,6 +81,7 @@ export function useNeedsMe(): NeedsMe | null {
     window.addEventListener("pos:needs-me", on);
     return () => {
       subs.delete(setS);
+      clearInterval(poll);
       window.clearTimeout(first);
       window.removeEventListener("pos:approvals", on);
       window.removeEventListener("pos:needs-me", on);
