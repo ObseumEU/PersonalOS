@@ -6,6 +6,7 @@ import { ActorChip } from "../components/agents/bits";
 import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
+import { useLiveReload } from "../liveStream";
 
 function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
@@ -91,9 +92,8 @@ export default function Approvals() {
   const load = useCallback(() => agentsApi.approvals(all ? "all" : "pending").then(setItems), [all]);
   useEffect(() => {
     load();
-    const h = setInterval(load, 15000);
-    return () => clearInterval(h);
   }, [load]);
+  useLiveReload(["approval"], load);
 
   return (
     <div className="flex min-w-0 flex-col gap-5">

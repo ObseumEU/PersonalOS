@@ -4,6 +4,7 @@ import { api } from "../api";
 import { toast } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
 import { ago, label, plural, t } from "../i18n";
+import { useLiveReload } from "../liveStream";
 
 type Finding = { kind: string; file: string; line: number | null; detail: string };
 type Publication = {
@@ -146,9 +147,8 @@ export default function Tools() {
   }, []);
   useEffect(() => {
     load();
-    const h = setInterval(load, 30000);
-    return () => clearInterval(h);
   }, [load]);
+  useLiveReload(["tool", "tool_publication"], load);
   const decide = (p: Publication, approve: boolean) =>
     api(`/api/tools/publications/${p.id}/decide`, { method: "POST", body: JSON.stringify({ approve }) }).then(
       () => {

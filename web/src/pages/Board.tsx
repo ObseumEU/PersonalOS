@@ -1,11 +1,12 @@
 import { Lock } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { approvalHref, taskHref } from "../taskSheet";
 import { type BoardCard, type BoardRow, agentsApi } from "../agentsApi";
 import { ActorChip, StatusDot } from "../components/agents/bits";
 import { PageHeader, Panel } from "../components/ui";
 import { t } from "../i18n";
+import { useLiveReload } from "../liveStream";
 
 const COLUMNS: (keyof Omit<BoardRow, "actor">)[] = ["queued", "working", "needs_you", "done_today"];
 
@@ -35,12 +36,13 @@ function Card({ c, col }: { c: BoardCard; col: string }) {
 
 export default function Board() {
   const [rows, setRows] = useState<BoardRow[] | null>(null);
-  useEffect(() => {
-    const load = () => agentsApi.board().then(setRows);
-    load();
-    const h = setInterval(load, 10000);
-    return () => clearInterval(h);
+  const load = useCallback(() => {
+    agentsApi.board().then(setRows);
   }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  useLiveReload(["task", "run"], load, { fallbackMs: 15_000 });
 
   return (
     <div className="flex flex-col gap-5">

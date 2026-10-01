@@ -7,6 +7,7 @@ import { LOCALE, ago, fmtTime, t } from "../i18n";
 import { markdownSnippet } from "../markdownText";
 import { confirmDialog, toast } from "./overlay";
 import { Panel } from "./ui";
+import { useLiveReload } from "../liveStream";
 
 export type Schedule = {
   id: number;
@@ -247,9 +248,8 @@ export function SchedulesPanel({
   }, [actor]);
   useEffect(() => {
     load();
-    const h = setInterval(load, 20000);
-    return () => clearInterval(h);
   }, [load]);
+  useLiveReload(["schedule", "run"], load, { safetyMs: 60_000 });
   const personal = items.filter((s) => s.visibility === "personal");
   const team = items.filter((s) => s.visibility === "team");
   const header = (
