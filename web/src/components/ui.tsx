@@ -36,15 +36,13 @@ export function Panel({
   );
 }
 
-export const MOCK_TITLE = t("misc.mock_title");
-
 /**
  * Small red dot on anything that is mock (sample data, unwired control, planned
  * screen). Real, working parts carry no dot. The list lives in docs/MOCK-STATUS.md;
  * remove the dot there and here when the part is wired to real data.
  */
 export function MockDot({ why, className = "" }: { why?: string; className?: string }) {
-  const label = why ? `${t("misc.mock_title")}: ${why}` : MOCK_TITLE;
+  const label = why ? `${t("misc.mock_title")}: ${why}` : t("misc.mock_title");
   return (
     <span
       role="img"

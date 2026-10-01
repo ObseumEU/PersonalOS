@@ -197,6 +197,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import api_reports
 
     app.include_router(api_reports.router)  # weekly reports and goals (pos.weekly, pos.goals)
+    from . import api_owner_report
+
+    app.include_router(api_owner_report.router)  # the owner's report on a hand-in (pos.owner_report)
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
 

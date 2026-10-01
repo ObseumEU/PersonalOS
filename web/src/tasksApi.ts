@@ -223,7 +223,11 @@ export const tasksApi = {
   related: (ref: string) => api<Related>(`/api/tasks/${ref}/related`),
 };
 
-export const PRIORITY_LABEL: Record<number, string> = { 1: t("work.priority.1"), 2: t("work.priority.2"), 3: t("work.priority.3") };
+// Read when shown, not when this module loads: a module-level t() ran before the dictionary was
+// registered and the panel showed the raw key "work.priority.2" (web/tests/i18n.test.ts guards it).
+export const PRIORITY_LABEL: Record<number, string> = new Proxy({} as Record<number, string>, {
+  get: (_, k) => t(`work.priority.${String(k)}`),
+});
 
 export function dueLabel(task: Pick<Task, "do_date" | "deadline" | "follow_up" | "status">): { text: string; urgent: boolean } {
   const today = new Date().toISOString().slice(0, 10);
@@ -241,7 +245,6 @@ export function dueLabel(task: Pick<Task, "do_date" | "deadline" | "follow_up" |
   return { text: fmt(d), urgent: d <= today };
 }
 
-export const NO_DESCRIPTION = t("work.no_description");
 
 /** A short plain-text preview of a task's description (markdown marks and wrappers stripped). */
 export function descriptionPreview(notes: string | null | undefined, max = 180): string {

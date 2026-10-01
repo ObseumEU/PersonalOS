@@ -1,13 +1,35 @@
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { RefChip } from "../components/RefPreview";
 import { t } from "../i18n/core";
+import { findRefs } from "../refs";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 
 /*
  * Markdown for a chat bubble, compact: paragraphs, lists, headings (as bold lines), quotes,
- * code (inline and fenced), bold, italic, links, @mentions, T-123 (opens the task panel) and
- * the chips for tool calls written as text. Small on purpose: it ships in the /m bundle.
+ * code (inline and fenced), bold, italic, links, @mentions, T-123 (opens the task panel), the chips
+ * for tool calls written as text, and references (a note, a message, a knowledge-base passage, a file:
+ * refs.ts) as chips that open a preview in place. Small on purpose: it ships in the /m bundle.
  */
+
+/** Plain text with its references (not tasks: those are linked below) as preview chips. */
+function withRefs(s: string, key: string, tone: Tone): ReactNode[] {
+  const refs = findRefs(s).filter((r) => r.kind !== "task");
+  if (!refs.length) return [<Fragment key={key}>{s}</Fragment>];
+  const out: ReactNode[] = [];
+  let at = 0;
+  refs.forEach((r, i) => {
+    if (r.start < at) {
+      out.push(<RefChip key={`${key}-r${i}`} kind={r.kind} id={r.id} label={r.id} tone={tone} />);
+      return;
+    }
+    if (r.start > at) out.push(<Fragment key={`${key}-t${i}`}>{s.slice(at, r.start)}</Fragment>);
+    out.push(<RefChip key={`${key}-r${i}`} kind={r.kind} id={r.id} label={r.kind === "chunk" ? undefined : r.raw.replace(/\*\*/g, "")} tone={tone} />);
+    at = r.end;
+  });
+  if (at < s.length) out.push(<Fragment key={`${key}-end`}>{s.slice(at)}</Fragment>);
+  return out;
+}
 
 function escapeRe(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -44,8 +66,14 @@ function useInline(names: string[], tone: Tone) {
   const render = (s: string, key: string): ReactNode[] =>
     s.split(re).map((part, i) => {
       const k = `${key}-${i}`;
-      if (i % 2 === 0) return part ? <Fragment key={k}>{part}</Fragment> : null;
+      if (i % 2 === 0) return part ? <Fragment key={k}>{withRefs(part, k, tone)}</Fragment> : null;
       if (part.startsWith("[nástroj")) return <ToolChip key={k} label={part.slice(1, -1)} />;
+      if (part.startsWith("`")) {
+        const inner = part.slice(1, -1).trim();
+        const refs = findRefs(inner).filter((r) => r.kind === "chunk");
+        if (refs.length && !inner.replace(/[\w.-]+:c\d+(?:\/c\d+)*/g, "").replace(/[\s,;]+/g, ""))
+          return <Fragment key={k}>{refs.map((r, j) => <RefChip key={`${k}-${j}`} kind="chunk" id={r.id} tone={tone} />)}</Fragment>;
+      }
       if (part.startsWith("`")) return <code key={k} className={`rounded-[4px] px-1 font-mono text-[0.86em] ${codeCls}`}>{part.slice(1, -1)}</code>;
       if (part.startsWith("**") || part.startsWith("__")) return <strong key={k} className="font-semibold">{render(part.slice(2, -2), k)}</strong>;
       if (part.startsWith("*") || part.startsWith("_")) return <em key={k}>{part.slice(1, -1)}</em>;

@@ -81,11 +81,16 @@ def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
 
 
 def _reviews(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:
+    from . import owner_report
+
     out = []
-    for t in tasks.list_tasks(conn, ctx, "to_review", limit=100):
+    rows = tasks.list_tasks(conn, ctx, "to_review", limit=100)
+    takeaways = owner_report.takeaways_for(conn, [t["id"] for t in rows], ctx.actor_id)
+    for t in rows:
         out.append({
             "kind": "review", "key": f"review:{t['id']}", "id": t["id"], "ref": t["ref"], "title": t["title"],
-            "detail": (t.get("progress_note") or "")[:240], "from_name": t.get("assignee_name"),
+            "detail": (takeaways.get(t["id"]) or t.get("progress_note") or "")[:240],
+            "report_url": f"/report/{t['ref']}", "from_name": t.get("assignee_name"),
             "from_kind": t.get("assignee_type"), "at": t["updated_at"],
             "link": f"/tasks?view=review&task={t['ref']}",
         })

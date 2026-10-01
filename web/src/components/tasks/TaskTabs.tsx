@@ -212,8 +212,9 @@ function Steps({ task, onChange }: { task: Task; onChange: () => void }) {
   );
 }
 
-export function Overview({ task, onSave, onChange }: { task: Task; onSave: (c: Record<string, unknown>) => void; onChange: () => void }) {
-  const result = !!task.progress_note?.trim() && (task.status === "review" || task.status === "done");
+export function Overview({ task, onSave, onChange, hideResult = false }: { task: Task; onSave: (c: Record<string, unknown>) => void; onChange: () => void; hideResult?: boolean }) {
+  // hideResult: the owner's report above shows the result (with the raw text in its details).
+  const result = !hideResult && !!task.progress_note?.trim() && (task.status === "review" || task.status === "done");
   return (
     <div className="flex flex-col gap-7">
       {result && (
@@ -228,7 +229,7 @@ export function Overview({ task, onSave, onChange }: { task: Task; onSave: (c: R
           </Collapsible>
         </section>
       )}
-      {!result && task.status === "working" && task.progress_note && (
+      {!result && !hideResult && task.status === "working" && task.progress_note && (
         <p className="rounded-lg border border-cyan-400/30 bg-cyan-400/[0.04] px-4 py-3 text-[14px]">
           <span className="text-cyan-200">{t("tk.now")} </span>
           <ToolText text={task.progress_note} />

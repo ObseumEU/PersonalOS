@@ -8,6 +8,7 @@ import { useLive } from "../liveStream";
 import { useNeedsMe } from "../needsMeApi";
 import { KNOWLEDGE_TABS, SECTIONS, SETTINGS, SETTINGS_ROOT, type SubSection, sectionOf } from "../sections";
 import { OverlayHost } from "./overlay";
+import { RefPreviewHost } from "./RefPreview";
 
 // The task panel (and the Markdown it renders) loads the first time a task or approval is opened.
 const TaskSheetHost = lazy(() => import("./tasks/TaskSheet"));
@@ -281,6 +282,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
       </nav>
       {more && <MoreSheet onClose={() => setMore(false)} onLogout={onLogout} />}
       <TaskSheetSlot />
+      <RefPreviewHost />
       <OverlayHost />
     </div>
   );
