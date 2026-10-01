@@ -409,6 +409,10 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
 
             if owner_notice.notify(conn, tid, ctx.actor_id, "blocked", res.error or ""):
                 conn.commit()
+        from . import head_alerts
+
+        if head_alerts.run_ended(conn, ctx.actor_id, tid, "blocked", res.error or ""):
+            conn.commit()
         raise HTTPException(409, res.error)
     # A run on a chat answer: the agent shows as typing there (no tool call, no tokens).
     chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)
@@ -515,6 +519,10 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
             out["requeued"] = True
     if body.status == "error" and row["task_id"] and not out.get("requeued"):
         back_off(conn, row["task_id"])  # a failed task is not retried at once
+        if row["status"] == "error":  # not when the kill switch or a person stopped it meanwhile
+            from . import head_alerts
+
+            head_alerts.run_ended(conn, ctx.actor_id, row["task_id"], "error", body.detail)
         conn.commit()
     if body.status == "error" and not out.get("requeued"):
         from . import learning
