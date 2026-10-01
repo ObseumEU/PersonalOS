@@ -144,6 +144,23 @@ def test_runbook_restarts_allowlisted_once_per_cooldown(sen, cfg, clock):
     assert len(sen.docker.restarted) == 2
 
 
+def test_runbook_starts_deployer_stopped_by_its_deploy(sen, cfg):
+    s, inc = sen.s, sen.inc
+    down = dict(service="personalos", kind="container_down", key="personalos-deployer-1", severity="high",
+                title="personalos-deployer-1 is exited (exit 143)", container="personalos-deployer-1")
+    iid, _ = inc.observe(Obs(**down, detail={"status": "exited", "exit_code": 143}))
+    assert runbook.maybe_restart(s, inc, cfg, iid, sen.docker) == "restarted"
+    assert sen.docker.restarted == ["personalos-deployer-1"]
+    inc.resolve(iid, "test")
+    # a crash (exit 1) is not started blindly; nor is a container off the start list
+    jid, _ = inc.observe(Obs(**down, detail={"status": "exited", "exit_code": 1}))
+    assert runbook.maybe_restart(s, inc, cfg, jid, sen.docker) == "not_remediable"
+    kid, _ = inc.observe(Obs(**{**down, "key": "pg", "container": "personalos-postgres-1"},
+                             detail={"status": "exited", "exit_code": 143}))
+    assert runbook.maybe_restart(s, inc, cfg, kid, sen.docker) == "not_remediable"
+    assert sen.docker.restarted == ["personalos-deployer-1"]
+
+
 def test_restart_that_fixes_it_never_reaches_personalos(sen, clock):
     check = {"name": "nexus-api", "service": "nexus", "url": "http://x", "restart": "nexus-process-pilot-api-1"}
     for _ in range(3):

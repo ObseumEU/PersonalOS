@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily PersonalOS host backup: %i, with catch-up after downtime (T-379)
+
+[Timer]
+OnCalendar=*-*-* 10:00
+# A run missed while the host was down or frozen starts right after boot.
+Persistent=true
+# Also after boot: covers a first boot with no timer stamp yet; the script
+# skips when the newest backup is fresh.
+OnBootSec=15min
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

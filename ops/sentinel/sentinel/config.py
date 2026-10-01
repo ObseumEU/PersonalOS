@@ -54,6 +54,8 @@ DEFAULTS: dict = {
         # stateless containers only: never databases, queues or anything holding data in memory
         "restart_allowlist": ["personalos-web-1", "personalos-api-1", "nexus-process-pilot-web-1",
                               "nexus-process-pilot-api-1", "kb-web-1", "litellm", "langfuse-web"],
+        # container_down with exit 143/137 (stopped from outside, e.g. by its own deploy, T-462): start again
+        "start_allowlist": ["personalos-deployer-1"],
         "cooldown_min": 30,
         "grace_s": 150,
     },
