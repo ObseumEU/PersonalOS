@@ -125,3 +125,37 @@ def test_agents_ask_the_knowledge_agent_cheaply(monkeypatch, tmp_path):
     a2a.ask(conn, me, "Knowledge agent", "Q?", effort=4)
     assert sent == [{"effort": 2}, {"effort": 4}]
     conn.close()
+
+
+def test_subsystems_never_waits_on_the_probes_once_cached(monkeypatch):
+    """T-464 (p95 alert): a stale cache is served at once and refreshed in the background."""
+    import time
+
+    from pos import engines
+
+    calls = []
+
+    def slow_probe(url):
+        calls.append(url)
+        time.sleep(0.3)
+        return True, 300, {"documents": 1, "chunks": 2}
+
+    monkeypatch.setattr(knowledge, "_probe", slow_probe)
+    monkeypatch.setattr(engines, "status", lambda conn: {"order": ["codex"], "codex": {"can_run": True},
+                                                         "claude": {"paused_until": None}})
+    monkeypatch.setenv("POS_NEXUS_URL", "http://nexus")
+    monkeypatch.setattr(knowledge, "_sub_cache", {})
+
+    t = time.monotonic()
+    first = knowledge.subsystems(None)  # cold: knowlage (2 probes) and Nexus run side by side
+    assert time.monotonic() - t < 0.8
+    assert [s["name"] for s in first] == ["Knowledge base", "Nexus", "Agent runtime"]
+
+    knowledge._sub_cache["v"] = (time.monotonic() - knowledge.SUB_FRESH_S - 1, first[:2])  # stale
+    n = len(calls)
+    t = time.monotonic()
+    again = knowledge.subsystems(None)
+    assert time.monotonic() - t < 0.1 and again[:2] == first[:2]
+    assert knowledge._sub_refresh.acquire(timeout=3)  # the background refresh finished
+    knowledge._sub_refresh.release()
+    assert len(calls) == n + 3 and time.monotonic() - knowledge._sub_cache["v"][0] < 1
