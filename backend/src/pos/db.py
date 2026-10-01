@@ -734,12 +734,22 @@ MIGRATIONS: list[str] = [
 ]
 
 
+BUSY_TIMEOUT_MS = 10_000  # a writer waits this long for the lock before "database is locked"
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
+    """One connection with the platform's settings: foreign keys enforced (the schema's
+    REFERENCES), WAL (readers never block the writer), synchronous=NORMAL (safe with WAL:
+    a power cut can lose the last commits, never corrupt the file; no fsync per commit), and
+    a 10 s busy timeout so a write that meets another one waits instead of failing (the
+    worker heartbeat 500 of run 143)."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 

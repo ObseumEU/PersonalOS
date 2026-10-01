@@ -548,7 +548,7 @@ def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float
                           detail={"used": used_, "limit": lim, "signals": signals(conn, agent_id)})
     audit.log(conn, Ctx(agent_id, via="system"), "access_limit_hit", "actor", agent_id, metric=metric,
               used=used_, limit=lim, request=rid)
-    _wake_manager(conn, f"#{rid}: {name} narazil na limit {METRICS[metric]}")
+    _wake_manager(conn, f"#{rid}: {name} narazil na limit {METRICS[metric]}", subject=f"{name} · limit {metric}")
     return rid
 
 
@@ -933,7 +933,8 @@ def pause_for_spike(conn: sqlite3.Connection, agent_id: int, detail: dict) -> in
     _dm_ceo(conn, f"Pozastavil jsem {name}: {why} Prověřuju to (žádost #{rid}); pokud to byl omyl, "
                   "pustím ho zpátky sám. Majiteli to předej, jen pokud jde o peníze, které vadí.")
     if agent_id != am:
-        _wake_manager(conn, f"#{rid}: {name} pozastaven kvůli skoku ve spotřebě, prověř to")
+        _wake_manager(conn, f"#{rid}: {name} pozastaven kvůli skoku ve spotřebě, prověř to",
+                      subject=f"{name} · skok ve spotřebě")
     return rid
 
 
@@ -1310,20 +1311,40 @@ def _manager_task(conn: sqlite3.Connection, title: str, notes: str, done: str) -
     return t["ref"]
 
 
-def _wake_manager(conn: sqlite3.Connection, line: str) -> None:
-    """One open queue task at a time; a new request while it waits only adds a line."""
-    from .. import comments
+QUEUE_TITLE = "Žádosti o přístup"
+QUEUE_REOPEN_H = 24  # the same agent and kind again within this long reopens its task, no new one
+
+
+def _wake_manager(conn: sqlite3.Connection, line: str, subject: str | None = None) -> None:
+    """One open queue task at a time; a new request while it waits only adds a line. With none
+    open, the same agent and kind (`subject`: "<agent> · <what>") closed within QUEUE_REOPEN_H
+    is reopened with the line instead of a new task (prod 2026-09-26..28: 13 tasks "Žádosti o
+    přístup", the same agents paused for a spike again and again)."""
+    from .. import comments, tasks, versioning, wake
 
     am = manager_id(conn)
     if am is None:
         return
     open_ = conn.execute("SELECT id FROM tasks WHERE assignee_id = ? AND source = 'access' AND status = 'next' "
-                         "AND archived_at IS NULL AND title LIKE 'Žádosti o přístup%' ORDER BY id LIMIT 1",
-                         (am,)).fetchone()
+                         "AND archived_at IS NULL AND title LIKE ? ORDER BY id LIMIT 1",
+                         (am, QUEUE_TITLE + "%")).fetchone()
     if open_:
         comments.log(conn, Ctx(am, via="system"), open_["id"], f"Nová: {line}", "system")
         return
-    _manager_task(conn, "Žádosti o přístup", (
+    title = f"{QUEUE_TITLE}: {subject}" if subject else QUEUE_TITLE
+    since = _iso(utcnow() - timedelta(hours=QUEUE_REOPEN_H))
+    recent = conn.execute("SELECT id FROM tasks WHERE assignee_id = ? AND source = 'access' AND title = ? "
+                          "AND archived_at IS NULL AND status != 'next' AND updated_at >= ? ORDER BY id DESC LIMIT 1",
+                          (am, title[:200], since)).fetchone()
+    if recent:
+        ctx = Ctx(am, via="system")
+        versioning.update(conn, ctx, tasks.ENTITY, recent["id"], {"status": "next", "completed_at": None},
+                          action="reopen")
+        comments.log(conn, ctx, recent["id"], f"Znovu (do {QUEUE_REOPEN_H} h): {line}", "system")
+        audit.log(conn, ctx, "access_queue_reopen", "task", recent["id"], line=line[:200])
+        wake.wake(am)
+        return
+    _manager_task(conn, title, (
         "Purpose: decide the open access requests and budget limit hits.\n"
         f"Source: {line}.\n\n"
         "1. `access_review_requests` for the open ones.\n"

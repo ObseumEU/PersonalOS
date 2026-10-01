@@ -134,6 +134,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     if visibility == "personal" and assignee_id != ctx.actor_id:
         raise tasks.Invalid("a personal schedule is assigned to its creator; use visibility 'team' for others")
     _check_assign(conn, ctx.actor_id, assignee_id)
+    twin = existing(conn, name, schedule, assignee_id)
+    if twin is not None:  # idempotent: the same routine twice is one routine (two "Daily standup", 2026-09)
+        return {**get(conn, twin), "existing": True}
 
     me = actors.get(conn, ctx.actor_id)
     if me["kind"] != "human":
@@ -153,6 +156,27 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         "created_at": now, "updated_at": now,
     })
     return get(conn, row["id"])
+
+
+def existing(conn: sqlite3.Connection, name: str, schedule: str, assignee_id: int,
+             exclude: int | None = None) -> int | None:
+    """The live (not archived) schedule with this name, schedule and assignee, if any: a
+    schedule is unique by (name, schedule, assignee); names compare without case and spaces."""
+    row = conn.execute("""SELECT id FROM schedules WHERE archived_at IS NULL AND assignee_id = ?
+                          AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND LOWER(TRIM(schedule)) = LOWER(TRIM(?))
+                          AND id IS NOT ? ORDER BY id LIMIT 1""",
+                       (assignee_id, name, schedule, exclude)).fetchone()
+    return row["id"] if row else None
+
+
+def duplicates(conn: sqlite3.Connection) -> list[tuple[int, list[int]]]:
+    """Live schedules that repeat an older one (same name, schedule, assignee): (kept id, [the repeats])."""
+    groups: dict[tuple, list[int]] = {}
+    for r in conn.execute("SELECT id, name, schedule, assignee_id FROM schedules WHERE archived_at IS NULL "
+                          "ORDER BY id"):
+        k = (r["name"].strip().lower(), r["schedule"].strip().lower(), r["assignee_id"])
+        groups.setdefault(k, []).append(r["id"])
+    return [(ids[0], ids[1:]) for ids in groups.values() if len(ids) > 1]
 
 
 def _facilitator_id(conn: sqlite3.Connection, ref) -> int:
@@ -224,6 +248,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, schedule_id: int, changes: dict) 
         sets["template"] = json.dumps(template, ensure_ascii=False)
     if "name" in changes and changes["name"]:
         sets["name"] = changes["name"]
+    if ("name" in sets or "schedule" in sets) and existing(
+            conn, sets.get("name", s["name"]), sets.get("schedule", s["schedule"]), s["assignee_id"],
+            exclude=schedule_id) is not None:
+        raise tasks.Invalid("the same routine (name, schedule, assignee) already exists; change or archive that one")
     if sets:
         versioning.update(conn, ctx, ENTITY, schedule_id, sets)
     return get(conn, schedule_id)
