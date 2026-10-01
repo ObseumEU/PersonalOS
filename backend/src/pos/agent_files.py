@@ -207,10 +207,10 @@ def share(conn: sqlite3.Connection, ctx: Ctx, file_ids: list[int], *, to: str | 
         msg = chat.send(conn, ctx, channel_id, text, reply_to=reply_to, attachments=atts)
     except chat.ChatError as e:
         raise Invalid(str(e)) from e
-    if task_id:
+    if task_id and not msg.get("duplicate"):
         from . import comments
 
         names = ", ".join(a["name"] for a in atts if a["type"] == "file")
         comments.add(conn, ctx, task_id, f"📎 Sdíleno v chatu: {names}")
-    return {"message_id": msg["id"], "channel_id": channel_id,
+    return {"message_id": msg["id"], "channel_id": channel_id, **({"already_shared": True} if msg.get("duplicate") else {}),
             "files": [{k: a.get(k) for k in ("id", "name", "preview", "version")} for a in atts if a["type"] == "file"]}
