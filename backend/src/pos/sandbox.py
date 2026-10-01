@@ -96,7 +96,8 @@ LAN = ("192.168.1.1", "192.168.1.108", "192.168.1.186", "10.66.66.1", "172.17.0.
 CHECKS = [
     ("no PersonalOS secret in the environment",
      "env | cut -d= -f1 | sort | tr '\\n' ' '",
-     lambda r: not re.search(r"TOKEN|SECRET|PASSWORD|_KEY\b|OAUTH|VAPID|CLAUDE|OPENAI", r["stdout"])),
+     # GPG_KEY is the python image's public release-signing key id, not a secret.
+     lambda r: not re.search(r"TOKEN|SECRET|PASSWORD|(?<!GPG)_KEY\b|OAUTH|VAPID|CLAUDE|OPENAI", r["stdout"])),
     ("no Docker socket, no host paths mounted",
      "test -e /var/run/docker.sock && echo SOCK; awk '{print $2}' /proc/mounts | grep -vE "
      "'^/(proc|sys|dev|tmp|workspace|shared|etc/(hosts|hostname|resolv.conf))?(/|$)' | head -5",
