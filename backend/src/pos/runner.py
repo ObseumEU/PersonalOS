@@ -43,6 +43,10 @@ class RunRequest:
     extra_args: list[str] = field(default_factory=list)
     engine: str = "codex"  # codex | claude (outside workers may run either)
     model: str | None = None
+    # Claude only: a lean system prompt instead of Claude Code's own (a much faster first token for
+    # a tool-less call), and the effort level (low for editing, not reasoning).
+    system_prompt: str | None = None
+    effort: str | None = None
 
 
 @dataclass
@@ -101,6 +105,10 @@ def _claude_args(req: "RunRequest", binary: str) -> list[str]:
             "--strict-mcp-config", "--no-session-persistence", "--restricted"]
     if req.model:
         args += ["--model", req.model]
+    if req.system_prompt:
+        args += ["--system-prompt", req.system_prompt]
+    if req.effort:
+        args += ["--effort", req.effort]
     if req.output_schema:
         args += ["--json-schema", json.dumps(req.output_schema)]
     return args

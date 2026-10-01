@@ -220,7 +220,7 @@ def test_api_ref_preview(tmp_path):
 # ------------------------------------------------------------------ the builder
 
 def _no_llm(monkeypatch):
-    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint: None)
+    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint, **kw: None)
 
 
 def test_example_becomes_a_takeaway_first_report_without_a_model(tmp_path, monkeypatch):
@@ -248,7 +248,7 @@ def test_example_becomes_a_takeaway_first_report_without_a_model(tmp_path, monke
     assert d["original"].startswith("## Hormozi kontrola")
     # Cached per task version: no second build until the result changes.
     calls = []
-    monkeypatch.setattr(owner_report, "build", lambda *a: calls.append(1) or (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(owner_report, "build", lambda *a, **kw: calls.append(1) or (_ for _ in ()).throw(AssertionError))
     assert owner_report.current(conn, ex["owner"], ex["task"])["takeaway"] == view["takeaway"]
     assert calls == []
 
@@ -269,7 +269,7 @@ def test_the_builder_never_keeps_what_the_material_does_not_say(tmp_path, monkey
              "evidence": "když fáze 1 neušetří dohodnutý počet hodin, dopracujeme bez příplatku"},
         ],
     }
-    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint: (invented, 7))
+    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint, **kw: (invented, 7))
     view = owner_report.current(conn, ex["owner"], ex["task"])
     # Only the decision quoted from the material stays; everything invented is dropped and listed.
     # The agent's other proposals the model did not cover are added in the agent's own words.
@@ -302,7 +302,7 @@ def test_a_grounded_model_answer_is_kept(tmp_path, monkeypatch):
                        "recommendation": "Ano, silnější podíl", "why": "15 % + 10 % může být málo.",
                        "evidence": "15 % + 10 % může být málo"}],
     }
-    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint: (good, 7))
+    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint, **kw: (good, 7))
     view = owner_report.current(conn, ex["owner"], ex["task"])
     assert view["takeaway"] == good["takeaway"] and view["takeaway_source"] == "llm"
     assert view["next"] == good["next"] and view["details"]["summary"] == good["summary"]
@@ -488,7 +488,53 @@ def test_no_proposal_is_lost_when_the_model_fills_all_three_slots(tmp_path, monk
         dec("Garance: dopracujeme bez příplatku?", "neušetří dohodnutý počet hodin, dopracujeme bez příplatku"),
         dec("Bonusy: školení týmu kanceláře a 30 dní podpory?", "školení týmu kanceláře 1–2 h"),
         dec("Odměna partnerů: silnější podíl z první zakázky?", "dát jim silnější podíl z první zakázky")]}
-    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint: (out, 7))
+    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint, **kw: (out, 7))
     qs = [d["question"] for d in owner_report.current(conn, ex["owner"], ex["task"])["decisions"]]
     assert len(qs) == 3 and qs[0].startswith("Garance") and qs[1].startswith("Bonusy")
     assert all(w in qs[2] for w in ("Nedostatek", "Název", "Odměna partnerů"))
+
+
+# ------------------------------------------------------------------ the model call: lean, fast, cached
+
+def test_the_model_call_is_lean_sonnet_60s_cached_and_proofread(tmp_path, monkeypatch):
+    """The takeaway is owner-facing: Sonnet, a lean system prompt (no Claude Code prompt, no tools, no
+    schema turn), low effort, 60 s, a Czech proofreading instruction; one call per task version."""
+    from pos import runner
+
+    conn = _conn(tmp_path)
+    ex = seed_example(conn)
+    seen = []
+
+    def fake_run(conn_, req):
+        seen.append(req)
+        return runner.RunResult(99, "ok", output='```json\n{"takeaway": "Kontrola je hotová.", "decisions": [], '
+                                                 '"next": "Pokračujeme."}\n```')
+
+    monkeypatch.setattr(runner, "available", lambda engine="codex": True)
+    monkeypatch.setattr(runner, "run", fake_run)
+    view = owner_report.current(conn, ex["owner"], ex["task"])
+    assert view["takeaway_source"] == "llm" and len(seen) == 1
+    req = seen[0]
+    assert req.model == owner_report.MODEL == "claude-sonnet-5" and req.timeout_s == 60
+    assert req.system_prompt and req.effort == "low" and req.output_schema is None
+    assert "korektor" in req.prompt and "garantu" in req.prompt
+    assert "--system-prompt" in runner._claude_args(req, "claude") and "--tools" in runner._claude_args(req, "claude")
+    # Cached per task version: a rebuild of the same material for another viewer does not call again.
+    conn.execute("DELETE FROM task_reports")
+    owner_report.current(conn, ex["owner"], ex["task"])
+    assert len(seen) == 1
+    # An explicit rebuild asks the model again.
+    owner_report.current(conn, ex["owner"], ex["task"], rebuild=True)
+    assert len(seen) == 2
+
+
+def test_a_fallback_report_is_retried_later(tmp_path, monkeypatch):
+    conn = _conn(tmp_path)
+    ex = seed_example(conn)
+    _no_llm(monkeypatch)
+    assert owner_report.current(conn, ex["owner"], ex["task"])["takeaway_source"] == "fallback"
+    monkeypatch.setattr(owner_report, "_llm", lambda conn, task, material, hint, **kw: (
+        {"takeaway": "Kontrola podle Hormoziho je hotová.", "decisions": [], "next": ""}, 5))
+    assert owner_report.current(conn, ex["owner"], ex["task"])["takeaway_source"] == "fallback"  # not yet
+    conn.execute("UPDATE task_reports SET created_at = '2000-01-01T00:00:00+00:00'")
+    assert owner_report.current(conn, ex["owner"], ex["task"])["takeaway_source"] == "llm"
