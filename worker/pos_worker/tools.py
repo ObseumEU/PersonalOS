@@ -26,7 +26,10 @@ def tool_list(raw: str) -> list[str]:
 
 # Talking to colleagues is never narrowed away (standup answers, questions, handoffs).
 COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "chat_react", "heartbeat", "meeting_decide",
-         "meeting_info")
+         "meeting_info",
+         # Every agent's own computer and its files for people (docs/SANDBOX.md): never narrowed away either.
+         "sandbox_exec", "sandbox_run_python", "sandbox_write_file", "sandbox_read_file", "sandbox_list",
+         "sandbox_reset", "sandbox_share", "file_create", "file_update", "file_read", "file_list", "file_share")
 
 
 def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:

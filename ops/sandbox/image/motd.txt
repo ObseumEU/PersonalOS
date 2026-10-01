@@ -1,0 +1,7 @@
+PersonalOS sandbox: your own computer (root, Debian 12).
+/workspace  your files, kept across restarts (soft quota 5 GB)
+/shared     files shared with your team
+Tools: python3 (pandas, matplotlib, plotly, networkx, graphviz, openpyxl, python-docx, reportlab, ...),
+node/npm, git, curl, jq, sqlite3, ffmpeg, imagemagick, pandoc, graphviz (dot), mermaid-cli (mmdc), chromium.
+Internet works through the proxy (pip, npm, apt, curl); the local network does not.
+Share a result with sandbox_share(path).

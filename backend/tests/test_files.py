@@ -206,12 +206,14 @@ def test_retry_job_pushes_what_failed(conn, me, tmp_path, kb):
 def test_search_goes_through_knowlage_and_maps_ids(conn, me, ai, tmp_path, kb):
     a = _up(conn, me, tmp_path, b"Invoice from the plumber, 4 200 CZK", "scan-001.txt", topic="house")
     b = _up(conn, me, tmp_path, b"Invoice for Acme consulting", "acme.txt", topic="acme")
-    secret = _up(conn, me, tmp_path, b"Invoice for the clinic", "clinic.txt", visibility="private")
+    secret = _up(conn, me, tmp_path, b"Invoice for the clinic", "clinic-invoice.txt", visibility="private")
     kb_files.sync_pending(conn)
+    # A private file stays out of the shared knowledge base; its name is still matched here.
+    assert all(it["key"] != kb_files.item_key(secret["id"]) for it in kb.ingested)
     found = files.search(conn, me, "invoice")
     assert found["mode"] == "knowlage"
     # knowlage's order (best first) is kept; its workspace-prefixed ids map back to local files.
-    assert [f["id"] for f in found["files"]] == [secret["id"], b["id"], a["id"]]
+    assert [f["id"] for f in found["files"]] == [b["id"], a["id"], secret["id"]]
     assert kb.searches[-1]["sources"] == ["personalos"] and kb.searches[-1]["workspace"] == "firma"
     assert [f["id"] for f in files.search(conn, me, "invoice", topic="house")["files"]] == [a["id"]]
     assert [f["id"] for f in files.list_files(conn, me, q="plumber")] == [a["id"]]  # content, not the name
@@ -370,7 +372,7 @@ def test_files_api(client, kb):
                     data={"topic": "house", "tags": "diy"})
     assert r.status_code == 201, r.text
     f = r.json()
-    assert f["mime"] == "text/markdown" and f["preview"] == "text"
+    assert f["mime"] == "text/markdown" and f["preview"] == "markdown"
     c = client.get(f"/api/files/{f['id']}/content")
     assert c.status_code == 200 and c.text.startswith("# Plan")
     assert c.headers["content-type"].startswith("text/plain")

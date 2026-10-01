@@ -1,4 +1,4 @@
-import { Archive, Download, FileText, History, Image, RotateCcw, Search, Upload, X } from "lucide-react";
+import { Archive, Download, FileText, History, Image, Maximize2, RotateCcw, Search, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import TopicInput, { refreshTopics } from "../components/TopicInput";
@@ -6,6 +6,8 @@ import { PageHeader, Panel } from "../components/ui";
 import { type FileItem, type FileSearch, filesApi, fmtDate, fmtSize, histAction, parseTags } from "../filesApi";
 import { LOCALE, label, plural, t } from "../i18n";
 import type { Version } from "../tasksApi";
+import { FilePreview, FileViewer } from "../files/FileCard";
+import type { FileRef } from "../files/kinds";
 
 const input = "h-8 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
@@ -26,28 +28,25 @@ function TypeIcon({ file }: { file: FileItem }) {
 }
 
 function Preview({ file }: { file: FileItem }) {
-  const [text, setText] = useState<string | null>(null);
-  useEffect(() => {
-    setText(null);
-    if (file.preview === "text") filesApi.text(file.id).then((t) => setText(t.slice(0, 20000)), () => setText(""));
-  }, [file.id, file.preview]);
-  const url = filesApi.contentUrl(file.id);
-  if (file.preview === "image")
-    return <img src={url} alt={file.name} className="max-h-[320px] w-full rounded border border-line bg-bg object-contain" />;
-  if (file.preview === "pdf")
-    return <iframe src={url} title={file.name} className="h-[420px] w-full rounded border border-line bg-white" />;
-  if (file.preview === "text")
-    return (
-      <pre className="max-h-[320px] overflow-auto rounded border border-line bg-bg p-3 font-mono text-xs break-words whitespace-pre-wrap">
-        {text ?? t("act.loading")}
-      </pre>
-    );
-  return <p className="rounded border border-dashed border-line p-4 text-center text-xs text-ink-2">{t("files.no_preview")}</p>;
+  const [open, setOpen] = useState<FileRef | null>(null);
+  if (file.preview === "download") return <p className="rounded border border-dashed border-line p-4 text-center text-xs text-ink-2">{t("files.no_preview")}</p>;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="max-h-[420px] overflow-auto rounded border border-line bg-bg p-2">
+        <FilePreview file={file} />
+      </div>
+      <button type="button" className="btn self-start" onClick={() => setOpen(file)}>
+        <Maximize2 size={14} /> {t("files.fullscreen")}
+      </button>
+      {open && <FileViewer file={open} onClose={() => setOpen(null)} />}
+    </div>
+  );
 }
 
 function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => void; onClose: () => void }) {
   const [file, setFile] = useState<FileItem | null>(null);
   const [history, setHistory] = useState<Version[] | null>(null);
+  const [viewing, setViewing] = useState<FileRef | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => filesApi.get(id).then(setFile, (e) => setError(e.message)), [id]);
   useEffect(() => {
@@ -95,8 +94,10 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
         />
         <span className="text-xs break-words text-ink-2">
           {t("files.meta", { mime: file.mime ?? "—", size: fmtSize(file.size), date: fmtDate(file.created_at) })}
+          {file.version ? ` · v${file.version}` : ""}
           {file.archived_at && <span className="text-amber-300">{t("files.archived_flag")}</span>}
         </span>
+        {file.description && <p className="text-[13px] text-ink-2">{file.description}</p>}
         <Preview file={file} />
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label={t("files.topic")} htmlFor="file-topic">
@@ -139,7 +140,9 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
         <span className="text-xs break-words text-ink-2">
           {file.kb_status === "ok"
             ? t("files.kb_ok") + (file.text_chars > 0 ? t("files.kb_chars", { n: file.text_chars.toLocaleString(LOCALE) }) : "")
-            : file.kb_status === "error"
+            : file.kb_status === "private"
+              ? t("files.kb_private")
+              : file.kb_status === "error"
               ? t("files.kb_error", { error: file.kb_error ?? t("files.kb_error_generic") })
               : t("files.kb_pending")}
         </span>
@@ -169,11 +172,25 @@ function FileDetail({ id, onChanged, onClose }: { id: number; onChanged: () => v
                 <span className="ml-auto text-ink-2">
                   {h.actor_name ?? t("files.system")} · {new Date(h.at).toLocaleString(LOCALE)}
                 </span>
+                {h.version !== file.version && (
+                  <span className="flex w-full justify-end gap-3">
+                    <button type="button" className="text-accent hover:underline" onClick={() => {
+                        const d = (h.data ?? {}) as Record<string, unknown>;
+                        setViewing({ ...file, version: h.version, name: String(d.name ?? file.name), mime: (d.mime as string | undefined) ?? file.mime });
+                      }}>
+                      {t("files.view_version")}
+                    </button>
+                    <button type="button" className="text-accent hover:underline" onClick={() => run(filesApi.restore(file.id, h.version))}>
+                      {t("files.restore_version")}
+                    </button>
+                  </span>
+                )}
               </div>
             ))}
           </div>
         )}
         {error && <p className="text-xs break-words text-red-400">{error}</p>}
+        {viewing && <FileViewer file={viewing} onClose={() => setViewing(null)} />}
       </div>
     </Panel>
   );
@@ -402,7 +419,7 @@ export default function Files() {
                   className={`flex min-w-0 flex-col gap-2 rounded border p-2 text-left ${f.id === selected ? "border-accent" : "border-line hover:border-ink-3"}`}
                 >
                   <div className="grid h-24 place-items-center overflow-hidden rounded bg-bg">
-                    {f.preview === "image" ? <img src={filesApi.contentUrl(f.id)} alt="" className="h-full w-full object-cover" /> : <TypeIcon file={f} />}
+                    {f.preview === "image" || f.preview === "svg" ? <img src={filesApi.contentUrl(f.id)} alt="" className="h-full w-full object-cover" /> : f.preview === "dot" ? <img src={`/api/files/${f.id}/render.svg`} alt="" className="h-full w-full bg-white object-contain" /> : <TypeIcon file={f} />}
                   </div>
                   <span className="truncate text-[13px]">{f.name}</span>
                   <span className="truncate text-xs text-ink-2">

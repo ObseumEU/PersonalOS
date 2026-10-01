@@ -29,12 +29,21 @@ from .tasks import Invalid
 from .visibility import DEFAULT, check_read, visible_sql
 
 ENTITY = "file"
-EDITABLE = {"name", "topic", "tags", "visibility"}
+EDITABLE = {"name", "topic", "tags", "visibility", "description"}
 CHUNK = 1024 * 1024
 MAX_EXTRACT = 200_000  # characters of text kept for search
 INLINE_IMAGES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 TEXT_EXT = {".txt": "text/plain", ".md": "text/markdown", ".markdown": "text/markdown", ".csv": "text/csv",
-            ".json": "application/json", ".log": "text/plain", ".tsv": "text/tab-separated-values"}
+            ".json": "application/json", ".log": "text/plain", ".tsv": "text/tab-separated-values",
+            # visuals (pos.file_render): diagrams and pages rendered for the reader, never served as HTML
+            ".mmd": "text/vnd.mermaid", ".mermaid": "text/vnd.mermaid", ".dot": "text/vnd.graphviz",
+            ".gv": "text/vnd.graphviz", ".html": "text/html", ".htm": "text/html"}
+VEGALITE = "application/vnd.vegalite+json"
+SVG = "image/svg+xml"
+# Source code and config show as highlighted text (the language comes from the extension).
+CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".bash", ".yaml", ".yml", ".toml", ".ini", ".conf", ".sql",
+            ".xml", ".css", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".rb", ".php", ".ps1", ".env.example",
+            ".dockerfile", ".tf", ".nginx", ".diff", ".patch"}
 OFFICE_EXT = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -80,6 +89,12 @@ def sniff_mime(head: bytes, name: str) -> str:
     if head.startswith(b"PK\x03\x04"):
         return OFFICE_EXT.get(ext, "application/zip")
     if _looks_like_text(head):
+        from .file_render import looks_like_svg
+
+        if looks_like_svg(head.decode("utf-8", errors="replace")):
+            return SVG
+        if name.lower().endswith((".vl.json", ".vegalite.json")):
+            return VEGALITE
         return TEXT_EXT.get(ext, "text/plain")
     return "application/octet-stream"
 
@@ -96,7 +111,8 @@ def _looks_like_text(head: bytes) -> bool:
 
 
 def is_text(mime: str | None) -> bool:
-    return bool(mime) and (mime.startswith("text/") or mime == "application/json")
+    return bool(mime) and (mime.startswith("text/") or mime == "application/json" or mime.endswith("+json")
+                           or mime == SVG)
 
 
 def extract_text(path: Path, mime: str) -> str:
@@ -134,18 +150,42 @@ def to_dict(row: sqlite3.Row | dict, *, with_text: bool = False) -> dict:
     if with_text:
         d["text_extract"] = text
     d.pop("path", None)  # a server detail; the API serves the bytes by id
-    d["preview"] = preview_kind(d.get("mime"))
+    d["preview"] = preview_kind(d.get("mime"), d.get("name"))
     return d
 
 
-def preview_kind(mime: str | None) -> str:
+# How the web app shows a file (docs/FILES.md, "Visuals").
+PREVIEWS = {SVG: "svg", "application/pdf": "pdf", "text/markdown": "markdown", "text/csv": "csv",
+            "text/tab-separated-values": "csv", "text/vnd.mermaid": "mermaid", "text/vnd.graphviz": "dot",
+            VEGALITE: "vegalite", "text/html": "html"}
+
+
+def preview_kind(mime: str | None, name: str | None = None) -> str:
+    """image | svg | pdf | markdown | csv | mermaid | dot | vegalite | html | code | text | download."""
     if mime in INLINE_IMAGES:
         return "image"
-    if mime == "application/pdf":
-        return "pdf"
+    if mime in PREVIEWS:
+        return PREVIEWS[mime]
     if is_text(mime):
-        return "text"
+        ext = os.path.splitext((name or "").lower())[1]
+        return "code" if ext in CODE_EXT or mime == "application/json" else "text"
     return "download"
+
+
+def version_of(conn: sqlite3.Connection, file_ids: list[int]) -> dict[int, int]:
+    """The current version number of each file (its newest history entry)."""
+    if not file_ids:
+        return {}
+    rows = conn.execute(f"SELECT entity_id, MAX(version) FROM history WHERE entity = 'file' AND entity_id IN "
+                        f"({','.join('?' * len(file_ids))}) GROUP BY entity_id", file_ids)
+    return {r[0]: r[1] for r in rows}
+
+
+def _with_versions(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
+    v = version_of(conn, [d["id"] for d in items])
+    for d in items:
+        d["version"] = v.get(d["id"], 1)
+    return items
 
 
 def _row(conn: sqlite3.Connection, ctx: Ctx, file_id: int) -> sqlite3.Row:
@@ -157,7 +197,7 @@ def _row(conn: sqlite3.Connection, ctx: Ctx, file_id: int) -> sqlite3.Row:
 
 
 def get(conn: sqlite3.Connection, ctx: Ctx, file_id: int, *, with_text: bool = False) -> dict:
-    return to_dict(_row(conn, ctx, file_id), with_text=with_text)
+    return _with_versions(conn, [to_dict(_row(conn, ctx, file_id), with_text=with_text)])[0]
 
 
 def _filtered(ctx: Ctx, topic: str | None, tag: str | None, archived: bool) -> tuple[str, list]:
@@ -178,7 +218,7 @@ def list_files(conn: sqlite3.Connection, ctx: Ctx, *, topic: str | None = None, 
         return search(conn, ctx, q, topic=topic, tag=tag, archived=archived, limit=limit)["files"]
     sql, params = _filtered(ctx, topic, tag, archived)
     rows = conn.execute(f"{sql} ORDER BY files.created_at DESC, files.id DESC LIMIT ?", [*params, limit]).fetchall()
-    return [to_dict(r) for r in rows]
+    return _with_versions(conn, [to_dict(r) for r in rows])
 
 
 def _like(word: str) -> str:
@@ -206,12 +246,17 @@ def search(conn: sqlite3.Connection, ctx: Ctx, q: str, *, topic: str | None = No
         rows = conn.execute(f"{sql} AND {cond} ORDER BY files.created_at DESC, files.id DESC LIMIT ?",
                             [*params, *map(_like, ws), limit]).fetchall()
         return {"mode": "filename", "files": [to_dict(r) for r in rows], "error": str(e)[:300]}
-    if not ids:
-        return {"mode": "knowlage", "files": []}
-    rank = {kid: i for i, kid in enumerate(ids)}
-    rows = conn.execute(f"{sql} AND files.kb_doc_id IN ({','.join('?' * len(ids))})", [*params, *ids]).fetchall()
-    rows = sorted(rows, key=lambda r: rank[r["kb_doc_id"]])[:limit]
-    return {"mode": "knowlage", "files": [to_dict(r) for r in rows]}
+    rows = []
+    if ids:
+        rank = {kid: i for i, kid in enumerate(ids)}
+        rows = conn.execute(f"{sql} AND files.kb_doc_id IN ({','.join('?' * len(ids))})", [*params, *ids]).fetchall()
+        rows = sorted(rows, key=lambda r: rank[r["kb_doc_id"]])
+    # Private files stay out of the shared knowledge base (pos.kb_files): their names are matched here.
+    cond = " AND ".join("files.name LIKE ? ESCAPE '\\'" for _ in ws)
+    seen = {r["id"] for r in rows}
+    rows += [r for r in conn.execute(f"{sql} AND files.visibility = 'private' AND {cond} ORDER BY files.id DESC LIMIT ?",
+                                     [*params, *map(_like, ws), limit]).fetchall() if r["id"] not in seen]
+    return {"mode": "knowlage", "files": _with_versions(conn, [to_dict(r) for r in rows[:limit]])}
 
 
 def tags(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:
@@ -246,16 +291,10 @@ def _existing_path(conn: sqlite3.Connection, files_dir: Path, sha: str) -> str |
 
 # ------------------------------------------------------------------ writes
 
-def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO, filename: str | None, *,
-           topic: str | None = None, tags=None, visibility: str | None = None,
-           max_bytes: int = 200 * 1024 * 1024) -> dict:
-    """Store an upload. The same content twice gives back the first file (the
-    result says `duplicate`); on disk each content is kept once."""
-    name = safe_name(filename)
-    topic_v = norm_topic(topic)
-    tag_list = norm_tags(tags)
-    vis = visibility or DEFAULT
-    check_visibility(vis)
+def _store(conn: sqlite3.Connection, files_dir: Path, stream: BinaryIO, name: str,
+           max_bytes: int) -> tuple[str, str, int, str]:
+    """Write the bytes into files_dir (each content once): (relative path, sha256, size, mime).
+    SVG is sanitised on the way in (pos.file_render), so what is stored is what is served."""
     files_dir.mkdir(parents=True, exist_ok=True)
     digest, size, head = hashlib.sha256(), 0, b""
     fd, tmp_name = tempfile.mkstemp(prefix=".upload-", dir=files_dir)
@@ -265,14 +304,53 @@ def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO
             while chunk := stream.read(CHUNK):
                 size += len(chunk)
                 if size > max_bytes:
-                    raise TooLarge(f"file is larger than {max_bytes // (1024 * 1024)} MB")
+                    raise TooLarge(f"file is larger than {_mb(max_bytes)}")
                 if len(head) < 4096:
                     head += chunk[: 4096 - len(head)]
                 digest.update(chunk)
                 out.write(chunk)
-        sha = digest.hexdigest()
         mime = sniff_mime(head, name)
+        if mime == SVG:
+            from .file_render import RenderError, sanitize_svg
 
+            try:
+                clean = sanitize_svg(tmp.read_bytes())
+            except RenderError as e:
+                raise Invalid(str(e)) from e
+            tmp.write_bytes(clean)
+            size, digest = len(clean), hashlib.sha256(clean)
+        sha = digest.hexdigest()
+        rel = _existing_path(conn, files_dir, sha)
+        if rel is None:
+            now = now_iso()
+            rel = f"{now[:4]}/{now[5:7]}/{sha[:12]}-{name}"
+            dest = resolve(files_dir, rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                os.replace(tmp, dest)
+        return rel, sha, size, mime
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _mb(n: int) -> str:
+    return f"{n / (1024 * 1024):g} MB"
+
+
+def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO, filename: str | None, *,
+           topic: str | None = None, tags=None, visibility: str | None = None, description: str | None = None,
+           max_bytes: int = 200 * 1024 * 1024, dedupe: bool = True, origin: str | None = None) -> dict:
+    """Store an upload. The same content twice gives back the first file (the result says
+    `duplicate`) unless `dedupe` is off; on disk each content is kept once."""
+    name = safe_name(filename)
+    topic_v = norm_topic(topic)
+    tag_list = norm_tags(tags)
+    vis = visibility or DEFAULT
+    check_visibility(vis)
+    rel, sha, size, mime = _store(conn, files_dir, stream, name, max_bytes)
+
+    if dedupe:
         vis_sql, vparams = visible_sql(ENTITY, ctx.actor_id)
         dup = conn.execute(f"SELECT * FROM files WHERE sha256 = ? AND {vis_sql} ORDER BY id LIMIT 1",
                            [sha, *vparams]).fetchone()
@@ -281,22 +359,6 @@ def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO
                 versioning.unarchive(conn, ctx, ENTITY, dup["id"])
             return {**get(conn, ctx, dup["id"]), "duplicate": True}
 
-        rel = _existing_path(conn, files_dir, sha)
-        if rel is None:
-            now = now_iso()
-            rel = f"{now[:4]}/{now[5:7]}/{sha[:12]}-{name}"
-            dest = resolve(files_dir, rel)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.exists():
-                tmp.unlink()
-            else:
-                os.replace(tmp, dest)
-        else:
-            tmp.unlink()
-    finally:
-        if tmp.exists():
-            tmp.unlink()
-
     me = actors.get(conn, ctx.actor_id)
     # Agents file things on behalf of the owner, as with tasks.
     owner = ctx.actor_id if me["kind"] == "human" else actors.owner_id(conn)
@@ -304,10 +366,39 @@ def upload(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, stream: BinaryIO
     row = versioning.insert(conn, ctx, ENTITY, {
         "name": name, "path": rel, "mime": mime, "size": size, "sha256": sha, "topic": topic_v,
         "tags": tags_json(tag_list), "visibility": vis, "owner_id": owner, "created_by": ctx.actor_id,
+        "description": (description or "").strip()[:500], "origin": origin,
         "text_extract": extract_text(resolve(files_dir, rel), mime), "created_at": now, "updated_at": now,
         "kb_status": "pending",  # pushed into knowlage once the upload is saved (pos.kb_files)
     })
+    if vis == "private" and me["kind"] != "human":
+        from .visibility import share
+
+        share(conn, ENTITY, row["id"], ctx.actor_id)  # the agent keeps seeing what it made for the owner
     return {**get(conn, ctx, row["id"]), "duplicate": False}
+
+
+def update_content(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, file_id: int, stream: BinaryIO, *,
+                   name: str | None = None, description: str | None = None,
+                   max_bytes: int = 200 * 1024 * 1024) -> dict:
+    """New content for a file: a new version (the earlier bytes stay on disk, so every version
+    can be viewed and restored). Who may change the file decides (visibility.check_write)."""
+    from .visibility import check_write
+
+    row = _row(conn, ctx, file_id)
+    check_write(conn, ENTITY, row, ctx.actor_id)
+    new_name = safe_name(name) if name else row["name"]
+    rel, sha, size, mime = _store(conn, files_dir, stream, new_name, max_bytes)
+    changes = {"name": new_name, "path": rel, "sha256": sha, "size": size, "mime": mime,
+               "text_extract": extract_text(resolve(files_dir, rel), mime)}
+    if description is not None:
+        changes["description"] = description.strip()[:500]
+    if row["archived_at"]:
+        changes["archived_at"] = None
+    versioning.update(conn, ctx, ENTITY, file_id, changes, action="update:content")
+    from . import kb_files
+
+    kb_files.mark_changed(conn, file_id)
+    return get(conn, ctx, file_id)
 
 
 def update(conn: sqlite3.Connection, ctx: Ctx, file_id: int, changes: dict) -> dict:
@@ -325,6 +416,8 @@ def update(conn: sqlite3.Connection, ctx: Ctx, file_id: int, changes: dict) -> d
         clean["topic"] = norm_topic(changes["topic"])
     if "tags" in changes:
         clean["tags"] = tags_json(norm_tags(changes["tags"]))
+    if "description" in changes:
+        clean["description"] = str(changes["description"] or "").strip()[:500]
     if "visibility" in changes:
         check_visibility(changes["visibility"])
         if changes["visibility"] != row["visibility"]:
@@ -333,7 +426,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, file_id: int, changes: dict) -> d
             check_visibility_change(conn, ctx, row, changes["visibility"])
         clean["visibility"] = changes["visibility"]
     versioning.update(conn, ctx, ENTITY, file_id, clean)
-    if {"name", "topic", "tags"} & set(clean):
+    if {"name", "topic", "tags", "description", "visibility"} & set(clean):
         from . import kb_files
 
         kb_files.mark_changed(conn, file_id)  # the retry job pushes the new name and labels
@@ -375,10 +468,56 @@ def history(conn: sqlite3.Connection, ctx: Ctx, file_id: int) -> list[dict]:
     return out
 
 
-def content(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, file_id: int) -> tuple[Path, dict]:
-    """Where the bytes are, for serving. Checks visibility and the path."""
+def content(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, file_id: int,
+            version: int | None = None) -> tuple[Path, dict]:
+    """Where the bytes are, for serving: the current content, or that of an earlier version
+    (a chat message shows the version that was shared). Checks visibility and the path."""
     row = _row(conn, ctx, file_id)
-    path = resolve(files_dir, row["path"])
+    data = dict(row)
+    if version is not None:
+        snap = conn.execute("SELECT data FROM history WHERE entity = 'file' AND entity_id = ? AND version = ?",
+                            (file_id, version)).fetchone()
+        if snap is None:
+            raise NotFound(f"file {file_id} v{version}")
+        old = json.loads(snap["data"])
+        data.update({k: old[k] for k in ("path", "mime", "name", "sha256", "size") if old.get(k)})
+    path = resolve(files_dir, data["path"])
     if not path.is_file():
         raise NotFound(f"file {file_id} content is missing on disk")
-    return path, to_dict(row)
+    meta = to_dict(data)
+    meta["sha256"] = data.get("sha256")
+    return path, meta
+
+
+def read_text(conn: sqlite3.Connection, ctx: Ctx, files_dir: Path, file_id: int, version: int | None = None,
+              limit: int = 200_000) -> tuple[str, dict]:
+    """A text file's content (any version), for an agent editing it."""
+    path, meta = content(conn, ctx, files_dir, file_id, version)
+    if not is_text(meta.get("mime")):
+        raise Invalid(f"file {file_id} is {meta.get('mime')}, not text: file_get gives its extracted text")
+    with path.open("rb") as f:
+        return f.read(limit * 4).decode("utf-8", errors="replace")[:limit], meta
+
+
+def attachment(f: dict, version: int | None = None) -> dict:
+    """A file as a chat message attachment: what the card shows without asking again."""
+    out = {"type": "file", "id": f["id"], "name": f["name"], "mime": f.get("mime"), "size": f.get("size"),
+           "preview": f.get("preview") or preview_kind(f.get("mime"), f.get("name")),
+           "version": version or f.get("version")}
+    if f.get("description"):
+        out["description"] = f["description"]
+    return out
+
+
+def chat_attachments(conn: sqlite3.Connection, ctx: Ctx, ids: list[int]) -> tuple[list[dict], list[str]]:
+    """Files the sender may read, as message attachments, and a line per file for the text
+    (agents read the text: they see which file to open)."""
+    ids = list(dict.fromkeys(int(i) for i in ids))
+    if len(ids) > 10:
+        raise Invalid("at most 10 attachments")
+    out, lines = [], []
+    for fid in ids:
+        f = get(conn, ctx, fid)  # NotFound / Forbidden when the sender cannot read it
+        out.append(attachment(f))
+        lines.append(f"📎 {f['name']} (soubor #{f['id']})")
+    return out, lines

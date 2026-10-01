@@ -5,7 +5,8 @@ FROM python:3.12-slim
 # The current Claude Code: older versions do not know claude-opus-5-5. The build
 # fails below the version verified with it (CLAUDE_MIN).
 ARG CLAUDE_MIN=2.1.282
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+# graphviz: DOT files agents share are drawn to SVG here (pos.file_render).
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates graphviz \
     && npm install -g @anthropic-ai/claude-code@latest \
     && rm -rf /var/lib/apt/lists/* \
     && v="$(claude --version | cut -d' ' -f1)" \

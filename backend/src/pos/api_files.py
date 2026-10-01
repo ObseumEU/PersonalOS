@@ -106,28 +106,81 @@ def get_file(file_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return files.get(conn, ctx, file_id)
 
 
+# Served as an image (inline, never as a page): raster images and sanitised SVG (pos.file_render).
+IMAGE_KINDS = ("image", "svg")
+SANDBOX_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+# An agent's HTML page (preview "html"): scripts run, but in an opaque origin (no cookies, no
+# PersonalOS API), with no network at all, framed only by PersonalOS itself.
+PAGE_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; "
+            "font-src data:; media-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; "
+            "sandbox allow-scripts")
+
+
+def _disposition(name: str, inline: bool) -> str:
+    ascii_name = "".join(ch if ch.isascii() and ch not in '"\\' else "_" for ch in name)
+    return (f"{'inline' if inline else 'attachment'}; filename=\"{ascii_name}\"; "
+            f"filename*=UTF-8''{quote(name, safe='')}")
+
+
 @router.get("/files/{file_id}/content")
-def file_content(file_id: int, download: bool = False, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx),
-                 settings: Settings = Depends(get_settings)):
-    """The bytes: inline for images, PDFs and text, a download otherwise."""
-    path, meta = files.content(conn, ctx, settings.files_dir, file_id)
+def file_content(file_id: int, download: bool = False, v: int | None = None, conn=Depends(get_db),
+                 ctx: Ctx = Depends(get_ctx), settings: Settings = Depends(get_settings)):
+    """The bytes (of version `v`, default the current one): inline for images, SVG, PDFs and
+    text of any kind (diagrams, pages and code as plain text: the app renders them), a download
+    otherwise or with ?download=1."""
+    path, meta = files.content(conn, ctx, settings.files_dir, file_id, v)
     kind = meta["preview"]
     inline = kind != "download" and not download
-    # Text of any flavour is shown as plain text, never rendered as HTML.
-    media = "text/plain; charset=utf-8" if kind == "text" else meta["mime"] or "application/octet-stream"
     if not inline:
         media = "application/octet-stream"
-    ascii_name = "".join(ch if ch.isascii() and ch not in '"\\' else "_" for ch in meta["name"])
-    headers = {
-        "Content-Disposition": f"{'inline' if inline else 'attachment'}; filename=\"{ascii_name}\"; "
-                               f"filename*=UTF-8''{quote(meta['name'], safe='')}",
-        "X-Content-Type-Options": "nosniff",
-        "Cache-Control": "private, max-age=300",
-    }
+    elif kind in IMAGE_KINDS or kind == "pdf":
+        media = meta["mime"] or "application/octet-stream"
+    else:  # text of any flavour is shown as plain text, never rendered as HTML
+        media = "text/plain; charset=utf-8"
+    headers = {"Content-Disposition": _disposition(meta["name"], inline), "X-Content-Type-Options": "nosniff",
+               "Cache-Control": "private, max-age=300" if v is None else "private, max-age=86400"}
     if kind != "pdf":
         # Browsers' PDF viewers do not run in a sandbox; everything else does.
-        headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox"
+        headers["Content-Security-Policy"] = SANDBOX_CSP
     return FileResponse(path, media_type=media, headers=headers)
+
+
+@router.get("/files/{file_id}/render.svg")
+def file_render(file_id: int, v: int | None = None, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx),
+                settings: Settings = Depends(get_settings)):
+    """A Graphviz DOT file drawn as SVG (graphviz on the server, sanitised, cached by content).
+    422 with graphviz's message when the source does not render."""
+    from fastapi.responses import Response
+
+    from .file_render import RenderError, render_dot_cached
+
+    path, meta = files.content(conn, ctx, settings.files_dir, file_id, v)
+    if meta["preview"] != "dot":
+        raise HTTPException(400, "only Graphviz DOT files are rendered here")
+    try:
+        svg = render_dot_cached(settings.files_dir, meta["sha256"], path)
+    except RenderError as e:
+        raise HTTPException(422, str(e)) from e
+    return Response(svg, media_type="image/svg+xml", headers={
+        "Content-Security-Policy": SANDBOX_CSP, "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=86400",
+        "Content-Disposition": _disposition(meta["name"].rsplit(".", 1)[0] + ".svg", True)})
+
+
+@router.get("/files/{file_id}/page")
+def file_page(file_id: int, v: int | None = None, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx),
+              settings: Settings = Depends(get_settings)):
+    """An HTML file as a page for a sandboxed frame: its scripts run in an opaque origin
+    (the CSP sandbox, without allow-same-origin) with no network (connect-src 'none')."""
+    path, meta = files.content(conn, ctx, settings.files_dir, file_id, v)
+    if meta["preview"] != "html":
+        raise HTTPException(400, "not an HTML file")
+    return FileResponse(path, media_type="text/html; charset=utf-8", headers={
+        # No frame-ancestors: under the sandbox 'self' is the page's own opaque origin, which matches no
+        # parent; another site framing it gets no cookie (SameSite) and the page has no origin anyway.
+        "Content-Security-Policy": PAGE_CSP, "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=300", "Referrer-Policy": "no-referrer",
+        "Content-Disposition": _disposition(meta["name"], True)})
 
 
 @router.patch("/files/{file_id}")

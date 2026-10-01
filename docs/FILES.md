@@ -65,6 +65,52 @@ All three follow the rules of tasks: every write goes through `versioning`
 - Notes keep their own SQLite FTS5 index (`notes_fts`); a SQLite build without
   FTS5 falls back to LIKE.
 
+## Agents' files and visuals
+
+Code: `backend/src/pos/agent_files.py`, `file_render.py`; web: `src/files/` (FileCard, the lazy
+renderers). Agents make files and share them with people; chat (desktop and the phone app) and
+Files render them inline. Their own computer, where they make charts and documents with code, is
+[SANDBOX.md](SANDBOX.md).
+
+- **Tools** (pos MCP, every agent): `file_create(name, content, mime?, encoding: text|base64,
+  project?, topic?, description?)`, `file_update(file_id, content, …)` (a new **version**: the
+  bytes of every version stay, Files shows the history and restores any of it),
+  `file_read(file_id, version?)` (the text, any version), `file_get` (metadata and extracted
+  text), `file_list(scope: mine|all)`, `file_share(file_id, to: owner|<member>|#channel,
+  thread_or_task_ref?, message?)` (a chat message, a DM to the owner by default, with the file
+  attached), and `attachments` on `chat_send`. `sandbox_share` does the same for a sandbox file.
+- **Limits.** `POS_AGENT_FILE_MAX_MB` (20) per file, `POS_AGENT_FILES_QUOTA_MB` (500) for the
+  current versions of one agent's files. Names are sanitised (no directories, no traversal).
+  An agent's file is owned by the owner, as everything agents file; a private one is also shared
+  with the agent that made it, and with whoever it is shared with in chat.
+- **Kinds** (`preview`, from the sniffed type and the name): `image` (PNG, JPEG, GIF, WebP),
+  `svg`, `pdf`, `markdown`, `csv` (and TSV: a sortable table), `mermaid` (`.mmd`), `dot`
+  (`.dot`, `.gv`), `vegalite` (`.vl.json`), `html`, `code` (by extension, highlighted), `text`,
+  `download`.
+- **Rendering and safety.**
+  - SVG is sanitised when stored (`file_render.sanitize_svg`): only SVG drawing elements stay;
+    scripts, `foreignObject`, animations, event handlers, `javascript:` and every outside
+    reference (`href`, `url()`, `@import`) go; a DOCTYPE with entities is refused. Served as an
+    image with a sandboxing CSP and shown with `<img>`.
+  - DOT is drawn on the server (`GET /api/files/{id}/render.svg`; graphviz in the api image, 20 s,
+    an empty working directory, attributes that read files refused, output sanitised, cached by
+    content hash). 422 carries graphviz's message.
+  - Mermaid and Vega-Lite render in the browser from a lazy chunk (mermaid in its strict mode;
+    Vega with the expression interpreter, so no `eval` under the phone app's CSP; data must be
+    inline, never a URL). The phone app's first download stays under its 150 KB budget.
+  - HTML is shown in `<iframe sandbox="allow-scripts">` from `GET /api/files/{id}/page`, whose
+    CSP adds `sandbox allow-scripts` (an opaque origin even when opened directly: no cookies, no
+    PersonalOS API) and `connect-src 'none'` (no network at all).
+  - `GET /api/files/{id}/content` serves everything textual as `text/plain`; `?v=<n>` serves an
+    earlier version (a chat card shows the version that was shared).
+  - A broken diagram or chart comes back to the agent at once as `render_error`.
+- **In chat**: a card with the name, kind and version and the preview; a click opens the
+  full-screen viewer (zoom and pan for pictures and diagrams, pinch on the phone), download and
+  "Otevřít v Souborech".
+- **Knowledge.** Agents' files go to knowlage like any file. Private files never do: a file that
+  becomes private is deleted from knowlage (`kb_status: private`); search still matches their
+  names for whoever may see them.
+
 ## Topics
 
 A topic is the slug that tasks, files and notes carry in `topic` (lower case,

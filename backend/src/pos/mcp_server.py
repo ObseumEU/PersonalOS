@@ -57,7 +57,11 @@ Team chat (chat_send, chat_read, #team): talk to people and agents inside
 PersonalOS; @Name mentions land in their inbox. It never leaves PersonalOS.
 Files, notes and topics: search finds tasks, files and notes; file_get gives a
 file's text, topic_get everything in one topic; note_create and note_update
-write markdown notes. The company knowledge base (mail, Drive, GitHub,
+write markdown notes. Your own computer: sandbox_exec, sandbox_run_python (a Linux sandbox, root,
+Python/Node, internet, no LAN; /workspace is kept). Show people results as files: make them in
+the sandbox and sandbox_share them, or file_create (Mermaid .mmd, Graphviz .dot, Vega-Lite .vl.json,
+.md, .csv, .svg, .html) and file_share; they render inline in chat. Edit with file_update (a new
+version), not a new file. The company knowledge base (mail, Drive, GitHub,
 meetings) is the `knowledge` tool, for members with the grant tool:knowledge.
 Knowledge first: check the knowledge base before acting (a run starts with its passages
 for the task) and cite the chunk ids you used (<doc>:c<n>) in your result.
@@ -99,6 +103,12 @@ TOOL_PERMISSIONS = {
     # Feedback: any member gives it; resolving is checked in pos.feedback.
     "propose_instructions": "tasks:claim",
     "file_list": "tasks:read", "file_upload": "tasks:write",
+    # Agents' files and their own computer (pos.agent_files, pos.sandbox): every agent (tasks:claim);
+    # file_share and sandbox_share also follow chat's rules (and work when someone waits for the answer).
+    "file_create": "tasks:claim", "file_update": "tasks:claim", "file_read": "tasks:read",
+    "file_share": "tasks:claim", **{t: "tasks:claim" for t in (
+        "sandbox_exec", "sandbox_run_python", "sandbox_write_file", "sandbox_read_file", "sandbox_list",
+        "sandbox_reset", "sandbox_share")},
     "route_update": "routes:write",
     # Projects: reading needs tasks:read; creating tasks:write, members by the project's lead (pos.projects).
     "project_list": "tasks:read", "project_get": "tasks:read", "project_create": "tasks:write",
@@ -174,7 +184,7 @@ def may_use(conn: sqlite3.Connection, actor_id: int, tool: str) -> bool:
     if perm is None or agents.has_permission(conn, actor_id, perm) or (
             not tool.startswith("access_") and agents.has_permission(conn, actor_id, f"tool:{tool}")):
         return True
-    if tool in ("chat_send", "chat_react"):  # every agent answers the person waiting for it (chat.may_answer)
+    if tool in ("chat_send", "chat_react", "file_share", "sandbox_share"):  # every agent answers the person waiting for it (chat.may_answer)
         from . import chat
 
         return chat.may_answer(conn, actor_id)
@@ -679,20 +689,25 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "Keep it short (a few sentences, at most 3000 characters): details go into a task or a "
                           "note you link. Never send bare thanks/ok: react with chat_react instead (an "
                           "acknowledgement wakes nobody). "
+                          "attachments: file ids (file_create, sandbox_share) shown inline with the message. "
                           "Chat stays inside PersonalOS; at most 20 messages per 10 minutes.")
     def chat_send(ctx: Context, body: str, channel: str | None = None, to: str | None = None,
                   reply_to: int | None = None, priority: str | None = None, blocking: bool = False,
-                  task_id: str | None = None) -> dict:
+                  task_id: str | None = None, attachments: list[int] | None = None) -> dict:
         with session(ctx, "chat_send", channel=channel, to=to, reply_to=reply_to, priority=priority,
-                     blocking=blocking or None) as (conn, c):
+                     blocking=blocking or None, attachments=attachments) as (conn, c):
             def go(chat):
+                from . import files
+
+                atts, lines = files.chat_attachments(conn, c, attachments) if attachments else ([], [])
+                text = "\n".join(x for x in [(body or "").strip(), *lines] if x)
                 if to:
-                    return chat.send_dm(conn, c, chat.resolve_actor(conn, to)["id"], body, reply_to=reply_to,
-                                        priority=priority)
+                    return chat.send_dm(conn, c, chat.resolve_actor(conn, to)["id"], text, reply_to=reply_to,
+                                        priority=priority, attachments=atts or None)
                 if not channel:
                     raise chat.ChatError("give a channel or a member (to)")
-                return chat.send(conn, c, chat.resolve_channel(conn, channel)["id"], body, reply_to=reply_to,
-                                 priority=priority)
+                return chat.send(conn, c, chat.resolve_channel(conn, channel)["id"], text, reply_to=reply_to,
+                                 priority=priority, attachments=atts or None)
             out = chat_call(go)
             if blocking:
                 from . import asks
@@ -1029,14 +1044,6 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             f["text_extract"] = wrap_external("file", f["text_extract"][:100_000], ref=f"file:{file_id}")
             return f
 
-    @mcp.tool(description="Files you can see, newest first, optionally in a topic or with a tag.")
-    def file_list(ctx: Context, topic: str | None = None, tag: str | None = None, limit: int = 50) -> list[dict]:
-        from . import files
-
-        with session(ctx, "file_list", topic=topic, tag=tag) as (conn, c):
-            keep = ("id", "name", "mime", "size", "topic", "tags", "visibility", "created_at")
-            return [{k: f.get(k) for k in keep} for f in files.list_files(conn, c, topic=topic, tag=tag)[:max(1, min(limit, 200))]]
-
     @mcp.tool(description="Share a document with the team as a file: a name (with its extension, e.g. "
                           "report.md) and its text, or base64 for binary content. Optional topic, tags, visibility. "
                           "It is searchable through the knowledge base once pushed there.")
@@ -1090,6 +1097,197 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             t["open"] = [brief(x) for x in t["open"]]
             t["done"] = [brief(x) for x in t["done"]]
             return t
+
+    # ------------------------------------------------------------- agents' files and visuals (pos.agent_files)
+
+    def _settings():
+        from .config import Settings, get_settings
+
+        s = get_settings()
+        # the files live next to the database (Settings.files_dir), also in tests with another db
+        return Settings(**{**s.model_dump(), "data_dir": db_path.parent})
+
+    @mcp.tool(description="Create a file and keep it in PersonalOS Files (then share it with file_share). "
+                          "name with its extension decides how it shows: .mmd Mermaid, .dot Graphviz (networks, "
+                          "topologies), .vl.json a Vega-Lite chart (data inline), .svg, .png/.jpg (base64), .html "
+                          "(a small interactive page, shown sandboxed, no network), .md, .csv (a sortable table), "
+                          ".pdf (base64), code. content is the text, or base64 with encoding='base64'. Optional "
+                          "mime (adds the extension), project (slug), topic, description (one line: what it shows), "
+                          "tags, visibility (team by default). A diagram that cannot render comes back as "
+                          "render_error: fix it with file_update. At most 20 MB a file.")
+    def file_create(ctx: Context, name: str, content: str, mime: str | None = None, encoding: str = "text",
+                    project: str | None = None, topic: str | None = None, description: str | None = None,
+                    tags: list[str] | None = None, visibility: str | None = None) -> dict:
+        from . import agent_files
+
+        data = agent_files.decode(content, encoding)
+        settings = _settings()
+        with session(ctx, "file_create", name=name, size=len(data), project=project, topic=topic) as (conn, c):
+            out = agent_files.create(conn, c, settings, name=name, data=data, mime=mime, topic=topic,
+                                     project=project, description=description, tags=tags, visibility=visibility)
+        _push_kb(out["id"])
+        return out
+
+    @mcp.tool(description="Change a file's content (a new version; earlier versions stay viewable and restorable "
+                          "in Files). Edit the file you shared instead of making a new one. content as text, or "
+                          "base64 with encoding='base64'; optional new name, description.")
+    def file_update(ctx: Context, file_id: int, content: str, encoding: str = "text", name: str | None = None,
+                    description: str | None = None) -> dict:
+        from . import agent_files
+
+        data = agent_files.decode(content, encoding)
+        settings = _settings()
+        with session(ctx, "file_update", file_id=file_id, size=len(data)) as (conn, c):
+            out = agent_files.update(conn, c, settings, file_id, data, name=name, description=description)
+        _push_kb(file_id)
+        return out
+
+    @mcp.tool(description="A text file's content (Mermaid, DOT, Markdown, CSV, HTML, code…), the current version "
+                          "or an earlier one (version), to edit it. Binary files: file_get gives their text.")
+    def file_read(ctx: Context, file_id: int, version: int | None = None) -> dict:
+        from . import files
+        from .guard.external import wrap_external
+
+        settings = _settings()
+        with session(ctx, "file_read", file_id=file_id, version=version) as (conn, c):
+            text, meta = files.read_text(conn, c, settings.files_dir, file_id, version)
+            f = files.get(conn, c, file_id)
+            mine = f.get("created_by") == c.actor_id
+            return {"id": file_id, "name": meta["name"], "mime": meta.get("mime"), "version": version or f["version"],
+                    "content": text if mine else wrap_external("file", text, ref=f"file:{file_id}")}
+
+    @mcp.tool(description="Files: scope 'mine' (default: files you made or that were shared with you) or 'all' "
+                          "(everything you can see; optionally a topic or tag), newest first.")
+    def file_list(ctx: Context, scope: str = "mine", topic: str | None = None, tag: str | None = None,
+                  limit: int = 50) -> list[dict]:
+        from . import agent_files, files
+
+        with session(ctx, "file_list", scope=scope, topic=topic, tag=tag) as (conn, c):
+            n = max(1, min(limit, 200))
+            if scope == "mine" and not topic and not tag:
+                items = agent_files.list_mine(conn, c, limit=n)
+            else:
+                items = files.list_files(conn, c, topic=topic, tag=tag)[:n]
+            keep = ("id", "name", "mime", "size", "preview", "version", "topic", "tags", "visibility",
+                    "description", "updated_at")
+            return [{k: f.get(k) for k in keep if f.get(k) not in (None, "", [])} for f in items]
+
+    @mcp.tool(description="Share files in chat, shown inline (an image, a diagram, a chart, a table, a page): "
+                          "to='owner' (default, a DM), a member's name (a DM) or '#channel'; or "
+                          "thread_or_task_ref: a message id (answer in that conversation or thread) or a task "
+                          "(T-123, linked and noted on the task). message: one line saying what it shows. "
+                          "file_id is one id or a list.")
+    def file_share(ctx: Context, file_id: int | list[int], to: str | None = None,
+                   thread_or_task_ref: str | None = None, message: str | None = None) -> dict:
+        from . import agent_files
+
+        ids = file_id if isinstance(file_id, list) else [file_id]
+        with session(ctx, "file_share", file_id=ids, to=to, ref=thread_or_task_ref) as (conn, c):
+            return agent_files.share(conn, c, ids, to=to, ref=thread_or_task_ref, message=message)
+
+    def _push_kb(file_id: int) -> None:
+        """Into knowlage at once, in the background (the scheduler job retries what fails)."""
+        import threading
+
+        from . import kb_files
+
+        if kb_files.configured():
+            threading.Thread(target=kb_files.ingest_in_background, args=(db_path, file_id), daemon=True).start()
+
+    # ------------------------------------------------------------- the agent's own computer (pos.sandbox)
+
+    def _who(ctx: Context, tool: str, **args) -> dict:
+        from . import sandbox
+
+        with session(ctx, tool, **args) as (conn, c):
+            return sandbox.identity(conn, c.actor_id)
+
+    async def _sbx(coro):
+        from . import sandbox
+
+        try:
+            return await coro
+        except sandbox.SandboxError as e:
+            raise ToolError(str(e)) from e
+
+    @mcp.tool(description="Run a shell command in your own sandbox: a Linux computer (root, Debian) with Python "
+                          "(pandas, matplotlib, plotly, networkx, graphviz, openpyxl, python-docx, reportlab…), "
+                          "Node, git, curl, jq, sqlite3, ffmpeg, imagemagick, pandoc, dot, mmdc. Install anything "
+                          "(pip, npm, apt). Internet works, the local network does not. /workspace keeps your "
+                          "files; /shared is your team's. Returns exit_code, stdout, stderr (long output is cut; "
+                          "the full log is the `log` file). timeout in seconds (default 600, at most 3600).")
+    async def sandbox_exec(ctx: Context, command: str, timeout: int = 600, workdir: str | None = None) -> dict:
+        from . import sandbox
+
+        who = _who(ctx, "sandbox_exec", command=command[:500], timeout=timeout, workdir=workdir)
+        return await _sbx(sandbox.run(who, command, timeout, workdir))
+
+    @mcp.tool(description="Run Python code in your sandbox (saved under /workspace/.runs, run with python3). "
+                          "Charts: matplotlib (savefig to /workspace/…png), then sandbox_share the file.")
+    async def sandbox_run_python(ctx: Context, code: str, timeout: int = 600) -> dict:
+        from . import sandbox
+
+        who = _who(ctx, "sandbox_run_python", size=len(code), timeout=timeout)
+        return await _sbx(sandbox.run_python(who, code, timeout))
+
+    @mcp.tool(description="Write a file in your sandbox (a path under /workspace, or relative to it): content as "
+                          "text, or base64 with encoding='base64'. Folders are created.")
+    async def sandbox_write_file(ctx: Context, path: str, content: str, encoding: str = "text") -> dict:
+        from . import agent_files, sandbox
+
+        data = agent_files.decode(content, encoding)
+        who = _who(ctx, "sandbox_write_file", path=path, size=len(data))
+        return await _sbx(sandbox.write(who, path, data))
+
+    @mcp.tool(description="Read a text file from your sandbox (at most max_chars characters).")
+    async def sandbox_read_file(ctx: Context, path: str, max_chars: int = 100_000) -> dict:
+        from . import sandbox
+
+        who = _who(ctx, "sandbox_read_file", path=path)
+        data, full = await _sbx(sandbox.read(who, path, max_bytes=5 * 1024 * 1024))
+        return {"path": full, **sandbox.as_text(data, max(1, min(max_chars, 500_000)))}
+
+    @mcp.tool(description="List files in your sandbox (default /workspace, depth 2): type, size, modified, path.")
+    async def sandbox_list(ctx: Context, path: str = "/workspace", depth: int = 2) -> dict:
+        from . import sandbox
+
+        who = _who(ctx, "sandbox_list", path=path)
+        return await _sbx(sandbox.call("list", who, path=path, depth=depth))
+
+    @mcp.tool(description="Start your sandbox afresh from the image (what you installed goes; /workspace stays). "
+                          "wipe=true also empties /workspace.")
+    async def sandbox_reset(ctx: Context, wipe: bool = False) -> dict:
+        from . import sandbox
+
+        who = _who(ctx, "sandbox_reset", wipe=wipe)
+        return await _sbx(sandbox.call("reset", who, wipe=wipe))
+
+    @mcp.tool(description="Share a file from your sandbox with people: it goes into PersonalOS Files (sharing the "
+                          "same path again makes a new version of the same file) and into chat, shown inline: "
+                          "PNG/JPG/SVG, PDF, HTML (sandboxed), CSV (a table), Markdown, Mermaid (.mmd), DOT, "
+                          "Vega-Lite (.vl.json). to='owner' (default, a DM), a member or '#channel'; or "
+                          "thread_or_task_ref (a message id or T-123). message: one line saying what it shows. "
+                          "name: the file's name in Files (default the file's own).")
+    async def sandbox_share(ctx: Context, path: str, to: str | None = None, thread_or_task_ref: str | None = None,
+                            message: str | None = None, name: str | None = None,
+                            description: str | None = None) -> dict:
+        from . import agent_files, sandbox
+
+        settings = _settings()
+        who = _who(ctx, "sandbox_share", path=path, to=to, ref=thread_or_task_ref)
+        data, full = await _sbx(sandbox.read(who, path, max_bytes=settings.agent_file_max_mb * 1024 * 1024))
+        origin = f"sandbox:{who['agent']}:{full}"
+        with session(ctx, "sandbox_share:file", path=full, size=len(data)) as (conn, c):
+            row = conn.execute("SELECT id FROM files WHERE origin = ? AND created_by = ? ORDER BY id DESC LIMIT 1",
+                               (origin, c.actor_id)).fetchone()
+            if row is not None:
+                f = agent_files.update(conn, c, settings, row["id"], data, name=name, description=description)
+            else:
+                f = agent_files.create(conn, c, settings, name=name or full.rsplit("/", 1)[-1], data=data,
+                                       description=description, tags=["sandbox"], origin=origin)
+            shared = agent_files.share(conn, c, [f["id"]], to=to, ref=thread_or_task_ref, message=message)
+        _push_kb(f["id"])
+        return {"file": f, **shared}
 
     from .integrations import register_mcp_tools
 

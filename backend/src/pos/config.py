@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     scheduler: bool = True
     # Largest file upload, in megabytes (POS_MAX_UPLOAD_MB).
     max_upload_mb: int = 200
+    # Files agents make (file_create / file_update, pos.agent_files): the largest one, and how much
+    # one agent may keep in all (the current versions of its files that are not archived).
+    agent_file_max_mb: int = 20
+    agent_files_quota_mb: int = 500
     # Web Push to the installed app (pos.push, docs/MOBILE.md): the VAPID key pair as base64url
     # (generated on the server into .env, never printed). Both empty: push is off.
     vapid_private_key: str = ""

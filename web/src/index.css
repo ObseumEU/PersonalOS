@@ -279,3 +279,13 @@ body {
   .report .panel::before, .report .panel::after { display: none; }
   .report .fade-in { animation: none; }
 }
+
+/* Highlighted code in file previews (src/files/renderers.tsx, highlight.js classes), on the Lab palette. */
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-meta .hljs-keyword { color: #c792ea; }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute .hljs-string { color: #a5d6a7; }
+.hljs-number, .hljs-literal, .hljs-symbol { color: #f7b267; }
+.hljs-comment, .hljs-quote, .hljs-deletion { color: #6b7280; font-style: italic; }
+.hljs-title, .hljs-section, .hljs-function .hljs-title, .hljs-title.function_ { color: var(--color-accent); }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-name, .hljs-tag { color: #8ab4f8; }
+.hljs-type, .hljs-class .hljs-title, .hljs-title.class_ { color: #ffd479; }
+.hljs-meta { color: #9aa0a6; }
