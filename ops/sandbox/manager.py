@@ -220,7 +220,7 @@ def op_exec(agent: str, team: str, command: str, timeout: int | None = None, wor
     t = max(1, min(int(timeout or DEFAULT_TIMEOUT), MAX_TIMEOUT))
     box = ensure(agent, team)
     stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
-    run = f"/tmp/.pos-exec/{stamp}"
+    run = f"/var/tmp/.pos-exec/{stamp}"  # not /tmp: the archive API does not see a tmpfs
     log_path = f"/workspace/.logs/exec-{stamp}.log"
     # The output goes to files, not the exec's pipe: a background process (a server started with &)
     # keeps no pipe open, so the call returns when the command does.
@@ -268,28 +268,29 @@ def _read_tar(box, path: str) -> dict[str, bytes]:
 
 
 def op_read(agent: str, team: str, path: str, max_bytes: int = 1024 * 1024) -> dict:
+    """A file's bytes, from any path (an exec, not the archive API, which misses tmpfs mounts)."""
     p = _abs(path)
     box = ensure(agent, team)
     limit = max(1, min(int(max_bytes or 1024 * 1024), MAX_READ))
     with _Use(box.name):
-        try:
-            stream, stat = box.get_archive(p)
-        except NotFound as e:
-            raise Problem(404, f"no such file: {p}") from e
-        if stat.get("mode", 0) & (1 << 31):  # a directory
+        code, out, err = _exec(box, ["stat", "-L", "-c", "%F|%s", p])
+        if code != 0:
+            raise Problem(404, f"no such file: {p}")
+        kind, _, size = out.decode().strip().partition("|")
+        if kind == "directory":
             raise Problem(400, f"{p} is a directory: use sandbox_list")
-        if stat.get("size", 0) > limit:
-            raise Problem(413, f"{p} is {stat['size']} bytes, over the {limit} byte limit")
-        buf = io.BytesIO(b"".join(stream))
-    with tarfile.open(fileobj=buf) as tar:
-        member = next((m for m in tar.getmembers() if m.isfile()), None)
-        if member is None:
-            raise Problem(400, f"{p} is not a regular file")
-        data = tar.extractfile(member).read()
+        if "regular" not in kind:
+            raise Problem(400, f"{p} is not a regular file ({kind})")
+        if int(size or 0) > limit:
+            raise Problem(413, f"{p} is {size} bytes, over the {limit} byte limit")
+        code, data, err = _exec(box, ["cat", p])
+        if code != 0:
+            raise Problem(400, err.decode(errors="replace")[:300] or f"cannot read {p}")
     return {"path": p, "size": len(data), "content_b64": base64.b64encode(data).decode()}
 
 
 def op_write(agent: str, team: str, path: str, content_b64: str, mode: int = 0o644) -> dict:
+    """Write a file anywhere: staged on the root filesystem (the archive API), then moved."""
     p = _abs(path)
     data = base64.b64decode(content_b64 or "")
     if len(data) > MAX_READ:
@@ -300,16 +301,20 @@ def op_write(agent: str, team: str, path: str, content_b64: str, mode: int = 0o6
             used = workspace_mb(box)
             if used is not None and used > QUOTA_MB:
                 raise Problem(507, f"/workspace holds {used} MB, over the {QUOTA_MB} MB quota: delete files first")
-        d, name = posixpath.split(p)
-        code, _, err = _exec(box, ["mkdir", "-p", d])
-        if code != 0:
-            raise Problem(400, f"cannot create {d}: {err.decode(errors='replace')[:200]}")
+        stage = "/var/tmp/.pos-upload"
+        name = f"up-{int(time.time() * 1000)}"
+        _exec(box, ["mkdir", "-p", stage])
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w") as tar:
             info = tarfile.TarInfo(name)
             info.size, info.mode, info.mtime = len(data), mode, int(time.time())
             tar.addfile(info, io.BytesIO(data))
-        box.put_archive(d, buf.getvalue())
+        box.put_archive(stage, buf.getvalue())
+        d = posixpath.dirname(p)
+        code, _, err = _exec(box, ["sh", "-c", 'mkdir -p "$1" && mv -f "$2" "$3"', "sh", d, f"{stage}/{name}", p])
+        if code != 0:
+            _exec(box, ["rm", "-f", f"{stage}/{name}"])
+            raise Problem(400, f"cannot write {p}: {err.decode(errors='replace')[:200]}")
     return {"path": p, "size": len(data)}
 
 
