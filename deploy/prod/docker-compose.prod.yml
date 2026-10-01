@@ -88,7 +88,7 @@ services:
               "--source-remote", "dev", "--watch", "60"]
     environment:
       DEPLOY_TEST_CMD: >-
-        cd backend && pip install -q -e .[dev] -e ../worker && python -m pytest -q -n auto -p no:cacheprovider && cd ../web && npm ci --silent && npm run build
+        cd backend && pip install -q -e .[dev] -e ../worker && python -m pytest -q -n auto -p no:cacheprovider && cd ../web && npm ci --silent && NODE_OPTIONS=--max-old-space-size=1536 npm run build
       DEPLOY_UP_CMD: >-
         docker compose -f docker-compose.yml -f deploy/prod/docker-compose.prod.yml up -d --build api web
       DEPLOY_HEALTH_URL: http://web/api/health
@@ -99,7 +99,9 @@ services:
     # init reaps the git/docker/pytest children it spawns (~200 zombies after an hour without it);
     # the test run (pytest -n auto, npm build) is its peak.
     init: true
-    mem_limit: ${POS_DEPLOYER_MEM:-1536m}
+    # 2g: the web build (mermaid, vega, three) needs ~1.2 GB of V8 heap; node's default limit in a
+    # 1.5 GB container ran out (deploy 33, "JavaScript heap out of memory").
+    mem_limit: ${POS_DEPLOYER_MEM:-2g}
     mem_reservation: 128m
     logging: *logging
 
