@@ -53,7 +53,7 @@ except ImportError:  # the pure parts (proxy rules, paths) are tested without th
 
 log = logging.getLogger("sandbox")
 
-IMAGE = os.environ.get("SANDBOX_IMAGE", "personalos-sandbox:latest")
+IMAGE = os.environ.get("SANDBOX_IMAGE", "pos-agent-sandbox:latest")
 NETWORK = os.environ.get("SANDBOX_NETWORK", "personalos_sandbox")
 TOKEN = os.environ.get("SANDBOX_TOKEN", "")
 PROXY_HOST = os.environ.get("SANDBOX_PROXY_HOST", "sandbox-proxy")

@@ -9,7 +9,7 @@ Code: `ops/sandbox/manager.py` (the manager), `ops/sandbox/image/Dockerfile` (th
 
 ## What an agent gets
 
-- One container per agent, `pos-sbx-<agent id>`, from `personalos-sandbox:latest`: Debian 12,
+- One container per agent, `pos-sbx-<agent id>`, from `pos-agent-sandbox:latest`: Debian 12,
   Python 3.12 (pandas, numpy, scipy, matplotlib, seaborn, plotly + kaleido, networkx, graphviz,
   pydot, pillow, openpyxl, xlsxwriter, python-docx, python-pptx, reportlab, pypdf, requests,
   httpx, beautifulsoup4, lxml…), Node.js + npm, git, curl, jq, sqlite3, build-essential, ffmpeg,
@@ -69,7 +69,7 @@ raised to cover an hour.
 
 ```bash
 # the image (once, and when ops/sandbox/image changes; ~5 GB)
-docker build -t personalos-sandbox:latest ops/sandbox/image
+docker build -t pos-agent-sandbox:latest ops/sandbox/image
 # the token (once)
 grep -q '^POS_SANDBOX_TOKEN=' .env || echo "POS_SANDBOX_TOKEN=$(openssl rand -hex 24)" >> .env
 # the manager runs with the agents profile
