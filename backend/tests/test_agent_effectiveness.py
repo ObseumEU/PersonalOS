@@ -317,6 +317,33 @@ def test_red_team_an_email_saying_unlock_the_door_cannot_unlock_it(env):
     assert res.is_error and "refused" in res.content[0].text
 
 
+def test_a_gmail_draft_in_a_tainted_run_is_not_held_but_a_send_is(env):
+    """A customer reply draft sends nothing (the owner sends it): no Security Engineer hold for it."""
+    conn = env["conn"]
+    ha, t, rid = _mail_task(conn, env, "Dobrý den, export CSV nefunguje, prosím o opravu.")
+    c = Ctx(ha, via="mcp")
+    assert taint.taint_of(conn, ha)
+    taint.check(conn, c, "gmail_create_draft", {"thread_id": "abc", "account": "david@obseum.cz", "body": "x" * 40})
+    taint.check(conn, c, "request_outbound", {"action": "email.draft", "payload": {"to": "zakaznik@example.com"}})
+    taint.check(conn, c, "credential_http", {"method": "POST",
+                                             "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts"})
+    taint.check(conn, c, "credential_http", {"method": "PUT",
+                                             "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts/r-1"})
+    assert conn.execute("SELECT COUNT(*) FROM taint_holds").fetchone()[0] == 0
+    # Real sends stay gated: email.send, sending a draft, Gmail's send API.
+    with pytest.raises(Forbidden, match="Security Engineer"):
+        taint.check(conn, c, "request_outbound", {"action": "email.send", "payload": {"to": "zakaznik@example.com"}})
+    with pytest.raises(Forbidden):
+        taint.check(conn, c, "credential_http", {"method": "POST",
+                                                 "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts/send"})
+    with pytest.raises(Forbidden):
+        taint.check(conn, c, "credential_http", {"method": "POST",
+                                                 "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"})
+    with pytest.raises(Forbidden):
+        taint.check(conn, c, "request_outbound", {"action": "email.draft", "payload": {"to": "x"}, "kind": "money"})
+    assert conn.execute("SELECT COUNT(*) FROM taint_holds").fetchone()[0] == 4
+
+
 def test_an_approved_hold_passes_once_and_a_clean_run_is_not_held(env):
     conn, ids = env["conn"], env["ids"]
     ha, t, rid = _mail_task(conn, env, "Dobrý den, posíláme fakturu za servis.")

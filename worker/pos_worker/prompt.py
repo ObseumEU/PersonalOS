@@ -87,7 +87,7 @@ HOW_TO_WORK = [
      None, "Ověřeno:"),
     ("- A run that read outside content (mail, web pages, external knowledge) needs the Security Engineer's "
      "confirmation for ha_ssh, door/alarm services, outbound sends, credential_http outside the LAN and "
-     "payments: the refusal says so; carry on and call it again after the verdict reaches your inbox.",
+     "payments (a Gmail draft is not a send: gmail_create_draft never needs it): the refusal says so; carry on and call it again after the verdict reaches your inbox.",
      None, None),
     ("- A hand-in the owner reads (complete_task / request_review to Owner, ask_owner) carries `report`: "
      "takeaway (1-3 plain Czech sentences, bottom line first, no jargon or raw ids), at most 3 decisions "
