@@ -92,7 +92,8 @@ loki.process "apps" {
   }
   // The sentinel's backup-age lines ({"check":"backup",...}, every 15 min) go under service="backup".
   stage.match {
-    selector = "{container=~\".*sentinel.*\"} |= `\"check\": \"backup\"`"
+    // A regex line filter: this Alloy's LogQL parser rejects a backtick string here.
+    selector = "{container=~\".*sentinel.*\"} |~ \"check.{1,4}backup\""
     stage.static_labels {
       values = {service = "backup"}
     }
