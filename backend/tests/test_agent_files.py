@@ -155,6 +155,40 @@ def test_chat_send_with_attachments(env):
     assert m["attachments"][0]["id"] == f["id"] and "soubor #" in m["body"]
 
 
+def test_the_same_file_version_shared_twice_into_one_conversation_is_one_message(env):
+    """The CFO shared a chart (sandbox_share, about the task), then answered the owner's message with
+    chat_send and the same file: one message, the answer's words merged into it; a new version posts."""
+    conn, owner = env["conn"], Ctx(env["owner"])
+    task = tasks.create(conn, owner, {"title": "Graf nákladů"})
+    conn.commit()
+
+    async def steps(c):
+        f = _call(await c.call_tool("file_create", {"name": "naklady.png", "content": base64.b64encode(PNG).decode(),
+                                                    "encoding": "base64"}))
+        a = _call(await c.call_tool("file_share", {"file_id": f["id"], "message": "Náklady podle agenta.",
+                                                   "thread_or_task_ref": tasks.display_id(task["id"])}))
+        b = _call(await c.call_tool("chat_send", {"body": "Celkem $85,29 za 27 agentů.", "to": "owner",
+                                                  "attachments": [f["id"]]}))
+        again = _call(await c.call_tool("file_share", {"file_id": f["id"]}))
+        g = _call(await c.call_tool("file_update", {"file_id": f["id"], "content": base64.b64encode(PNG + b"x").decode(),
+                                                    "encoding": "base64"}))
+        v2 = _call(await c.call_tool("file_share", {"file_id": f["id"], "message": "Opravený graf."}))
+        return f, a, b, again, g, v2
+
+    f, a, b, again, g, v2 = _run(_server(env, ASSISTANT), steps)
+    assert b["id"] == a["message_id"] and b["duplicate"] is True
+    assert again["message_id"] == a["message_id"] and again["already_shared"] is True
+    with_file = [r for r in conn.execute("SELECT id, body, attachments FROM chat_messages WHERE channel_id = ? "
+                                         "AND author_id = ? ORDER BY id", (a["channel_id"], env["ids"][ASSISTANT]))]
+    assert [r["id"] for r in with_file] == [a["message_id"], v2["message_id"]]
+    first = with_file[0]["body"]
+    assert first.startswith("Náklady podle agenta.") and "Celkem $85,29 za 27 agentů." in first
+    assert json.loads(with_file[1]["attachments"])[0]["version"] == g["version"] == 2
+    from pos import comments
+
+    assert sum("naklady.png" in x["body"] for x in comments.list_for(conn, owner, task["id"])) == 1
+
+
 # ------------------------------------------------------------------ permissions, limits, names
 
 def test_an_agent_cannot_read_the_owners_private_files_unless_shared(env):

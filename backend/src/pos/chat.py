@@ -47,6 +47,7 @@ class ChatError(AgentError):
 # messages over 800 characters; an owner message in #kniha without a mention reached nobody).
 AGENT_SOFT_BODY = 1200   # longer: the author gets a note to put details into a task or a note
 DUP_WINDOW_S = 120       # the same body from the same author in the same place: one message
+SHARE_DUP_WINDOW_S = 600  # the same file version from the same agent into the same conversation: one message
 UNROUTED = ("system", "weekly")  # channels whose unaddressed messages have their own handling
 
 
@@ -503,6 +504,45 @@ def _duplicate(conn: sqlite3.Connection, author_id: int, channel_id: int, body: 
     return row["id"] if row else None
 
 
+def _shared_before(conn: sqlite3.Connection, author_id: int, channel_id: int, reply_to: int | None,
+                   attachments: list[dict]) -> dict[tuple[int, int | None], int]:
+    """{(file id, version): message id} of the files in `attachments` this author already posted into
+    this conversation (a DM; a channel's top level or one thread) within SHARE_DUP_WINDOW_S (an agent
+    sharing a chart, then answering with it again)."""
+    want = {(int(a["id"]), a.get("version")) for a in attachments if a.get("type") == "file" and a.get("id")}
+    if not want:
+        return {}
+    since = (datetime.now(timezone.utc) - timedelta(seconds=SHARE_DUP_WINDOW_S)).isoformat(timespec="seconds")
+    found: dict[tuple[int, int | None], int] = {}
+    for row in conn.execute("""SELECT id, attachments FROM chat_messages WHERE channel_id = ? AND author_id = ?
+                               AND COALESCE(reply_to, 0) = ? AND archived_at IS NULL AND created_at >= ?
+                               AND attachments LIKE '%"file"%' ORDER BY id""",
+                            (channel_id, author_id, reply_to or 0, since)):
+        try:
+            atts = json.loads(row["attachments"] or "[]")
+        except ValueError:
+            continue
+        for a in atts:
+            if isinstance(a, dict) and a.get("type") == "file" and a.get("id"):
+                key = (int(a["id"]), a.get("version"))
+                if key in want:
+                    found.setdefault(key, row["id"])
+    return found
+
+
+def _merge_into(conn: sqlite3.Connection, ctx: Ctx, message_id: int, body: str) -> None:
+    """The new words of a repeated share go into the message that already carries the file."""
+    old = conn.execute("SELECT body FROM chat_messages WHERE id = ?", (message_id,)).fetchone()["body"] or ""
+    extra = "\n".join(line for line in body.splitlines() if not line.startswith("📎 ")).strip()
+    if not extra or extra in old:
+        return
+    merged = f"{old.rstrip()}\n\n{extra}"
+    if len(merged) > min(MAX_BODY, agent_max_body()):
+        return
+    versioning.update(conn, ctx, "chat_message", message_id, {"body": merged, "edited_at": now_iso()},
+                      action="share_merge")
+
+
 def channel_lead(conn: sqlite3.Connection, ch: sqlite3.Row) -> int | None:
     """Who answers an unaddressed question in a group channel: the project's lead when an agent
     leads it, else the top agent of the channel's own team (actors.team = the channel name, e.g.
@@ -660,6 +700,21 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         if dup is not None:  # a double submit or a retried call: the message is there already
             return {**message_view(conn, dup, ctx.actor_id), "duplicate": True, "delivered_to_run": None,
                     "inbox": []}
+    if agent_author and attachments:
+        # The same file version into the same conversation within minutes is one message (the CFO shared
+        # a chart with sandbox_share, then answered the asking message with chat_send and the same file).
+        shared = _shared_before(conn, ctx.actor_id, channel_id, reply_to, attachments)
+        if shared:
+            attachments = [a for a in attachments
+                           if not (a.get("type") == "file" and (int(a["id"]), a.get("version")) in shared)]
+            if not any(a.get("type") == "file" for a in attachments):
+                first = min(shared.values())
+                _merge_into(conn, ctx, first, body)
+                audit.log(conn, ctx, "chat_share_dedup", "chat_message", first, channel=channel_id,
+                          files=sorted(k[0] for k in shared))
+                conn.commit()
+                return {**message_view(conn, first, ctx.actor_id), "duplicate": True, "delivered_to_run": None,
+                        "inbox": []}
 
     members = set(member_ids(conn, channel_id))
     mentioned = [m for m in _mentions(conn, body, mentions, channel_id) if m != ctx.actor_id]
