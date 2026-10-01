@@ -7,13 +7,18 @@ import { useCurrentRef } from "../refStore";
 import { t } from "../i18n/core";
 import { useNeedsMe } from "../needsMeApi";
 import ChatList from "./ChatList";
-import Conversation from "./Conversation";
-import Needs from "./Needs";
 import { applyUpdate, isStandalone, setBadge, useUpdateReady } from "./pwa";
-import Tasks from "./Tasks";
 import { TopBar } from "./ui";
 
 // Loaded when used: the full task panel (Markdown and all) and the settings (the QR code).
+// The start screen (the chat list) is in the entry; the other screens load on first use and are
+// fetched when the phone is idle, so a tap is instant and the service worker has them offline.
+const loadConversation = () => import("./Conversation");
+const loadNeeds = () => import("./Needs");
+const loadTasks = () => import("./Tasks");
+const Conversation = lazy(loadConversation);
+const Needs = lazy(loadNeeds);
+const Tasks = lazy(loadTasks);
 const TaskSheetHost = lazy(() => import("../components/tasks/TaskSheet"));
 const MobileSettings = lazy(() => import("./Settings"));
 const ReportPage = lazy(() => import("../pages/ReportPage"));
@@ -24,7 +29,7 @@ function RefPreviewSlot() {
   const cur = useCurrentRef();
   return cur ? (
     <Suspense fallback={null}>
-      <RefPreviewSlot />
+      <RefPreviewHost />
     </Suspense>
   ) : null;
 }
@@ -200,10 +205,15 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
     window.addEventListener("pos:open", open);
     return () => window.removeEventListener("pos:open", open);
   }, [navigate]);
+  useEffect(() => {
+    const idle = (window as Window & { requestIdleCallback?: (f: () => void) => void }).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 1500));
+    idle(() => void Promise.all([loadConversation(), loadNeeds(), loadTasks()]).catch(() => undefined));
+  }, []);
   const inConversation = /^\/m\/chat\/\d+/.test(loc.pathname);
   return (
     <div className="min-h-dvh bg-bg">
       <main className={inConversation ? "" : "pb-[calc(64px+env(safe-area-inset-bottom))]"}>
+        <Suspense fallback={<p className="p-4 text-sm text-ink-2">{t("act.loading")}</p>}>
         <Routes>
           <Route path="/m" element={<ChatList />} />
           <Route path="/m/chat/:id" element={<Conversation />} />
@@ -215,6 +225,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <Route path="/m/*" element={<Navigate to="/m" replace />} />
           <Route path="*" element={<Outside />} />
         </Routes>
+        </Suspense>
       </main>
       {!inConversation && <TabBar needs={count} />}
       {/* The task panel over any screen: ?task=T-123 (from a list, a message, "Čeká na tebe"). */}
