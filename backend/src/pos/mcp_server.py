@@ -144,6 +144,8 @@ TOOL_PERMISSIONS = {
     "ha_ssh": "homeassistant:ssh",
     # Every agent's own pinned memory (pos.agent_memory).
     "memory_get": "tasks:read", "memory_update": "tasks:read",
+    # HTML overviews for the owner (pos.html_reports): every agent; attaching to a task checks read access.
+    "report_html": "tasks:read",
     "give_feedback": "tasks:read", "feedback_list": "tasks:read", "feedback_resolve": "tasks:read",
     # Pausing or stopping an agent: people and its leads (checked in pos.agents).
     "manage_agent": "tasks:claim",
@@ -1431,6 +1433,23 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             shared = agent_files.share(conn, c, [f["id"]], to=to, ref=thread_or_task_ref, message=message)
         _push_kb(f["id"])
         return {"file": f, **shared}
+
+    @mcp.tool(description="A report for David as a short HTML overview behind the web app's login; returns "
+                          "{id, url}: put the url in chat or the task, with at most 2-3 sentences of text. "
+                          "Structured data only (no HTML): title, summary (1-3 sentences), status green|amber|red, "
+                          "kpis (max 5 x {label, value, delta?, status?}), charts (max 2 x {type: bar|line, title, "
+                          "labels[], series[{name, values[]}]}), sections (max 6 x {heading, bullets[max 8]}), "
+                          "next ('Co dál'), asks ('Co potřebuju od Davida'), task_id (the link goes to the task).")
+    def report_html(ctx: Context, title: str, status: str, summary: str = "", kpis: list[dict] | None = None,
+                    charts: list[dict] | None = None, sections: list[dict] | None = None,
+                    next: list[str] | None = None, asks: list[str] | None = None,
+                    task_id: str | None = None) -> dict:
+        from . import html_reports
+
+        data = {k: v for k, v in dict(title=title, status=status, summary=summary, kpis=kpis, charts=charts,
+                                      sections=sections, next=next, asks=asks).items() if v is not None}
+        with session(ctx, "report_html", title=title, task_id=task_id) as (conn, c):
+            return html_reports.create(conn, c, data, tasks.parse_id(task_id) if task_id else None)
 
     from .integrations import register_mcp_tools
 
