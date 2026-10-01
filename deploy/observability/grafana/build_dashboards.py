@@ -125,7 +125,8 @@ def var_custom(name, label, values, default, multi=True, include_all=False):
 
 def links():
     return [{"title": t, "url": f"{GRAFANA}/d/{uid}", "type": "link", "icon": "dashboard", "targetBlank": False}
-            for t, uid in (("Server overview", "obs-server-overview"), ("Apps", "obs-apps"), ("LLM usage", "obs-llm"))]
+            for t, uid in (("Server overview", "obs-server-overview"), ("Apps", "obs-apps"), ("LLM usage", "obs-llm"),
+                           ("PersonalOS výkon", "obs-pos-perf"))]
 
 
 def dashboard(uid, title, panels, variables, tags, time_from="now-6h", refresh="1m"):
@@ -250,10 +251,75 @@ def llm():
     return dashboard("obs-llm", "LLM usage", p, [], ["llm", "litellm"], time_from="now-24h")
 
 
+# ------------------------------------------------------------------ PersonalOS výkon
+
+def pos_perf():
+    """The API's own metrics (pos.metrics, GET /metrics scraped by svr03's Alloy, job "personalos")
+    and the web nginx's JSON access log (request_time, upstream_time) in Loki."""
+    j = 'job="personalos"'
+    rate = f"sum(rate(pos_http_requests_total{{{j}}}[5m]))"
+    err = f'sum(rate(pos_http_requests_total{{{j}, status="5xx"}}[5m]))'
+    hq = lambda q, by="": (f"histogram_quantile({q}, sum by (le{by}) "  # noqa: E731
+                           f"(rate(pos_http_request_duration_seconds_bucket{{{j}, route=~\"$route\"}}[5m])))")
+    nginx = '{host="svr03", stack="personalos", service="web"} | json | path=~"/api/.*" | path!~"/api/(chat/)?stream|/api/worker/next"'
+    p = [
+        stat("p95 (5 min)", hq(0.95), 0, 0, 4, 4, "s", warn=0.3, crit=0.5, decimals=3),
+        stat("p50 (5 min)", hq(0.5), 4, 0, 4, 4, "s", warn=0.15, crit=0.3, decimals=3),
+        stat("5xx share (5 min)", f"({err} or vector(0)) / {rate}", 8, 0, 4, 4, "percentunit", warn=0.01, crit=0.02,
+             decimals=2),
+        stat("Requests / min", f"{rate} * 60", 12, 0, 4, 4, "short", warn=1e9, crit=1e9, decimals=0),
+        stat("Open live streams", f"sum(pos_live_subscribers{{{j}}})", 16, 0, 4, 4, "short", warn=1e9, crit=1e9,
+             decimals=0),
+        stat("SQLite locked (range)", f"sum(increase(pos_sqlite_locked_total{{{j}}}[$__range]))", 20, 0, 4, 4, "short",
+             warn=1, crit=10, decimals=0),
+        row("Latency by route (API, route templates; streams and the worker long-poll not timed)", 4),
+        ts("p95 by route (top 10)", [target(f"topk(10, {hq(0.95, ', route')})", "{{route}}")], 0, 5, 12, 9, "s"),
+        ts("p50 by route (top 10)", [target(f"topk(10, {hq(0.5, ', route')})", "{{route}}")], 12, 5, 12, 9, "s"),
+        ts("Requests / min by route (top 10)",
+           [target(f"topk(10, sum by (route) (rate(pos_http_requests_total{{{j}, route=~\"$route\"}}[5m])) * 60)",
+                   "{{route}}")], 0, 14, 12, 8, "reqpm"),
+        ts("Error share (5xx, 4xx)",
+           [target(f"({err} or vector(0)) / {rate}", "5xx"),
+            target(f'(sum(rate(pos_http_requests_total{{{j}, status="4xx"}}[5m])) or vector(0)) / {rate}', "4xx",
+                   ref="B")], 12, 14, 12, 8, "percentunit"),
+        table("Slowest routes (p95 over the range)",
+              f"topk(15, histogram_quantile(0.95, sum by (le, route, method) "
+              f"(increase(pos_http_request_duration_seconds_bucket{{{j}}}[$__range]))))", 0, 22, 12, 9, "s"),
+        ts("Edge time (nginx request_time, /api)",
+           [target(f"quantile_over_time(0.95, {nginx} | unwrap request_time [5m]) by ()", "p95", ds=LOKI),
+            target(f"quantile_over_time(0.5, {nginx} | unwrap request_time [5m]) by ()", "p50", ds=LOKI, ref="B")],
+           12, 22, 12, 9, "s"),
+        row("Agents and work", 31),
+        ts("Run outcomes per hour", [target(f"sum by (status) (increase(pos_runs_total{{{j}}}[1h]))", "{{status}}")],
+           0, 32, 8, 8, "short", stack=True),
+        ts("Runs running", [target(f"sum(pos_runs_running{{{j}}})", "running")], 8, 32, 4, 8, "short"),
+        ts("Cost today (USD, UTC day)", [target(f"max(pos_cost_usd_today{{{j}}})", "today")], 12, 32, 6, 8,
+           "currencyUSD"),
+        bars("Cost per day (USD)", f"max_over_time(max(pos_cost_usd_today{{{j}}})[1d:5m])", 18, 32, 6, 8,
+             "currencyUSD", legend="last 24 h peak"),
+        ts("Review queue and Čeká na tebe",
+           [target(f"max(pos_review_queue{{{j}}})", "in review"),
+            target(f"max by (kind) (pos_needs_me{{{j}}})", "needs me: {{kind}}", ref="B")], 0, 40, 12, 8, "short"),
+        ts("SQLite lock errors (log lines and failed requests, per 5 min)",
+           [target('sum(count_over_time({host="svr03", stack="personalos"} |= "database is locked" [5m]))', "log lines",
+                   ds=LOKI),
+            target(f"sum(increase(pos_sqlite_locked_total{{{j}}}[5m]))", "failed requests", ref="B")],
+           12, 40, 12, 8, "short"),
+        logs("PersonalOS errors (api, worker, deployer)",
+             '{host="svr03", stack="personalos", level="error"} |~ "(?i)$search"', 0, 48, 24, 12),
+    ]
+    v = [var_query("route", "Route", f"label_values(pos_http_requests_total{{{j}}}, route)", multi=True,
+                   include_all=True, default="$__all"),
+         {"name": "search", "label": "Text", "type": "textbox", "query": "", "current": {"text": "", "value": ""}}]
+    v[0]["allValue"] = ".*"
+    return dashboard("obs-pos-perf", "PersonalOS výkon", p, v, ["personalos", "performance"], time_from="now-24h")
+
+
 def main() -> None:
     OUT.mkdir(exist_ok=True)
-    for d in (server_overview(), apps(), llm()):
-        (OUT / f"{d['uid']}.json").write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    for d in (server_overview(), apps(), llm(), pos_perf()):
+        (OUT / f"{d['uid']}.json").write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+                                              newline="\n")
         print("wrote", d["uid"])
 
 

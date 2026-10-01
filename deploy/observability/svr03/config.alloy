@@ -368,6 +368,18 @@ prometheus.scrape "sentinel" {
   forward_to      = [prometheus.remote_write.obs.receiver]
 }
 
+// PersonalOS API (pos.metrics): request count and latency by route template, run outcomes, the
+// review queue, cost per day. pos-api is reachable only on the Docker networks (proxy alias); its
+// /metrics answers direct requests from private addresses that did not come through a proxy.
+// Dashboard "PersonalOS výkon" (obs-pos-perf), alerts in group platform-personalos.
+prometheus.scrape "personalos" {
+  targets         = [{"__address__" = "pos-api:8000", "job" = "personalos"}]
+  metrics_path    = "/metrics"
+  scrape_interval = "30s"
+  scrape_timeout  = "10s"
+  forward_to      = [prometheus.remote_write.obs.receiver]
+}
+
 prometheus.scrape "nexus" {
   targets         = prometheus.exporter.postgres.nexus.targets
   scrape_interval = "60s"

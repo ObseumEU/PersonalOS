@@ -10,7 +10,7 @@ svr03 (192.168.1.108)                        agent (192.168.1.186)
 ```
 
 - **Grafana**: https://grafana.obseum.cloud (LAN and VPN; 403 outside), org **Obseum**, folder
-  **Obseum platform**: *Server overview*, *Apps*, *LLM usage*.
+  **Obseum platform**: *Server overview*, *Apps*, *LLM usage*, *PersonalOS výkon*.
 - The Grafana and Loki on .186 are **shared with the innogy project** (orgs Main, Obseum, Innogy).
   Everything here is additive: new provisioning files only (`00-obs-platform.yaml` dashboards
   provider, `obs-platform.yaml` datasource and alerting, all `orgId: 2`), a separate compose project
@@ -55,6 +55,18 @@ svr03 still pings) go only to the contact point *Home Assistant phone* → `obs-
 HA webhook (`HA_WEBHOOK_ID` in `.env`) → HA automation `server_outage_phone` →
 `notify.mobile_app_david_phone` (high priority; "Back up" on resolve). The reverse: HA pings .186
 (`binary_sensor.192_168_1_186`, automation `agent186_down_phone`, 3 min).
+
+**PersonalOS performance** (dashboard *PersonalOS výkon*, `obs-pos-perf`): the API's own
+`GET /metrics` (pos.metrics: `pos_http_requests_total` and `pos_http_request_duration_seconds` by
+route template, `pos_runs_total{status}`, `pos_review_queue`, `pos_needs_me{kind}`,
+`pos_cost_usd_today`, `pos_sqlite_locked_total`, `pos_live_subscribers`), scraped by svr03's Alloy
+as `job="personalos"` from `pos-api:8000` over the proxy network. /metrics is not routed by the web
+nginx or Caddy and answers only direct requests from private addresses without X-Forwarded-For
+(or `Authorization: Bearer $POS_METRICS_TOKEN` when that is set). The web nginx logs one JSON line
+per request with `request_time` and `upstream_time` (edge latency panel, LogQL `| json | unwrap
+request_time`). Alerts (group `platform-personalos`): p95 > 500 ms for 10 min and 5xx > 2 % for
+10 min go to the Monitor; failing (> 20 % 5xx) or very slow (p95 > 3 s) for 10 min pages the phone.
+All need ≥ 50 requests in 10 minutes, so a quiet night stays quiet.
 
 ## PersonalOS side
 

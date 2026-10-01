@@ -469,3 +469,92 @@ groups:
         annotations:
           summary: "LiteLLM key {{ $labels.api_key_alias }}: {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} of its budget left"
           dashboard: https://grafana.obseum.cloud/d/obs-llm
+
+  # ---------------------------------------------------------------- PersonalOS performance (pos.metrics)
+  # The API's own metrics, scraped by svr03's Alloy (job "personalos"). Only with real traffic, so a
+  # quiet night with three slow requests does not page anyone. Warnings go to the Monitor agent;
+  # the severe ones (page=phone) go to the owner's phone through Home Assistant only.
+  - orgId: 2
+    name: platform-personalos
+    folder: Obseum platform
+    interval: 1m
+    rules:
+      - uid: obs-pos-p95-slow
+        title: PersonalOS API p95 above 500 ms
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                histogram_quantile(0.95, sum by (le) (rate(pos_http_request_duration_seconds_bucket{job="personalos"}[5m])))
+                and on() sum(rate(pos_http_request_duration_seconds_count{job="personalos"}[5m])) > 0.05
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.5]}}]}
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: latency, severity: medium, host: svr03, app: personalos}
+        annotations:
+          summary: "PersonalOS API: p95 {{ with $values.A }}{{ humanizeDuration .Value }}{{ end }} for 10 minutes (slowest routes on the board)"
+          dashboard: https://grafana.obseum.cloud/d/obs-pos-perf
+
+      - uid: obs-pos-errors
+        title: PersonalOS API 5xx above 2%
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                (sum(rate(pos_http_requests_total{job="personalos", status="5xx"}[10m])) or vector(0))
+                / sum(rate(pos_http_requests_total{job="personalos"}[10m]))
+                and on() sum(increase(pos_http_requests_total{job="personalos"}[10m])) >= 50
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.02]}}]}
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: error_rate, severity: high, host: svr03, app: personalos}
+        annotations:
+          summary: "PersonalOS API: {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} of requests fail (5xx) for 10 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-pos-perf
+
+      # Severe: the owner's phone (Home Assistant). PersonalOS is barely usable, and its Monitor may
+      # be the thing that is failing.
+      - uid: obs-pos-severe
+        title: PersonalOS API failing or very slow
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                (
+                  ((sum(rate(pos_http_requests_total{job="personalos", status="5xx"}[10m])) or vector(0))
+                    / sum(rate(pos_http_requests_total{job="personalos"}[10m])) > 0.2)
+                  or
+                  (histogram_quantile(0.95, sum by (le) (rate(pos_http_request_duration_seconds_bucket{job="personalos"}[10m]))) > 3)
+                )
+                and on() sum(increase(pos_http_requests_total{job="personalos"}[10m])) >= 50
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0]}}]}
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, page: phone, kind: error_rate, severity: critical, host: svr03, app: personalos}
+        annotations:
+          summary: "PersonalOS API failing (over 20% 5xx) or very slow (p95 over 3 s) for 10 minutes"
+          dashboard: https://grafana.obseum.cloud/d/obs-pos-perf

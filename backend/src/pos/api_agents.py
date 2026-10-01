@@ -3,7 +3,7 @@
 from fastapi import HTTPException, APIRouter, Depends
 from pydantic import BaseModel
 
-from . import agents, approvals, killswitch, network, org, tasks
+from . import agents, approvals, killswitch, live, network, org, tasks
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .config import Settings, get_settings
@@ -361,12 +361,16 @@ def freeze_state(conn=Depends(get_db)):
 
 @router.post("/system/freeze")
 def freeze(body: FreezeIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
-    return killswitch.freeze(conn, ctx, body.reason)
+    out = killswitch.freeze(conn, ctx, body.reason)
+    live.poke()  # every open tab shows the banner at once
+    return out
 
 
 @router.post("/system/unfreeze")
 def unfreeze(conn=Depends(get_db), ctx=Depends(get_ctx)):
-    return killswitch.unfreeze(conn, ctx)
+    out = killswitch.unfreeze(conn, ctx)
+    live.poke()
+    return out
 
 
 @router.get("/needs-me")
