@@ -1,13 +1,28 @@
 import { ChevronDown, LogOut, MoreHorizontal, Power, X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { type FreezeState, agentsApi } from "../agentsApi";
 import { label, t } from "../i18n";
 import { useSubsystems } from "../knowledgeApi";
+import { useLive } from "../liveStream";
 import { useNeedsMe } from "../needsMeApi";
 import { KNOWLEDGE_TABS, SECTIONS, SETTINGS, SETTINGS_ROOT, type SubSection, sectionOf } from "../sections";
 import { OverlayHost } from "./overlay";
-import TaskSheetHost from "./tasks/TaskSheet";
+
+// The task panel (and the Markdown it renders) loads the first time a task or approval is opened.
+const TaskSheetHost = lazy(() => import("./tasks/TaskSheet"));
+
+function TaskSheetSlot() {
+  const loc = useLocation();
+  const q = new URLSearchParams(loc.search);
+  const open = /^\/tasks\/T-\d+$/i.test(loc.pathname) || q.has("task") || q.has("approval");
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <TaskSheetHost />
+    </Suspense>
+  );
+}
 
 export function Mark({ size = 22 }: { size?: number }) {
   return (
@@ -21,18 +36,17 @@ export function Mark({ size = 22 }: { size?: number }) {
 
 /** The kill switch state for the banner (the switch itself lives on Tým and Nastavení). */
 export function useFreeze() {
-  const [freeze, setFreeze] = useState<FreezeState>({ frozen: false });
+  // Pushed by the live stream (liveStream.ts); polled only while it is down.
+  const live = useLive<FreezeState>("freeze", agentsApi.freezeState, 30_000);
+  const [local, setLocal] = useState<FreezeState | null>(null);
+  useEffect(() => setLocal(null), [live]);
   useEffect(() => {
-    const load = () => agentsApi.freezeState().then(setFreeze, () => undefined);
-    load();
-    const h = setInterval(load, 20000);
+    // Right after this tab toggles the switch: show the new state at once.
+    const load = () => agentsApi.freezeState().then(setLocal, () => undefined);
     window.addEventListener("pos:freeze", load);
-    return () => {
-      clearInterval(h);
-      window.removeEventListener("pos:freeze", load);
-    };
+    return () => window.removeEventListener("pos:freeze", load);
   }, []);
-  return freeze;
+  return local ?? live ?? { frozen: false };
 }
 
 function FrozenBanner() {
@@ -266,7 +280,7 @@ export default function Shell({ children, onLogout }: { children: ReactNode; onL
         </button>
       </nav>
       {more && <MoreSheet onClose={() => setMore(false)} onLogout={onLogout} />}
-      <TaskSheetHost />
+      <TaskSheetSlot />
       <OverlayHost />
     </div>
   );

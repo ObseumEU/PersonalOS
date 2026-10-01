@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { useLive } from "./liveStream";
 
 export type KNode = {
   id: string;
@@ -65,14 +66,8 @@ export function useKnowledgeGraph() {
 
 export type Subsystem = { name: string; proto: string; ok: boolean; value: number | null; unit: string; detail: string; url: string | null };
 
-/** Live state of knowlage, Nexus and the runtimes (refreshed every minute). */
-export function useSubsystems() {
-  const [items, setItems] = useState<Subsystem[] | null>(null);
-  useEffect(() => {
-    const load = () => api<Subsystem[]>("/api/system/subsystems").then(setItems, () => setItems([]));
-    load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
-  }, []);
-  return items;
+/** Live state of knowlage, Nexus and the runtimes (pushed by the live stream every minute). */
+export function useSubsystems(): Subsystem[] | null {
+  const fetchIt = () => api<Subsystem[]>("/api/system/subsystems").catch(() => [] as Subsystem[]);
+  return useLive<Subsystem[]>("subsystems", fetchIt, 60_000) ?? null;
 }

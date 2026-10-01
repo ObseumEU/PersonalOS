@@ -2,6 +2,7 @@ import { ArrowRight, Orbit } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { LOCALE, t } from "../i18n";
+import { useLiveStatus } from "../liveStream";
 
 export function Panel({
   title,
@@ -70,10 +71,13 @@ function useNow() {
 
 let healthState: { ok: boolean | null; at: number } = { ok: null, at: 0 };
 
-/** "API online" from a live /api/health check (shared by every header, every 30 s). */
+/** "API online": the tab's live stream is open (liveStream.ts); while it is down, /api/health
+ * decides (every 30 s, shared by every header). */
 function ApiStatus() {
-  const [ok, setOk] = useState<boolean | null>(healthState.ok);
+  const live = useLiveStatus();
+  const [polled, setOk] = useState<boolean | null>(healthState.ok);
   useEffect(() => {
+    if (live === "open") return;
     let alive = true;
     const check = () => {
       if (Date.now() - healthState.at < 25000 && healthState.ok !== null) return setOk(healthState.ok);
@@ -84,13 +88,14 @@ function ApiStatus() {
           if (alive) setOk(v);
         });
     };
-    check();
-    const t = setInterval(check, 30000);
+    if (live === "down") check();
+    const t = setInterval(() => live === "down" && check(), 30000);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [live]);
+  const ok = live === "open" ? true : live === "down" ? polled : healthState.ok;
   return (
     <span className="flex items-center gap-2 text-sm">
       <span className={`h-[7px] w-[7px] rounded-full ${ok === false ? "bg-red-400" : ok ? "sonar bg-accent" : "bg-dim"}`} />

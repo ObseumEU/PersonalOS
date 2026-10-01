@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { subscribe, useLiveStatus } from "./liveStream";
 
 /** One thing that waits for the owner (GET /api/needs-me). */
 export type NeedsItem = {
@@ -51,19 +52,38 @@ export function dropNeedsItem(key: string) {
   subs.forEach((f) => f(state!));
 }
 
+// Pushed by the tab's live stream (liveStream.ts) whenever it changes.
+let streamed = false;
+function fromStream() {
+  if (streamed) return;
+  streamed = true;
+  subscribe<NeedsMe>("needs", (s) => {
+    state = s;
+    subs.forEach((f) => f(s));
+  });
+}
+
 export function useNeedsMe(): NeedsMe | null {
   const [s, setS] = useState<NeedsMe | null>(state);
+  const live = useLiveStatus();
   useEffect(() => {
+    // Polled only while the stream is down.
+    if (live !== "down") return;
+    const t = setInterval(() => document.visibilityState === "visible" && refreshNeedsMe(), 30000);
+    return () => clearInterval(t);
+  }, [live]);
+  useEffect(() => {
+    fromStream();
     subs.add(setS);
-    if (subs.size === 1) refreshNeedsMe();
-    else if (state) setS(state);
-    const t = setInterval(() => document.visibilityState === "visible" && refreshNeedsMe(), 20000);
+    // The stream's first snapshot normally comes within a second; HTTP only if it does not.
+    const first = state ? undefined : window.setTimeout(() => !state && refreshNeedsMe(), 2500);
+    if (state) setS(state);
     const on = () => refreshNeedsMe();
     window.addEventListener("pos:approvals", on);
     window.addEventListener("pos:needs-me", on);
     return () => {
       subs.delete(setS);
-      clearInterval(t);
+      window.clearTimeout(first);
       window.removeEventListener("pos:approvals", on);
       window.removeEventListener("pos:needs-me", on);
     };

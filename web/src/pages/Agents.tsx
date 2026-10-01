@@ -9,6 +9,7 @@ import HiringPanel, { InvitePanel } from "../components/Hiring";
 import { Panel } from "../components/ui";
 import { ago as agoCs, label, t } from "../i18n";
 import { StructureList } from "./Org";
+import { useLiveReload } from "../liveStream";
 
 const input = "h-8 w-full rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
@@ -225,9 +226,8 @@ export default function Agents() {
   }, []);
   useEffect(() => {
     load();
-    const h = setInterval(load, 15000); // live status
-    return () => clearInterval(h);
   }, [load]);
+  useLiveReload(["actor", "run", "task"], load); // live status
 
   const list = data?.agents.filter((a) => showArchived || !a.archived) ?? [];
   const archivedCount = data?.agents.filter((a) => a.archived).length ?? 0;

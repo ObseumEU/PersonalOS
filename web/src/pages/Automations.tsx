@@ -8,6 +8,7 @@ import { NewSchedule, PausedBadge, type Schedule, resultText, until } from "../c
 import { PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
 import { markdownSnippet } from "../markdownText";
+import { useLiveReload } from "../liveStream";
 
 type Job = {
   id: number;
@@ -55,9 +56,9 @@ export default function Automations() {
   }, []);
   useEffect(() => {
     load();
-    const h = setInterval(load, 20000);
-    return () => clearInterval(h);
   }, [load]);
+  // Runs of jobs and schedules write no audit entry: the safety reload keeps "last run" fresh.
+  useLiveReload(["job", "schedule", "route", "run"], load, { safetyMs: 60_000 });
   const patch = (path: string, body: unknown) => api(path, { method: "PATCH", body: JSON.stringify(body) });
   const post = (path: string) => api(path, { method: "POST" });
   // One list: the platform's jobs (owner: System) and every member's schedules.
