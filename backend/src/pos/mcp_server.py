@@ -109,7 +109,7 @@ TOOL_PERMISSIONS = {
     # HR's roster and scores: the owner, the HR agent and the Agent coach.
     "hr_overview": "hr:read",
     # Your own task needs tasks:claim, someone else's tasks:write (checked in pos.org).
-    "handoff_task": "tasks:read", "org_chart": "tasks:read",
+    "handoff_task": "tasks:read", "org_chart": "tasks:read", "stuck_tasks": "tasks:read",
     # Reassign a task and wake the new agent (pos.reassign); the COO and leads route work with it.
     "task_reassign": "tasks:write",
     # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
@@ -904,6 +904,18 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "org_chart") as (conn, c):
             return [{k: m[k] for k in ("name", "kind", "role", "team", "reports_to_name", "status")}
                     for m in org.chart(conn)]
+
+    @mcp.tool(description="Your team's stuck tasks in one call (read-only). team: a head's name (default you: "
+                          "everyone below you in the org chart; only the owner, CEO and COO see other teams). "
+                          "Stuck: working/next with no movement (change, comment, progress, run) for `hours`, "
+                          "or held back (retry_after), or the last run failed or hit the budget; plus the team's "
+                          "tasks now with the owner (owner_assigned, not ask_owner tickets).")
+    def stuck_tasks(ctx: Context, team: str | None = None, hours: float = 6,
+                    include_owner_assigned: bool = True) -> dict:
+        from . import head_alerts
+
+        with session(ctx, "stuck_tasks", team=team, hours=hours) as (conn, c):
+            return head_alerts.stuck(conn, c.actor_id, team, hours, include_owner_assigned)
 
     @mcp.tool(description="All agent runs happening right now.")
     def list_active_runs(ctx: Context) -> list[dict]:

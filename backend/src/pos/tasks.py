@@ -348,7 +348,12 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         # Every task says what it is for, where it came from and what done looks like.
         values["notes"] = task_descriptions.build(conn, values)
         values["description_generated"] = 1
-    return get(conn, ctx, versioning.insert(conn, ctx, ENTITY, values)["id"])
+    new_id = versioning.insert(conn, ctx, ENTITY, values)["id"]
+    if me["kind"] != "human" and values.get("assignee_id") == actors.owner_id(conn):
+        from . import head_alerts
+
+        head_alerts.assigned(conn, ctx, new_id)  # an agent's task for the owner: its head hears of it
+    return get(conn, ctx, new_id)
 
 
 def capture(conn: sqlite3.Connection, ctx: Ctx, text: str, source: str | None = None) -> dict:
@@ -749,6 +754,10 @@ def assign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, assignee) -> dict:
     if row["retry_after"] and actors.get(conn, ctx.actor_id)["kind"] == "human":
         changes["retry_after"] = None  # a person hands it out again: no back-off
     versioning.update(conn, ctx, ENTITY, task_id, {**cols, **changes}, action="assign")
+    if cols.get("assignee_id") == actors.owner_id(conn) and row["assignee_id"] != cols.get("assignee_id"):
+        from . import head_alerts
+
+        head_alerts.assigned(conn, ctx, task_id, row["assignee_id"])
     return get(conn, ctx, task_id)
 
 
