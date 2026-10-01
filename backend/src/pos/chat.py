@@ -750,6 +750,11 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
             conn, ctx, channel_id, owner in (others if ch["kind"] == "dm" else mentioned))
     if not system and author["is_owner"]:
         _owner_dm_interventions(conn, ctx, ch, targets, atts)
+        from . import learning
+
+        # The owner correcting an agent's result: a lesson for it (pos.learning).
+        learning.on_owner_message(conn, ctx, list(targets), body,
+                                  [x["id"] for x in atts if x.get("type") == "task"] or None)
     if not system and author["kind"] == "human" and priority != "stop" and not ack and meeting is None:
         for aid in [*targets, *[r for r in routed if r not in targets]]:
             _ask_to_answer(conn, ctx, ch, aid, mid, body, priority)

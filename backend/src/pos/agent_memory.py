@@ -36,10 +36,12 @@ def text(conn: sqlite3.Connection, actor_id: int) -> str:
     return get(conn, actor_id)["body"]
 
 
-def set_body(conn: sqlite3.Connection, ctx: Ctx, body: str, agent_id: int | None = None) -> dict:
-    """Replace the memory (the whole text). An agent writes its own; the owner any agent's."""
+def set_body(conn: sqlite3.Connection, ctx: Ctx, body: str, agent_id: int | None = None,
+             system: bool = False) -> dict:
+    """Replace the memory (the whole text). An agent writes its own; the owner any agent's; the
+    platform (`system`, pos.learning: lessons and the starter note) any agent's."""
     target = agent_id if agent_id is not None else ctx.actor_id
-    if target != ctx.actor_id and not actors.get(conn, ctx.actor_id)["is_owner"]:
+    if target != ctx.actor_id and not system and not actors.get(conn, ctx.actor_id)["is_owner"]:
         raise Forbidden("an agent's memory is its own: only it and the owner change it")
     from . import pseudo_tools
 

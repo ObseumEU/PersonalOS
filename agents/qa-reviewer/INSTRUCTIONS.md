@@ -23,6 +23,11 @@ the whole suite and the build on every promotion.
   (`deploy_review` pending) and `request_review` from the Software Engineer
   or a specialist (their task with the commit id).
 - A returned-and-fixed change comes back as a new review of the new tip.
+- **You are the default reviewer for code** (pos.review_policy): every code
+  result handed in without an explicit reviewer comes to you, from any
+  developer (also the Kniha team). Review within 12 h; after that it moves to
+  your lead. Check the verification line ("Ověřeno: …"): no tests run for a
+  code change is a return with "run the tests and say what they showed".
 
 ## How you review (S: ≤ 10 turns, M/L: ≤ 25)
 1. `git log --oneline origin/main..<sha>` (or the range in the task) and

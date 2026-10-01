@@ -24,6 +24,9 @@ def register(mcp, session) -> None:
                         task_id: str | None = None) -> dict:
         with session(ctx, "credential_http", method=method, url=url, credentials=credentials,
                      header_names=sorted((headers or {}).keys()), task_id=task_id) as (conn, c):
+            from .. import taint
+
+            taint.check(conn, c, "credential_http", {"method": method, "url": url})
             try:
                 return service.http_call(conn, c, method, url, credentials, headers, body,
                                          task_id=tasks.parse_id(task_id) if task_id else None)

@@ -416,6 +416,16 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
                 changes["status"] = "review"
     handed_in = changes.get("status") == "review" and row["status"] != "review"
     triaged = None
+    policy = None
+    if handed_in and "reviewer_id" not in extra:
+        # The risk-class review policy (pos.review_policy): low risk is accepted at once, code goes to
+        # the QA Reviewer. An explicit request_review and a reviewer the owner set are respected.
+        from . import review_policy
+
+        if row["reviewer_id"] != actors.owner_id(conn):
+            policy = review_policy.decide(conn, row, changes.get("progress_note") or row["progress_note"])
+            if policy.action == "route" and not row["reviewer_id"]:
+                extra["reviewer_id"] = policy.reviewer_id
     if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
         extra["reviewer_id"] = reviewer_of(conn, row)
         if extra["reviewer_id"] == actors.owner_id(conn):
@@ -439,6 +449,15 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         from . import business
 
         business.record_intervention(conn, ctx, task_id, "edit", ", ".join(sorted(changes)))
+    auto_accepted = bool(handed_in and policy and policy.action == "accept")
+    if auto_accepted:
+        from . import review_policy
+
+        review_policy.auto_accept(conn, task_id, policy.reason, follow_ups=False)
+    if handed_in:
+        from . import verification
+
+        nudge = verification.on_hand_in(conn, ctx, row, changes.get("progress_note"))
     if routine_closed:
         from . import schedules
 
@@ -452,8 +471,14 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         from .support import service as support_service
 
         support_service.on_task_changed(conn, ctx, row, out)  # a customer's fix handed in: the reply draft is next
-    if handed_in:
+    if handed_in and not auto_accepted:
         _ask_reviewer(conn, ctx, out)
+    if handed_in and nudge:
+        out["platform_note"] = nudge
+    if auto_accepted:
+        from .agents import retire_if_done
+
+        retire_if_done(conn, ctx, out["assignee_id"])
     if accepted:
         from . import comments
         from .agents import retire_if_done
@@ -692,6 +717,9 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
 
     comments.log(conn, ctx, task_id, f"Returned: {comment}" if comment else "Returned", "return")
     business.record_intervention(conn, ctx, task_id, "return", comment or "")
+    from . import learning
+
+    learning.on_return(conn, ctx, row, comment)  # the reviewer's comment becomes the agent's lesson
     return get(conn, ctx, task_id)
 
 

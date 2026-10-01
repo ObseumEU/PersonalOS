@@ -14,9 +14,10 @@ keep it that way:
   task count on that task (`tasks.interventions`, history action `intervene`,
   audit `intervention` with the kind), deduplicated per task and kind for
   30 minutes. Each kind has an estimate of the owner's minutes.
-- **Review SLA**: a result waiting over 24 h for an agent reviewer goes to that
+- **Review SLA**: a result waiting over 12 h for an agent reviewer goes to that
   reviewer's lead; a result that would wait for the owner goes to the CEO first
-  (at hand-in, and after 24 h for older ones); the CEO accepts what it can and
+  (at hand-in, and after 12 h for older ones); low-risk results are auto-accepted and code goes to
+  the QA Reviewer at hand-in (pos.review_policy); the CEO accepts what it can and
   hands the owner only what truly needs him (request_review reviewer=Owner).
 - **Escalation dedup**: an agent escalating an item that already has an open
   escalation (the same source task, e.g. one invoice) gets that task back with
@@ -453,7 +454,7 @@ def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: di
 
 # ------------------------------------------------------------------ review SLA
 
-REVIEW_SLA_HOURS = 24
+REVIEW_SLA_HOURS = 12  # pos.review_policy.SLA_HOURS (was 24 h until the 2026-10 review burn-down)
 
 
 def system_ctx(conn: sqlite3.Connection) -> Ctx:
@@ -481,9 +482,11 @@ def _can_review(conn: sqlite3.Connection, actor_id: int) -> bool:
     return _can_review_as_agent(conn, actor_id)
 
 
-def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int = 30) -> dict:
-    """Results waiting over 24 h: the reviewer's lead takes them over; the owner's go to the CEO
-    to triage. The CEO's own reviews get one reminder a day (its lead is the owner)."""
+def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int = 30,
+               dry_run: bool = False) -> dict:
+    """Results waiting over REVIEW_SLA_HOURS: the reviewer's lead takes them over; the owner's go to
+    the CEO to triage. The CEO's own reviews get one reminder per SLA period (its lead is the owner).
+    `dry_run`: only say what would move (pos.review_policy's backlog run)."""
     from . import chat, comments, tasks, versioning, wake
 
     now = now or datetime.now(timezone.utc)
@@ -503,7 +506,9 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
         elif reviewer == ceo:
             last = conn.execute("""SELECT MAX(at) FROM audit_log WHERE action = 'review_reminder' AND entity = 'task'
                                    AND entity_id = ?""", (row["id"],)).fetchone()[0]
-            if not last or last < cutoff:
+            if (not last or last < cutoff) and dry_run:
+                reminded.append(ref)
+            elif not last or last < cutoff:
                 sys_ctx = system_ctx(conn)
                 chat.send_dm(conn, sys_ctx, ceo, f"{ref} '{row['title']}' waits for your review over "
                                                  f"{REVIEW_SLA_HOURS} h: accept it, return it, or hand it to the "
@@ -529,6 +534,9 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
             why = f"no review in {REVIEW_SLA_HOURS} h: the reviewer's lead takes it over"
         if not target or target == reviewer:
             continue
+        if dry_run:
+            moved.append(f"{ref}→{actors.get(conn, target)['name']}")
+            continue
         sys_ctx = system_ctx(conn)
         versioning.update(conn, sys_ctx, tasks.ENTITY, row["id"], {"reviewer_id": target}, action="review_escalate")
         name = actors.get(conn, target)["name"]
@@ -543,7 +551,8 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
                      priority="fyi", attachments=[{"type": "task", "id": row["id"]}], system=True)
         wake.wake(target)
         moved.append(f"{ref}→{name}")
-    conn.commit()
+    if not dry_run:
+        conn.commit()
     return {k: v for k, v in (("moved", moved), ("reminded", reminded)) if v}
 
 

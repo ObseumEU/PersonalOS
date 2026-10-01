@@ -155,6 +155,9 @@ def register_mcp_tools(mcp, session) -> None:
     from .support import service as support
 
     support.register_mcp(mcp, session)  # customer issues: reply drafts in Gmail, issue tasks (Customer Success)
+    from . import taint
+
+    taint.register_mcp(mcp, session)  # security_confirm: the Security Engineer's verdict on a tainted run's action
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:
