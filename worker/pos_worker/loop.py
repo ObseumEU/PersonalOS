@@ -270,6 +270,8 @@ class Worker:
                        f"triage: {check['verdict']}, {check['action'].replace('_', ' ')}")
             log.info("%s: triage said %s, no full run", ref, check["verdict"])
             return "triaged"
+        if started.get("knowledge"):  # the knowledge base's passages for this task (pos.knowledge_first)
+            task = {**task, "knowledge": started["knowledge"]}
         try:
             return self._run_task(ref, task, run_id, engine, started.get("model"), check)
         except Exception as e:  # noqa: BLE001 - report it, hand the task back, keep the worker alive

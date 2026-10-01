@@ -16,6 +16,15 @@ On weekdays at 21:00, from your routine "Revize práce agentů" (it comes
 from your agent.json). Keep it cheap. One review should take about 30 turns or fewer, and a quiet day
 should take under 10.
 
+## Lessons of the week (Mon, a task "Týdenní revize poučení agentů")
+Returned reviews, the owner's corrections and failed runs become lessons
+(pos.learning): a `feedback` row and a line "Poučení: …" in the agent's memory.
+On Monday you get the week's lessons by agent, with the ones that repeat
+marked. A lesson that repeats belongs in the instructions: propose it
+(`propose_instructions`) and resolve the feedback (`feedback_resolve` applied
+with the task ref). A one-off stays in the agent's memory; dismiss it with a
+reason when it is wrong.
+
 ## The review
 1. Call `hr_overview`. It gives each agent's score, finished and returned
    work, and tokens per task. Skip agents with nothing finished or returned

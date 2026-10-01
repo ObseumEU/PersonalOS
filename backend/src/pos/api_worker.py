@@ -6,6 +6,7 @@ idle agent never spends tokens (AGENTS-SPEC 4.2).
 """
 
 import json
+import logging
 import sqlite3
 import time
 
@@ -18,6 +19,7 @@ from .config import Settings, get_settings
 from .core import Ctx, Forbidden, now_iso
 from .db import connect
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/worker", tags=["worker"])
 
 
@@ -84,7 +86,7 @@ def _state(conn: sqlite3.Connection, actor_id: int, run_id: int | None = None) -
 
 @router.get("/me")
 def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
-    from . import business
+    from . import business, verification
     from .guard import prompt as guard_prompt
 
     row = actors.get(conn, ctx.actor_id)
@@ -100,7 +102,7 @@ def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
         # pool runs many agents in one container, so each one's settings come from here, not the env.
         "profile": agents_code.worker_profile(row["name"], role=row["role"]),
         # Platform notes for its prompt (pos.business: e.g. contacting the owner past the chain of command).
-        "nudges": business.nudges(conn, ctx.actor_id),
+        "nudges": business.nudges(conn, ctx.actor_id) + verification.nudges(conn, ctx.actor_id),
         **_state(conn, ctx.actor_id),
     }
 
@@ -170,9 +172,11 @@ async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Se
 
 @router.get("/memory")
 def my_memory(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
-    """This agent's pinned memory, for the prompt of its next run."""
-    from . import agent_memory
+    """This agent's pinned memory, for the prompt of its next run (a starter note when it has none)."""
+    from . import agent_memory, learning
 
+    if learning.ensure_memory(conn, ctx.actor_id):
+        conn.commit()
     return agent_memory.get(conn, ctx.actor_id)
 
 
@@ -413,8 +417,36 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     from .access import service as access
 
     # The agent's max USD per run (pos.access): the worker hands it to the engine as its cost cap.
-    return {"run_id": res.run_id, "engine": engine, "model": model,
-            "max_budget_usd": access.run_cap_usd(conn, ctx.actor_id)}
+    out = {"run_id": res.run_id, "engine": engine, "model": model,
+           "max_budget_usd": access.run_cap_usd(conn, ctx.actor_id)}
+    if tid is not None:
+        out.update(_run_context(conn, ctx, tid, res.run_id))
+    return out
+
+
+def _run_context(conn: sqlite3.Connection, ctx: Ctx, tid: int, run_id: int) -> dict:
+    """What a run starts with besides its task: the tainted-run mark when the task carries outside
+    content (pos.taint), and the knowledge base's passages for it (pos.knowledge_first). Fail-open."""
+    from . import knowledge_first, taint
+
+    out: dict = {}
+    try:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
+        if row is not None:
+            taint.mark_task(conn, ctx.actor_id, row, run_id)
+        conn.commit()
+        rctx = Ctx(ctx.actor_id, via="worker", run_id=run_id)
+        kn = knowledge_first.preload(conn, rctx, {**dict(row), "ref": tasks.display_id(tid)}) if row else None
+        if kn:
+            for source in kn["external"]:
+                taint.mark(conn, ctx.actor_id, f"knowlage:{source}", kn["text"][:1500], "knowledge pre-load", run_id)
+            out["knowledge"] = kn["text"]
+            out["knowledge_chunks"] = kn["chunks"]
+        conn.commit()
+    except Exception:  # noqa: BLE001 - the run starts either way
+        log.exception("run context for T-%s", tid)
+        conn.rollback()
+    return out
 
 
 class BeatIn(BaseModel):
@@ -484,6 +516,14 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
     if body.status == "error" and row["task_id"] and not out.get("requeued"):
         back_off(conn, row["task_id"])  # a failed task is not retried at once
         conn.commit()
+    if body.status == "error" and not out.get("requeued"):
+        from . import learning
+
+        try:  # a failure with a clear lesson goes into the agent's memory (pos.learning)
+            if learning.on_failed_run(conn, conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()):
+                conn.commit()
+        except Exception:  # noqa: BLE001 - the run's end is what matters here
+            conn.rollback()
     if body.status == "cancelled" and row["task_id"] and not (body.detail or "").startswith("could not claim"):
         from . import owner_notice
 
@@ -681,9 +721,12 @@ def browser_credential(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(work
 @router.post("/browser/log")
 def browser_log(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
                 settings: Settings = Depends(get_settings)):
-    from . import browser
+    from . import browser, taint
 
-    return browser.record(conn, ctx, settings.data_dir, body)
+    out = browser.record(conn, ctx, settings.data_dir, body)
+    if taint.mark_browser(conn, ctx.actor_id, body.get("url"), browser._run_ctx(conn, ctx, body.get("run_id")).run_id):
+        conn.commit()  # a web page read in this run taints it (pos.taint)
+    return out
 
 
 @router.get("/approvals/{approval_id}")

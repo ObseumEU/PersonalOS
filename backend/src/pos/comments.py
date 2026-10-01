@@ -34,6 +34,10 @@ def add(conn: sqlite3.Connection, ctx: Ctx, task_id: int, body: str, kind: str =
         from . import asks
 
         asks.on_comment(conn, ctx, row, body)  # an answer on an ask_owner ticket reaches the asker
+        if actors.get(conn, ctx.actor_id)["is_owner"]:
+            from . import learning
+
+            learning.on_owner_comment(conn, ctx, row, body)  # the owner correcting a result: a lesson
     return _view(conn, out)
 
 

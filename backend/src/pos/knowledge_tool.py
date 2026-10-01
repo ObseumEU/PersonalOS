@@ -88,6 +88,16 @@ def ask(question: str, *, effort: int | None = None) -> dict:
             "insufficient_evidence": out.get("insufficient_evidence", False)}
 
 
+def external_sources(out: dict) -> list[str]:
+    """The external sources (mail, Drive, web) among a result's passages; an answer without
+    recognisable passages counts as external (fail-closed for the tainted-run rule, pos.taint)."""
+    from .knowledge_first import INTERNAL_SOURCES, parse
+
+    text = out.get("results") or out.get("answer") or ""
+    sources = {p["source"].lower() for p in parse(text)} or {"knowlage"}
+    return sorted(sources - INTERNAL_SOURCES)
+
+
 def register_mcp(mcp, session) -> None:
     from mcp.server.mcpserver import Context
     from mcp.server.mcpserver.exceptions import ToolError
@@ -116,7 +126,16 @@ def register_mcp(mcp, session) -> None:
             pass
         try:
             if mode == "ask":
-                return ask(query, effort=effort)
-            return search(query, k=k, effort=effort, date_from=date_from, date_to=date_to, sources=sources)
+                out = ask(query, effort=effort)
+            else:
+                out = search(query, k=k, effort=effort, date_from=date_from, date_to=date_to, sources=sources)
         except Unavailable as e:
             raise ToolError(f"knowledge base: {e}") from e
+        external = external_sources(out)
+        if external:  # passages from outside taint this run (pos.taint)
+            from . import taint
+
+            with session(ctx, f"{TOOL}:taint", sources=external) as (conn, c):
+                taint.mark(conn, c.actor_id, "knowlage", (out.get("results") or out.get("answer") or "")[:1500],
+                           "knowledge tool")
+        return out

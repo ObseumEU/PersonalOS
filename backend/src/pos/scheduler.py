@@ -433,7 +433,30 @@ def projects_weekly(conn: sqlite3.Connection) -> dict:
     return project_info.weekly_job(conn)
 
 
+def learning_weekly(conn: sqlite3.Connection) -> dict:
+    from . import learning
+
+    return learning.coach_weekly(conn)
+
+
+def memories_ensure(conn: sqlite3.Connection) -> dict:
+    from . import learning
+
+    out = learning.ensure_memories(conn)
+    conn.commit()
+    return out if out.get("created") else {}
+
+
+def ceo_business_focus(conn: sqlite3.Connection) -> dict:
+    from . import effectiveness
+
+    return effectiveness.ceo_digest(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "learning_weekly": learning_weekly,
+    "memories_ensure": memories_ensure,
+    "ceo_business_focus": ceo_business_focus,
     "projects_weekly": projects_weekly,
     "review_sla": review_sla,
     "idle_agents": idle_agents,
@@ -508,7 +531,12 @@ DEFAULT_JOBS = [
     # Business value (pos.business): reviews never wait over 24 h (the owner's go to the CEO first),
     # idle agents are flagged to the CEO, the company's GitHub issues and PRs reach the CTO's triage,
     # and a weekly report nobody published is published from its numbers.
-    ("Reviews: over 24 h to the reviewer's lead, the owner's to the CEO", "every 60m", "review_sla"),
+    ("Reviews: over 12 h to the reviewer's lead, the owner's to the CEO", "every 60m", "review_sla"),
+    # Agent effectiveness (pos.learning, pos.effectiveness): lessons → the Performance Coach weekly, every
+    # agent has a memory note, the CEO's business-focus digest (target ≥ 50 % of spend on business work).
+    ("Lessons of the week → the Performance Coach", "weekly mon 06:45", "learning_weekly"),
+    ("Every agent has a memory note", "daily 05:50", "memories_ensure"),
+    ("CEO: business focus of the week (cost split, idle agents)", "weekly mon 07:50", "ceo_business_focus"),
     ("Agents without input for 7 days → the CEO", "weekly mon 07:45", "idle_agents"),
     ("GitHub: new issues and PRs in the company's repositories → triage", "every 30m", "github_triage"),
     ("Weekly report: publish a draft nobody published", "every 60m", "weekly_publish_overdue"),

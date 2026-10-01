@@ -227,6 +227,9 @@ def register_mcp(mcp, session) -> None:
 
         with session(ctx, "ha_ws", types=[str(m.get("type")) for m in messages if isinstance(m, dict)][:20],
                      task_id=task_id) as (conn, c):
+            from . import taint
+
+            taint.check(conn, c, "ha_ws", {"messages": messages})
             try:
                 return ws_call(conn, c, messages, task_id=tasks.parse_id(task_id) if task_id else None,
                                match=match)
@@ -244,6 +247,9 @@ def register_mcp(mcp, session) -> None:
         from .credentials import service as creds
 
         with session(ctx, "ha_ssh", command=(command or "")[:500], task_id=task_id) as (conn, c):
+            from . import taint
+
+            taint.check(conn, c, "ha_ssh", {"command": command})
             try:
                 return ssh_call(conn, c, command, timeout=timeout,
                                 task_id=tasks.parse_id(task_id) if task_id else None)
