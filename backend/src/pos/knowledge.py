@@ -243,30 +243,59 @@ def _probe(url: str) -> tuple[bool, int | None, object]:
         return False, None, str(e)[:120]
 
 
-def subsystems(conn) -> list[dict]:
-    """Live state of what PersonalOS depends on: knowlage, Nexus, the runtimes."""
-    from . import engines
+_sub_lock = threading.Lock()
+_sub_refresh = threading.Lock()
+SUB_FRESH_S = 30
 
-    hit = _sub_cache.get("v")
-    if hit and time.monotonic() - hit[0] < 30:
-        out = hit[1]
-    else:
-        out = []
+
+def _probe_all() -> list[dict]:
+    """Probe knowlage and Nexus side by side (each probe can take a few hundred ms)."""
+    def kb() -> dict:
         ok, ms, _ = _probe(base_url() + "/api/health")
         stats = _probe(base_url() + "/api/stats")[2] if ok else None
         detail = (f"{stats['documents']:,} documents · {stats['chunks']:,} chunks".replace(",", " ")
                   if isinstance(stats, dict) else "unreachable")
-        out.append({"name": "Knowledge base", "proto": "knowlage · A2A", "ok": ok, "value": ms, "unit": "ms",
-                    "detail": detail, "url": public_url()})
-        nexus = os.environ.get("POS_NEXUS_URL") or os.environ.get("POS_NEXUS_A2A_URL", "").split("/a2a")[0]
-        if nexus:
-            ok, ms, info = _probe(nexus.rstrip("/") + "/health")
-            out.append({"name": "Nexus", "proto": "A2A facade", "ok": ok, "value": ms, "unit": "ms",
-                        "detail": "reachable" if ok else f"not reachable ({info})", "url": nexus})
-        else:
-            out.append({"name": "Nexus", "proto": "A2A facade", "ok": False, "value": None, "unit": "",
-                        "detail": "not connected yet (POS_NEXUS_A2A_URL)", "url": None})
-        _sub_cache["v"] = (time.monotonic(), out)
+        return {"name": "Knowledge base", "proto": "knowlage · A2A", "ok": ok, "value": ms, "unit": "ms",
+                "detail": detail, "url": public_url()}
+
+    nexus = os.environ.get("POS_NEXUS_URL") or os.environ.get("POS_NEXUS_A2A_URL", "").split("/a2a")[0]
+    if not nexus:
+        return [kb(), {"name": "Nexus", "proto": "A2A facade", "ok": False, "value": None, "unit": "",
+                       "detail": "not connected yet (POS_NEXUS_A2A_URL)", "url": None}]
+    res: dict = {}
+    t = threading.Thread(target=lambda: res.setdefault("nx", _probe(nexus.rstrip("/") + "/health")), daemon=True)
+    t.start()
+    first = kb()
+    t.join()
+    ok, ms, info = res["nx"]
+    return [first, {"name": "Nexus", "proto": "A2A facade", "ok": ok, "value": ms, "unit": "ms",
+                    "detail": "reachable" if ok else f"not reachable ({info})", "url": nexus}]
+
+
+def _refresh_subsystems() -> None:
+    try:
+        _sub_cache["v"] = (time.monotonic(), _probe_all())
+    finally:
+        _sub_refresh.release()
+
+
+def subsystems(conn) -> list[dict]:
+    """Live state of what PersonalOS depends on: knowlage, Nexus, the runtimes.
+
+    The probes are cached; a stale cache is served at once and refreshed in the
+    background, so the request never waits on the probes (T-464: p95 alert)."""
+    from . import engines
+
+    hit = _sub_cache.get("v")
+    if hit is None:
+        with _sub_lock:
+            hit = _sub_cache.get("v")
+            if hit is None:
+                hit = (time.monotonic(), _probe_all())
+                _sub_cache["v"] = hit
+    elif time.monotonic() - hit[0] >= SUB_FRESH_S and _sub_refresh.acquire(blocking=False):
+        threading.Thread(target=_refresh_subsystems, daemon=True).start()
+    out = hit[1]
     st = engines.status(conn)
     order = st.get("order", ["codex", "claude"])
     free = [e for e in order if (st["codex"]["can_run"] if e == "codex" else not st["claude"]["paused_until"])]
