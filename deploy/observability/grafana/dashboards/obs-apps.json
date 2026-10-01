@@ -37,6 +37,13 @@
       "type": "link",
       "icon": "dashboard",
       "targetBlank": false
+    },
+    {
+      "title": "PersonalOS výkon",
+      "url": "https://grafana.obseum.cloud/d/obs-pos-perf",
+      "type": "link",
+      "icon": "dashboard",
+      "targetBlank": false
     }
   ],
   "templating": {

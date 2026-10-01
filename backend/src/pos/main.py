@@ -4,10 +4,10 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from . import __doc__ as description
 from . import (a2a, actors, api_agents, api_chat, api_connectors, api_deploys, api_files, api_projects, api_tasks,
@@ -162,6 +162,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         same_site="lax",
         https_only=settings.secure_cookies,
     )
+    from . import metrics
+
+    # Outermost: every request counted and timed by route template (GET /metrics, pos.metrics).
+    app.add_middleware(metrics.Metrics)
     app.include_router(auth_router)
     app.include_router(budget_router)
     from .access.api import router as access_router
@@ -195,6 +199,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_reports.router)  # weekly reports and goals (pos.weekly, pos.goals)
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
+
+    app.add_route("/metrics", metrics.endpoint(settings.db_path), methods=["GET"], include_in_schema=False)
+
+    @app.get("/api/stream", tags=["system"], dependencies=[Depends(require_user)])
+    async def live_stream(request: Request, timeout: float | None = None, ctx=Depends(api_tasks.get_ctx)):
+        """One live stream per tab (Server-Sent Events, pos.live): health, the kill switch,
+        subsystems, "Čeká na tebe", typing and working, and which kinds of things changed."""
+        from . import live
+
+        gen = live.stream(settings.db_path, ctx.actor_id, timeout=min(timeout, 30) if timeout else None,
+                          disconnected=request.is_disconnected)
+        return StreamingResponse(gen, media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/health", tags=["system"])
     def health() -> dict[str, str]:

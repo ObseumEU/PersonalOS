@@ -1,9 +1,10 @@
 {
-  "uid": "obs-server-overview",
-  "title": "Server overview",
+  "uid": "obs-pos-perf",
+  "title": "PersonalOS výkon",
   "tags": [
     "obseum-platform",
-    "hosts"
+    "personalos",
+    "performance"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -12,7 +13,7 @@
   "graphTooltip": 1,
   "refresh": "1m",
   "time": {
-    "from": "now-6h",
+    "from": "now-24h",
     "to": "now"
   },
   "links": [
@@ -48,8 +49,8 @@
   "templating": {
     "list": [
       {
-        "name": "host",
-        "label": "Host",
+        "name": "route",
+        "label": "Route",
         "type": "query",
         "datasource": {
           "type": "prometheus",
@@ -57,16 +58,27 @@
         },
         "refresh": 2,
         "sort": 1,
-        "multi": false,
-        "includeAll": false,
+        "multi": true,
+        "includeAll": true,
         "regex": "",
         "query": {
-          "query": "label_values(host:cpu_used:ratio, host)",
+          "query": "label_values(pos_http_requests_total{job=\"personalos\"}, route)",
           "refId": "v"
         },
         "current": {
-          "text": "svr03",
-          "value": "svr03"
+          "text": "$__all",
+          "value": "$__all"
+        },
+        "allValue": ".*"
+      },
+      {
+        "name": "search",
+        "label": "Text",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
         }
       }
     ]
@@ -76,9 +88,9 @@
   },
   "panels": [
     {
-      "id": 1,
+      "id": 41,
       "type": "stat",
-      "title": "CPU",
+      "title": "p95 (5 min)",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -95,7 +107,7 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "host:cpu_used:ratio{host=\"$host\"}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(pos_http_request_duration_seconds_bucket{job=\"personalos\", route=~\"$route\"}[5m])))",
           "refId": "A",
           "legendFormat": "",
           "range": false,
@@ -104,7 +116,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -114,18 +126,18 @@
               },
               {
                 "color": "orange",
-                "value": 0.8
+                "value": 0.3
               },
               {
                 "color": "red",
-                "value": 0.9
+                "value": 0.5
               }
             ]
           },
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 1
+          "decimals": 3
         },
         "overrides": []
       },
@@ -143,9 +155,9 @@
       }
     },
     {
-      "id": 2,
+      "id": 42,
       "type": "stat",
-      "title": "Memory",
+      "title": "p50 (5 min)",
       "gridPos": {
         "x": 4,
         "y": 0,
@@ -162,7 +174,7 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "host:memory_used:ratio{host=\"$host\"}",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(pos_http_request_duration_seconds_bucket{job=\"personalos\", route=~\"$route\"}[5m])))",
           "refId": "A",
           "legendFormat": "",
           "range": false,
@@ -171,7 +183,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -181,18 +193,18 @@
               },
               {
                 "color": "orange",
-                "value": 0.85
+                "value": 0.15
               },
               {
                 "color": "red",
-                "value": 0.95
+                "value": 0.3
               }
             ]
           },
           "color": {
             "mode": "thresholds"
           },
-          "decimals": 1
+          "decimals": 3
         },
         "overrides": []
       },
@@ -210,9 +222,9 @@
       }
     },
     {
-      "id": 3,
+      "id": 43,
       "type": "stat",
-      "title": "Swap",
+      "title": "5xx share (5 min)",
       "gridPos": {
         "x": 8,
         "y": 0,
@@ -229,7 +241,7 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "host:swap_used:ratio{host=\"$host\"}",
+          "expr": "(sum(rate(pos_http_requests_total{job=\"personalos\", status=\"5xx\"}[5m])) or vector(0)) / sum(rate(pos_http_requests_total{job=\"personalos\"}[5m]))",
           "refId": "A",
           "legendFormat": "",
           "range": false,
@@ -248,145 +260,11 @@
               },
               {
                 "color": "orange",
-                "value": 0.8
+                "value": 0.01
               },
               {
                 "color": "red",
-                "value": 0.9
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "background",
-        "graphMode": "area",
-        "textMode": "value"
-      }
-    },
-    {
-      "id": 4,
-      "type": "stat",
-      "title": "Disk /",
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "host:disk_used:ratio{host=\"$host\", mountpoint=\"/\"}",
-          "refId": "A",
-          "legendFormat": "",
-          "range": false,
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.75
-              },
-              {
-                "color": "red",
-                "value": 0.85
-              }
-            ]
-          },
-          "color": {
-            "mode": "thresholds"
-          },
-          "decimals": 1
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "colorMode": "background",
-        "graphMode": "area",
-        "textMode": "value"
-      }
-    },
-    {
-      "id": 5,
-      "type": "stat",
-      "title": "Load / CPU",
-      "gridPos": {
-        "x": 16,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "host:load1:per_cpu{host=\"$host\"}",
-          "refId": "A",
-          "legendFormat": "",
-          "range": false,
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              },
-              {
-                "color": "red",
-                "value": 2
+                "value": 0.02
               }
             ]
           },
@@ -411,11 +289,11 @@
       }
     },
     {
-      "id": 6,
+      "id": 44,
       "type": "stat",
-      "title": "Root FS read-only",
+      "title": "Requests / min",
       "gridPos": {
-        "x": 20,
+        "x": 12,
         "y": 0,
         "w": 4,
         "h": 4
@@ -430,7 +308,7 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "max(node_filesystem_readonly{host=\"$host\", mountpoint=\"/\"})",
+          "expr": "sum(rate(pos_http_requests_total{job=\"personalos\"}[5m])) * 60",
           "refId": "A",
           "legendFormat": "",
           "range": false,
@@ -439,7 +317,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "short",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -449,11 +327,11 @@
               },
               {
                 "color": "orange",
-                "value": 0.5
+                "value": 1000000000.0
               },
               {
                 "color": "red",
-                "value": 1
+                "value": 1000000000.0
               }
             ]
           },
@@ -478,9 +356,143 @@
       }
     },
     {
-      "id": 7,
+      "id": 45,
+      "type": "stat",
+      "title": "Open live streams",
+      "gridPos": {
+        "x": 16,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "obs-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "sum(pos_live_subscribers{job=\"personalos\"})",
+          "refId": "A",
+          "legendFormat": "",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1000000000.0
+              },
+              {
+                "color": "red",
+                "value": 1000000000.0
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 46,
+      "type": "stat",
+      "title": "SQLite locked (range)",
+      "gridPos": {
+        "x": 20,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "obs-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "sum(increase(pos_sqlite_locked_total{job=\"personalos\"}[$__range]))",
+          "refId": "A",
+          "legendFormat": "",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 47,
       "type": "row",
-      "title": "Host",
+      "title": "Latency by route (API, route templates; streams and the worker long-poll not timed)",
       "collapsed": false,
       "gridPos": {
         "x": 0,
@@ -491,14 +503,14 @@
       "panels": []
     },
     {
-      "id": 8,
+      "id": 48,
       "type": "timeseries",
-      "title": "CPU, memory, swap",
+      "title": "p95 by route (top 10)",
       "gridPos": {
         "x": 0,
         "y": 5,
         "w": 12,
-        "h": 8
+        "h": 9
       },
       "datasource": {
         "type": "prometheus",
@@ -510,40 +522,16 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "host:cpu_used:ratio{host=\"$host\"}",
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, route) (rate(pos_http_request_duration_seconds_bucket{job=\"personalos\", route=~\"$route\"}[5m]))))",
           "refId": "A",
-          "legendFormat": "cpu",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "host:memory_used:ratio{host=\"$host\"}",
-          "refId": "B",
-          "legendFormat": "memory",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "host:swap_used:ratio{host=\"$host\"}",
-          "refId": "C",
-          "legendFormat": "swap",
+          "legendFormat": "{{route}}",
           "range": true,
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
-          "max": 1,
-          "min": 0,
+          "unit": "s",
           "custom": {
             "lineWidth": 1,
             "fillOpacity": 10,
@@ -568,13 +556,66 @@
       }
     },
     {
-      "id": 9,
+      "id": 49,
       "type": "timeseries",
-      "title": "Load",
+      "title": "p50 by route (top 10)",
       "gridPos": {
         "x": 12,
         "y": 5,
         "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "obs-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "topk(10, histogram_quantile(0.5, sum by (le, route) (rate(pos_http_request_duration_seconds_bucket{job=\"personalos\", route=~\"$route\"}[5m]))))",
+          "refId": "A",
+          "legendFormat": "{{route}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 50,
+      "type": "timeseries",
+      "title": "Requests / min by route (top 10)",
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
         "h": 8
       },
       "datasource": {
@@ -587,37 +628,16 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "max(node_load1{host=\"$host\"})",
+          "expr": "topk(10, sum by (route) (rate(pos_http_requests_total{job=\"personalos\", route=~\"$route\"}[5m])) * 60)",
           "refId": "A",
-          "legendFormat": "load1",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "max(node_load5{host=\"$host\"})",
-          "refId": "B",
-          "legendFormat": "load5",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "max(node_load15{host=\"$host\"})",
-          "refId": "C",
-          "legendFormat": "load15",
+          "legendFormat": "{{route}}",
           "range": true,
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
+          "unit": "reqpm",
           "custom": {
             "lineWidth": 1,
             "fillOpacity": 10,
@@ -642,14 +662,14 @@
       }
     },
     {
-      "id": 10,
+      "id": 51,
       "type": "timeseries",
-      "title": "Disk used",
+      "title": "Error share (5xx, 4xx)",
       "gridPos": {
-        "x": 0,
-        "y": 13,
-        "w": 8,
-        "h": 7
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -661,9 +681,20 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "host:disk_used:ratio{host=\"$host\"}",
+          "expr": "(sum(rate(pos_http_requests_total{job=\"personalos\", status=\"5xx\"}[5m])) or vector(0)) / sum(rate(pos_http_requests_total{job=\"personalos\"}[5m]))",
           "refId": "A",
-          "legendFormat": "{{mountpoint}}",
+          "legendFormat": "5xx",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "(sum(rate(pos_http_requests_total{job=\"personalos\", status=\"4xx\"}[5m])) or vector(0)) / sum(rate(pos_http_requests_total{job=\"personalos\"}[5m]))",
+          "refId": "B",
+          "legendFormat": "4xx",
           "range": true,
           "instant": false
         }
@@ -671,8 +702,6 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
-          "max": 1,
-          "min": 0,
           "custom": {
             "lineWidth": 1,
             "fillOpacity": 10,
@@ -697,14 +726,14 @@
       }
     },
     {
-      "id": 11,
-      "type": "timeseries",
-      "title": "Disk I/O",
+      "id": 52,
+      "type": "table",
+      "title": "Slowest routes (p95 over the range)",
       "gridPos": {
-        "x": 8,
-        "y": 13,
-        "w": 8,
-        "h": 7
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 9
       },
       "datasource": {
         "type": "prometheus",
@@ -716,91 +745,73 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "sum(rate(node_disk_read_bytes_total{host=\"$host\", device!~\"loop.*\"}[5m]))",
+          "expr": "topk(15, histogram_quantile(0.95, sum by (le, route, method) (increase(pos_http_request_duration_seconds_bucket{job=\"personalos\"}[$__range]))))",
           "refId": "A",
-          "legendFormat": "read",
-          "range": true,
-          "instant": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "sum(rate(node_disk_written_bytes_total{host=\"$host\", device!~\"loop.*\"}[5m]))",
-          "refId": "B",
-          "legendFormat": "write",
-          "range": true,
-          "instant": false
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
+          "unit": "s"
         },
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
+      "options": {},
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "container_id": true
+            }
+          }
         }
-      }
+      ]
     },
     {
-      "id": 12,
+      "id": 53,
       "type": "timeseries",
-      "title": "Network",
+      "title": "Edge time (nginx request_time, /api)",
       "gridPos": {
-        "x": 16,
-        "y": 13,
-        "w": 8,
-        "h": 7
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 9
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
+        "type": "loki",
+        "uid": "P148A5550C732AD4B"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
+            "type": "loki",
+            "uid": "P148A5550C732AD4B"
           },
-          "expr": "sum(rate(node_network_receive_bytes_total{host=\"$host\"}[5m]))",
+          "expr": "quantile_over_time(0.95, {host=\"svr03\", stack=\"personalos\", service=\"web\"} | json | path=~\"/api/.*\" | path!~\"/api/(chat/)?stream|/api/worker/next\" | unwrap request_time [5m]) by ()",
           "refId": "A",
-          "legendFormat": "rx",
-          "range": true,
-          "instant": false
+          "legendFormat": "p95",
+          "queryType": "range"
         },
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
+            "type": "loki",
+            "uid": "P148A5550C732AD4B"
           },
-          "expr": "sum(rate(node_network_transmit_bytes_total{host=\"$host\"}[5m]))",
+          "expr": "quantile_over_time(0.5, {host=\"svr03\", stack=\"personalos\", service=\"web\"} | json | path=~\"/api/.*\" | path!~\"/api/(chat/)?stream|/api/worker/next\" | unwrap request_time [5m]) by ()",
           "refId": "B",
-          "legendFormat": "tx",
-          "range": true,
-          "instant": false
+          "legendFormat": "p50",
+          "queryType": "range"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "Bps",
+          "unit": "s",
           "custom": {
             "lineWidth": 1,
             "fillOpacity": 10,
@@ -825,27 +836,27 @@
       }
     },
     {
-      "id": 13,
+      "id": 54,
       "type": "row",
-      "title": "Containers",
+      "title": "Agents and work",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 31,
         "w": 24,
         "h": 1
       },
       "panels": []
     },
     {
-      "id": 14,
-      "type": "bargauge",
-      "title": "Top 12 containers by memory",
+      "id": 55,
+      "type": "timeseries",
+      "title": "Run outcomes per hour",
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 32,
         "w": 8,
-        "h": 11
+        "h": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -857,16 +868,175 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "topk(12, container:memory_working_set_bytes{host=\"$host\"})",
+          "expr": "sum by (status) (increase(pos_runs_total{job=\"personalos\"}[1h]))",
           "refId": "A",
-          "legendFormat": "{{container}}",
+          "legendFormat": "{{status}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 56,
+      "type": "timeseries",
+      "title": "Runs running",
+      "gridPos": {
+        "x": 8,
+        "y": 32,
+        "w": 4,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "obs-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "sum(pos_runs_running{job=\"personalos\"})",
+          "refId": "A",
+          "legendFormat": "running",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 57,
+      "type": "timeseries",
+      "title": "Cost today (USD, UTC day)",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "obs-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "max(pos_cost_usd_today{job=\"personalos\"})",
+          "refId": "A",
+          "legendFormat": "today",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none"
+            },
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 58,
+      "type": "bargauge",
+      "title": "Cost per day (USD)",
+      "gridPos": {
+        "x": 18,
+        "y": 32,
+        "w": 6,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "obs-prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "max_over_time(max(pos_cost_usd_today{job=\"personalos\"})[1d:5m])",
+          "refId": "A",
+          "legendFormat": "last 24 h peak",
           "range": false,
           "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "currencyUSD",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -897,14 +1067,14 @@
       }
     },
     {
-      "id": 15,
+      "id": 59,
       "type": "timeseries",
-      "title": "Top 8 containers by CPU (cores)",
+      "title": "Review queue and Čeká na tebe",
       "gridPos": {
-        "x": 8,
-        "y": 21,
-        "w": 16,
-        "h": 11
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
       },
       "datasource": {
         "type": "prometheus",
@@ -916,16 +1086,27 @@
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "topk(8, container:cpu_cores:rate5m{host=\"$host\"})",
+          "expr": "max(pos_review_queue{job=\"personalos\"})",
           "refId": "A",
-          "legendFormat": "{{container}}",
+          "legendFormat": "in review",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "obs-prometheus"
+          },
+          "expr": "max by (kind) (pos_needs_me{job=\"personalos\"})",
+          "refId": "B",
+          "legendFormat": "needs me: {{kind}}",
           "range": true,
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
+          "unit": "short",
           "custom": {
             "lineWidth": 1,
             "fillOpacity": 10,
@@ -950,40 +1131,50 @@
       }
     },
     {
-      "id": 16,
+      "id": 60,
       "type": "timeseries",
-      "title": "Memory by stack",
+      "title": "SQLite lock errors (log lines and failed requests, per 5 min)",
       "gridPos": {
-        "x": 0,
-        "y": 32,
+        "x": 12,
+        "y": 40,
         "w": 12,
-        "h": 9
+        "h": 8
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
+        "type": "loki",
+        "uid": "P148A5550C732AD4B"
       },
       "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "P148A5550C732AD4B"
+          },
+          "expr": "sum(count_over_time({host=\"svr03\", stack=\"personalos\"} |= \"database is locked\" [5m]))",
+          "refId": "A",
+          "legendFormat": "log lines",
+          "queryType": "range"
+        },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "obs-prometheus"
           },
-          "expr": "sum by (stack) (container:memory_working_set_bytes{host=\"$host\"})",
-          "refId": "A",
-          "legendFormat": "{{stack}}",
+          "expr": "sum(increase(pos_sqlite_locked_total{job=\"personalos\"}[5m]))",
+          "refId": "B",
+          "legendFormat": "failed requests",
           "range": true,
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "short",
           "custom": {
             "lineWidth": 1,
-            "fillOpacity": 60,
+            "fillOpacity": 10,
             "stacking": {
-              "mode": "normal"
+              "mode": "none"
             },
             "showPoints": "never"
           }
@@ -1003,170 +1194,42 @@
       }
     },
     {
-      "id": 17,
-      "type": "table",
-      "title": "Restarts and OOM kills (last hour)",
+      "id": 61,
+      "type": "logs",
+      "title": "PersonalOS errors (api, worker, deployer)",
       "gridPos": {
-        "x": 12,
-        "y": 32,
-        "w": 12,
-        "h": 9
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 12
       },
       "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
+        "type": "loki",
+        "uid": "P148A5550C732AD4B"
       },
       "targets": [
         {
           "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
+            "type": "loki",
+            "uid": "P148A5550C732AD4B"
           },
-          "expr": "container:restarts:1h{host=\"$host\"} > 0 or container:oom_events:1h{host=\"$host\"} > 0",
+          "expr": "{host=\"svr03\", stack=\"personalos\", level=\"error\"} |~ \"(?i)$search\"",
           "refId": "A",
           "legendFormat": "",
-          "range": false,
-          "instant": true,
-          "format": "table"
+          "queryType": "range"
         }
       ],
       "fieldConfig": {
         "defaults": {},
         "overrides": []
       },
-      "options": {},
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "__name__": true,
-              "container_id": true
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 18,
-      "type": "row",
-      "title": "Health checks (blackbox, from .186)",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 41,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 19,
-      "type": "timeseries",
-      "title": "Probes up",
-      "gridPos": {
-        "x": 0,
-        "y": 42,
-        "w": 12,
-        "h": 7
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "probe_success",
-          "refId": "A",
-          "legendFormat": "{{app}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
-          "max": 1,
-          "min": 0,
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
       "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "id": 20,
-      "type": "timeseries",
-      "title": "Probe latency",
-      "gridPos": {
-        "x": 12,
-        "y": 42,
-        "w": 12,
-        "h": 7
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "obs-prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "obs-prometheus"
-          },
-          "expr": "probe_duration_seconds",
-          "refId": "A",
-          "legendFormat": "{{app}}",
-          "range": true,
-          "instant": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "dedupStrategy": "none"
       }
     }
   ]
