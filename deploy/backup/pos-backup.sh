@@ -21,8 +21,9 @@ env_file="${POS_BACKUP_ENV_DIR:-/etc/pos-backup}/${name}.env"
 : "${BACKUP_DIR:?BACKUP_DIR missing in $env_file}"
 min_age_h="${MIN_AGE_H:-12}"
 
-# Newest file or dir mtime, 3 levels deep, as the sentinel measures it.
-newest="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 3 -printf '%T@\n' 2>/dev/null | sort -n | tail -1)"
+# Newest file or dir mtime, 3 levels deep, as the sentinel measures it. stat -c %Y works with GNU
+# and BusyBox (find -printf is GNU only: under set -e -o pipefail it ended the script silently).
+newest="$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 3 -exec stat -c '%Y' {} + 2>/dev/null | sort -n | tail -1 || true)"
 now="$(date +%s)"
 if [ -n "$newest" ]; then
   age_s=$(( now - ${newest%.*} ))

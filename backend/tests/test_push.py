@@ -280,6 +280,12 @@ def test_logout_ends_the_device(tmp_path, keys):
         assert c.get("/api/system").status_code == 401
 
 
+def _session(cookie: str) -> dict:
+    import base64
+
+    return json.loads(base64.b64decode(cookie.split(".")[0] + "=="))
+
+
 def test_a_session_from_before_devices_becomes_one(tmp_path, keys):
     settings = _settings(tmp_path, keys, password="pw", session_secret="s")
     with TestClient(create_app(settings)) as c:
@@ -296,8 +302,12 @@ def test_a_session_from_before_devices_becomes_one(tmp_path, keys):
         from itsdangerous import TimestampSigner
 
         raw = base64.b64encode(json.dumps({"user": "owner"}).encode())
+        c.cookies.clear()  # only this cookie (the jar may keep the cleared session's next to it)
         c.cookies.set("pos_session", TimestampSigner("s").sign(raw).decode())
-        assert c.get("/api/system").status_code == 200
+        r = c.get("/api/system")
+        assert r.status_code == 200 and "sid" in _session(r.cookies["pos_session"])
+        c.cookies.clear()
+        c.cookies.set("pos_session", r.cookies["pos_session"])  # the browser keeps the new one
         assert len(c.get("/api/auth/devices").json()) == 1
 
 
