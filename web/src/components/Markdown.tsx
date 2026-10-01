@@ -1,8 +1,10 @@
 import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Link } from "react-router-dom";
+import { linkRefsMarkdown, parseRefHref } from "../refs";
 import { TaskLink } from "../taskSheet";
 import { ToolChip, toolMarkupToMarkdown } from "../toolMarkup";
+import { RefChip } from "./RefPreview";
 
 /**
  * Task text, notes and answers as formatted Markdown (GitHub flavour: tables,
@@ -11,13 +13,15 @@ import { ToolChip, toolMarkupToMarkdown } from "../toolMarkup";
  * scripts; links other than http(s), mailto and in-app paths are dropped.
  *
  * `compact` is for comments, progress and other short text in a list.
- * In-app links stay in the app; a task reference (T-123) opens the task panel.
+ * In-app links stay in the app; a task reference (T-123) opens the task panel; notes, chat messages,
+ * knowledge-base passages and files an agent mentions ("poznámka 23", "msg 1095", `k834E6OTGTM:c17`)
+ * become chips that open a preview in place (refs.ts, RefPreview.tsx).
  */
 export default function Markdown({ text, compact = false, className = "" }: { text: string; compact?: boolean; className?: string }) {
   return (
     <div className={`md ${compact ? "md-compact" : ""} ${className}`}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={safeUrl} components={components}>
-        {linkRefs(clean(text))}
+        {linkRefs(linkRefsMarkdown(clean(text)))}
       </ReactMarkdown>
     </div>
   );
@@ -45,8 +49,15 @@ function safeUrl(url: string): string {
 const components: Components = {
   a: ({ href, children }) => {
     if (href === "#pos-tool") return <ToolChip label={String(Array.isArray(children) ? children.join("") : children ?? "")} />;
+    const pref = parseRefHref(href);
+    if (pref) return <RefChip kind={pref.kind} id={pref.id} label={String(Array.isArray(children) ? children.join("") : children ?? "")} />;
     const ref = href?.match(/^\/tasks(?:\/|\?(?:.*&)?task=)(T-\d+)/i);
-    if (ref) return <TaskLink taskRef={ref[1].toUpperCase()}>{children}</TaskLink>;
+    if (ref) {
+      const label = String(Array.isArray(children) ? children.join("") : children ?? "");
+      // A bare "T-431" shows the task's title too; a link with its own words stays as written.
+      if (label.toUpperCase() === ref[1].toUpperCase()) return <RefChip kind="task" id={ref[1].toUpperCase()} />;
+      return <TaskLink taskRef={ref[1].toUpperCase()}>{children}</TaskLink>;
+    }
     if (href && href.startsWith("/") && !href.startsWith("/api/")) return <Link to={href}>{children}</Link>;
     return href ? (
       <a

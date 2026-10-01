@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api, getMe, logout, type Me } from "../api";
 import { OverlayHost } from "../components/overlay";
+import { RefPreviewHost } from "../components/RefPreview";
 import { t } from "../i18n/core";
 import { useNeedsMe } from "../needsMeApi";
 import ChatList from "./ChatList";
@@ -15,6 +16,7 @@ import { TopBar } from "./ui";
 // Loaded when used: the full task panel (Markdown and all) and the settings (the QR code).
 const TaskSheetHost = lazy(() => import("../components/tasks/TaskSheet"));
 const MobileSettings = lazy(() => import("./Settings"));
+const ReportPage = lazy(() => import("../pages/ReportPage"));
 
 function Mark({ size = 40 }: { size?: number }) {
   return (
@@ -198,6 +200,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <Route path="/m/tasks" element={<Tasks />} />
           <Route path="/m/more" element={<More onLogout={onLogout} />} />
           <Route path="/m/settings" element={<SettingsScreen />} />
+          <Route path="/m/report/:ref" element={<Suspense fallback={null}><ReportPage /></Suspense>} />
           <Route path="/m/*" element={<Navigate to="/m" replace />} />
           <Route path="*" element={<Outside />} />
         </Routes>
@@ -209,6 +212,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <TaskSheetHost />
         </Suspense>
       ) : null}
+      <RefPreviewHost />
       <UpdateToast />
       <OverlayHost />
     </div>

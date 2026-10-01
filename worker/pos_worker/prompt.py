@@ -89,6 +89,12 @@ HOW_TO_WORK = [
      "confirmation for ha_ssh, door/alarm services, outbound sends, credential_http outside the LAN and "
      "payments: the refusal says so; carry on and call it again after the verdict reaches your inbox.",
      None, None),
+    ("- A hand-in the owner reads (complete_task / request_review to Owner, ask_owner) carries `report`: "
+     "takeaway (1-3 plain Czech sentences, bottom line first, no jargon or raw ids), at most 3 decisions "
+     "addressed to him (question, options, recommendation, why), next (one line), and the content itself "
+     "inline (never 'see note 23'), with sources as title + quote + link. Notes: read them whole with note_get "
+     "and change them in place with note_update (mode section or patch), not in a new side note.",
+     "note_get", "takeaway"),
 ]
 
 

@@ -64,6 +64,15 @@ what went badly. Names, commands and quoted text stay as they are.
   and the idle agents. Under 50 %: move priorities in your Monday plan (work
   for the heads with business outcomes, fewer platform routines of the
   costliest agents). Say the share and what you changed in the board note.
+- **What reaches David is a report, not pointers.** Every `request_review`
+  to `Owner` and every `ask_owner` carries `report`: `takeaway` first (1–3
+  plain Czech sentences, the bottom line, no jargon, no note/msg/chunk ids),
+  at most 3 `decisions` he can click (question, options, your
+  recommendation, why), `next` (one line), then `content` (the deliverable
+  itself, inline: the plan, the table), `sources` (title + quote + link),
+  `changes`, `verification`. Proposals an agent sent to you in a DM that
+  David must decide go into his `decisions`, not stay in your DM. Read the
+  notes in full first (`note_get`).
 - **Idle agents.** Every Monday you get a list of agents with no input for 7
   days: give them work, pause them (`manage_agent`), or propose archiving to
   the Head of People. The owner does not need to hear about it.

@@ -23,6 +23,7 @@ import { confirmDialog, toast } from "../overlay";
 import AgentPicker from "./AgentPicker";
 import { Avatar, StatusChip, statusText, toneOf } from "./bits";
 import NeedsYou, { ApprovalCard, needsYou } from "./NeedsYou";
+import ReportCard from "./Report";
 import { Discussion, HistoryTab, isTalk, Overview, Technical } from "./TaskTabs";
 
 /* ------------------------------------------------------------------ shared lookups (loaded once) */
@@ -80,7 +81,7 @@ function Sheet({
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (document.querySelector("[role=alertdialog]")) return; // a confirmation dialog is on top
+      if (document.querySelector("[role=alertdialog],[data-ref-preview]")) return; // a dialog or a preview is on top
       if (e.key === "Escape") {
         if (editable(e.target) && (e.target as HTMLInputElement).value) {
           (e.target as HTMLElement).blur();
@@ -627,6 +628,8 @@ function TaskPanel({
   const due = dueLabel(task);
   const agentWork = task.assignee_type === "ai" || task.assignee_type === "agent";
   const waitsForMe = needsYou(task, related, me.id);
+  // A handed-in result: the owner's report (takeaway, decisions, details) replaces the raw text.
+  const resultReady = (task.status === "review" || task.status === "done") && !!task.progress_note?.trim();
   const primary = (() => {
     if (waitsForMe)
       return (
@@ -634,7 +637,7 @@ function TaskPanel({
           type="button"
           className="btn-accent h-9!"
           onClick={() => {
-            const box = document.getElementById("needs-you");
+            const box = document.getElementById("owner-report") ?? document.getElementById("needs-you");
             box?.scrollIntoView({ block: "start", behavior: "smooth" });
             (box?.querySelector<HTMLElement>("[data-needs-focus]") ?? box?.querySelector<HTMLElement>("button,textarea"))?.focus({ preventScroll: true });
           }}
@@ -756,8 +759,11 @@ function TaskPanel({
 
           <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_272px]">
             <div className="flex min-w-0 flex-col gap-6">
-              <NeedsYou task={task} related={related} meId={me.id} onDone={load} />
-              <SummaryBox summary={summary} loading={summaryLoading} />
+              {(resultReady || task.source === "ask_owner") && (
+                <ReportCard taskRef={task.ref} version={task.updated_at} focus={focus === "needs"} />
+              )}
+              <NeedsYou task={task} related={related} meId={me.id} onDone={load} reportShown={resultReady} />
+              {!resultReady && <SummaryBox summary={summary} loading={summaryLoading} />}
 
               <div className="flex min-w-0 flex-col">
                 <div
@@ -794,7 +800,7 @@ function TaskPanel({
                   ))}
                 </div>
                 <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-5">
-                  {tab === "overview" && <Overview task={task} onSave={save} onChange={load} />}
+                  {tab === "overview" && <Overview task={task} onSave={save} onChange={load} hideResult={resultReady} />}
                   {tab === "talk" && (
                     <Discussion
                       task={task}

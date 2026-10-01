@@ -285,3 +285,13 @@ body {
 .hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-name, .hljs-tag { color: #8ab4f8; }
 .hljs-type, .hljs-class .hljs-title, .hljs-title.class_ { color: #ffd479; }
 .hljs-meta { color: #9aa0a6; }
+
+/* The owner's report as a document (pages/ReportPage.tsx): only the report prints, dark on white. */
+@media print {
+  body * { visibility: hidden; }
+  .report-doc, .report-doc * { visibility: visible; }
+  .report-doc { position: absolute; inset: 0 auto auto 0; width: 100%; max-width: none; padding: 0; }
+  .report-doc, .report-doc * { color: #111 !important; background: transparent !important; border-color: #bbb !important; box-shadow: none !important; }
+  .report-doc .md th { background: #eee !important; }
+  .report-doc details { display: none; }
+}

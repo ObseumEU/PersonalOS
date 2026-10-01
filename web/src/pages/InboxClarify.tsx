@@ -12,7 +12,7 @@ import { Capture } from "./Tasks";
 const input = "h-8 w-full min-w-0 rounded border border-line bg-bg px-2 text-[13px] outline-none focus:border-accent";
 
 // The GTD questions: [question, answer that leads to the result, result]. The 4th rule is the one about assigning.
-const RULES: [string, string, string][] = [
+const RULES = (): [string, string, string][] => [
   [t("work.rule.1.q"), t("work.rule.no"), t("work.rule.1.r")],
   [t("work.rule.2.q"), t("work.rule.yes"), t("work.rule.2.r")],
   [t("work.rule.3.q"), t("work.rule.yes"), t("work.rule.3.r")],
@@ -272,7 +272,7 @@ export default function InboxClarify() {
         </Panel>
 
         <Panel title={t("work.clarify.rules_title")} right="GTD" className="min-w-0 lg:w-72 lg:shrink-0">
-          {RULES.map(([q, a, r], i) => (
+          {RULES().map(([q, a, r], i) => (
             <div key={q} className="grid grid-cols-[22px_minmax(0,1fr)] gap-2 border-b border-line px-3.5 py-2.5">
               <span className="text-xs text-accent tabular-nums">{i + 1}</span>
               <span className="flex min-w-0 flex-col gap-1">

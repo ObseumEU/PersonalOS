@@ -145,14 +145,14 @@ function AskCard({
   );
 }
 
-function ReviewCard({ task, autoFocus, onDone }: { task: Task; autoFocus: boolean; onDone: () => void }) {
+function ReviewCard({ task, autoFocus, onDone, reportShown }: { task: Task; autoFocus: boolean; onDone: () => void; reportShown?: boolean }) {
   const [returning, setReturning] = useState(false);
   const [text, setText] = useState("");
   const { busy, act } = useAct(onDone);
   const who = task.assignee_name ?? t("tk.someone");
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[15px] leading-snug">{t("tk.needs.review", { who })}</p>
+      <p className="text-[15px] leading-snug">{t(reportShown ? "tk.needs.review_report" : "tk.needs.review", { who })}</p>
       {returning ? (
         <form
           className="flex flex-col gap-2"
@@ -301,11 +301,13 @@ export default function NeedsYou({
   related,
   meId,
   onDone,
+  reportShown,
 }: {
   task: Task;
   related: Related | null;
   meId: number | null;
   onDone: () => void;
+  reportShown?: boolean;
 }) {
   if (!needsYou(task, related, meId)) return null;
   const blocks = [];
@@ -341,7 +343,7 @@ export default function NeedsYou({
         onDone={onDone}
       />,
     );
-  if (task.status === "review" && task.can_review) blocks.push(<ReviewCard key="review" task={task} autoFocus={focus()} onDone={onDone} />);
+  if (task.status === "review" && task.can_review) blocks.push(<ReviewCard key="review" task={task} autoFocus={!reportShown && focus()} onDone={onDone} reportShown={reportShown} />);
   for (const a of related?.approvals ?? []) blocks.push(<ApprovalCard key={`a${a.id}`} a={a} autoFocus={focus()} onDone={onDone} />);
 
   return (

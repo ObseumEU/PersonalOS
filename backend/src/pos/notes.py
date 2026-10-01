@@ -111,6 +111,89 @@ def update(conn: sqlite3.Connection, ctx: Ctx, note_id: int, changes: dict) -> d
     return get(conn, ctx, note_id)
 
 
+# ------------------------------------------------------------------ for agents: full reads, edits in place
+
+PAGE = 20_000  # characters per note_get page; a longer note is read in pages, never cut off silently
+_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$", re.M)
+
+
+def outline(body: str) -> list[dict]:
+    """The note's headings: [{level, title, at}] (at = character offset)."""
+    return [{"level": len(m.group(1)), "title": m.group(2).strip(), "at": m.start()} for m in _HEADING.finditer(body)]
+
+
+def read(conn: sqlite3.Connection, ctx: Ctx, note_id: int, offset: int = 0, limit: int = PAGE) -> dict:
+    """The note with its body from `offset`, at most `limit` characters, and where the next page starts.
+    With the outline, an agent sees the whole structure even when the body takes several pages."""
+    n = get(conn, ctx, note_id)
+    body = n.pop("body") or ""
+    offset = max(0, int(offset or 0))
+    limit = max(1, min(int(limit or PAGE), 100_000))
+    part = body[offset:offset + limit]
+    end = offset + len(part)
+    return {**n, "body": part, "offset": offset, "next_offset": end if end < len(body) else None,
+            "total_chars": len(body), "complete": offset == 0 and end >= len(body), "outline": outline(body)}
+
+
+def _section_span(body: str, section: str) -> tuple[int, int, int] | None:
+    """(heading start, content start, end) of the section whose heading matches `section`
+    (case-insensitive, with or without the #s). It runs to the next heading of the same or a higher level."""
+    want = section.strip().lstrip("#").strip().lower()
+    heads = outline(body)
+    for i, h in enumerate(heads):
+        if h["title"].lower() == want:
+            nl = body.find("\n", h["at"])
+            content = nl + 1 if nl >= 0 else len(body)
+            end = next((x["at"] for x in heads[i + 1:] if x["level"] <= h["level"]), len(body))
+            return h["at"], content, end
+    return None
+
+
+MODES = ("replace", "append", "section", "patch")
+
+
+def edit(conn: sqlite3.Connection, ctx: Ctx, note_id: int, mode: str, *, body: str | None = None,
+         section: str | None = None, find: str | None = None, replace: str | None = None) -> dict:
+    """Change the note's body in place:
+    - replace: the whole body becomes `body`;
+    - append: `body` is added at the end;
+    - section: the content under the heading `section` becomes `body` (the heading stays); a missing
+      section is added at the end as "## <section>";
+    - patch: the exact text `find` (it must occur exactly once) becomes `replace`.
+    """
+    if mode not in MODES:
+        raise Invalid(f"mode must be one of {MODES}")
+    old = _row(conn, ctx, note_id)["body"] or ""
+    if mode == "replace":
+        if body is None:
+            raise Invalid("replace needs body")
+        new = body
+    elif mode == "append":
+        if not body:
+            raise Invalid("append needs body")
+        new = old.rstrip("\n") + "\n\n" + body.strip("\n") + "\n"
+    elif mode == "section":
+        if not section or body is None:
+            raise Invalid("section mode needs section (the heading) and body (its new content)")
+        span = _section_span(old, section)
+        if span is None:
+            title = section.strip().lstrip("#").strip()
+            new = old.rstrip("\n") + f"\n\n## {title}\n\n" + body.strip("\n") + "\n"
+        else:
+            _, start, end = span
+            tail = old[end:]
+            new = old[:start] + "\n" + body.strip("\n") + "\n" + ("\n" + tail.lstrip("\n") if tail.strip() else "")
+    else:
+        if not find:
+            raise Invalid("patch needs find (the exact text to change) and replace")
+        n = old.count(find)
+        if n != 1:
+            raise Invalid(f"find must occur exactly once in the note; it occurs {n} times "
+                          "(read it with note_get and quote more of the text)")
+        new = old.replace(find, replace or "", 1)
+    return update(conn, ctx, note_id, {"body": new})
+
+
 def archive(conn: sqlite3.Connection, ctx: Ctx, note_id: int) -> dict:
     from .visibility import check_write
 

@@ -56,8 +56,12 @@ send_message, report status to your lead.
 Team chat (chat_send, chat_read, #team): talk to people and agents inside
 PersonalOS; @Name mentions land in their inbox. It never leaves PersonalOS.
 Files, notes and topics: search finds tasks, files and notes; file_get gives a
-file's text, topic_get everything in one topic; note_create and note_update
-write markdown notes. Your own computer: sandbox_exec, sandbox_run_python (a Linux sandbox, root,
+file's text, note_get a note's full text (paged), topic_get everything in one topic;
+note_create writes a note, note_update edits one in place (a section or an exact
+patch): update the real document instead of creating side notes.
+Handing in to the owner (complete_task, request_review, ask_owner): pass `report`, a
+self-contained report (takeaway, at most 3 decisions, next, the content inline, sources);
+never only pointers to notes, messages or chunk ids he cannot see. Your own computer: sandbox_exec, sandbox_run_python (a Linux sandbox, root,
 Python/Node, internet, no LAN; /workspace is kept). Show people results as files: make them in
 the sandbox and sandbox_share them, or file_create (Mermaid .mmd, Graphviz .dot, Vega-Lite .vl.json,
 .md, .csv, .svg, .html) and file_share; they render inline in chat. Edit with file_update (a new
@@ -72,6 +76,16 @@ Engineer's confirmation (security_confirm) before ha_ssh, door/alarm services,
 outbound sends, credential_http outside the LAN or payments.
 One item, one task: escalate an item that already has a task by passing that
 task on (handoff_task), not by creating a new one."""
+
+REPORT_DESC = (
+    "report (optional; required in your instructions when the owner reads it): an object for the "
+    "owner, self-contained: takeaway (1-3 plain Czech sentences, bottom line first, no jargon or raw "
+    "ids), decisions (at most 3, each {question, options[2-4], recommendation (one of the options), "
+    "why} that the owner decides), next (one line: what happens after), content (the deliverable "
+    "itself inline in Markdown: the full plan, the table; never \"see note 23\"), summary (<=3 "
+    "bullets), changes, verification, sources ({title, quote, link}). Refused with a list of what to "
+    "fix when it only points elsewhere."
+)
 
 
 def _bearer(headers) -> str | None:
@@ -141,7 +155,7 @@ TOOL_PERMISSIONS = {
     "chat_mark_read": "tasks:read",
     # Files, notes and topics: reading needs tasks:read, writing notes tasks:write.
     "search": "tasks:read", "file_get": "tasks:read", "topic_get": "tasks:read",
-    "note_create": "tasks:write", "note_update": "tasks:write",
+    "note_create": "tasks:write", "note_update": "tasks:write", "note_get": "tasks:read",
     # The sentinel's incidents (pos.monitor): the Hlídač's narrow log read and its verdict.
     "incident_logs": "ops:monitor", "incident_close": "ops:monitor",
     # The deploy review gate (pos.deploy_review): the QA Reviewer's verdict; who may decide is checked inside.
@@ -294,10 +308,18 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                 raise tasks.Invalid("say what should change")
             return brief(tasks.review(conn, c, tasks.parse_id(task_id), verdict == "accept", comment or None))
 
-    @mcp.tool(description="Hand your result in to a chosen colleague for review (not yourself).")
-    def request_review(ctx: Context, task_id: str, reviewer: str, note: str = "") -> dict:
+    @mcp.tool(description="Hand your result in to a chosen colleague for review (not yourself). " + REPORT_DESC)
+    def request_review(ctx: Context, task_id: str, reviewer: str, note: str = "",
+                       report: dict[str, Any] | None = None) -> dict:
+        from . import owner_report
+
         with session(ctx, "request_review", task_id=task_id, reviewer=reviewer) as (conn, c):
-            return brief(tasks.request_review(conn, c, tasks.parse_id(task_id), reviewer, note))
+            rep = owner_report.validate(report) if report else None
+            tid = tasks.parse_id(task_id)
+            out = brief(tasks.request_review(conn, c, tid, reviewer, note or (rep and rep["takeaway"]) or ""))
+            if rep:
+                out["report"] = owner_report.submit(conn, c, tid, rep)
+            return out
 
     @mcp.tool(description="Give a colleague feedback: kind praise, critique or suggestion, optionally about a "
                           "task (T-012). Be specific: what happened, why it matters, what to do instead. It reaches "
@@ -512,11 +534,20 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "update_task", task_id=task_id, fields=sorted(fields)) as (conn, c):
             return brief(tasks.update(conn, c, tasks.parse_id(task_id), fields))
 
-    @mcp.tool(description="Finish a task. Work done by AI or agents goes to the owner's review first.")
-    def complete_task(ctx: Context, task_id: str, note: str | None = None, result_ref: str | None = None) -> dict:
+    @mcp.tool(description="Finish a task. Work done by AI or agents goes to the owner's review first. " + REPORT_DESC)
+    def complete_task(ctx: Context, task_id: str, note: str | None = None, result_ref: str | None = None,
+                      report: dict[str, Any] | None = None) -> dict:
+        from . import owner_report
+
         with session(ctx, "complete_task", task_id=task_id, result_ref=result_ref) as (conn, c):
-            text = " ".join(x for x in (note, f"Result: {result_ref}" if result_ref else None) if x) or None
-            return brief(tasks.complete(conn, c, tasks.parse_id(task_id), text))
+            rep = owner_report.validate(report) if report else None
+            text = " ".join(x for x in (note or (rep and rep["takeaway"]),
+                                        f"Result: {result_ref}" if result_ref else None) if x) or None
+            tid = tasks.parse_id(task_id)
+            out = brief(tasks.complete(conn, c, tid, text))
+            if rep:
+                out["report"] = owner_report.submit(conn, c, tid, rep)
+            return out
 
     @mcp.tool(description="Hand a task over: 'me', 'ai', an agent name, or an outside person's name.")
     def assign_task(ctx: Context, task_id: str, assignee: str) -> dict:
@@ -577,18 +608,24 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "when the owner answers; finish the run then. links: URLs or refs worth opening. "
                           "topic: a short key; the same task and topic is never asked twice (you get the "
                           "existing ticket back). The owner's comments and resolution reach your inbox. "
-                          "Outbound work goes through request_outbound (ordinary sends go out at once).")
+                          "Outbound work goes through request_outbound (ordinary sends go out at once). "
+                          "For a decision with several parts, or a result behind it, pass " + REPORT_DESC)
     def ask_owner(ctx: Context, title: str, why: str, details: str = "", options: list[str] | None = None,
                   recommendation: str = "", kind: str = "decision", task_id: str | None = None,
                   blocking: bool = True, links: list[str] | None = None, topic: str | None = None,
-                  after: str = "") -> dict:
-        from . import asks
+                  after: str = "", report: dict[str, Any] | None = None) -> dict:
+        from . import asks, owner_report
 
         with session(ctx, "ask_owner", title=title, task_id=task_id, kind=kind, blocking=blocking) as (conn, c):
-            return asks.ask(conn, c, title=title, why=why, details=details, options=options,
-                            recommendation=recommendation, blocking=blocking,
-                            task_id=tasks.parse_id(task_id) if task_id else None, kind=kind, topic=topic,
-                            links=links, after=after)
+            rep = owner_report.validate(report) if report else None
+            out = asks.ask(conn, c, title=title, why=why, details=details or (rep and rep["content"]) or "",
+                           options=options, recommendation=recommendation, blocking=blocking,
+                           task_id=tasks.parse_id(task_id) if task_id else None, kind=kind, topic=topic,
+                           links=links, after=after)
+            if rep and not out.get("deduped"):
+                out["report"] = owner_report.submit(conn, c, out["ticket_id"], rep)
+                conn.commit()
+            return out
 
     # ------------------------------------------------------------- resources and prompts
 
@@ -1075,17 +1112,40 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "note_create", title=title, topic=topic) as (conn, c):
             return notes.create(conn, c, fields)
 
-    @mcp.tool(description="Change a note: title, body (markdown), topic, tags, visibility. "
-                          "Every change is versioned.")
-    def note_update(ctx: Context, note_id: int, title: str | None = None, body: str | None = None,
-                    topic: str | None = None, tags: list[str] | None = None,
-                    visibility: str | None = None) -> dict:
+    @mcp.tool(description="Read a note in full: its Markdown body (pages of up to `limit` characters; "
+                          "next_offset says where the next page starts, null when you have it all) and its "
+                          "outline (the headings). Read the whole note before you change it.")
+    def note_get(ctx: Context, note_id: int, offset: int = 0, limit: int = 20000) -> dict:
         from . import notes
 
-        changes = {k: v for k, v in dict(title=title, body=body, topic=topic, tags=tags,
+        with session(ctx, "note_get", note_id=note_id, offset=offset) as (conn, c):
+            return notes.read(conn, c, note_id, offset, limit)
+
+    @mcp.tool(description="Change a note in place (every change is versioned): title, topic, tags, "
+                          "visibility, and its body by mode: 'replace' (body = the whole new text), 'append' "
+                          "(body added at the end), 'section' (section = a heading; its content becomes body, "
+                          "or a new '## section' at the end), 'patch' (find = exact text occurring once, "
+                          "replace = its new text). Update the real document; do not create side notes.")
+    def note_update(ctx: Context, note_id: int, title: str | None = None, body: str | None = None,
+                    topic: str | None = None, tags: list[str] | None = None,
+                    visibility: str | None = None, mode: str = "replace", section: str | None = None,
+                    find: str | None = None, replace: str | None = None) -> dict:
+        from . import notes
+
+        changes = {k: v for k, v in dict(title=title, topic=topic, tags=tags,
                                          visibility=visibility).items() if v is not None}
-        with session(ctx, "note_update", note_id=note_id, fields=sorted(changes)) as (conn, c):
-            return notes.update(conn, c, note_id, changes)
+        touches_body = body is not None or bool(find)
+        with session(ctx, "note_update", note_id=note_id, mode=mode,
+                     fields=sorted(changes) + (["body"] if touches_body else [])) as (conn, c):
+            if not touches_body and not changes:
+                raise tasks.Invalid("nothing to change")
+            if touches_body:
+                notes.edit(conn, c, note_id, mode, body=body, section=section, find=find, replace=replace)
+            if changes:
+                notes.update(conn, c, note_id, changes)
+            out = notes.get(conn, c, note_id)
+            full = out.get("body") or ""
+            return {**out, "total_chars": len(full), "outline": notes.outline(full)}
 
     @mcp.tool(description="Everything in one topic (e.g. 'acme', 'health'): its files, notes, open and "
                           "done tasks, and calendar events that mention it.")

@@ -33,6 +33,8 @@ const Today = lazy(() => import("./pages/Today"));
 const Tools = lazy(() => import("./pages/Tools"));
 const Topics = lazy(() => import("./pages/Topics"));
 const WeeklyReview = lazy(() => import("./pages/WeeklyReview"));
+// The owner's report on one task as a document (pos.owner_report).
+const ReportPage = lazy(() => import("./pages/ReportPage"));
 
 /** While a page's chunk loads (once per page; then it is cached). */
 function PageLoading() {
@@ -120,6 +122,7 @@ export default function App() {
           <Route path="/admin" element={<Navigate to="/system" replace />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:week" element={<Reports />} />
+          <Route path="/report/:ref" element={<ReportPage />} />
           <Route path="*" element={<Navigate to="/today" replace />} />
         </Routes>
       </Suspense>

@@ -6,12 +6,13 @@ import { LOCALE, ago, plural, t } from "../../i18n";
 
 export const field = "h-8 min-w-0 rounded border border-line bg-bg px-2 font-mono text-xs outline-none focus:border-accent";
 
+// Getters: the words are read when shown, after the dictionary is registered (web/tests/i18n.test.ts).
 export const KIND_LABEL: Record<CredKind, string> = {
-  ssh: t("cred.kind.ssh"),
-  token: t("cred.kind.token"),
-  basic: t("cred.kind.basic"),
-  db: t("cred.kind.db"),
-  generic: t("cred.kind.generic"),
+  get ssh() { return t("cred.kind.ssh"); },
+  get token() { return t("cred.kind.token"); },
+  get basic() { return t("cred.kind.basic"); },
+  get db() { return t("cred.kind.db"); },
+  get generic() { return t("cred.kind.generic"); },
 };
 
 export function KindIcon({ kind, size = 15 }: { kind?: CredKind; size?: number }) {
@@ -48,7 +49,7 @@ export function dayLabel(day: string) {
 export const times = (n: number) => `${n}×`;
 export const errWord = (n: number) => `${n} ${plural(n, "chyba", "chyby", "chyb")}`;
 
-export const HOURS: { label: string; value: number | null }[] = [
+export const HOURS = (): { label: string; value: number | null }[] => [
   { label: t("cred.forever"), value: null },
   { label: t("cred.hours.1"), value: 1 },
   { label: t("cred.hours.8"), value: 8 },
@@ -59,7 +60,7 @@ export const HOURS: { label: string; value: number | null }[] = [
 export function HoursPick({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
   return (
     <select aria-label={t("cred.how_long")} value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} className={field}>
-      {HOURS.map((h) => (
+      {HOURS().map((h) => (
         <option key={h.label} value={h.value ?? ""}>
           {h.label}
         </option>

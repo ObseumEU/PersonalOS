@@ -656,7 +656,8 @@ def _ask_reviewer(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> None:
 
     by = actors.get(conn, ctx.actor_id)["name"]
     chat.send_dm(conn, ctx, rid, f"{by} handed in {task['ref']} '{task['title']}' for your review. "
-                                 "Accept it or return it with what should change (review_task).",
+                                 "Accept it or return it with what should change (review_task). "
+                                 f"Report: /report/{task['ref']}",
                  priority="fyi", attachments=[{"type": "task", "id": task["id"]}], system=True)
     if r["kind"] != "human":
         wake.wake(rid)

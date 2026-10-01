@@ -103,7 +103,7 @@ def list_tasks(view: str = "today", topic: str | None = None, assignee_id: int |
     from . import task_summary
 
     out = tasks.list_tasks(conn, ctx, view, topic=topic, assignee_id=assignee_id, scope=scope, limit=500)
-    cached = task_summary.cached_for(conn, [t["id"] for t in out])
+    cached = task_summary.cached_for(conn, [t["id"] for t in out], ctx.actor_id)
     for t in out:
         t["summary"] = cached.get(t["id"])
     return out
