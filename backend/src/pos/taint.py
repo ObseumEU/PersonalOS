@@ -13,7 +13,9 @@ it not to obey. This rule makes the dangerous half impossible without a second l
 - **Sinks**: in a tainted run these need a confirmation first: `ha_ssh`; `ha_ws` service calls on
   locks, alarms and covers (doors, the garage); outbound sending (`request_outbound`);
   `credential_http` to a host outside the LAN (or to Home Assistant's lock/alarm/cover services);
-  payments.
+  payments. A **draft** is not a sink: `gmail_create_draft` (and a draft through
+  `request_outbound` or Gmail's `/drafts` API) sends nothing, the owner reads and sends it himself.
+  Sending a draft (`/drafts/send`, `email.send`) stays gated.
 - **Confirmation**: not the owner, the **Security Engineer agent**. The refused call creates a hold
   and a quick review task for it (priority 1, the outside content that tainted the run and the
   action wanted); it decides with `security_confirm(hold, approve, reason)`. An approved hold lets
@@ -42,6 +44,9 @@ EXTERNAL_SOURCES = ("gmail", "mail", "web", "http", "github", "discord", "file",
                     "browser", "imap", "slack", "rss")
 _EXT_RE = re.compile(r'<external source="([^"]+)"[^>]*>(.*?)</external>', re.DOTALL)
 SENSITIVE_HA_DOMAINS = {"lock", "alarm_control_panel", "cover", "siren"}
+# Drafts send nothing (the owner sends them himself): never a sink. Sending one is.
+DRAFT_TOOLS = {"gmail_create_draft", "create_draft", "update_draft", "gmail_update_draft"}
+_GMAIL_DRAFT_RE = re.compile(r"^/gmail/v1/users/[^/]+/drafts(/(?!send/?$)[^/]+)?/?$", re.IGNORECASE)
 _HA_SERVICE_RE = re.compile(r"/api/services/(lock|alarm_control_panel|cover|siren)/", re.IGNORECASE)
 
 
@@ -153,6 +158,8 @@ def sink(tool: str, args: dict) -> tuple[str, str] | None:
     """(target, why) when this call is a sink, else None."""
     from .credentials.service import private_host
 
+    if tool in DRAFT_TOOLS:
+        return None  # a draft is not outbound: nothing leaves until the owner sends it
     if tool == "ha_ssh":
         return (str(args.get("command") or "")[:300], "a shell command on the Home Assistant host")
     if tool == "ha_ws":
@@ -161,6 +168,8 @@ def sink(tool: str, args: dict) -> tuple[str, str] | None:
                        and str(m.get("domain") or "").lower() in SENSITIVE_HA_DOMAINS})
         return (", ".join(hits), "a lock, alarm or cover in the house") if hits else None
     if tool == "request_outbound":
+        if _is_draft_action(str(args.get("action") or "")) and str(args.get("kind") or "") != "money":
+            return None
         p = args.get("payload") or {}
         to = p.get("to") or p.get("channel") or p.get("repo") or p.get("recipient") or ""
         kind = str(args.get("kind") or "")
@@ -169,6 +178,8 @@ def sink(tool: str, args: dict) -> tuple[str, str] | None:
     if tool == "credential_http":
         url = str(args.get("url") or "")
         host = (urlsplit(url).hostname or "").lower()
+        if host == "gmail.googleapis.com" and _GMAIL_DRAFT_RE.match(urlsplit(url).path or ""):
+            return None  # creating/updating a Gmail draft; /drafts/send does not match and stays a sink
         if _HA_SERVICE_RE.search(url):
             return (f"{args.get('method') or 'GET'} {url[:200]}", "a lock, alarm or cover in the house")
         if host and not private_host(host):
@@ -178,6 +189,12 @@ def sink(tool: str, args: dict) -> tuple[str, str] | None:
     if tool in ("payment", "pay", "purchase"):
         return (json.dumps(args, ensure_ascii=False, default=str)[:300], "a payment")
     return None
+
+
+def _is_draft_action(action: str) -> bool:
+    """email.draft, gmail.draft, gmail.create_draft …: a draft, not a send."""
+    a = action.strip().lower()
+    return "draft" in a and "send" not in a
 
 
 def fingerprint(actor_id: int, tool: str, target: str) -> str:
