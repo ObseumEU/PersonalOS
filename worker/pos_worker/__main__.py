@@ -240,6 +240,8 @@ def main() -> None:
             # for `codex exec`, which cannot ask (mounts.CODEX_EXTRA).
             config=[f'mcp_servers.pos.url="{mcp_url}"', 'mcp_servers.pos.bearer_token_env_var="POS_AGENT_KEY"',
                     *(f"mcp_servers.pos.{x}" for x in mounts.CODEX_EXTRA),
+                    # a sandbox command may run up to an hour (sandbox_exec timeout ≤ 3600 s)
+                    "mcp_servers.pos.tool_timeout_sec=3700", "mcp_servers.pos.startup_timeout_sec=60",
                     *([f"mcp_servers.pos.enabled_tools={json.dumps(pos_tools(me)[0])}"] if me.get("pos_tools") else []),
                     *([f'model="{model}"'] if model else []), *extra_config(), *codex_effort(me),
                     *tool_library.codex_config(tools),

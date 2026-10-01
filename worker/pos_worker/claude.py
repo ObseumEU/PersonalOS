@@ -133,7 +133,8 @@ class ClaudeSession:
         prompt_file = self._prompt_file()
         settings_file = self._settings_file()
         kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
-        env = {**os.environ, **(self.env or {}), "PYTHONUTF8": "1"}
+        # MCP_TOOL_TIMEOUT: a sandbox command may run up to an hour (sandbox_exec timeout ≤ 3600 s).
+        env = {"MCP_TOOL_TIMEOUT": "3700000", **os.environ, **(self.env or {}), "PYTHONUTF8": "1"}
         try:
             self.proc = subprocess.Popen(self._args(mcp_file, prompt_file, settings_file), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=self.workdir,

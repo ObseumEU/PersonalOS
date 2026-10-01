@@ -1,8 +1,8 @@
-import { AlertCircle, Check, ChevronDown, ChevronRight, Clock, CornerUpLeft, FileText, Loader2 } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, ChevronRight, Clock, CornerUpLeft, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import type { ChatMessage, Priority, ThreadSummary, TypingEntry } from "../chatApi";
-import { filesApi } from "../filesApi";
+import { FileCard } from "../files/FileCard";
 import { LOCALE, t } from "../i18n/core";
 import { Avatar } from "../mobile/ui";
 import { Rich } from "./Rich";
@@ -16,7 +16,8 @@ import { type Item, type Row, ago, channelTimeline, dmTimeline, rows as toRows, 
  * and threads.
  */
 
-export type FileAtt = { type: "file"; id: number; name: string; mime?: string | null; preview?: string };
+export type FileAtt = { type: "file"; id: number; name: string; mime?: string | null; preview?: string; size?: number | null;
+  version?: number | null; description?: string | null };
 
 /** A message on its way: shown at once, replaced by the real one when the server answers. */
 export type Pending = {
@@ -80,25 +81,10 @@ export const visibleBody = (m: ChatMessage) => (m.attachments.some((a) => a.type
 function Attachments({ files, mine }: { files: FileAtt[]; mine: boolean }) {
   if (!files.length) return null;
   return (
-    <div className="mt-1 flex flex-wrap gap-1.5">
-      {files.map((f) =>
-        f.preview === "image" || f.mime?.startsWith("image/") ? (
-          <a key={f.id} href={filesApi.contentUrl(f.id)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
-            <img src={filesApi.contentUrl(f.id)} alt={f.name} loading="lazy" className="max-h-60 max-w-full rounded-xl object-cover" />
-          </a>
-        ) : (
-          <a
-            key={f.id}
-            href={filesApi.contentUrl(f.id)}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className={`flex h-10 max-w-full items-center gap-2 rounded-lg px-3 text-[13px] ${mine ? "bg-black/15" : "border border-line bg-bg/60"}`}
-          >
-            <FileText size={16} className="shrink-0 opacity-70" /> <span className="truncate">{f.name}</span>
-          </a>
-        ),
-      )}
+    <div className="mt-1 flex flex-col gap-1.5">
+      {files.map((f) => (
+        <FileCard key={`${f.id}-${f.version ?? ""}`} file={f} mine={mine} />
+      ))}
     </div>
   );
 }

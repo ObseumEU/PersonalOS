@@ -5,7 +5,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Keybo
 import { Link, useSearchParams } from "react-router-dom";
 import { type OrgMember, agentsApi } from "../agentsApi";
 import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, type TypingEntry, chatApi } from "../chatApi";
-import Messenger, { ThreadChip, replyCount, useSender } from "../chat/Messenger";
+import Messenger, { type FileAtt, ThreadChip, replyCount, useSender, visibleBody } from "../chat/Messenger";
+import { FileCard } from "../files/FileCard";
 import ThreadList, { useThreads } from "../chat/ThreadList";
 import { applyReply, upsert as upsertMsg } from "../chat/timeline";
 import { WorkingDot, WorkingOnText, workingOn } from "../components/agents/WorkingOn";
@@ -190,7 +191,16 @@ function MessageItem({
           </span>
         </form>
       ) : (
-        <Body text={m.body} names={names} />
+        <>
+          <Body text={visibleBody(m)} names={names} />
+          {m.attachments.some((a) => a.type === "file") && (
+            <div className="flex flex-col gap-1.5">
+              {(m.attachments.filter((a) => a.type === "file") as unknown as FileAtt[]).map((f) => (
+                <FileCard key={`${f.id}-${f.version ?? ""}`} file={f} />
+              ))}
+            </div>
+          )}
+        </>
       )}
       {m.reactions.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">

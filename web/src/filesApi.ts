@@ -20,11 +20,14 @@ export type FileItem = {
   updated_at: string;
   archived_at: string | null;
   text_chars: number;
-  preview: "image" | "pdf" | "text" | "download";
+  preview: import("./files/kinds").PreviewKind;
+  /** The current version (history entries); a chat attachment keeps the one that was shared. */
+  version?: number;
+  description?: string;
   duplicate?: boolean;
   /** The file's document in knowlage, where its text is indexed and searched. */
   kb_doc_id?: string | null;
-  kb_status?: "pending" | "ok" | "error" | null;
+  kb_status?: "pending" | "ok" | "error" | "private" | null;
   kb_error?: string | null;
 };
 
@@ -96,7 +99,7 @@ export const filesApi = {
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.text();
   },
-  update: (id: number, changes: Partial<Pick<FileItem, "name" | "topic" | "tags" | "visibility">>) => patch<FileItem>(`/api/files/${id}`, changes),
+  update: (id: number, changes: Partial<Pick<FileItem, "name" | "topic" | "tags" | "visibility" | "description">>) => patch<FileItem>(`/api/files/${id}`, changes),
   archive: (id: number) => post<FileItem>(`/api/files/${id}/archive`),
   unarchive: (id: number) => post<FileItem>(`/api/files/${id}/unarchive`),
   restore: (id: number, version: number) => post<FileItem>(`/api/files/${id}/restore`, { version }),

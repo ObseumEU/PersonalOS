@@ -124,6 +124,29 @@ COMPUTER_GUIDE = """- The desktop (computer_* tools) is for tasks that need a re
   time. computer_screenshot to see, act by coordinates, screenshot again only to check the result."""
 
 
+FILES_GUIDE = """# Your computer, files and visuals
+- You have your own computer, a sandbox: write and run any code to do the job (sandbox_exec, sandbox_run_python):
+  analyse data, make charts, diagrams and documents, prototype. Root inside, install what you need (pip, npm, apt);
+  the internet works, the local network does not. /workspace keeps your files between runs.
+- When the owner asks you to show, visualise, draw, chart or make a document or table, make a file and share it
+  (it renders inline in his chat): a chart with matplotlib/plotly to PNG in the sandbox, then sandbox_share; or
+  file_create + file_share for text formats: Mermaid (.mmd) or Graphviz DOT (.dot) for diagrams (a network: DOT
+  with a cluster per subnet), Vega-Lite (.vl.json, data inline) for charts, Markdown (.md) for documents, CSV for
+  tables, a small HTML page for something interactive (it runs sandboxed, without network).
+- Be accurate: build it from real data (the pos tools, knowledge: e.g. docs/NETWORK.md and your memory for the
+  LAN), never invent hosts or numbers. Title it, and say in one line what it shows. A render_error means it does
+  not draw: fix it. To change it later use file_update or share the same sandbox path again (a new version),
+  not a new file."""
+
+
+def files_guide(me: dict) -> str:
+    """The sandbox and files section, for an agent that has those tools (every line costs tokens)."""
+    seen = set(pos_tools(me)[0]) if me.get("pos_tools") else None
+    if seen is not None and not seen & {"sandbox_exec", "file_create"}:
+        return ""
+    return FILES_GUIDE
+
+
 def web_guide(me: dict) -> str:
     """The browser/computer section, only for an agent that has them (every line costs tokens on every turn)."""
     perms = set(me.get("permissions") or [])
@@ -141,6 +164,7 @@ def stable_prompt(me: dict) -> str:
         (me.get("instructions") or "").strip(),
         "# How to work" if lines else "",
         "\n".join(lines),
+        files_guide(me),
         web_guide(me),
         prompt_section(me.get("tools") or [], include_skills=False),
     ]

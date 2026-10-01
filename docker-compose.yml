@@ -21,6 +21,8 @@ services:
       POS_WORKER_KEYS_DIR: /worker-keys
       # GitHub repositories (owner/name, comma-separated) whose `agent` issues go to the Dev agent.
       POS_DEV_REPOS: ${POS_DEV_REPOS:-ObseumEU/PersonalOS}
+      # The agents' sandboxes (docs/SANDBOX.md); POS_SANDBOX_TOKEN comes from .env.
+      POS_SANDBOX_URL: ${POS_SANDBOX_URL:-http://pos-sandbox:8200}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
       interval: 15s
@@ -140,6 +142,36 @@ services:
       - desktop
     restart: unless-stopped
 
+  # Every agent's own computer (docs/SANDBOX.md): this manager starts one container per agent from
+  # personalos-sandbox:latest (ops/sandbox/image; built once on the host) on the internal network
+  # `sandbox`, which has no route out; its egress proxy (here, alias sandbox-proxy) reaches only public
+  # addresses and the api. The api calls the control API (pos-sandbox:8200) with POS_SANDBOX_TOKEN.
+  sandbox:
+    profiles: ["agents"]
+    build: ./ops/sandbox
+    environment:
+      SANDBOX_TOKEN: ${POS_SANDBOX_TOKEN:-}
+      SANDBOX_IMAGE: ${POS_SANDBOX_IMAGE:-personalos-sandbox:latest}
+      SANDBOX_NETWORK: pos-sandbox
+      SANDBOX_MAX_ACTIVE: ${POS_SANDBOX_MAX_ACTIVE:-3}
+      SANDBOX_IDLE_S: ${POS_SANDBOX_IDLE_S:-900}
+      SANDBOX_MEM: ${POS_SANDBOX_MEM:-2g}
+      SANDBOX_CPUS: ${POS_SANDBOX_CPUS:-2}
+      SANDBOX_QUOTA_MB: ${POS_SANDBOX_QUOTA_MB:-5120}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      default:
+        aliases:
+          - pos-sandbox
+      sandbox:
+        aliases:
+          - sandbox-proxy
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   docker-proxy:
     profiles: ["sentinel"]
     image: tecnativa/docker-socket-proxy:${DOCKER_PROXY_TAG:-v0.5.0}
@@ -170,6 +202,16 @@ services:
 
 networks:
   desktop:
+  # The sandboxes' network: internal (no route out) and the bridge without an address (the host is not
+  # reachable either); the manager's proxy is the only way out.
+  sandbox:
+    name: pos-sandbox
+    internal: true
+    driver_opts:
+      com.docker.network.bridge.inhibit_ipv4: "true"
+    ipam:
+      config:
+        - subnet: 10.231.0.0/24
 
 volumes:
   pos-data:

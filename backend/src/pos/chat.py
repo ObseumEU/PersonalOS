@@ -1167,7 +1167,6 @@ def _reactions(conn: sqlite3.Connection, ids: list[int]) -> dict[int, list[dict]
 
 
 def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
-    from . import tasks
 
     ids = [r["id"] for r in rows]
     reacts = _reactions(conn, ids)
@@ -1189,8 +1188,7 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
         d["author_name"] = author["name"] if author else "?"
         d["author_kind"] = author["kind"] if author else "agent"
         d["mentions"] = json.loads(r["mentions"] or "[]")
-        d["attachments"] = [{**a, "ref": tasks.display_id(a["id"])} if a.get("type") == "task" else a
-                            for a in json.loads(r["attachments"] or "[]")]
+        d["attachments"] = [_attachment_view(a) for a in json.loads(r["attachments"] or "[]")]
         d["reactions"] = reacts.get(r["id"], [])
         d["replies"] = replies.get(r["id"], 0)
         d["quote_of"] = r["quote_of"] if "quote_of" in r.keys() else None
@@ -1206,6 +1204,17 @@ def _view(conn, rows, viewer: int, names, for_agent: bool) -> list[dict]:
         d["body"] = body
         out.append(d)
     return out
+
+
+def _attachment_view(a: dict) -> dict:
+    """A task gets its display ref; a file how the app shows it (kinds added later apply to old messages)."""
+    from . import files, tasks
+
+    if a.get("type") == "task":
+        return {**a, "ref": tasks.display_id(a["id"])}
+    if a.get("type") == "file":
+        return {**a, "preview": files.preview_kind(a.get("mime"), a.get("name"))}
+    return a
 
 
 def _snippet(body: str, n: int = 120) -> str:

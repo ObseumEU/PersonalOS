@@ -103,17 +103,9 @@ def _file_attachments(conn, ctx, items: list[AttachmentIn]) -> tuple[list[dict],
     (agents read the text: they see which file to open)."""
     from . import files
 
-    if len(items) > 10:
-        raise tasks.Invalid("at most 10 attachments")
-    out, lines = [], []
-    for a in items:
-        if a.type != "file":
-            raise tasks.Invalid(f"unknown attachment type {a.type}")
-        f = files.get(conn, ctx, a.id)  # NotFound / Forbidden when the sender cannot read it
-        out.append({"type": "file", "id": f["id"], "name": f["name"], "mime": f.get("mime"),
-                    "preview": f.get("preview")})
-        lines.append(f"📎 {f['name']} (soubor #{f['id']})")
-    return out, lines
+    if any(a.type != "file" for a in items):
+        raise tasks.Invalid("unknown attachment type")
+    return files.chat_attachments(conn, ctx, [a.id for a in items])
 
 
 @router.post("/channels/{channel_id}/messages", status_code=201)

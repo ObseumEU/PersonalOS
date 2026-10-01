@@ -156,6 +156,11 @@ services:
     mem_limit: 256m
     mem_reservation: 32m
     logging: *logging
+  # The sandbox manager (docs/SANDBOX.md): ~40 MB itself; each agent's container at most
+  # POS_SANDBOX_MEM (2g), at most POS_SANDBOX_MAX_ACTIVE (3) running, stopped after 15 min idle.
+  sandbox:
+    logging: *logging
+
   docker-proxy:
     security_opt:
       - no-new-privileges:true

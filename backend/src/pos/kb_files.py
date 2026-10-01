@@ -90,6 +90,8 @@ def item(row: sqlite3.Row | dict) -> dict:
     head = [f"File in PersonalOS: {row['name']}", f"Type: {row['mime'] or 'unknown'}"]
     if row["topic"]:
         head.append(f"Topic: {row['topic']}")
+    if "description" in row.keys() and row["description"]:
+        head.append(f"Description: {row['description']}")
     if tags:
         head.append("Tags: " + ", ".join(tags))
     text = "\n".join(head) + "\n\n" + (row["text_extract"] or "")
@@ -110,6 +112,8 @@ def ingest_file(conn: sqlite3.Connection, file_id: int) -> dict:
         return {"ok": False, "error": f"no file {file_id}"}
     if not configured():
         return {"ok": False, "skipped": "knowlage is not configured"}
+    if row["visibility"] == "private":
+        return _withdraw(conn, row)
     try:
         r = _request("POST", "/api/ingest", json={"items": [item(row)]}, timeout=60)
         report = r.json()
@@ -127,6 +131,24 @@ def ingest_file(conn: sqlite3.Connection, file_id: int) -> dict:
     return {"ok": True, "kb_doc_id": kid}
 
 
+def _withdraw(conn: sqlite3.Connection, row) -> dict:
+    """A private file stays out of the shared knowledge base: never pushed, and taken out
+    again when it was pushed before it became private (kb_status 'private')."""
+    if row["kb_doc_id"]:
+        try:
+            _request("POST", "/api/ingest", json={"items": [], "deletes": [
+                {"source": SOURCE, "channel": CHANNEL, "key": item_key(row["id"])}]}, timeout=60)
+        except Unavailable as e:
+            conn.execute("UPDATE files SET kb_status = 'error', kb_error = ?, kb_attempts = kb_attempts + 1 "
+                         "WHERE id = ?", (str(e)[:500], row["id"]))
+            conn.commit()
+            return {"ok": False, "error": str(e)[:500]}
+    conn.execute("""UPDATE files SET kb_doc_id = NULL, kb_status = 'private', kb_error = NULL, kb_synced_at = ?
+                    WHERE id = ?""", (now_iso(), row["id"]))
+    conn.commit()
+    return {"ok": True, "private": True}
+
+
 def ingest_in_background(db_path: Path, file_id: int) -> None:
     """After an upload: push the file, whatever happens the upload stays done."""
     from .db import connect
@@ -142,7 +164,8 @@ def ingest_in_background(db_path: Path, file_id: int) -> None:
 
 
 def mark_changed(conn: sqlite3.Connection, file_id: int) -> None:
-    """Name, topic or tags changed: knowlage's copy is stale until pushed again."""
+    """Name, topic, tags, content or visibility changed: knowlage's copy is stale until pushed again
+    (a file that became private is taken out of it)."""
     conn.execute("UPDATE files SET kb_status = 'pending', kb_attempts = 0 WHERE id = ? AND kb_status IS NOT NULL",
                  (file_id,))
 
@@ -162,7 +185,7 @@ def backfill(conn: sqlite3.Connection, *, apply: bool = True, limit: int | None 
              include_archived: bool = False) -> dict:
     """Push every file that has no knowlage document yet. Idempotent: pushed files
     have an id and are skipped next time; knowlage updates by key anyway."""
-    sql = "SELECT id FROM files WHERE kb_doc_id IS NULL"
+    sql = "SELECT id FROM files WHERE kb_doc_id IS NULL AND visibility != 'private'"
     if not include_archived:
         sql += " AND archived_at IS NULL"
     ids = [r["id"] for r in conn.execute(sql + " ORDER BY id" + (f" LIMIT {int(limit)}" if limit else ""))]

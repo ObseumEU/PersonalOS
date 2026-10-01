@@ -731,6 +731,14 @@ MIGRATIONS: list[str] = [
     INSERT INTO chat_thread_reads (actor_id, root_id, last_read_id)
         SELECT id, 0, (SELECT COALESCE(MAX(id), 0) FROM chat_messages) FROM actors WHERE kind = 'human';
     """,
+    # 31: files agents make and share (pos.agent_files): a one-line description, where it came from
+    # (origin, e.g. sandbox:<agent>:<path>, so sharing the same path again is a new version), quota by creator.
+    """
+    ALTER TABLE files ADD COLUMN description TEXT NOT NULL DEFAULT '';
+    ALTER TABLE files ADD COLUMN origin TEXT;
+    CREATE INDEX files_created_by ON files (created_by);
+    CREATE INDEX files_origin ON files (origin);
+    """,
 ]
 
 
