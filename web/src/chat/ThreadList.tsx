@@ -4,7 +4,7 @@ import { type ThreadItem, chatApi } from "../chatApi";
 import { t } from "../i18n/core";
 import { Avatar } from "../mobile/ui";
 import { stripToolMarkup } from "../toolMarkup";
-import { ThreadChip } from "./Messenger";
+import { ThreadChip } from "./ThreadChip";
 
 /** Threads in the owner's channels, the latest activity first, with unread replies ("Vlákna"). */
 export function useThreads(listen: (reload: () => void) => () => void) {
