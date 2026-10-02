@@ -464,16 +464,16 @@ def system_ctx(conn: sqlite3.Connection) -> Ctx:
     return Ctx(actors.assistant_id(conn), via="system")
 
 
-def review_triage_target(conn: sqlite3.Connection, row) -> int | None:
-    """Who reviews instead of the owner: the CEO, unless the CEO did the work, or already
+def review_triage_target(conn: sqlite3.Connection, row, note: str | None = None) -> int | None:
+    """Who reviews instead of the owner (pos.review_policy.owner_stand_in): the CEO for what needs
+    judgment, else the assignee's team lead. None when the stand-in did the work, or already
     triaged this result and left it for the owner."""
-    ceo = ceo_id(conn)
-    if not ceo or row["assignee_id"] == ceo or not _can_review(conn, ceo):
-        return None
+    from .review_policy import owner_stand_in
+
     if conn.execute("SELECT 1 FROM audit_log WHERE action = 'review_triage' AND entity = 'task' AND entity_id = ?",
                     (row["id"],)).fetchone():
         return None
-    return ceo
+    return owner_stand_in(conn, row, note if note is not None else row["progress_note"])
 
 
 def _can_review(conn: sqlite3.Connection, actor_id: int) -> bool:
@@ -502,7 +502,7 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
         target = None
         if reviewer == owner:
             target = review_triage_target(conn, row)
-            why = "the owner's review goes to the CEO first (it leaves him only what truly needs him)"
+            why = "the owner's review goes to a stand-in first (it leaves him only what truly needs him)"
         elif reviewer == ceo:
             last = conn.execute("""SELECT MAX(at) FROM audit_log WHERE action = 'review_reminder' AND entity = 'task'
                                    AND entity_id = ?""", (row["id"],)).fetchone()[0]
@@ -542,8 +542,8 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
         name = actors.get(conn, target)["name"]
         comments.log(conn, sys_ctx, row["id"], f"Review moved to {name}: {why}.", "system")
         audit.log(conn, sys_ctx, "review_escalate", "task", row["id"], **{"from": reviewer, "to": target})
-        if target == ceo and reviewer == owner:
-            audit.log(conn, sys_ctx, "review_triage", "task", row["id"], ceo=ceo)
+        if reviewer == owner:
+            audit.log(conn, sys_ctx, "review_triage", "task", row["id"], to=target)
         chat.send_dm(conn, sys_ctx, target, f"{ref} '{row['title']}' is yours to review now ({why}). Accept it or "
                                             "return it with what should change (review_task)"
                      + ("; hand the owner only what truly needs him (request_review reviewer=Owner)."

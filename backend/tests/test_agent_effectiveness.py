@@ -147,6 +147,90 @@ def test_the_backlog_sweep_dry_runs_then_applies_and_the_sla_is_12_hours(env):
     assert business.REVIEW_SLA_HOURS == review_policy.SLA_HOURS == 12
 
 
+def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgment_calls(env):
+    """T-472: what used to wait for the owner went to the CEO; now routine is accepted, code goes
+    to QA, the rest to the team lead, and only judgment calls to the CEO."""
+    conn, owner, ids = env["conn"], env["owner"], env["ids"]
+    ha, cto, ceo = ids["Home Assistant Specialist"], ids["CTO"], ids["CEO"]
+    w = Ctx(ha, via="mcp")
+
+    def handed(title, note, **kw):
+        t = _task(conn, owner, ha, title=title, **kw)
+        return tasks.complete(conn, w, t["id"], note)
+
+    # 1. A task from a schedule with nothing to act on: accepted (created by the owner's schedule).
+    out = handed("Denní kontrola kapacity", "V normě: disk 60 %, swap 10 %, bez restartů, 0 errors.",
+                 source="schedule:901")
+    assert out["status"] == "done"
+    assert conn.execute("SELECT 1 FROM audit_log WHERE action = 'review_auto_accept' AND entity_id = ?",
+                        (out["id"],)).fetchone()
+    # ...with a finding: the checker's team lead, not the CEO.
+    out = handed("Denní kontrola kapacity", "Nad prahem: swap 80 % (práh 70 %), úkol pro CTO založen.",
+                 source="schedule:901")
+    assert out["status"] == "review" and out["reviewer_id"] == cto
+    # 2. A digest from a schedule ("frontu schválení" is a line in it, not an ask): accepted.
+    out = handed("Souhrn pro majitele (ráno)", "Ranní souhrn odeslán v DM. Frontu schválení jsem nekontroloval.\n"
+                 "Ověřeno: chat_send vrátil zprávu.", topic="digest", source="schedule:902")
+    assert out["status"] == "done"
+    # A mail triaged to nothing: accepted ("Rozhodnutí: nic" is the verdict, not an ask).
+    out = handed("BAK rámcová nabídka", "## Rozhodnutí: Nic (FYI)\nNaše vlastní odchozí pošta, nikdo nečeká "
+                 "na odpověď.", topic="mail", source="event:gmail")
+    assert out["status"] == "done"
+    # 3. Code: the QA Reviewer, even when the owner's event created it.
+    se = ids["Software Engineer"]
+    t = _task(conn, owner, se, title="Issue: parser padá", source="event:github")
+    out = tasks.complete(conn, Ctx(se, via="mcp"), t["id"], "Commit abc1234 na agent/dev.\nOvěřeno: pytest 9 passed")
+    assert out["status"] == "review" and out["reviewer_id"] == ids["QA Reviewer"]
+    # 4. Ordinary work that would wait for the owner: the team lead.
+    out = handed("Import z Home Assistant", "Import opraven jen zčásti, chyba u dvou senzorů trvá.",
+                 source="event:gmail")
+    assert out["status"] == "review" and out["reviewer_id"] == cto
+    # The work of the CEO's direct report: its lead is the CEO.
+    t = _task(conn, owner, ids["Writer"], title="Článek o serverech", source="event:gmail")
+    out = tasks.complete(conn, Ctx(ids["Writer"], via="mcp"), t["id"], "Článek má problém se zdroji, řeším.")
+    assert out["status"] == "review" and out["reviewer_id"] == ceo
+    # 5. A plan, money, something waiting for an approval: the CEO.
+    out = handed("Plán automatizace na Q4", "Tři varianty, doporučuji B.", source="event:gmail")
+    assert out["status"] == "review" and out["reviewer_id"] == ceo
+    out = handed("Upomínka dodavatele", "Faktura je po splatnosti, zaplatit může jen vlastník.",
+                 source="event:gmail")
+    assert out["status"] == "review" and out["reviewer_id"] == ceo
+    t = _task(conn, Ctx(cto), ha, title="Objednat senzor", estimate_min=15)
+    conn.execute("INSERT INTO approvals (task_id, requested_by, action, created_at) VALUES (?, ?, 'buy', ?)",
+                 (t["id"], ha, now_iso()))
+    out = tasks.complete(conn, w, t["id"], "Objednávka čeká na schválení.\nOvěřeno: košík zkontrolován")
+    assert out["status"] == "review"
+    # A small verified task without code or outbound: accepted.
+    t = _task(conn, Ctx(cto), ha, title="Přejmenovat entitu", estimate_min=15)
+    assert tasks.complete(conn, w, t["id"], "Přejmenováno.\nOvěřeno: entita v HA má nový název")["status"] == "done"
+    # An explicit reviewer other than the owner stays.
+    t = _task(conn, owner, ha, title="Nastavit automatizaci", source="event:gmail")
+    assert tasks.request_review(conn, w, t["id"], "QA Reviewer", "Hotovo, problém s časem trvá")["reviewer_id"] \
+        == ids["QA Reviewer"]
+
+    # The measurement over today: the routine no longer reaches the CEO.
+    today = datetime.now(timezone.utc).date().isoformat()
+    m = review_policy.measure(conn, today, today)
+    assert m["handed_in"] == 12, m
+    assert m["after"] == {"auto_accept": 4, "qa": 1, "team_lead": 3, "ceo": 3, "owner": 0, "other": 1}, m
+    assert m["after"]["ceo"] == m["ceo_before"] == 3  # the head's work, the plan, the invoice
+
+
+def test_the_sweep_moves_the_ceos_stand_in_reviews_to_the_team_lead(env):
+    conn, owner, ids = env["conn"], env["owner"], env["ids"]
+    ceo = ids["CEO"]
+    t = tasks.create(conn, owner, {"title": "Kontrola světel", "source": "event:ha",
+                                   "assignee": {"type": "agent", "id": ids["Home Assistant Specialist"]}})
+    conn.execute("UPDATE tasks SET status = 'review', reviewer_id = ?, progress_note = ? WHERE id = ?",
+                 (ceo, "Dvě světla nereagují, chyba v Zigbee.", t["id"]))
+    from pos import audit
+    audit.log(conn, owner, "review_triage", "task", t["id"], ceo=ceo)
+    conn.commit()
+    assert any("→CTO" in x for x in review_policy.sweep(conn)["to_lead"])
+    review_policy.sweep(conn, apply=True)
+    assert conn.execute("SELECT reviewer_id FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] == ids["CTO"]
+
+
 # ------------------------------------------------------------------ 2. knowledge first
 
 KB_ANSWER = (
