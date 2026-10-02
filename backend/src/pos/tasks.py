@@ -434,10 +434,11 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
         extra["reviewer_id"] = reviewer_of(conn, row)
         if extra["reviewer_id"] == actors.owner_id(conn):
-            # The owner's reviews go to the CEO first; it leaves him only what truly needs him.
+            # The owner's reviews go to a stand-in first (the team lead, the CEO for what needs
+            # judgment); it leaves him only what truly needs him (pos.review_policy.owner_stand_in).
             from . import business
 
-            triaged = business.review_triage_target(conn, row)
+            triaged = business.review_triage_target(conn, row, changes.get("progress_note") or row["progress_note"])
             if triaged:
                 extra["reviewer_id"] = triaged
     if "status" in changes:
@@ -449,7 +450,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     if triaged:
         from . import audit
 
-        audit.log(conn, ctx, "review_triage", ENTITY, task_id, ceo=triaged)
+        audit.log(conn, ctx, "review_triage", ENTITY, task_id, to=triaged)
     if not accepted and set(changes) - {"status", "progress", "progress_note", "position", "value_kind"}:
         from . import business
 
