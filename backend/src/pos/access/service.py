@@ -510,6 +510,41 @@ def budget_gate(conn: sqlite3.Connection, req) -> None:
                              f"the Access manager has it as request #{ref}")
 
 
+def limited_until(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None) -> str | None:
+    """When the agent's own limit it is over now lets it run again (ISO, UTC), else None.
+    The dispatcher holds its tasks back until then (prod 2026-10-03: an agent on runs_day was
+    started every 5 min, 173 refused runs a day, each one a limit hit for the Access manager)."""
+    if not store.ready(conn):
+        return None
+    now = now or utcnow()
+    since = _iso(now - timedelta(days=1))
+    until: datetime | None = None
+    for metric in GATED:
+        lim = limit(conn, agent_id, metric, now)
+        if lim is None:
+            continue
+        u = used(conn, agent_id, metric, now)
+        if u < lim:
+            continue
+        if metric.endswith("month"):
+            local = _month_start(now).astimezone(TZ)
+            nxt = (local.replace(year=local.year + 1, month=1) if local.month == 12
+                   else local.replace(month=local.month + 1))
+            at = nxt.astimezone(timezone.utc)
+        else:
+            # rolling 24 h: runs_day frees up when enough runs leave the window; usd/tokens are
+            # re-checked once the oldest run leaves it (the dispatcher asks again each poll)
+            drop = int(u - lim) + 1 if metric == "runs_day" else 1
+            row = conn.execute(
+                "SELECT started_at FROM runs WHERE actor_id = ? AND started_at >= ? AND status != 'blocked' "
+                "ORDER BY started_at LIMIT 1 OFFSET ?", (agent_id, since, drop - 1)).fetchone()
+            at = (datetime.fromisoformat(row["started_at"]) + timedelta(days=1)) if row else now + timedelta(hours=1)
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+        until = at if until is None or at > until else until
+    return _iso(until) if until and until > now else None
+
+
 def run_cap_usd(conn: sqlite3.Connection, agent_id: int) -> float | None:
     """The agent's max USD per run (the worker passes it to the engine)."""
     return limit(conn, agent_id, "usd_run")
@@ -532,14 +567,31 @@ def signals(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None
             "looks_like_loop": bool((per_task and per_task[0]["n"] >= 5) or (tools and tools[0]["n"] >= 200))}
 
 
+LIMIT_HIT_DEDUP_H = 24  # one limit-hit request per (agent, limit) in this window
+
+
 def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float, lim: float,
               task_id: int | None = None) -> int:
-    """A run was refused for the agent's own limit: one open request per limit."""
+    """A run was refused for the agent's own limit: one request per (agent, limit) a day. One still
+    open, or raised within LIMIT_HIT_DEDUP_H (decided or not), only counts the hit, noted in the audit
+    at most once an hour; the Access manager is not woken again (prod 2026-10-03: T-517 reopened on
+    every hit, 173 runs a day)."""
     store.ensure_schema(conn)
+    now = utcnow()
     row = conn.execute(
-        """SELECT id FROM access_requests WHERE agent_id = ? AND metric = ? AND trigger = 'limit_hit'
-           AND status = 'pending'""", (agent_id, metric)).fetchone()
+        """SELECT id, detail FROM access_requests WHERE agent_id = ? AND metric = ? AND trigger = 'limit_hit'
+           AND (status = 'pending' OR created_at >= ?) ORDER BY id DESC LIMIT 1""",
+        (agent_id, metric, _iso(now - timedelta(hours=LIMIT_HIT_DEDUP_H)))).fetchone()
     if row:
+        detail = json.loads(row["detail"] or "{}")
+        detail["repeats"] = int(detail.get("repeats", 0)) + 1
+        noted = detail.get("repeat_noted_at")
+        if not noted or noted <= _iso(now - timedelta(hours=1)):
+            detail["repeat_noted_at"] = _iso(now)
+            audit.log(conn, Ctx(agent_id, via="system"), "access_limit_hit_repeat", "actor", agent_id,
+                      metric=metric, used=used_, limit=lim, request=row["id"], repeats=detail["repeats"])
+        conn.execute("UPDATE access_requests SET detail = ? WHERE id = ?",
+                     (json.dumps(detail, ensure_ascii=False, default=str), row["id"]))
         return row["id"]
     name = actors.get(conn, agent_id)["name"]
     rid = _insert_request(conn, agent_id=agent_id, requested_by=None, trigger="limit_hit", what="budget",

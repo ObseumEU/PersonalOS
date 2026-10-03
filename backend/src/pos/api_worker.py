@@ -136,6 +136,15 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     ).fetchone()
     out: dict = {"state": st, "unread_messages": unread}
     if row:
+        from .access import service as access
+
+        # Over its own limit (runs_day, usd_day...): no task until the limit resets, so neither this
+        # worker nor the pool's probe starts a run that would only be refused (pos.access).
+        until = access.limited_until(conn, ctx.actor_id)
+        if until:
+            st["limited_until"] = until
+            row = None
+    if row:
         from . import business
 
         out["task"] = tasks.get(conn, ctx, row["id"])
