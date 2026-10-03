@@ -132,6 +132,72 @@ def test_over_budget_start_run_is_refused_and_becomes_a_request(app):
     assert client.post("/api/worker/runs", json={"kind": "task"}, headers=h).status_code == 201
 
 
+def _past_run(conn, agent_id, hours_ago):
+    at = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+    return conn.execute("INSERT INTO runs (actor_id, kind, status, started_at) VALUES (?, 'task', 'ok', ?)",
+                        (agent_id, at)).lastrowid
+
+
+def test_agent_on_its_runs_day_limit_is_offered_no_task_until_the_limit_resets(app):
+    client, conn, agent, key = app["client"], app["conn"], app["agent"], app["key"]
+    h = {"Authorization": f"Bearer {key}"}
+    t = tasks.create(conn, app["owner"], {"title": "Grow sales", "assignee": {"type": "agent", "id": agent}})
+    conn.execute("UPDATE tasks SET status = 'next' WHERE id = ?", (t["id"],))
+    access.set_budget(conn, app["am"], agent, "runs_day", 3, "small agent")
+    oldest = _past_run(conn, agent, 20)
+    _past_run(conn, agent, 10)
+    _past_run(conn, agent, 1)
+    conn.commit()
+    # (a) on the limit: no task for the worker nor the pool's probe, so no run is even attempted
+    work = client.get("/api/worker/next", params={"wait": 0}, headers=h).json()
+    assert "task" not in work
+    until = datetime.fromisoformat(work["state"]["limited_until"])
+    assert timedelta(hours=3.9) < until - datetime.now(timezone.utc) < timedelta(hours=4.1)
+    assert conn.execute("SELECT COUNT(*) FROM runs WHERE actor_id = ?", (agent,)).fetchone()[0] == 3
+    # (c) the oldest run leaves the 24 h window: the agent runs normally again
+    conn.execute("UPDATE runs SET started_at = ? WHERE id = ?",
+                 ((datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(timespec="seconds"), oldest))
+    conn.commit()
+    work = client.get("/api/worker/next", params={"wait": 0}, headers=h).json()
+    assert work["task"]["id"] == t["id"] and "limited_until" not in work["state"]
+    assert client.post("/api/worker/runs", json={"kind": "task", "task_id": t["ref"]}, headers=h).status_code == 201
+
+
+def test_a_raised_limit_lifts_the_hold_at_once(app):
+    conn, agent = app["conn"], app["agent"]
+    access.set_budget(conn, app["am"], agent, "runs_day", 1, "small agent")
+    _past_run(conn, agent, 2)
+    conn.commit()
+    assert access.limited_until(conn, agent)
+    access.set_budget(conn, app["am"], agent, "runs_day", 5, "busy day")
+    assert access.limited_until(conn, agent) is None
+
+
+def test_repeated_limit_hits_within_a_day_make_one_request_and_never_reopen_the_queue(app):
+    conn, agent, am = app["conn"], app["agent"], app["am"]
+    first = access.limit_hit(conn, agent, "runs_day", 3, 3)
+    access.decide(conn, am, first, "deny", "3 runs a day is enough for now")
+    conn.execute("UPDATE tasks SET status = 'done' WHERE assignee_id = ? AND source = 'access'", (am.actor_id,))
+    conn.commit()
+    # (b) ten more hits of the same limit within 24 h: still the one request, no new or reopened task
+    for _ in range(10):
+        assert access.limit_hit(conn, agent, "runs_day", 3, 3) == first
+    reqs = conn.execute("SELECT id, detail FROM access_requests WHERE agent_id = ? AND trigger = 'limit_hit'",
+                        (agent,)).fetchall()
+    assert [r["id"] for r in reqs] == [first] and json.loads(reqs[0]["detail"])["repeats"] == 10
+    queue = conn.execute("SELECT status FROM tasks WHERE assignee_id = ? AND source = 'access'",
+                         (am.actor_id,)).fetchall()
+    assert [q["status"] for q in queue] == ["done"]
+    audit = lambda a: conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = ?", (a,)).fetchone()[0]  # noqa: E731
+    assert audit("access_queue_reopen") == 0
+    assert audit("access_limit_hit") == 1 and audit("access_limit_hit_repeat") == 1  # noted once an hour
+    # A different limit is its own key; a day later the same limit raises a new request.
+    assert access.limit_hit(conn, agent, "usd_day", 5, 5) != first
+    conn.execute("UPDATE access_requests SET created_at = ? WHERE id = ?",
+                 ((datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(timespec="seconds"), first))
+    assert access.limit_hit(conn, agent, "runs_day", 3, 3) != first
+
+
 def test_company_cap_blocks_everyone_and_only_the_owner_sets_it(app):
     client, conn, agent, key = app["client"], app["conn"], app["agent"], app["key"]
     with pytest.raises(Forbidden):

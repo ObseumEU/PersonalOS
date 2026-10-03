@@ -114,10 +114,15 @@ def test_access_queue_tasks_fold_per_agent_and_kind(env):
     conn.commit()
     [t] = queue()
     assert t["title"] == "Žádosti o přístup: Builder · limit usd_day"
-    # The manager decides and closes it; the same agent hits the same limit again: the task comes back.
+    # The manager decides and closes it; the same limit again within 24 h only counts (T-534).
     conn.execute("UPDATE access_requests SET status = 'granted'")
     tasks.update(conn, Ctx(am), t["id"], {"status": "done", "progress_note": "raised"})
     conn.commit()
+    access.limit_hit(conn, env["agent"], "usd_day", 13.0, 10.0)
+    conn.commit()
+    assert [(r["id"], r["status"]) for r in queue()] == [(t["id"], "done")]
+    # Its request is a day old, the task closed lately: a new hit brings the task back.
+    conn.execute("UPDATE access_requests SET created_at = '2000-01-01T00:00:00+00:00'")
     access.limit_hit(conn, env["agent"], "usd_day", 13.0, 10.0)
     conn.commit()
     assert [(r["id"], r["status"]) for r in queue()] == [(t["id"], "next")]
