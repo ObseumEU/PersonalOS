@@ -97,6 +97,8 @@ export default {
   "m.tasks.view.review": "K revizi",
 
   "m.more.title": "Víc",
+  "m.more.company": "Firma",
+  "m.more.company_hint": "Cíle, co se dostalo ven, náklady a top problémy",
   "m.more.full": "Otevřít celou aplikaci",
   "m.more.full_hint": "Projekty, Tým, Znalosti, Kalendář a celé Nastavení",
   "m.more.settings": "Oznámení, instalace a zařízení",

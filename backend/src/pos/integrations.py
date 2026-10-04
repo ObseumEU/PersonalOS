@@ -164,6 +164,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import taint
 
     taint.register_mcp(mcp, session)  # security_confirm: the Security Engineer's verdict on a tainted run's action
+    from . import mcp_scorecard
+
+    mcp_scorecard.register_mcp(mcp, session)  # scorecard: the company's numbers (the CEO's plan and board input)
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:

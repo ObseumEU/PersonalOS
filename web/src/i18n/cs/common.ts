@@ -2,6 +2,7 @@
 export default {
   // navigation
   "nav.home": "Domů",
+  "nav.company": "Firma",
   "nav.chat": "Chat",
   "nav.work": "Práce",
   "nav.tasks": "Úkoly",

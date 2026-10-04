@@ -9,6 +9,7 @@ import {
   FileText,
   FolderKanban,
   FolderOpen,
+  Gauge,
   Hash,
   Home,
   KeyRound,
@@ -38,9 +39,11 @@ export type Section = {
 
 export type SubSection = { path: string; key: string; icon: LucideIcon };
 
-// Six places: what needs you, talking, doing, knowing, who, and the rest folded under Nastavení.
+// Seven places: what needs you, how the company is doing, talking, doing, knowing, who, and the rest
+// folded under Nastavení.
 export const SECTIONS: Section[] = [
   { path: "/today", key: "nav.home", icon: Home, match: ["today", "approvals", "weekly-review", "assistant"], mobile: true },
+  { path: "/company", key: "nav.company", icon: Gauge, match: ["company"] },
   { path: "/chat", key: "nav.chat", icon: MessagesSquare, match: ["chat"], mobile: true },
   { path: "/tasks", key: "nav.work", icon: Briefcase, match: ["tasks", "projects", "calendar", "work"], mobile: true },
   { path: "/knowledge", key: "nav.knowledge", icon: BookOpen, match: ["knowledge", "files", "notes", "topics"] },

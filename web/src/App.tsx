@@ -14,6 +14,7 @@ const AssistantChat = lazy(() => import("./pages/AssistantChat"));
 const Automations = lazy(() => import("./pages/Automations"));
 const Calendar = lazy(() => import("./pages/Calendar"));
 const Chat = lazy(() => import("./pages/Chat"));
+const Company = lazy(() => import("./pages/Company"));
 const Connectors = lazy(() => import("./pages/Connectors"));
 const Credentials = lazy(() => import("./pages/Credentials"));
 const Files = lazy(() => import("./pages/Files"));
@@ -85,6 +86,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/today" replace />} />
           <Route path="/today" element={<Today />} />
+          <Route path="/company" element={<Company />} />
           {/* Práce: Úkoly · Projekty · Kalendář */}
           <Route path="/work" element={<Navigate to="/tasks" replace />} />
           <Route path="/tasks" element={<Work><Tasks /></Work>} />

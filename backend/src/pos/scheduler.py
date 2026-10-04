@@ -481,7 +481,28 @@ def promises_tick(conn: sqlite3.Connection) -> dict:
     return promises.tick(conn)
 
 
+def scorecard_daily(conn: sqlite3.Connection) -> dict:
+    from . import scorecard
+
+    return scorecard.daily(conn)
+
+
+def platform_meeting(conn: sqlite3.Connection) -> dict:
+    from . import platform_loop
+
+    return platform_loop.start_meeting(conn)
+
+
+def platform_retro(conn: sqlite3.Connection) -> dict:
+    from . import platform_loop
+
+    return platform_loop.retro(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "scorecard_daily": scorecard_daily,
+    "platform_meeting": platform_meeting,
+    "platform_retro": platform_retro,
     "owner_decision_defaults": owner_decision_defaults,
     "promises_tick": promises_tick,
     "learning_weekly": learning_weekly,
@@ -589,6 +610,12 @@ DEFAULT_JOBS = [
     # its default time; the CEO's dated promises to the owner are parsed and a missed one is flagged.
     ("Owner decisions: adopt the recommendation after the default time", "every 15m", "owner_decision_defaults"),
     ("CEO promises to the owner: parse and flag missed ones", "every 5m", "promises_tick"),
+    # The company scorecard (pos.scorecard): measured goals updated, the day's snapshot for the Firma page
+    # and the week-over-week deltas; the CEO's Monday plan and Friday board input read it.
+    ("Scorecard: measured goals and the daily snapshot", "daily 06:10", "scorecard_daily"),
+    # The agent company improves itself (pos.platform_loop): the CTO's meeting in #platform, the Friday retro.
+    ("Platforma: zlepšení týdne (CTO, #platform)", "weekly mon 10:00", "platform_meeting"),
+    ("Platforma: páteční retro s čísly (#platform, do týdenního reportu)", "weekly fri 12:00", "platform_retro"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on

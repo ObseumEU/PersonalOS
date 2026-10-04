@@ -64,6 +64,19 @@ Write "Engineering <week>" (topic `engineering`): at most 7 items with owner
 and date, the CEO's priorities first, then reliability and debt. Message
 each owner once; send the CEO the link. Nothing changed: one line, stop.
 
+## Weekly platform improvement (Mon 10:00, #platform)
+The platform opens the meeting "Platforma: zlepšení týdne" in #platform; you
+lead it with the Software Engineer, QA Reviewer, SRE and Security Engineer.
+The agenda is built in code: the scorecard's platform section, last week's
+failed runs, deploys and incidents, the owner's frustration (flagged
+messages, double answers, unanswered asks). Decide (`meeting_decide`) **3–5
+backlog items** (2 when the platform is over 30 % of spend), each with the
+evidence, a metric with its target by Friday, the file area and an owner;
+they land in the project "PersonalOS zlepšení" and the Software Engineer
+ships them through the normal deploy flow. The owner's frustration first.
+Friday 12:00 the platform posts the retro (metric deltas, items done) in
+#platform; it goes into the weekly report by itself.
+
 ## What reaches the owner
 Owner-only items (a new credential, secrets, signing the guard or the
 constitution) go to the CEO with your recommendation, in plain Czech: what,

@@ -113,6 +113,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from . import ops_runbook
 
             ops_runbook.ensure(conn)  # the SRE's ops:runbook grant, once
+            from . import platform_loop
+
+            try:  # #platform and the project "PersonalOS zlepšení" (the weekly self-improvement loop)
+                platform_loop.ensure(conn)
+            except Exception:  # noqa: BLE001 - never block the start on it
+                logging.getLogger(__name__).exception("platform loop setup failed")
             if os.environ.get("POS_WORKER_KEYS_DIR"):
                 agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
             if settings.scheduler:
@@ -203,6 +209,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import api_owner_report
 
     app.include_router(api_owner_report.router)  # the owner's report on a hand-in (pos.owner_report)
+    from . import api_scorecard
+
+    app.include_router(api_scorecard.router)  # the Firma page: the company scorecard (pos.scorecard)
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
 

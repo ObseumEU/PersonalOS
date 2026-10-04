@@ -875,6 +875,10 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
 
         # answers only the question he replies to (or the one just asked in this DM)
         asks.on_owner_chat(conn, ctx, channel_id, mid, reply_to, body, quote_of=quote_of)
+        from . import frustration
+
+        # "nefunguje", "zase", "!!!", a repeated request: to the CEO now, with the context (never raises)
+        frustration.on_owner_message(conn, ctx, ch, mid, body)
     if not system and author["role"] == "ceo" and owner_channel.reaches_owner(conn, ch, members, mentioned):
         from . import promises
 

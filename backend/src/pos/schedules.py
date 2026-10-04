@@ -306,6 +306,10 @@ def fire(conn: sqlite3.Connection, schedule_id: int, *, manual_by: Ctx | None = 
                 from . import promises
 
                 template = promises.with_missed(conn, assignee["id"], s["schedule"], template)  # the CEO's 16:00
+                from . import scorecard
+
+                # the CEO's Monday plan and Friday board input are built on the company scorecard
+                template = scorecard.with_scorecard(conn, assignee["id"], s["name"], template)
                 if (template.get("notes") or "").strip():
                     # Where it came from; without notes the generated description says it (task_descriptions).
                     template["notes"] = (f"{template['notes'].rstrip()}\n\nSource: the schedule "

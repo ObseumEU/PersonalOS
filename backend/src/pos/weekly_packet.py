@@ -532,7 +532,19 @@ def build(conn: sqlite3.Connection, week: str | None = None, *, now: datetime | 
         "incidents": _incidents(conn, s, u),
         "goals": _goals(conn, prev_packet),
         "last_meeting": _last_meeting(conn, prev_row),
+        "platform_improvement": _platform(conn, s, u, until),
     }
+
+
+def _platform(conn: sqlite3.Connection, s: str, u: str, until: datetime) -> dict:
+    """The platform improvement loop (pos.platform_loop): metric deltas and the backlog, for the report."""
+    try:
+        from . import platform_loop
+
+        return {"available": True, **platform_loop.packet_section(conn, s, u, until)}  # its own flag when past
+    except Exception as e:  # noqa: BLE001 - the report goes out without it
+        log.exception("platform section failed")
+        return {"available": False, "note": str(e)[:200]}
 
 
 def summary_line(packet: dict) -> str:

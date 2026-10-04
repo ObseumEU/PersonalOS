@@ -1,4 +1,4 @@
-import { ArrowRight, ExternalLink, Inbox, ListChecks, LogOut, MessagesSquare, MoreHorizontal, RefreshCw, Settings, WifiOff } from "lucide-react";
+import { ArrowRight, ExternalLink, Gauge, Inbox, ListChecks, LogOut, MessagesSquare, MoreHorizontal, RefreshCw, Settings, WifiOff } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api, getMe, logout, type Me } from "../api";
@@ -22,6 +22,8 @@ const Tasks = lazy(loadTasks);
 const TaskSheetHost = lazy(() => import("../components/tasks/TaskSheet"));
 const MobileSettings = lazy(() => import("./Settings"));
 const ReportPage = lazy(() => import("../pages/ReportPage"));
+// Firma: the company scorecard (loads on first open).
+const Company = lazy(() => import("../pages/Company"));
 const RefPreviewHost = lazy(() => import("../components/RefPreview").then((m) => ({ default: m.RefPreviewHost })));
 
 /** The reference preview (a note, a message, a source) loads the first time one is opened. */
@@ -109,7 +111,7 @@ function TabBar({ needs }: { needs: number }) {
     { to: "/m", label: t("m.tab.chat"), Icon: MessagesSquare, active: loc.pathname === "/m" || loc.pathname.startsWith("/m/chat") },
     { to: "/m/needs", label: t("m.tab.needs"), Icon: Inbox, active: loc.pathname.startsWith("/m/needs"), badge: needs },
     { to: "/m/tasks", label: t("m.tab.tasks"), Icon: ListChecks, active: loc.pathname.startsWith("/m/tasks") },
-    { to: "/m/more", label: t("m.tab.more"), Icon: MoreHorizontal, active: loc.pathname.startsWith("/m/more") || loc.pathname.startsWith("/m/settings") },
+    { to: "/m/more", label: t("m.tab.more"), Icon: MoreHorizontal, active: loc.pathname.startsWith("/m/more") || loc.pathname.startsWith("/m/settings") || loc.pathname.startsWith("/m/company") },
   ];
   return (
     <nav aria-label={t("m.tabs")} className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
@@ -133,6 +135,13 @@ function More({ onLogout }: { onLogout?: () => void }) {
   return (
     <div className="flex flex-col">
       <TopBar title={t("m.more.title")} />
+      <Link to="/m/company" className={row}>
+        <Gauge size={20} className="text-ink-2" />
+        <span className="flex flex-col">
+          {t("m.more.company")}
+          <span className="text-[13px] text-ink-2">{t("m.more.company_hint")}</span>
+        </span>
+      </Link>
       <Link to="/m/settings" className={row}>
         <Settings size={20} className="text-ink-2" />
         <span className="flex flex-col">
@@ -221,6 +230,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <Route path="/m/tasks" element={<Tasks />} />
           <Route path="/m/more" element={<More onLogout={onLogout} />} />
           <Route path="/m/settings" element={<SettingsScreen />} />
+          <Route path="/m/company" element={<Company />} />
           <Route path="/m/report/:ref" element={<Suspense fallback={null}><ReportPage /></Suspense>} />
           <Route path="/m/*" element={<Navigate to="/m" replace />} />
           <Route path="*" element={<Outside />} />
