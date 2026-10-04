@@ -10,8 +10,13 @@ export type Goal = {
   target: string;
   owner_name: string | null;
   due: string | null;
-  status: "active" | "paused" | "done" | "dropped";
+  status: "proposed" | "active" | "paused" | "done" | "dropped";
   progress: number | null;
+  metric?: string | null;
+  baseline?: number | null;
+  current?: number | null;
+  target_value?: number | null;
+  veto_note?: string | null;
   progress_effective: number;
   parent_id: number | null;
   parent_title: string | null;
@@ -32,6 +37,10 @@ export type PacketGoal = {
   parent_id: number | null;
   tasks_done: number;
   tasks_total: number;
+  metric?: string | null;
+  baseline?: number | null;
+  current?: number | null;
+  target_value?: number | null;
 };
 
 export type TaskLine = { ref: string; title: string; assignee?: string | null; status?: string; deadline?: string | null };

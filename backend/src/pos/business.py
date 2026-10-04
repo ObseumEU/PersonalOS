@@ -529,10 +529,12 @@ DIGEST_AFTER_HOURS = 12  # a result waiting this long puts its reviewer on the d
 
 
 def system_ctx(conn: sqlite3.Connection) -> Ctx:
-    """The platform's own voice for reminders it sends by itself: the Executive Assistant (the
-    system identity, docs/REORG.md), never the owner. A reminder sent as "Owner" counted as the
-    owner's unanswered message in the chat watch (T-194/T-195)."""
-    return Ctx(actors.assistant_id(conn), via="system")
+    """The platform's own voice for reminders it sends by itself: "PersonalOS" (pos.notices), never
+    the owner and no agent. A reminder sent as "Owner" counted as the owner's unanswered message in
+    the chat watch (T-194/T-195), and "Owner handed in …" read as his words (prod 2026-10)."""
+    from .notices import system_ctx as _platform
+
+    return _platform(conn)
 
 
 def review_triage_target(conn: sqlite3.Connection, row, note: str | None = None) -> int | None:

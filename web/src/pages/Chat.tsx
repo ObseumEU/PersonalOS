@@ -896,7 +896,11 @@ export default function Chat() {
                     {t("chat.working_here", { names: workingHere.map((m) => m.name).join(", ") })}
                   </div>
                 )}
-                {(channel.member || channel.kind === "group") && !isSystem(channel) ? (
+                {channel.read_only && channel.archived_dm ? (
+                  <p className="border-t border-line px-4 py-3 text-xs text-ink-2" role="note">
+                    {t("chat.archived_dm", { name: channel.archived_dm.archived, successor: channel.archived_dm.successor_name ?? "CEO" })}
+                  </p>
+                ) : (channel.member || channel.kind === "group") && !isSystem(channel) ? (
                   <Composer
                     channel={channel}
                     members={members}

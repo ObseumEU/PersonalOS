@@ -4,9 +4,10 @@ import { Link, useLocation } from "react-router-dom";
 import { agentsApi } from "../agentsApi";
 import { chatApi } from "../chatApi";
 import { ago, label, plural, t } from "../i18n";
-import { type NeedsItem, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
+import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { approvalHref, setSheetOrder, taskHref } from "../taskSheet";
 import { tasksApi } from "../tasksApi";
+import DecisionOptions from "./DecisionOptions";
 import { toast } from "./overlay";
 import { Panel } from "./ui";
 
@@ -76,6 +77,11 @@ function Item({ it }: { it: NeedsItem }) {
           {it.detail && <p className="line-clamp-2 text-[13px] break-words text-ink-2">{it.detail}</p>}
         </div>
       </div>
+      {it.kind === "ask" && it.options?.length ? (
+        <div className="pl-[30px]">
+          <DecisionOptions it={it} busy={busy} onChoose={(o) => run(() => chooseOption(it.ref!, o), t("needs.done.decided"))} />
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2 pl-[30px]">
         {it.kind === "approval" && (
           <>

@@ -249,6 +249,11 @@ function GoalBars({ goals }: { goals: PacketGoal[] }) {
           >
             <div className="h-full rounded-full" style={{ width: `${g.progress}%`, background: g.status === "paused" ? "var(--viz-prev)" : "var(--viz-series-3)" }} />
           </div>
+          {g.metric && g.target_value != null && (
+            <span className="truncate text-xs">
+              {t("reports.goal_numbers", { metric: g.metric, current: g.current ?? "?", target: g.target_value, baseline: g.baseline ?? 0 })}
+            </span>
+          )}
           <span className="truncate text-xs text-ink-2">
             {g.target || t("reports.no_target")}
             {g.owner ? ` · ${g.owner}` : ""}

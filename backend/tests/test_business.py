@@ -571,7 +571,7 @@ def test_review_reminders_come_from_the_system_not_the_owner(conn, owner, compan
     assert t["ref"] in business.review_sla(conn, now=later)["reminded"]
     m = conn.execute("SELECT * FROM chat_messages ORDER BY id DESC LIMIT 1").fetchone()
     assert "waits for your review" in m["body"]
-    assert m["author_id"] == actors.assistant_id(conn) and m["priority"] == "fyi"
+    assert m["author_id"] == actors.system_id(conn) and m["priority"] == "fyi"  # PersonalOS, pos.notices
     # whatever the platform sends under the owner's name is no message of his to answer
     sys_msg = chat.send_dm(conn, Ctx(owner.actor_id, via="system"), ceo.actor_id, "Připomínka", system=True)
     real = chat.send_dm(conn, owner, ceo.actor_id, "Jak to vypadá?")

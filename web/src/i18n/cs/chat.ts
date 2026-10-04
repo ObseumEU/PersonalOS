@@ -1,5 +1,6 @@
 /** Czech strings: Chat (channels, DMs, #system notices, the composer). */
 export default {
+  "chat.archived_dm": "{name} je archivovaný, sem už se nepíše. Napiš agentovi {successor}: zprávy pro {name} přebírá on.",
   "chat.kicker": "Lidé a agenti",
   "chat.sub": "Kanály a přímé zprávy s lidmi i agenty. Automatická oznámení jsou v #system.",
   "chat.channels": "Konverzace",

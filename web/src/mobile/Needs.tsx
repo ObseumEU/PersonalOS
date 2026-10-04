@@ -5,7 +5,8 @@ import { agentsApi } from "../agentsApi";
 import { chatApi } from "../chatApi";
 import { toast } from "../components/overlay";
 import { ago, label, t } from "../i18n/core";
-import { type NeedsItem, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
+import DecisionOptions from "../components/DecisionOptions";
+import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { tasksApi } from "../tasksApi";
 import { TopBar } from "./ui";
 
@@ -106,6 +107,11 @@ function Item({ it, highlight }: { it: NeedsItem; highlight: boolean }) {
             </button>
           </>
         )}
+        {it.kind === "ask" && it.options?.length ? (
+          <div className="w-full">
+            <DecisionOptions it={it} big busy={busy} onChoose={(o) => run(() => chooseOption(it.ref!, o), t("needs.done.decided"))} />
+          </div>
+        ) : null}
         {(it.kind === "ask" || it.kind === "mention") && (
           <button className={primary} disabled={busy} onClick={() => setMode(mode === "reply" ? null : "reply")}>
             <MessageSquare size={16} /> {t("m.needs.reply")}

@@ -256,3 +256,29 @@ def test_a_decision_card_takes_its_recommendation_after_the_default_time(conn, m
     assert asks.default_digest(conn) == []  # told once
     with pytest.raises(tasks.Invalid):
         asks.choose(conn, me, out["ticket_id"], "490 Kč")  # already decided
+
+
+# ------------------------------------------------------------------ the one-off seeding
+
+def test_owner_seed_makes_the_cards_and_goal_proposals_once(conn, me, tmp_path):
+    from pos import goals, owner_seed
+
+    ceo = make(conn, me, tmp_path, "CEO", role="ceo")
+    for name in ("Kniha Lead", "Head of Growth"):
+        make(conn, me, tmp_path, name)
+    assert all(x.startswith(("card:", "skip")) for x in owner_seed.decisions(conn))  # a dry run writes nothing
+    assert not conn.execute("SELECT 1 FROM owner_asks").fetchone() if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'owner_asks'").fetchone() else True
+    made = owner_seed.decisions(conn, apply=True)
+    assert len([x for x in made if x.startswith("made")]) == 3  # the SRE card: T-376 is not open here
+    assert all(x.startswith(("exists", "skip")) for x in owner_seed.decisions(conn, apply=True))
+    cards = [i for i in needs_me.collect(conn, me)["items"] if i["kind"] == "ask" and i.get("options")]
+    assert len(cards) == 3 and all(c["from_name"] == "CEO" for c in cards)
+    price = next(c for c in cards if c["title"].startswith("Cena Knihy"))
+    assert price["default_at"] is None  # a price: only his click
+    out = owner_seed.seed_goals(conn, apply=True)
+    assert len([x for x in out if x.startswith("proposed")]) == 6
+    assert {g["status"] for g in goals.list_goals(conn, "all")} == {"proposed"}
+    assert all(x.startswith("exists") for x in owner_seed.seed_goals(conn, apply=True))
+    assert conn.execute("""SELECT 1 FROM chat_messages m JOIN channel_members cm ON cm.channel_id = m.channel_id
+                           AND cm.actor_id = ? WHERE m.body LIKE '%navrhuje firemní cíl%'""", (ceo,)).fetchone()

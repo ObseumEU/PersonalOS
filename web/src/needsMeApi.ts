@@ -19,7 +19,20 @@ export type NeedsItem = {
   blocking?: boolean;
   channel_id?: number;
   thread?: number;
+  /** A decision card (ask_owner with options): a button per option, the recommended one, and when it
+   * applies by itself without an answer (null: only his click). */
+  options?: string[];
+  recommendation?: string | null;
+  default_at?: string | null;
 };
+
+/** The owner pressed an option on a decision card. */
+export function chooseOption(ref: string, option: string) {
+  return api<{ ref: string; decided: string }>(`/api/needs-me/asks/${encodeURIComponent(ref)}/choose`, {
+    method: "POST",
+    body: JSON.stringify({ option }),
+  });
+}
 
 export type NeedsMe = { count: number; counts: Record<NeedsItem["kind"], number>; items: NeedsItem[] };
 

@@ -36,6 +36,9 @@ export type Channel = {
   last: { id: number; author_name: string; body: string; created_at: string } | null;
   archived_at: string | null;
   typing?: TypingEntry[];
+  /** A DM with an archived member: read-only; messages go to its successor. */
+  read_only?: boolean;
+  archived_dm?: { archived: string; successor_id: number | null; successor_name: string | null } | null;
 };
 
 /** Someone typing in a channel: a person at the composer, or an agent's run working on a reply. */

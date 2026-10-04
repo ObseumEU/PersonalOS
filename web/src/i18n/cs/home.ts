@@ -50,6 +50,10 @@ export default {
   "needs.done.answered": "Odpověď je u úkolu, agent ji dostal.",
   "needs.done.replied": "Odpověď odeslána.",
   "needs.done.read": "Označeno jako přečtené.",
+  "needs.done.decided": "Rozhodnuto, agent pokračuje.",
+  "needs.card.recommended": "Doporučení agenta",
+  "needs.card.recommendation": "Doporučuje: {option}",
+  "needs.card.default": "bez odpovědi platí doporučení od {when}",
   "needs.done.closed": "Úkol uzavřen.",
 
   "qa.placeholder": "Zeptej se znalostní báze (odpovědi citují zdroje)",

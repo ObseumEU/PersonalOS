@@ -77,7 +77,7 @@ function useInline(names: string[], tone: Tone) {
         "__[^_\\n]+__",
         "(?<![\\w*])\\*(?![\\s*])[^*\\n]+?\\*(?![\\w*])",
         "(?<![\\w_])_(?![\\s_])[^_\\n]+?_(?![\\w_])",
-        "\\[[^\\]\\n]+\\]\\(https?://[^)\\s]+\\)",
+        "\\[[^\\]\\n]+\\]\\((?:https?://|/)[^)\\s]+\\)",
         "https?://[^\\s<>)]+[^\\s<>).,;:!?\"']",
         "\\bT-\\d{1,6}\\b",
         mention,
@@ -108,6 +108,8 @@ function useInline(names: string[], tone: Tone) {
       if (part.startsWith("*") || part.startsWith("_")) return <em key={k}>{part.slice(1, -1)}</em>;
       if (part.startsWith("[")) {
         const m = /^\[([^\]]+)\]\((.+)\)$/.exec(part);
+        if (m && m[2].startsWith("/"))
+          return <Link key={k} to={m[2]} onClick={(e) => e.stopPropagation()} className={linkCls}>{m[1]}</Link>;
         if (m) return <a key={k} href={m[2]} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()} className={linkCls}>{m[1]}</a>;
       }
       if (/^https?:/i.test(part))
