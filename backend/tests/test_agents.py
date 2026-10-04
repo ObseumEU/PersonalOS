@@ -52,6 +52,24 @@ def test_owner_creates_agent_with_key_and_profile(conn, me, tmp_path):
     assert "Head of Customer Success work" in a["instructions"]
 
 
+def test_migration_puts_claude_model_agents_without_engine_on_claude(tmp_path):
+    from pos.db import MIGRATIONS
+
+    c = connect(tmp_path / "m.db")
+    for sql in MIGRATIONS[:-1]:
+        c.executescript(sql)
+    c.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+    now = "2026-10-01T00:00:00+00:00"
+    for name, engine, model in [("Nabu", None, "claude-opus-5-5"), ("Mine", "codex", "claude-opus-5-5"),
+                                ("Plain", None, None)]:
+        c.execute("INSERT INTO actors (kind, name, is_owner, created_at, updated_at, engine, model) "
+                  "VALUES ('agent', ?, 0, ?, ?, ?, ?)", (name, now, now, engine, model))
+    migrate(c)
+    got = {r["name"]: r["engine"] for r in c.execute("SELECT name, engine FROM actors")}
+    assert got == {"Nabu": "claude", "Mine": "codex", "Plain": None}
+    c.close()
+
+
 def test_agent_cannot_grant_more_than_it_has(conn, me, tmp_path):
     knowledge = Ctx(actors.find_by_name(conn, "Knowledge agent")["id"], via="mcp")
     with pytest.raises(Forbidden):  # it may not create agents at all

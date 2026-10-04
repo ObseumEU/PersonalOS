@@ -739,6 +739,12 @@ MIGRATIONS: list[str] = [
     CREATE INDEX files_created_by ON files (created_by);
     CREATE INDEX files_origin ON files (origin);
     """,
+    # T-595: agents created with a Claude model but no engine ran on `auto` (Codex first, OpenAI 401):
+    # they run on Claude like every other hire.
+    """
+    UPDATE actors SET engine = 'claude'
+     WHERE kind = 'agent' AND engine IS NULL AND model LIKE 'claude-%';
+    """,
 ]
 
 
