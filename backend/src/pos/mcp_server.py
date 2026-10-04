@@ -29,9 +29,9 @@ INSTRUCTIONS = """PersonalOS task list, shared by people and agents.
 You are autonomous. Don't ask for permission for anything you can do; do it and report the result. Ask only when the code actually refuses you (request_access is approved instantly) or when you truly lack information that can't be found.
 Tasks have a status (inbox, next, working, review, waiting, someday, done), a
 priority 1-3, a do_date and a deadline, and one assignee: a person, the AI
-assistant, an agent, or someone outside. As an agent: claim_task before you
-start, report_progress while you work, complete_task when done (the owner
-reviews it). Ordinary outbound work (e-mail and customer replies, Discord, GitHub
+assistant, an agent, or someone outside. As an agent your worker has already
+claimed the task of this run: report_progress at milestones, complete_task when
+done (its reviewer checks it). Ordinary outbound work (e-mail and customer replies, Discord, GitHub
 comments, issues, PRs) you send yourself with request_outbound: it goes out at once,
 audited, and the CEO reviews it daily. Only money (payments, purchases, anything
 costing money outside the approved budgets), commitments (contracts, price quotes)
@@ -220,6 +220,23 @@ def _gate(conn: sqlite3.Connection, c: Ctx, tool: str) -> None:
         agents.require(conn, c, perm)  # raises: not granted
 
 
+RUN_HEADER = "x-pos-run"
+
+
+def run_of(conn: sqlite3.Connection, actor_id: int, headers) -> int | None:
+    """The agent run a call belongs to, for the audit row (and everything else keyed by run): the
+    worker's X-POS-Run header when it names a running run of this actor, else the actor's one live run
+    (a Codex session or an older worker sends no header). None when unknown or ambiguous."""
+    wanted = None
+    if headers is not None:
+        raw = headers.get(RUN_HEADER) or headers.get("X-POS-Run")
+        wanted = int(raw) if raw and str(raw).strip().isdigit() else None
+    rows = [r[0] for r in conn.execute("SELECT id FROM runs WHERE actor_id = ? AND status = 'running'", (actor_id,))]
+    if wanted is not None and wanted in rows:
+        return wanted
+    return rows[0] if len(rows) == 1 else None
+
+
 def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | None = None) -> MCPServer:
     """Create the server. `default_actor` is used when there is no HTTP request
     (stdio, in-memory tests); over HTTP a valid bearer key is required."""
@@ -239,7 +256,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                 actor_id = default_actor(conn)
             else:
                 raise ToolError("unauthorized")
-            c = Ctx(actor_id, via="mcp")
+            c = Ctx(actor_id, via="mcp", run_id=run_of(conn, actor_id, headers))
             conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
             audit.log(conn, c, f"mcp:{tool}", args={k: v for k, v in args.items() if v is not None})
             try:
@@ -556,10 +573,17 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     # ------------------------------------------------------------- agent runs
 
-    @mcp.tool(description="Take a task from your queue and start working on it.")
+    @mcp.tool(description="Take a task from your queue and start working on it. The task of your current run "
+                          "is claimed for you already (calling this for it is a harmless no-op).")
     def claim_task(ctx: Context, task_id: str) -> dict:
         with session(ctx, "claim_task", task_id=task_id) as (conn, c):
-            return brief(tasks.claim(conn, c, tasks.parse_id(task_id)))
+            tid = tasks.parse_id(task_id)
+            row = conn.execute("SELECT status, assignee_id FROM tasks WHERE id = ?", (tid,)).fetchone()
+            if row is not None and row["status"] == "working" and row["assignee_id"] == c.actor_id:
+                # The worker claimed it when the run started (2026-10: 180 of 182 claim_task calls failed
+                # with "is working, not claimable" because the instructions said to claim first).
+                return {**brief(tasks.get(conn, c, tid)), "note": "already yours and in progress; carry on"}
+            return brief(tasks.claim(conn, c, tid))
 
     @mcp.tool(description="Report progress on a task you are working on (0-100).")
     def report_progress(ctx: Context, task_id: str, percent: int, message: str = "") -> dict:
@@ -971,8 +995,10 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "list_routes") as (conn, c):
             return routing.list_rules(conn)
 
-    @mcp.tool(description="Ask another agent over A2A (e.g. the Knowledge agent for research with citations) "
-                          "and wait up to wait_s seconds for the answer. effort (Knowledge agent only): 1-6 or the "
+    @mcp.tool(description="Ask the Knowledge agent (research with citations; for a lookup the `knowledge` tool is "
+                          "quicker) over A2A and wait up to wait_s seconds for the answer. Any other colleague "
+                          "gets the question as a DM instead (no waiting: the answer reaches your inbox). "
+                          "effort (Knowledge agent only): 1-6 or the "
                           "name; default 2 'rychle' (one search, seconds) for lookups; 1 'blesk' for a quick fact; "
                           "3 'standard' (minutes, full research and checks) when a person asked the question; "
                           "4-6 only when explicitly asked for deep or exhaustive research (up to 45 min, use a "
@@ -981,6 +1007,16 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         from . import a2a
 
         with session(ctx, "ask_agent", name=name) as (conn, c):
+            target = actors.find_by_name(conn, name.strip().lstrip("@"))
+            if target is not None and not target["a2a_url"] and target["id"] != c.actor_id:
+                # A colleague without an A2A endpoint (every pool agent, 2026-10: all ask_agent calls
+                # failed "not reachable over A2A"): the question goes to them as a DM, answered in the inbox.
+                def go(chat):
+                    return chat.send_dm(conn, c, target["id"], question)
+                sent = chat_call(go)
+                return {"delivered": "chat", "to": target["name"], "message_id": sent.get("id"),
+                        "note": f"{target['name']} is not an A2A service: your question went to them as a DM; "
+                                "the answer arrives in your inbox. Carry on meanwhile."}
             return a2a.ask(conn, c, name, question, min(max(wait_s, 5), 300), effort=effort)
 
     @mcp.tool(description="Kill switch: freeze every agent now (owner and people only). Unfreezing is "

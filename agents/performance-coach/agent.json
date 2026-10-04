@@ -22,7 +22,7 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "profile": {
-    "pos_tools": "hr_overview list_tasks get_task get_agent_status create_task propose_instructions give_feedback send_message report_progress complete_task schedule_list",
+    "pos_tools": "hr_overview list_tasks get_task get_agent_status create_task propose_instructions give_feedback send_message report_progress complete_task schedule_list feedback_resolve",
     "claude_tools": " ",
     "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
     "max_steps": 40

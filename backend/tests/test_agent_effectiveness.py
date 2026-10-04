@@ -234,12 +234,13 @@ def test_the_sweep_moves_the_ceos_stand_in_reviews_to_the_team_lead(env):
 # ------------------------------------------------------------------ 2. knowledge first
 
 KB_ANSWER = (
-    '<external source="mailbox" trust="untrusted" ref="m1">\n### 1. `m1:c3` · chunk\nZákazník O2 chce SLA 99,9 %.\n'
-    '</external>\n\n<external source="github" trust="untrusted" ref="g1">\n### 2. `g1:c0` · chunk\nREADME: '
-    'nasazení přes deployer.\n</external>')
+    '<external source="mailbox" trust="untrusted" ref="m1">\n### 1. `m1:c3` · chunk\nZákazník O2 chce SLA 99,9 %. '
+    '· sekce `m1:s2`\n</external>\n\n<external source="github" trust="untrusted" ref="g1">\n### 2. `g1:c0` · chunk\n'
+    'README: SLA pro zákazníka O2 hlídá sentinel.\n</external>\n\n<external source="gdrive" trust="untrusted" '
+    'ref="d1">\n### 3. `d1:c0` · chunk\nFaktura za pronájem kanceláře.\n</external>')
 
 
-def test_a_run_starts_with_cited_passages_and_external_ones_taint_it(env):
+def test_a_run_starts_with_relevant_passages_and_outside_ones_only_as_pointers(env):
     conn, ids = env["conn"], env["ids"]
     a = ids["Writer"]
     t = _task(conn, Ctx(ids["CEO"]), a, title="Odpovědět O2 na dotaz k SLA", notes="Zákazník se ptá na SLA.")
@@ -251,9 +252,20 @@ def test_a_run_starts_with_cited_passages_and_external_ones_taint_it(env):
                  "VALUES (?, 'tool:knowledge', 'tool', 'test', 'test', ?)", (a, now_iso()))
     kn = knowledge_first.preload(conn, Ctx(a), t, search=lambda q: seen.append(q) or KB_ANSWER)
     assert seen and "SLA" in seen[0]
-    assert kn["chunks"] == ["m1:c3", "g1:c0"] and kn["external"] == ["mailbox"]
-    assert 'source="knowlage:mailbox"' in kn["text"] and len(kn["text"]) < knowledge_first.MAX_CHARS + 600
+    # Our own repository's passage in full and first; the mail only as a pointer (no text: no taint);
+    # the unrelated invoice not at all (relevance threshold).
+    assert kn["chunks"] == ["g1:c0"] and kn["pointers"] == ["m1:c3"] and kn["external"] == []
+    assert 'source="knowlage:github"' in kn["text"] and "SLA 99,9" not in kn["text"] and "m1:s2" in kn["text"]
+    assert "d1:c0" not in kn["text"] and len(kn["text"]) < knowledge_first.MAX_CHARS + 600
     assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'knowledge_preload'").fetchone()[0] == 1
+    # Numbers-only and system work gets no pre-load at all.
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "source": "event:sentinel"}, search=lambda q: KB_ANSWER) is None
+    conn.execute("UPDATE actors SET role = 'access_manager' WHERE id = ?", (a,))
+    assert knowledge_first.preload(conn, Ctx(a), t, search=lambda q: KB_ANSWER) is None
+    conn.execute("UPDATE actors SET role = NULL WHERE id = ?", (a,))
+    # Nothing relevant: no passages.
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "title": "Kalibrace tiskárny", "notes": "Barvy tisknou špatně."},
+                                   search=lambda q: KB_ANSWER) is None
     # The worker puts them into the prompt with the instruction to cite.
     pytest.importorskip("pos_worker")
     from pos_worker.prompt import build_task_prompt

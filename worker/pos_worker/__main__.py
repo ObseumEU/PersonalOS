@@ -48,7 +48,7 @@ import logging
 import os
 import sys
 
-from .claude import DEFAULT_TOOLS, ClaudeSession
+from .claude import DEFAULT_TOOLS, ClaudeSession, builtin_set
 from .client import PosClient
 from .codex import CodexSession
 from .loop import Worker
@@ -107,6 +107,31 @@ def claude_extra_mcp() -> dict:
 
     raw = os.environ.get("WORKER_CLAUDE_MCP", "").strip()
     return json.loads(raw) if raw else {}
+
+
+def git_identity(me: dict) -> dict[str, str]:
+    """The agent's own git identity for its commits: agents share a workspace (the Kniha team's
+    /work/kniha), whose repository config names one of them; the deployer reads the author name to
+    find who is responsible (pos.selfdeploy.author_of)."""
+    import re
+
+    name = str(me.get("name") or "").strip()
+    if not name:
+        return {}
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "agent"
+    email = f"{slug}@agents.obseum.cz"
+    return {"GIT_AUTHOR_NAME": name, "GIT_COMMITTER_NAME": name, "GIT_AUTHOR_EMAIL": email,
+            "GIT_COMMITTER_EMAIL": email}
+
+
+EXTRA_SERVER_TOOLS = 10  # a guess per non-pos MCP server (the browser has ~20, a credential runner 3)
+
+
+def tool_count(shown: list[str], me: dict, servers: dict) -> int:
+    """How many MCP tools the agent will see: its pos tools (all it may use when not narrowed) and an
+    estimate for every other server."""
+    pos = len(shown) if shown else len(me.get("pos_tools") or me.get("all_pos_tools") or []) or 100
+    return pos + EXTRA_SERVER_TOOLS * len([n for n in servers if n != "pos"])
 
 
 def run_cap(worker_cap: float | None, agent_cap: float | None) -> float | None:
@@ -205,7 +230,20 @@ def main() -> None:
                 allowed = [f"mcp__pos__{t}" for t in shown] + [
                     t for t in configured if t != "mcp__pos" and not t.startswith("mcp__pos__")]
             else:  # an older PersonalOS without pos_tools: the configured list as it is
-                hidden, allowed = [], configured
+                shown, hidden, allowed = [], [], configured
+            disallowed = [t for t in tool_list(setting(me, "claude_disallowed", "WORKER_CLAUDE_DISALLOWED"))
+                          if not t.startswith("mcp__pos__")]
+            # The pos server: the agent's own key, and the run its calls belong to (the audit's run_id).
+            headers = {"Authorization": f"Bearer {key}",
+                       **({"X-POS-Run": str(me["run_id"])} if me.get("run_id") else {})}
+            servers = {"pos": {"type": "http", "url": mcp_url, "headers": headers},
+                       **browser(me), **claude_extra_mcp(), **tool_library.claude_servers(tools),
+                       **({"credentials": {"type": "stdio", "command": sys.executable,
+                                           "args": ["-m", "pos_worker.credentials"],
+                                           "env": credential_runner(me)}} if credential_runner(me) else {})}
+            builtin, search = builtin_set(
+                [t.strip() for t in setting(me, "claude_builtin", "WORKER_CLAUDE_BUILTIN").split(",") if t.strip()],
+                disallowed, tool_count(shown, me, servers))
             return ClaudeSession(
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
                 workdir=where,
@@ -214,18 +252,17 @@ def main() -> None:
                 system_prompt="\n\n".join(p for p in (me.get("guardrails", ""), me.get("stable_prompt", ""), skills)
                                           if p),
                 # The agent reaches PersonalOS through the pos MCP server, as itself.
-                mcp_servers={"pos": {"type": "http", "url": mcp_url, "headers": {"Authorization": f"Bearer {key}"}},
-                             **browser(me), **claude_extra_mcp(), **tool_library.claude_servers(tools),
-                             **({"credentials": {"type": "stdio", "command": sys.executable,
-                                                 "args": ["-m", "pos_worker.credentials"],
-                                                 "env": credential_runner(me)}} if credential_runner(me) else {})},
+                mcp_servers=servers,
                 allowed_tools=allowed + tool_library.claude_allowed(tools)
                 + (mounts.claude_allowed(me) if allowed else [])
                 + (["mcp__credentials"] if credential_runner(me) else []),
-                builtin_tools=[t for t in setting(me, "claude_builtin", "WORKER_CLAUDE_BUILTIN").split(",") if t],
-                disallowed_tools=[f"mcp__pos__{t}" for t in hidden]
-                + [t for t in tool_list(setting(me, "claude_disallowed", "WORKER_CLAUDE_DISALLOWED"))
-                   if not t.startswith("mcp__pos__")],
+                builtin_tools=builtin,
+                tool_search=search,
+                disallowed_tools=[f"mcp__pos__{t}" for t in hidden] + disallowed,
+                # The command guard (pos_worker.command_hook) auto-allows safe engineering commands only
+                # inside this folder, the agent's own worktree; git commits carry the agent's own name.
+                env={"POS_AGENT_WORKDIR": where, **git_identity(me),
+                     **({"POS_RUN_ID": str(me["run_id"])} if me.get("run_id") else {})},
                 # By the task's size when the check gave one (S: low effort, a smaller cap).
                 # The cap is the lower of this worker's and the agent's max USD per run (pos.access).
                 **triage.size_settings(me.get("size"), setting(me, "effort", "WORKER_CLAUDE_EFFORT") or None,

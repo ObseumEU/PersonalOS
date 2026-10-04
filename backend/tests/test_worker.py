@@ -492,7 +492,8 @@ def test_worker_tools_follow_the_agents_permissions(setup, monkeypatch):
     shown, hidden = pos_tools(me, "get_task complete_task")
     from pos_worker.tools import COMMS
 
-    assert set(shown) == {"get_task", "complete_task", *COMMS}  # the named tools and the always-shown ones
+    # the named tools, the always-shown ones, and note_get for the owner report of a hand-in
+    assert set(shown) == {"get_task", "complete_task", "note_get", *COMMS}
     assert "create_agent" in hidden and "chat_send" not in hidden
     assert set(pos_tools(me, "")[0]) == set(me["pos_tools"])  # nothing narrowed: all it may use
 
@@ -811,3 +812,55 @@ def test_worker_step_survives_an_unreachable_api(caplog):
     http = httpx.Client(base_url="http://testserver", transport=httpx.MockTransport(broken))
     worker = Worker(PosClient("http://testserver", "k", http=http), lambda *a: None, sleep=slept.append)
     assert worker.step() == "crashed"
+
+
+def test_the_fixed_prompt_names_its_builtin_tools_and_defers_big_tool_sets(monkeypatch):
+    """2026-10: 12-27k tokens of fixed prompt per turn, 57k for agents with built-in tools (all 120 pos
+    schemas upfront: --tools without ToolSearch), plus skill and agent listings nobody used."""
+    from pos_worker.claude import DEFAULT_BUILTIN, NEVER_BUILTIN, builtin_set
+
+    monkeypatch.delenv("WORKER_TOOL_SEARCH_ABOVE", raising=False)
+    # A Kniha profile: its own built-ins, the CLI's sub-agents/skills/to-dos never, ToolSearch for 30 tools.
+    tools, search = builtin_set(["Bash", "Read", "Agent", "Skill", "TodoWrite"], [], 30)
+    assert tools == ["Bash", "Read", "ToolSearch"] and search is True
+    # No profile: the default built-ins, not the CLI's default set; disallowed ones are left out.
+    tools, search = builtin_set([], ["WebFetch"], 100)
+    assert tools[:-1] == [t for t in DEFAULT_BUILTIN if t != "WebFetch"] and tools[-1] == "ToolSearch"
+    # A tiny set goes in upfront (no ToolSearch round trip).
+    tools, search = builtin_set([], list(DEFAULT_BUILTIN), 5)
+    assert tools == [] and search is False
+    assert {"Agent", "Task", "Skill", "TodoWrite"} <= set(NEVER_BUILTIN)
+    s = ClaudeSession(builtin_tools=tools, tool_search=search)
+    args = s._args(None)
+    assert args[args.index("--tools") + 1] == "" and "--disable-slash-commands" in args
+    assert s.cli_env()["ENABLE_TOOL_SEARCH"] == "false" and s.cli_env()["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+    assert ClaudeSession(builtin_tools=["Read", "ToolSearch"], tool_search=True).cli_env()["ENABLE_TOOL_SEARCH"] == "true"
+    # Without a decision (direct use) the CLI's defaults stay.
+    assert "--tools" not in ClaudeSession()._args(None) and "ENABLE_TOOL_SEARCH" not in ClaudeSession().cli_env()
+
+
+def test_narrow_profiles_use_the_worker_preset_and_keep_memory_and_the_report_tools():
+    from pos_worker.tools import COMMS, PRESETS, pos_tools
+
+    permitted = sorted({*PRESETS["worker"], *COMMS, "review_task", "create_agent", "hr_overview", "access_decide",
+                        "list_tasks"})
+    me = {"pos_tools": permitted, "all_pos_tools": permitted, "profile": {"pos_tools": "@worker review_task"}}
+    shown, hidden = pos_tools(me)
+    assert set(shown) == {*PRESETS["worker"], *COMMS, "review_task"}
+    assert {"memory_get", "memory_update", "note_get", "chat_send"} <= set(shown)
+    assert {"create_agent", "hr_overview", "access_decide", "list_tasks"} <= set(hidden)
+    assert 25 <= len(shown) <= 35  # the narrow list, not 120
+    # A narrow list without a hand-in tool gets no report tools; an unknown preset adds nothing.
+    me["profile"]["pos_tools"] = "@nothing get_task"
+    assert "note_get" not in pos_tools(me)[0]
+
+
+def test_session_sends_the_run_and_the_agents_own_git_identity():
+    from pos_worker.__main__ import git_identity, tool_count
+
+    ident = git_identity({"name": "Kniha Growth & Sales"})
+    assert ident["GIT_AUTHOR_NAME"] == ident["GIT_COMMITTER_NAME"] == "Kniha Growth & Sales"
+    assert ident["GIT_AUTHOR_EMAIL"] == "kniha-growth-sales@agents.obseum.cz"
+    assert git_identity({}) == {}
+    assert tool_count(["a", "b"], {}, {"pos": {}, "browser": {}}) == 12
+    assert tool_count([], {"pos_tools": ["x"] * 120}, {"pos": {}}) == 120

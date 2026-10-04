@@ -24,23 +24,49 @@ def tool_list(raw: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-# Talking to colleagues is never narrowed away (standup answers, questions, handoffs).
-COMMS = ("check_inbox", "ack_message", "chat_send", "chat_read", "chat_react", "heartbeat", "meeting_decide",
-         "meeting_info",
-         # Every agent's own computer and its files for people (docs/SANDBOX.md): never narrowed away either.
-         "sandbox_exec", "sandbox_run_python", "sandbox_write_file", "sandbox_read_file", "sandbox_list",
-         "sandbox_reset", "sandbox_share", "file_create", "file_update", "file_read", "file_list", "file_share")
+# Never narrowed away: talking to colleagues (standup answers, questions, handoffs), the agent's own
+# memory (every prompt tells it to use it), its own computer and its files for people (docs/SANDBOX.md).
+# Kept to what agents call: every listed tool's schema is paid for on every turn. The worker itself
+# checks the inbox and beats the heartbeat (check_inbox, heartbeat are not needed in a narrow list);
+# a sandbox_exec does what sandbox_write_file/read_file/list do.
+COMMS = ("ack_message", "chat_send", "chat_read", "chat_react", "meeting_decide",
+         "memory_get", "memory_update",
+         "sandbox_exec", "sandbox_run_python", "sandbox_share", "file_create", "file_update", "file_share")
+
+# Shown with any hand-in tool: the owner-report guidance needs note_get (complete_task's report check
+# applies to everyone, 2026-10: Access manager 17 refusals, Software Engineer 4).
+HAND_IN = ("complete_task", "request_review", "ask_owner")
+REPORT_TOOLS = ("note_get",)
+
+# Named tool sets for a profile's pos_tools ("@worker get_task ..."): one place for the common list.
+PRESETS = {
+    # A worker's everyday tools (~30 with COMMS): the Kniha team and the specialists; their schemas
+    # go in upfront instead of all 120 (2026-10: 57k tokens of fixed prompt for a Kniha agent).
+    "worker": ("get_task", "update_task", "complete_task", "request_review", "create_task", "task_comment",
+               "handoff_task", "knowledge", "note_get", "note_create", "note_update", "request_outbound",
+               "report_progress", "project_get", "schedule_create", "schedule_list", "search", "request_access"),
+}
+
+
+def expand(names: list[str]) -> list[str]:
+    """Profile names with the @preset entries expanded (unknown presets are dropped)."""
+    out: list[str] = []
+    for n in names:
+        out += list(PRESETS.get(n[1:], ())) if n.startswith("@") else [n]
+    return list(dict.fromkeys(out))
 
 
 def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]]:
     """(shown, hidden) pos MCP tools: what the agent's permissions allow, narrowed
     by its profile's pos_tools (agent.json) or WORKER_POS_TOOLS; the COMMS tools
-    stay when permitted."""
+    stay when permitted, and an agent that hands in also sees the report tools."""
     permitted = list(me.get("pos_tools") or [])
     if narrow is None:
         narrow = (me.get("profile") or {}).get("pos_tools")
     raw = os.environ.get("WORKER_POS_TOOLS", "") if narrow is None else narrow
-    wanted = {t.removeprefix("mcp__pos__") for t in tool_list(raw)}
+    wanted = {t.removeprefix("mcp__pos__") for t in expand(tool_list(raw))}
+    if wanted and wanted & set(HAND_IN):
+        wanted |= set(REPORT_TOOLS)
     shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]
     everything = set(me.get("all_pos_tools") or []) | set(permitted)
     return shown, sorted(everything - set(shown))

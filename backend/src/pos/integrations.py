@@ -143,6 +143,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import observability
 
     observability.register_mcp(mcp, session)  # loki_query, metrics_snapshot (ops:observe)
+    from . import command_policy
+
+    command_policy.register_mcp(mcp, session)  # command approvals for the CTO (request, decide)
     from . import knowledge_tool
 
     knowledge_tool.register_mcp(mcp, session)  # knowledge: the company knowledge base (grant tool:knowledge)

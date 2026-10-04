@@ -23,6 +23,7 @@
   "profile": {
     "workdir": "/work/nexus-specialist/nexus-process-pilot",
     "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
+    "pos_tools": "@worker credentials_list credential_http loki_query metrics_snapshot list_tasks request_approval",
     "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(git switch:*)|Bash(git checkout -b:*)|Bash(git branch:*)",
     "max_steps": 60
   },

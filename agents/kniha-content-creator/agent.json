@@ -20,6 +20,7 @@
   "profile": {
     "workdir": "/work/kniha",
     "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch",
+    "pos_tools": "@worker file_upload file_read file_list",
     "claude_tools": "Read|Glob|Grep|Write|Edit|WebSearch|WebFetch|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git checkout:*)|Bash(git switch:*)|Bash(git branch:*)|Bash(git merge:*)|Bash(git restore:*)|Bash(git rev-parse:*)|Bash(ls:*)|Bash(cat /work/kniha/.deploy/:*)|Bash(git -C:*)|Bash(git worktree:*)|Bash(git cherry-pick:*)|Bash(cd:*)|Bash(pwd:*)",
     "max_usd_run": 2,
     "max_steps": 200,

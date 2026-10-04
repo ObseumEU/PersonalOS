@@ -20,7 +20,7 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "profile": {
-    "pos_tools": "weekly_packet report_publish meeting_status meeting_reply meeting_close goal_list goal_upsert goal_link create_task get_task list_tasks search org_chart send_message complete_task report_progress knowledge",
+    "pos_tools": "weekly_packet report_publish meeting_status meeting_reply meeting_close goal_list goal_upsert goal_link create_task get_task list_tasks search org_chart send_message complete_task report_progress knowledge chat_send chat_read",
     "claude_tools": " ",
     "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
     "max_steps": 30

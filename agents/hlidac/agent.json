@@ -22,7 +22,7 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "profile": {
-    "pos_tools": "get_task list_tasks incident_logs incident_close metrics_snapshot loki_query create_task task_comment ask_owner report_progress complete_task",
+    "pos_tools": "get_task list_tasks incident_logs incident_close metrics_snapshot loki_query create_task task_comment ask_owner report_progress complete_task send_message",
     "claude_tools": " ",
     "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
     "max_usd_run": 1.8,

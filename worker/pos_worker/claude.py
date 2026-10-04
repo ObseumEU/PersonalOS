@@ -46,6 +46,33 @@ def resolve_binary(name: str) -> str:
 # pos MCP server (the agent's permissions there are enforced by PersonalOS).
 DEFAULT_TOOLS = "mcp__pos Read Glob Grep Write Edit WebSearch WebFetch"
 
+# The built-in tools an agent gets when its profile names none (--tools always names them: the
+# CLI's default set adds ~20 tools agents never use, e.g. Agent/Task, Skill, Cron*, worktrees).
+DEFAULT_BUILTIN = ("Read", "Glob", "Grep", "Write", "Edit", "WebSearch", "WebFetch")
+# Never given to an agent, even when a profile names them: sub-agents, skills and the CLI's own
+# to-do list (PersonalOS has tasks), whose descriptions and listings cost ~2k tokens on every turn.
+NEVER_BUILTIN = ("Agent", "Task", "Skill", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
+                 "TaskStop", "SendMessage", "ListAgents", "EnterWorktree", "ExitWorktree", "CronCreate",
+                 "CronDelete", "CronList", "ScheduleWakeup", "PushNotification", "NotebookEdit")
+# Up to this many tools (pos and others) their schemas go in upfront (ENABLE_TOOL_SEARCH=false); more,
+# and the CLI defers them behind ToolSearch (names only; one round trip loads the schemas of the tools
+# first used). ToolSearch exists only when --tools names it: without it every MCP schema goes in
+# upfront (the Kniha agents' 57k-token prompt before 2026-10). Measured in the pool image (Claude Code
+# 2.1.287) on the Access manager's 29 pos tools: 22.2k tokens upfront vs 9.3k deferred (~440 tokens a
+# schema), so only a very small set goes in upfront. WORKER_TOOL_SEARCH_ABOVE overrides it.
+TOOL_SEARCH_ABOVE = 12
+
+
+def builtin_set(configured: list[str], disallowed: list[str], tool_count: int) -> tuple[list[str], bool]:
+    """(the --tools list, tool search on?) for an agent: its profile's built-ins (else DEFAULT_BUILTIN),
+    without the disallowed and NEVER_BUILTIN ones, plus ToolSearch when it has more than
+    TOOL_SEARCH_ABOVE tools in all."""
+    base = [t for t in (configured or DEFAULT_BUILTIN) if t not in disallowed and t not in NEVER_BUILTIN
+            and t != "ToolSearch"]
+    above = int(os.environ.get("WORKER_TOOL_SEARCH_ABOVE") or TOOL_SEARCH_ABOVE)
+    search = tool_count + len(base) > above
+    return base + (["ToolSearch"] if search else []), search
+
 
 @dataclass
 class ClaudeSession:
@@ -60,7 +87,10 @@ class ClaudeSession:
     restricted: bool = True
     # Built-in tools that exist at all (--tools); in restricted mode Bash only
     # exists when named here, and then only the allow-listed commands run.
-    builtin_tools: list[str] = field(default_factory=list)
+    # None = the CLI's default set (only for direct use; the worker always names them, builtin_set).
+    builtin_tools: list[str] | None = None
+    # ToolSearch (deferred MCP schemas) on or off; None = the CLI's default.
+    tool_search: bool | None = None
     # Tools removed from the model's context altogether (e.g. pos MCP tools the
     # agent never needs); every listed tool definition costs tokens on every turn.
     disallowed_tools: list[str] = field(default_factory=list)
@@ -84,7 +114,7 @@ class ClaudeSession:
     def _settings_file(self) -> str | None:
         """Bash exists for this agent: every command goes through PersonalOS's
         command guard first (pos_worker.command_hook, a PreToolUse hook)."""
-        if "Bash" not in self.builtin_tools:
+        if "Bash" not in (self.builtin_tools or []):
             return None
         from .command_hook import settings
 
@@ -110,8 +140,10 @@ class ClaudeSession:
             args += ["--append-system-prompt-file", prompt_file]
         if mcp_file:
             args += ["--mcp-config", mcp_file, "--strict-mcp-config"]
-        if self.builtin_tools:
+        if self.builtin_tools is not None:  # "" = no built-in tool at all
             args += ["--tools", ",".join(self.builtin_tools)]
+            # No skills: their listing (~1.7k tokens a turn) is for people, agents have the tool library.
+            args.append("--disable-slash-commands")
         if self.allowed_tools:
             args += ["--allowedTools", *self.allowed_tools]
         if self.disallowed_tools:
@@ -119,6 +151,14 @@ class ClaudeSession:
         if self.thread_id:
             args += ["--resume", self.thread_id]
         return args
+
+    def cli_env(self) -> dict[str, str]:
+        """Environment for the CLI that keeps the fixed prompt small: tool search as decided, and no
+        auto-memory (agents keep memory in PersonalOS, memory_get/memory_update)."""
+        out = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
+        if self.tool_search is not None:
+            out["ENABLE_TOOL_SEARCH"] = "true" if self.tool_search else "false"
+        return out
 
     def _prompt_file(self) -> str | None:
         if not self.system_prompt:
@@ -134,7 +174,7 @@ class ClaudeSession:
         settings_file = self._settings_file()
         kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {"start_new_session": True}
         # MCP_TOOL_TIMEOUT: a sandbox command may run up to an hour (sandbox_exec timeout ≤ 3600 s).
-        env = {"MCP_TOOL_TIMEOUT": "3700000", **os.environ, **(self.env or {}), "PYTHONUTF8": "1"}
+        env = {"MCP_TOOL_TIMEOUT": "3700000", **os.environ, **(self.env or {}), **self.cli_env(), "PYTHONUTF8": "1"}
         try:
             self.proc = subprocess.Popen(self._args(mcp_file, prompt_file, settings_file), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=self.workdir,

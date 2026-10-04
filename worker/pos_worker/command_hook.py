@@ -3,7 +3,10 @@ run is checked by PersonalOS's command guard (/api/worker/check-command,
 constitution U1/U3/U4) before it runs.
 
     allow        -> no decision here; Claude's allow-list still applies
+    allow + auto -> allowed (safe engineering work inside the agent's own worktree,
+                    or a command the CTO approved: pos.command_policy)
     needs_owner  -> denied; PersonalOS made a task for the owner
+    needs_cto    -> denied; PersonalOS made a task for the CTO (a push, a network write)
     deny         -> denied
     guard down   -> denied (fail closed)
 
@@ -27,7 +30,10 @@ def decide(event: dict, post=None) -> dict | None:
         return None
     try:
         if post is None:
-            r = httpx.post(os.environ["POS_URL"].rstrip("/") + "/api/worker/check-command", json={"command": command},
+            body = {"command": command, "cwd": event.get("cwd") or os.getcwd(),
+                    "workdir": os.environ.get("POS_AGENT_WORKDIR") or None,
+                    "run_id": int(os.environ["POS_RUN_ID"]) if os.environ.get("POS_RUN_ID", "").isdigit() else None}
+            r = httpx.post(os.environ["POS_URL"].rstrip("/") + "/api/worker/check-command", json=body,
                            headers={"Authorization": f"Bearer {os.environ['POS_AGENT_KEY']}"}, timeout=30)
             r.raise_for_status()
             out = r.json()
@@ -37,11 +43,19 @@ def decide(event: dict, post=None) -> dict | None:
         return _deny(f"The command guard is not reachable ({type(e).__name__}); the command was not run.")
     outcome = out.get("outcome")
     if outcome == "allow":
-        return None
+        return _allow(out.get("reason") or "allowed") if out.get("auto") else None
+    if outcome == "needs_cto":
+        return _deny(f"{out.get('reason') or 'Needs the CTO.'} The CTO has a task for it"
+                     f"{' (' + out['cto_task'] + ')' if out.get('cto_task') else ''}; do something else meanwhile.")
     if outcome == "needs_owner":
         return _deny(f"{out.get('reason') or 'Needs the owner.'} The owner has a task for it"
                      f"{' (' + out['owner_task'] + ')' if out.get('owner_task') else ''}; do something else meanwhile.")
     return _deny(out.get("reason") or f"Refused by the constitution ({out.get('rule') or 'guard'}).")
+
+
+def _allow(reason: str) -> dict:
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                   "permissionDecisionReason": reason}}
 
 
 def _deny(reason: str) -> dict:

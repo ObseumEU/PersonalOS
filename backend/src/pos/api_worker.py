@@ -72,6 +72,8 @@ class CommandIn(BaseModel):
     command: str
     external: bool = False
     run_id: int | None = None
+    cwd: str | None = None      # where the shell runs (the CLI's hook event)
+    workdir: str | None = None  # the agent's own worktree (the worker's POS_AGENT_WORKDIR)
 
 
 def _state(conn: sqlite3.Connection, actor_id: int, run_id: int | None = None) -> dict:
@@ -451,6 +453,8 @@ def _run_context(conn: sqlite3.Connection, ctx: Ctx, tid: int, run_id: int) -> d
         rctx = Ctx(ctx.actor_id, via="worker", run_id=run_id)
         kn = knowledge_first.preload(conn, rctx, {**dict(row), "ref": tasks.display_id(tid)}) if row else None
         if kn:
+            # Outside passages are pointers only (pos.knowledge_first): nothing here taints the run;
+            # opening one through the knowledge tool does.
             for source in kn["external"]:
                 taint.mark(conn, ctx.actor_id, f"knowlage:{source}", kn["text"][:1500], "knowledge pre-load", run_id)
             out["knowledge"] = kn["text"]
@@ -568,13 +572,22 @@ def my_tools(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
 
 @router.post("/check-command")
 def check_command(body: CommandIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
-    """Before an agent shell command. NEEDS_OWNER becomes a task for the owner."""
+    """Before an agent shell command. The constitution's guard first: NEEDS_OWNER (irreversible, or
+    destructive on outside content) becomes a task for the owner. Of what it allows, the command policy
+    (pos.command_policy) auto-allows engineering work inside the agent's worktree ("auto": the hook lets
+    it past the CLI's allow-list) and sends pushes and network writes to the CTO."""
+    from . import command_policy
     from .guard import commands
     from .integrations import guard_actor
 
     d = commands.evaluate(body.command, guard_actor(conn, ctx.actor_id),
                           commands.Trigger.EXTERNAL if body.external else commands.Trigger.MEMBER)
     out = {"outcome": d.outcome.value, "rule": d.rule, "reason": d.reason}
+    if d.outcome.value == "allow" and not actors.get(conn, ctx.actor_id)["is_owner"]:
+        rctx = Ctx(ctx.actor_id, via="worker", run_id=body.run_id)
+        out = {**out, **command_policy.check(conn, rctx, body.command, body.cwd, body.workdir)}
+        conn.commit()
+        return out
     if d.outcome.value == "needs_owner":
         t = tasks.create(conn, ctx, {
             "title": f"Approve or run: {body.command[:80]}",
