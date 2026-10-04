@@ -10,9 +10,15 @@ it on Automations or with POS_WEEKLY_REPORT_SCHEDULE) the core:
 The agent then works through a few MCP tools (registered here):
 
 - `weekly_packet`   the stored packet (numbers only; `refresh` rebuilds it);
-- `report_publish`  saves the narrative and decisions, and opens the meeting:
-                    a Czech message to the owner in #weekly with the link and
-                    3-5 questions; the agent's task waits for the answer;
+- `report_publish`  saves the narrative and decisions and publishes the report:
+                    a Czech message to the owner in #weekly with the link, and
+                    at most ONE decision card (`decision`: options and a
+                    recommendation, pos.asks; its default applies after 72 h).
+                    No open questions and no waiting on him: the review runs
+                    without his answers (prod 2026-10: he never answered the
+                    strategy questions in #weekly, both meetings closed without
+                    him; he answers direct asks 31/31). The old meeting (3-5
+                    questions, the task waits) stays for `meeting=True` callers;
 - `meeting_status`  the conversation so far (the owner's replies), the questions,
                     how long the owner has left;
 - `meeting_reply`   a follow-up in the thread; the task waits again;
@@ -39,6 +45,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from . import actors, audit, goals as goals_mod, tasks, versioning, weekly_packet
 from .core import Ctx, Forbidden, NotFound, now_iso
@@ -336,6 +343,20 @@ def _questions(qs: list[str] | None) -> list[str]:
     return out
 
 
+def published_message(owner_name: str, week: str, url: str, headline: str = "", card: dict | None = None) -> str:
+    from .asks import vocative
+
+    lines = [f"{vocative(owner_name)}, týdenní report je hotový: [{week}]({url})."]
+    if headline.strip():
+        lines.append(f"V kostce: {' '.join(headline.split())}")
+    if card:
+        lines.append(f"Jedna věc potřebuje tebe: {card['ref']} „{card['title']}“ — karta s možnostmi je v „Čeká na "
+                     "tebe“; bez odpovědi do 72 h platí doporučení.")
+    else:
+        lines.append("Nic od tebe nepotřebuju; cíle a priority jsou v reportu.")
+    return "\n".join(lines)
+
+
 def opening_message(owner_name: str, week: str, url: str, questions: list[str], headline: str = "") -> str:
     from .asks import vocative
 
@@ -351,8 +372,10 @@ def opening_message(owner_name: str, week: str, url: str, questions: list[str], 
 
 def publish(conn: sqlite3.Connection, ctx: Ctx, *, week: str | None = None, narrative: str,
             decisions: list[str] | None = None, questions: list[str] | None = None, headline: str = "",
-            task_id: int | None = None) -> dict:
-    """Save the narrative and open the meeting (or only publish, without questions)."""
+            task_id: int | None = None, decision: dict | None = None, meeting: bool = False) -> dict:
+    """Save the narrative and publish the report, with at most one decision card for the owner
+    (`decision`: {title, why, options, recommendation}). `meeting=True` opens the old meeting
+    with `questions` instead (the task waits for his answers)."""
     _may_run_meeting(conn, ctx)
     week = (week or default_week(conn)).strip().upper()
     if not (narrative or "").strip():
@@ -376,6 +399,8 @@ def publish(conn: sqlite3.Connection, ctx: Ctx, *, week: str | None = None, narr
         audit.log(conn, ctx, "weekly_report_update", "weekly_report", row["id"], week=week)
         return {"week": week, "url": report_url(week), "status": OPEN_MEETING, "updated": True,
                 "note": "The meeting is already open; the report text was updated. Finish this run."}
+    if not meeting:
+        return _publish_with_card(conn, ctx, row, week, fields, decision)
     _set(conn, week, **fields, status="published" if not qs else OPEN_MEETING)
     audit.log(conn, ctx, "weekly_report_publish", "weekly_report", row["id"], week=week, questions=len(qs))
     if not qs:
@@ -394,6 +419,35 @@ def publish(conn: sqlite3.Connection, ctx: Ctx, *, week: str | None = None, narr
             "note": (f"The meeting is open in #{CHANNEL}. Your task now waits for the owner's answer and "
                      "comes back to your queue when they reply (or the meeting closes by itself after "
                      f"{ANSWER_HOURS} h without an answer). Finish this run now with one line.")}
+
+
+def _publish_with_card(conn: sqlite3.Connection, ctx: Ctx, row: sqlite3.Row, week: str, fields: dict,
+                       decision: dict | None) -> dict:
+    """The report is published; the owner gets the link and at most one decision card."""
+    from . import asks
+
+    card = None
+    if decision:
+        d = dict(decision)
+        opts = [str(o).strip() for o in (d.get("options") or []) if str(o).strip()]
+        if len(opts) < 2 or not str(d.get("recommendation") or "").strip():
+            raise Invalid("the decision card needs title, why, 2+ options and your recommendation")
+        out = asks.ask(conn, ctx, title=str(d.get("title") or ""), why=str(d.get("why") or ""),
+                       details=str(d.get("details") or ""), options=opts, recommendation=str(d["recommendation"]),
+                       kind="decision", blocking=False, task_id=fields.get("task_id"), topic=f"weekly {week}")
+        card = {"ref": out["ref"], "title": out["title"]}
+    _set(conn, week, **fields, status="published")
+    audit.log(conn, ctx, "weekly_report_publish", "weekly_report", row["id"], week=week, card=card and card["ref"])
+    owner = actors.get(conn, actors.owner_id(conn))
+    cid = channel_id(conn)
+    mid = _post(conn, ctx, cid, published_message(owner["name"], week, report_url(week),
+                                                  fields.get("headline", ""), card))
+    _set(conn, week, channel_id=cid, thread_message_id=mid, agent_seen_id=mid)
+    conn.commit()
+    return {"week": week, "url": report_url(week), "status": "published", "card": card,
+            "note": ("Published; the owner has the link" + (f" and one decision card ({card['ref']})" if card else "")
+                     + ". Do not ask him open questions. Update each goal's current number (goal_upsert current=…), "
+                       "then finish your task (complete_task) with a one-line summary.")}
 
 
 def status(conn: sqlite3.Connection, ctx: Ctx, week: str | None = None) -> dict:
@@ -518,6 +572,17 @@ def on_owner_message(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, messag
     row = conn.execute("SELECT * FROM weekly_reports WHERE channel_id = ? AND status = ? ORDER BY week DESC LIMIT 1",
                        (ch["id"], OPEN_MEETING)).fetchone()
     if row is None:
+        # No meeting waits for him: his message still reaches someone (the Chief of Staff, else the CEO).
+        target = agent_id(conn)
+        if target is None:
+            from .notices import ceo
+
+            target = ceo(conn)
+        if target and target != ctx.actor_id:
+            from . import chat
+
+            body = conn.execute("SELECT body FROM chat_messages WHERE id = ?", (message_id,)).fetchone()["body"]
+            chat._ask_to_answer(conn, ctx, ch, target, message_id, body)
         return
     now = now_iso()
     _set(conn, row["week"], answered_at=row["answered_at"] or now, last_owner_at=now, deadline_at=_in(ANSWER_HOURS))
@@ -547,13 +612,13 @@ def task_notes(week: str, packet: dict) -> str:
         "### Postup",
         "1. `weekly_packet` → přečti čísla (nic dalšího nenačítej, pokud to není nutné).",
         "2. Napiš narativ podle svých instrukcí a seznam rozhodnutí, která potřebuješ.",
-        "3. `report_publish` s 3–5 otázkami. Pak run ukonči.",
-        "4. Po každé odpovědi: `meeting_status` → `meeting_reply`, nebo cíle (`goal_upsert`, `goal_link`), "
-        "úkoly (`create_task`) a `meeting_close`.",
+        "3. Cíle: u každého aktivního cíle nastav aktuální číslo (`goal_upsert current=…`); chybějící cíl "
+        "navrhni (`goal_upsert`, CEO ho potvrdí).",
+        "4. `report_publish` bez otevřených otázek. Potřebuje-li Owner něco rozhodnout, přidej nanejvýš jednu "
+        "kartu `decision` (možnosti + doporučení). Pak úkol dokonči (`complete_task`).",
         "",
         "### Hotovo znamená",
-        "Report je publikovaný, meeting uzavřený (nebo sám skončil bez odpovědi), cíle a úkoly na další týden "
-        "jsou založené a zápis je v reportu.",
+        "Report je publikovaný, čísla cílů aktuální, Owner má odkaz a nanejvýš jednu rozhodovací kartu.",
     ])
 
 
@@ -848,16 +913,19 @@ def register_mcp(mcp, session) -> None:
         with session(ctx, "weekly_packet", week=week, refresh=refresh) as (conn, _):
             return invalid(lambda: packet_for(conn, week, refresh=refresh))
 
-    @mcp.tool(description="Publish the weekly report and open the meeting. narrative: Markdown in Czech "
-                          "(## Co se stalo, ## Co se povedlo, ## Problémy a rizika, ## Kam míříme). "
-                          "decisions: what the owner must decide (short lines). questions: 3-5 short Czech "
-                          "questions for the meeting; they go to the owner in #weekly with the report link. "
-                          "headline: one Czech sentence, the week in brief. Your task then waits for the answer.")
-    def report_publish(ctx: Context, narrative: str, questions: list[str], decisions: list[str] | None = None,
-                       headline: str = "", week: str | None = None, task_id: str | None = None) -> dict:
-        with session(ctx, "report_publish", week=week, questions=len(questions or [])) as (conn, c):
+    @mcp.tool(description="Publish the weekly report. narrative: Markdown in Czech (## Co se stalo, ## Co se "
+                          "povedlo, ## Problémy a rizika, ## Kam míříme, with the goals' numbers). decisions: "
+                          "what was decided or must be (short lines, for the record). headline: one Czech "
+                          "sentence, the week in brief. decision: at most ONE thing the owner must decide, as a "
+                          "card {title, why, options: [2-6], recommendation}; he gets buttons and the "
+                          "recommendation applies after 72 h without an answer. Never open questions to the "
+                          "owner: the review does not wait for him. questions: kept in the report only.")
+    def report_publish(ctx: Context, narrative: str, decisions: list[str] | None = None, headline: str = "",
+                       decision: dict[str, Any] | None = None, questions: list[str] | None = None,
+                       week: str | None = None, task_id: str | None = None) -> dict:
+        with session(ctx, "report_publish", week=week, card=bool(decision)) as (conn, c):
             return invalid(lambda: publish(conn, c, week=week, narrative=narrative, decisions=decisions,
-                                           questions=questions, headline=headline,
+                                           questions=questions, headline=headline, decision=decision,
                                            task_id=tasks.parse_id(task_id) if task_id else None))
 
     @mcp.tool(description="The weekly meeting now: status, the questions, the conversation in #weekly (the "
@@ -882,23 +950,30 @@ def register_mcp(mcp, session) -> None:
             return invalid(lambda: close(conn, c, notes=notes, summary=summary, week=week,
                                          tasks_created=tasks_created, goals_changed=goals_changed))
 
-    @mcp.tool(description="Goals: status active (default), paused, done, dropped or all. Each has title, why, "
-                          "target, owner, due, progress 0-100, parent, linked tasks/topics.")
+    @mcp.tool(description="Goals: status active (default), proposed, paused, done, dropped or all. Each has "
+                          "title, why, metric, baseline, current, target_value, target, owner, due, progress "
+                          "0-100, parent, linked tasks/topics.")
     def goal_list(ctx: Context, status: str = "active") -> list[dict]:
         with session(ctx, "goal_list", status=status) as (conn, _):
             return goals_mod.list_goals(conn, status)
 
-    @mcp.tool(description="Create a goal (no goal_id) or change one. title, why (one sentence), target "
-                          "(measurable: a number and a date), owner (member name), due (YYYY-MM-DD), status "
-                          "(active, paused, done, dropped), progress 0-100, parent_id, links (['T-12', "
-                          "'topic:acme', 'project:web']). Propose goals the owner agreed to, not your own.")
+    @mcp.tool(description="Create a goal (no goal_id) or change one. title, why (one sentence), metric (what "
+                          "is counted), baseline (the number at the start), current (the number now; update it "
+                          "every week), target_value (the number to reach), target (the same in a sentence), "
+                          "owner (the lead who owns it), due (YYYY-MM-DD), status (proposed, active, paused, "
+                          "done, dropped), progress 0-100 (only without numbers), parent_id, links (['T-12', "
+                          "'topic:acme', 'project:web']). The CEO sets and updates company goals itself (no "
+                          "need to ask the owner; he may veto); anyone else's new goal is a proposal the CEO "
+                          "confirms with status=active.")
     def goal_upsert(ctx: Context, goal_id: int | None = None, title: str | None = None, why: str | None = None,
                     target: str | None = None, owner: str | None = None, due: str | None = None,
                     status: str | None = None, progress: int | None = None, parent_id: int | None = None,
-                    links: list[str] | None = None) -> dict:
+                    links: list[str] | None = None, metric: str | None = None, baseline: float | None = None,
+                    current: float | None = None, target_value: float | None = None) -> dict:
         fields = {k: v for k, v in {"title": title, "why": why, "target": target, "owner": owner, "due": due,
                                     "status": status, "progress": progress, "parent_id": parent_id,
-                                    "links": links}.items() if v is not None}
+                                    "links": links, "metric": metric, "baseline": baseline, "current": current,
+                                    "target_value": target_value}.items() if v is not None}
         with session(ctx, "goal_upsert", goal_id=goal_id, title=title) as (conn, c):
             if goal_id:
                 return invalid(lambda: goals_mod.update(conn, c, goal_id, fields))

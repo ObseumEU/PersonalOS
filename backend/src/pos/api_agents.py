@@ -379,3 +379,19 @@ def needs_me(conn=Depends(get_db), ctx=Depends(get_ctx)):
     from . import needs_me as nm
 
     return nm.collect(conn, ctx)
+
+
+class ChoiceIn(BaseModel):
+    option: str
+    note: str = ""
+
+
+@router.post("/needs-me/asks/{ref}/choose")
+def choose_option(ref: str, body: ChoiceIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The owner pressed an option on a decision card ("Čeká na tebe")."""
+    from . import asks
+
+    try:
+        return asks.choose(conn, ctx, tasks.parse_id(ref), body.option, body.note)
+    except tasks.Invalid as e:
+        raise HTTPException(422, str(e)) from e

@@ -65,6 +65,29 @@ def assistant_id(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT id FROM actors WHERE name = ?", (ASSISTANT_NAME,)).fetchone()["id"]
 
 
+SYSTEM_NAME = "PersonalOS"
+
+
+def system_id(conn: sqlite3.Connection) -> int:
+    """The platform's own voice for notices (a failed run, a budget stop, an answer recorded): the
+    "PersonalOS" member, created on first use as a service (no worker, not on the org chart, never
+    woken). A notice is signed by it, never by the owner or by an agent that did not write it
+    (prod 2026-10: "Owner handed in T-445 …" and "Owner resolved your ask …" read as his words)."""
+    row = conn.execute("SELECT id FROM actors WHERE name = ?", (SYSTEM_NAME,)).fetchone()
+    if row is not None:
+        return row["id"]
+    cur = conn.execute("INSERT INTO actors (kind, name, is_owner, runtime, created_at) VALUES ('agent', ?, 0, "
+                       "'service', ?)", (SYSTEM_NAME, now_iso()))
+    return cur.lastrowid
+
+
+def is_system(conn: sqlite3.Connection, actor_id: int | None) -> bool:
+    if not actor_id:
+        return False
+    row = conn.execute("SELECT name, runtime FROM actors WHERE id = ?", (actor_id,)).fetchone()
+    return row is not None and row["name"] == SYSTEM_NAME and row["runtime"] == "service"
+
+
 def get(conn: sqlite3.Connection, actor_id: int) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM actors WHERE id = ?", (actor_id,)).fetchone()
     if row is None:

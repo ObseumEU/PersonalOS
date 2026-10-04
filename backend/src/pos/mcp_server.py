@@ -630,7 +630,10 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "your fields, linked to your task) and pings them in #team, in one step. "
                           "title: what you need, as a short imperative ('Choose the invoice template'). "
                           "why: one sentence on why you need it. details: the context in Markdown. "
-                          "options: the choices; recommendation: which one you advise and why. "
+                          "options: the choices (2-6 short lines); recommendation: the option you advise. "
+                          "With both, the owner gets one decision card with a button per option, and when he "
+                          "does not answer within default_after_hours (72; 0 = never) your recommendation is "
+                          "adopted, the ticket closes and he is told in his morning brief. "
                           "kind: decision | confirmation | input | approval. task_id: your task (T-12). "
                           "blocking (default true): your task goes to waiting and comes back to your queue "
                           "when the owner answers; finish the run then. links: URLs or refs worth opening. "
@@ -641,7 +644,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     def ask_owner(ctx: Context, title: str, why: str, details: str = "", options: list[str] | None = None,
                   recommendation: str = "", kind: str = "decision", task_id: str | None = None,
                   blocking: bool = True, links: list[str] | None = None, topic: str | None = None,
-                  after: str = "", report: dict[str, Any] | None = None) -> dict:
+                  after: str = "", report: dict[str, Any] | None = None,
+                  default_after_hours: int = 72) -> dict:
         from . import asks, owner_report
 
         with session(ctx, "ask_owner", title=title, task_id=task_id, kind=kind, blocking=blocking) as (conn, c):
@@ -649,7 +653,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             out = asks.ask(conn, c, title=title, why=why, details=details or (rep and rep["content"]) or "",
                            options=options, recommendation=recommendation, blocking=blocking,
                            task_id=tasks.parse_id(task_id) if task_id else None, kind=kind, topic=topic,
-                           links=links, after=after)
+                           links=links, after=after, default_after_hours=default_after_hours)
             if rep and not out.get("deduped"):
                 out["report"] = owner_report.submit(conn, c, out["ticket_id"], rep)
                 conn.commit()

@@ -680,6 +680,17 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     ch = _channel(conn, channel_id)
     if ch["archived_at"]:
         raise ChatError("this channel is archived")
+    from . import owner_channel
+
+    rerouted = None
+    if ch["kind"] == "dm" and not system:
+        # A DM to an archived member reaches its successor (or the CEO), with a note (pos.owner_channel).
+        hit = owner_channel.reroute_archived(conn, ctx, ch)
+        if hit:
+            ch, rerouted = hit
+            channel_id = ch["id"]
+            body = (body + owner_channel.reroute_note(rerouted))[:MAX_BODY]
+            reply_to = None
     agent_author = author["kind"] != "human" and not system
     if agent_author and len(body) > agent_max_body():
         raise ChatError(f"a chat message from an agent is at most {agent_max_body()} characters: answer in a "
@@ -720,6 +731,26 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         merged = flood.coalesce(conn, ctx, author, ch, body, attachments, system=system, priority=priority)
         if merged is not None:  # a one-way flood: added to the sender's last message, nobody woken
             return merged
+    owner_warnings: list[str] = []
+    merged_from = None
+    if author["kind"] != "human" and not actors.is_system(conn, ctx.actor_id) and meeting is None:
+        reach = (actors.owner_id(conn) in member_ids(conn, channel_id) if ch["kind"] == "dm"
+                 else actors.owner_id(conn) in _mentions(conn, body, mentions, channel_id))
+        if reach:  # ids the owner can open, and a warning for ids he cannot (pos.owner_channel)
+            body, owner_warnings = owner_channel.rewrite_refs(conn, body)
+        if priority != "stop":
+            # One answer per owner message: a second reply joins the first one (pos.owner_channel).
+            first = owner_channel.merge_target(conn, ctx, ch, reply_to, quote_of, attachments)
+            joined = owner_channel.merge(conn, ctx, first, body, MAX_BODY) if first is not None else None
+            if joined is owner_channel.SAME:  # nothing new (the same text again): the answer is there
+                return {**message_view(conn, first, ctx.actor_id), "duplicate": True, "merged": True,
+                        "delivered_to_run": None, "inbox": [],
+                        "platform_note": owner_channel.MERGE_NOTE}
+            if joined is not None:
+                body, merged_from = joined, first
+                if quote_of is None:
+                    quote_of = conn.execute("SELECT quote_of FROM chat_messages WHERE id = ?",
+                                            (first,)).fetchone()["quote_of"]
     if agent_author and attachments:
         # The same file version into the same conversation within minutes is one message (the CFO shared
         # a chart with sandbox_share, then answered the asking message with chat_send and the same file).
@@ -814,7 +845,9 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
               mentions=mentioned, inbox=sorted(inbox), **({"system": True} if system else {}),
               **({"routed": sorted(routed)} if routed else {}), **({"ack": True} if ack else {}),
               **({"loop": True} if looping is not None else {}),
-              **({"meeting": meeting["id"]} if meeting is not None else {}))
+              **({"meeting": meeting["id"]} if meeting is not None else {}),
+              **({"rerouted_from": rerouted["channel"]} if rerouted else {}),
+              **({"merged_from": merged_from} if merged_from else {}))
 
     platform_note = None
     if not system and author["kind"] != "human":
@@ -840,7 +873,12 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     if not system and author["is_owner"]:
         from . import asks
 
-        asks.on_owner_chat(conn, ctx, channel_id, mid, reply_to, body)  # answers a blocking chat question
+        # answers only the question he replies to (or the one just asked in this DM)
+        asks.on_owner_chat(conn, ctx, channel_id, mid, reply_to, body, quote_of=quote_of)
+    if not system and author["role"] == "ceo" and owner_channel.reaches_owner(conn, ch, members, mentioned):
+        from . import promises
+
+        promises.record(conn, ctx, mid, body)  # a dated commitment to the owner becomes the CEO's task
 
     if priority == "stop":
         for aid in targets:
@@ -867,6 +905,13 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     out["delivered_to_run"] = runs.get(dm_target) if dm_target and not quiet else None
     out["inbox"] = sorted(inbox)
     notes = [platform_note] if platform_note else []
+    if owner_warnings:
+        notes.append(owner_channel.owner_note(owner_warnings))
+    if merged_from:
+        out["merged_from"] = merged_from
+        notes.append(owner_channel.MERGE_NOTE)
+    if rerouted:
+        out["rerouted"] = rerouted
     if agent_author and ack:
         notes.append("An acknowledgement wakes nobody and needs no answer; next time react with chat_react "
                      "(👍) instead of a message.")
@@ -1475,7 +1520,13 @@ def channel_view(conn: sqlite3.Connection, channel_id: int, viewer: int, names=N
         title = " · ".join(m["name"] for m in other) if mine else " ↔ ".join(m["name"] for m in members)
     else:
         title = f"#{ch['name']}"
+    archived_dm = None
+    if ch["kind"] == "dm" and any(names[m["id"]]["archived_at"] for m in members if m["id"] != viewer):
+        from . import owner_channel
+
+        archived_dm = owner_channel.archived_dm(conn, ch, viewer)  # read-only: write to its successor
     return {
+        "read_only": archived_dm is not None, "archived_dm": archived_dm,
         "id": ch["id"], "kind": ch["kind"], "name": ch["name"], "title": title, "topic": ch["topic"],
         "visibility": ch["visibility"], "created_by": ch["created_by"], "created_at": ch["created_at"],
         "archived_at": ch["archived_at"], "member": mine is not None, "members": members,

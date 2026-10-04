@@ -553,6 +553,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         from .support import service as support_service
 
         support_service.on_task_changed(conn, ctx, row, out)  # a customer's fix handed in: the reply draft is next
+    if out["status"] in ("review", "done") and row["status"] not in ("review", "done")             and (row["source"] or "").startswith("hire_probe:"):
+        from . import hiring
+
+        hiring.probe_passed(conn, row)  # a new hire's test run passed: now it is "ready"
     if handed_in and not auto_accepted:
         _ask_reviewer(conn, ctx, out)
     if handed_in and nudge:
@@ -751,12 +755,18 @@ def _ask_reviewer(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> None:
         return
     from . import chat, review_work, wake
 
-    by = actors.get(conn, ctx.actor_id)["name"]
+    by_row = actors.get(conn, ctx.actor_id)
+    by = by_row["name"]
     if r["kind"] != "human":
         # An agent reviews as work: an item in its queue starts its run (pos.review_work).
         if review_work.ensure(conn, task["id"], f"handed in by {by}") is not None:
             wake.wake(rid)
         return
+    # The platform tells the reviewer; a person's hand-in is not a message he wrote (pos.notices).
+    if by_row["kind"] == "human":
+        from .notices import system_ctx
+
+        ctx = system_ctx(conn)
     chat.send_dm(conn, ctx, rid, f"{by} handed in {task['ref']} '{task['title']}' for your review. "
                                  "Accept it or return it with what should change (review_task). "
                                  f"Report: /report/{task['ref']}",

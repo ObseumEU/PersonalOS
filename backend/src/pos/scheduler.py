@@ -99,9 +99,13 @@ def morning_brief(conn: sqlite3.Connection) -> dict:
         "WHERE t.status = 'working' AND t.archived_at IS NULL"
     ).fetchall()
     lines = [f"- {t['ref']} {t['title']}" for t in today_list] or ["- nothing planned"]
+    from . import asks
+
+    defaults = asks.default_digest(conn)  # decisions he left unanswered: the recommendation was adopted
     body = "\n".join([
         f"Today: {c['today']} planned · inbox {c['inbox']} · waiting {c['waiting']} · to review {c['review']} "
         f"· approvals {pending}",
+        *(["", "Rozhodnuto za tebe (bez odpovědi platí doporučení):", *defaults] if defaults else []),
         "", "Planned:", *lines, "",
         "Agents working now:", *([f"- {w['name']}: {w['title']}" for w in working] or ["- none"]),
     ])
@@ -465,7 +469,21 @@ def ceo_business_focus(conn: sqlite3.Connection) -> dict:
     return effectiveness.ceo_digest(conn)
 
 
+def owner_decision_defaults(conn: sqlite3.Connection) -> dict:
+    from . import asks
+
+    return asks.adopt_defaults(conn)
+
+
+def promises_tick(conn: sqlite3.Connection) -> dict:
+    from . import promises
+
+    return promises.tick(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "owner_decision_defaults": owner_decision_defaults,
+    "promises_tick": promises_tick,
     "learning_weekly": learning_weekly,
     "memories_ensure": memories_ensure,
     "ceo_business_focus": ceo_business_focus,
@@ -567,6 +585,10 @@ DEFAULT_JOBS = [
     ("Heads: stuck team work (morning)", "daily 09:00", "heads_sweep"),
     ("Heads: stuck team work (afternoon)", "daily 15:00", "heads_sweep_afternoon"),
     ("COO: stuck work across teams (second line)", "daily 11:00", "heads_second_line"),
+    # The owner channel (pos.asks, pos.promises): an unanswered decision takes its recommendation after
+    # its default time; the CEO's dated promises to the owner are parsed and a missed one is flagged.
+    ("Owner decisions: adopt the recommendation after the default time", "every 15m", "owner_decision_defaults"),
+    ("CEO promises to the owner: parse and flag missed ones", "every 5m", "promises_tick"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on

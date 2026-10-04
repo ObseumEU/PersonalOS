@@ -4,8 +4,19 @@ A goal has a title, why it matters, a measurable target, an owner (a person
 or an agent), a due date, a status (active, paused, done, dropped), progress
 0-100 and an optional parent goal. Tasks, topics and projects link to it.
 
-Progress is what someone set (`progress`); without it, it is the share of
-linked tasks that are done. The weekly report (pos.weekly) shows every active
+A goal that steers has a number: `metric` (what is counted), `baseline` (where
+it started), `current` (where it is now, with `current_at`) and `target_value`
+(where it must get by `due`); `target` stays the sentence a person reads.
+Progress is then (current - baseline) / (target_value - baseline).
+
+Who sets them: the CEO sets and updates company goals itself (active at once);
+a goal another agent proposes is `proposed` until the CEO (or the owner)
+confirms it (status active). The owner may veto any goal (`veto`: dropped, with
+his note); nobody needs his answer for a goal to steer (prod 2026-10: the goals
+table was empty, both weekly meetings closed without him).
+
+Progress is what someone set (`progress`); without it, from the numbers above;
+without those, the share of linked tasks that are done. The weekly report (pos.weekly) shows every active
 goal with its progress and the change since the last report; the Chief of
 Staff proposes goals and links next week's tasks to them.
 
@@ -20,9 +31,14 @@ from datetime import date
 from . import actors, audit
 from .core import Ctx, NotFound, now_iso
 
-STATUSES = ("active", "paused", "done", "dropped")
+STATUSES = ("proposed", "active", "paused", "done", "dropped")
 LINK_KINDS = ("task", "topic", "project")
-EDITABLE = ("title", "why", "target", "owner", "due", "status", "progress", "parent_id")
+EDITABLE = ("title", "why", "target", "owner", "due", "status", "progress", "parent_id",
+            "metric", "baseline", "current", "target_value")
+NUMBERS = ("baseline", "current", "target_value")
+# Added after the table: ALTERed in on first use.
+_COLUMNS = {"metric": "TEXT", "baseline": "REAL", "current": "REAL", "target_value": "REAL", "current_at": "TEXT",
+            "confirmed_by": "INTEGER", "confirmed_at": "TEXT", "veto_note": "TEXT"}
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS goals (
@@ -59,6 +75,16 @@ class Invalid(ValueError):
 def ensure_schema(conn: sqlite3.Connection) -> None:
     for sql in _SCHEMA:
         conn.execute(sql)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(goals)")}
+    for col, typ in _COLUMNS.items():
+        if col not in have:
+            conn.execute(f"ALTER TABLE goals ADD COLUMN {col} {typ}")
+
+
+def _sets_goals(conn: sqlite3.Connection, ctx: Ctx) -> bool:
+    """The CEO and the owner set company goals; others propose them."""
+    me = actors.get(conn, ctx.actor_id)
+    return bool(me["is_owner"]) or me["role"] == "ceo"
 
 
 def _owner(conn: sqlite3.Connection, ctx: Ctx, value) -> int | None:
@@ -94,6 +120,14 @@ def _validate(fields: dict) -> None:
             date.fromisoformat(fields["due"])
         except ValueError as e:
             raise Invalid("due must be YYYY-MM-DD") from e
+    for k in NUMBERS:
+        if fields.get(k) not in (None, ""):
+            try:
+                fields[k] = float(fields[k])
+            except (TypeError, ValueError) as e:
+                raise Invalid(f"{k} is a number") from e
+        elif k in fields:
+            fields[k] = None
 
 
 def _task_stats(conn: sqlite3.Connection, goal_id: int) -> dict:
@@ -118,8 +152,11 @@ def to_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     d["links"] = [{"kind": r["kind"], "ref": (f"T-{int(r['ref']):03d}" if r["kind"] == "task" else r["ref"])}
                   for r in links]
     d["tasks"] = _task_stats(conn, d["id"])
+    measured = _measured(d)
     if d["progress"] is not None:
         d["progress_effective"] = d["progress"]
+    elif measured is not None:
+        d["progress_effective"] = measured
     elif d["tasks"]["total"]:
         d["progress_effective"] = round(100 * d["tasks"]["done"] / d["tasks"]["total"])
     else:
@@ -129,6 +166,17 @@ def to_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
         p = conn.execute("SELECT title FROM goals WHERE id = ?", (d["parent_id"],)).fetchone()
         d["parent_title"] = p["title"] if p else None
     return d
+
+
+def _measured(d: dict) -> int | None:
+    """Progress from the numbers: how far current got from baseline towards target_value."""
+    b, c, t = d.get("baseline"), d.get("current"), d.get("target_value")
+    if c is None or t is None:
+        return None
+    b = 0.0 if b is None else b
+    if t == b:
+        return 100 if c == t else 0
+    return max(0, min(100, round(100 * (c - b) / (t - b))))
 
 
 def get(conn: sqlite3.Connection, goal_id: int) -> dict:
@@ -159,6 +207,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     unknown = set(fields) - set(EDITABLE) - {"links"}
     if unknown:
         raise Invalid(f"unknown goal fields: {sorted(unknown)}; use {list(EDITABLE)}")
+    # The CEO (or the owner) sets a company goal; anyone else's goal is a proposal the CEO confirms.
+    if not _sets_goals(conn, ctx):
+        fields["status"] = "proposed"
     fields.setdefault("status", "active")
     _validate(fields)
     title = str(fields.get("title") or "").strip()
@@ -168,14 +219,31 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     if parent not in (None, ""):
         get(conn, int(parent))
     now = now_iso()
+    confirmed = fields["status"] != "proposed" and _sets_goals(conn, ctx)
     cur = conn.execute(
         """INSERT INTO goals (title, why, target, owner_id, due, status, progress, parent_id, created_by,
-                              created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              created_at, updated_at, metric, baseline, current, target_value, current_at,
+                              confirmed_by, confirmed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (title[:200], str(fields.get("why") or "").strip(), str(fields.get("target") or "").strip(),
          _owner(conn, ctx, fields.get("owner")), fields.get("due") or None, fields["status"],
-         fields.get("progress"), int(parent) if parent not in (None, "") else None, ctx.actor_id, now, now))
+         fields.get("progress"), int(parent) if parent not in (None, "") else None, ctx.actor_id, now, now,
+         str(fields.get("metric") or "").strip() or None, fields.get("baseline"), fields.get("current"),
+         fields.get("target_value"), now if fields.get("current") is not None else None,
+         ctx.actor_id if confirmed else None, now if confirmed else None))
     gid = cur.lastrowid
-    audit.log(conn, ctx, "goal_create", "goal", gid, title=title)
+    audit.log(conn, ctx, "goal_create", "goal", gid, title=title, status=fields["status"])
+    if fields["status"] == "proposed":  # the CEO confirms it (or drops it)
+        try:
+            from . import notices
+
+            ceo = notices.ceo(conn)
+            if ceo and ceo != ctx.actor_id:
+                notices.dm(conn, ceo, f"{actors.get(conn, ctx.actor_id)['name']} navrhuje firemní cíl #{gid} "
+                                      f"„{title[:160]}“. Potvrď ho (goal_upsert goal_id={gid} status=active), "
+                                      "uprav, nebo zahoď (status=dropped).")
+        except Exception:  # noqa: BLE001 - the proposal stands either way
+            pass
     for link in fields.get("links") or []:
         link_to(conn, ctx, gid, link)
     return get(conn, gid)
@@ -189,9 +257,16 @@ def update(conn: sqlite3.Connection, ctx: Ctx, goal_id: int, changes: dict) -> d
     changes = dict(changes)
     _validate(changes)
     sets: dict = {}
-    for k in ("title", "why", "target", "due", "status", "progress"):
+    for k in ("title", "why", "target", "due", "status", "progress", "metric", *NUMBERS):
         if k in changes:
             sets[k] = changes[k].strip() if isinstance(changes[k], str) else changes[k]
+    if "current" in sets:
+        sets["current_at"] = now_iso()
+    if sets.get("status") and sets["status"] != before["status"] and before["status"] == "proposed":
+        if sets["status"] == "active" and not _sets_goals(conn, ctx):
+            raise Invalid("a proposed goal becomes active when the CEO (or the owner) confirms it")
+        if sets["status"] == "active":
+            sets.update(confirmed_by=ctx.actor_id, confirmed_at=now_iso())
     if "due" in sets and not sets["due"]:
         sets["due"] = None
     if "owner" in changes:
@@ -213,6 +288,26 @@ def update(conn: sqlite3.Connection, ctx: Ctx, goal_id: int, changes: dict) -> d
     for link in changes.get("links") or []:
         link_to(conn, ctx, before["id"], link)
     return get(conn, before["id"])
+
+
+def veto(conn: sqlite3.Connection, ctx: Ctx, goal_id: int, note: str = "") -> dict:
+    """The owner stops a goal (the CEO's or a proposal): dropped, with his reason. The CEO hears it."""
+    if not actors.get(conn, ctx.actor_id)["is_owner"]:
+        raise Invalid("only the owner vetoes a goal")
+    g = get(conn, goal_id)
+    now = now_iso()
+    conn.execute("UPDATE goals SET status = 'dropped', veto_note = ?, updated_at = ? WHERE id = ?",
+                 ((note or "").strip() or "veto", now, g["id"]))
+    audit.log(conn, ctx, "goal_veto", "goal", g["id"], note=(note or "")[:300])
+    try:
+        from . import notices
+
+        notices.dm(conn, notices.ceo(conn), f"Owner vetoval cíl „{g['title']}“" + (f": {note.strip()}" if
+                                                                                  (note or "").strip() else ".")
+                   + " Uprav plán a cíle bez něj (goal_upsert).")
+    except Exception:  # noqa: BLE001 - the veto stands either way
+        pass
+    return get(conn, g["id"])
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, goal_id: int) -> dict:
@@ -278,4 +373,5 @@ def brief(g: dict) -> dict:
     """What the weekly packet keeps of a goal."""
     return {"id": g["id"], "title": g["title"], "target": g["target"], "owner": g["owner_name"], "due": g["due"],
             "status": g["status"], "progress": g["progress_effective"], "parent_id": g["parent_id"],
-            "tasks_done": g["tasks"]["done"], "tasks_total": g["tasks"]["total"]}
+            "tasks_done": g["tasks"]["done"], "tasks_total": g["tasks"]["total"], "metric": g.get("metric"),
+            "baseline": g.get("baseline"), "current": g.get("current"), "target_value": g.get("target_value")}

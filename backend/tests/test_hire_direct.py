@@ -51,7 +51,13 @@ def test_hr_hires_an_agent_that_works_at_once(co):
     seeded = conn.execute("SELECT COUNT(*) FROM access_budgets WHERE agent_id = ?", (aid,)).fetchone()[0]
     assert seeded == len(hiring.DEFAULT_BUDGETS["low"])               # a hire's default budget class
     assert "Náplň práce" in agents.instructions_of(a)
-    assert "Hlídač faktur" in conn.execute("SELECT body FROM chat_messages ORDER BY id DESC LIMIT 1").fetchone()[0]
+    # hired is not ready: #team hears of it only when its test run passed (pos.hiring.start_probe)
+    assert out["ready"] is False and out["probe_task"]
+    team = chat.ensure_team_channel(conn)
+    said = lambda: [r[0] for r in conn.execute("SELECT body FROM chat_messages WHERE channel_id = ?", (team,))]  # noqa: E731
+    assert not [b for b in said() if "Hlídač faktur" in b]
+    tasks.complete(conn, Ctx(aid, via="mcp"), tasks.parse_id(out["probe_task"]), "nástroje fungují")
+    assert [b for b in said() if "Hlídač faktur" in b and "připravený" in b]
     files = conn.execute("SELECT notes FROM tasks WHERE title LIKE 'Soubory nového agenta%'").fetchone()
     assert files and '"worker": "pool"' in files["notes"]                 # its files go to git
     # its lead gives it work, and it answers the owner through its worker

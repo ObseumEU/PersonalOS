@@ -62,6 +62,14 @@ class GoalIn(BaseModel):
     progress: int | None = None
     parent_id: int | None = None
     links: list[Any] | None = None
+    metric: str | None = None
+    baseline: float | None = None
+    current: float | None = None
+    target_value: float | None = None
+
+
+class VetoIn(BaseModel):
+    note: str = ""
 
 
 def _goal_call(conn, fn):
@@ -88,6 +96,12 @@ def create_goal(body: GoalIn, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx))
 @router.patch("/goals/{goal_id}")
 def update_goal(goal_id: int, body: GoalIn, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx)):
     return _goal_call(conn, lambda: goals.update(conn, ctx, goal_id, body.model_dump(exclude_unset=True)))
+
+
+@router.post("/goals/{goal_id}/veto")
+def veto_goal(goal_id: int, body: VetoIn, conn=Depends(get_db), ctx: Ctx = Depends(get_ctx)):
+    """The owner stops a goal the CEO set (or a proposal)."""
+    return _goal_call(conn, lambda: goals.veto(conn, ctx, goal_id, body.note))
 
 
 @router.post("/goals/{goal_id}/archive")

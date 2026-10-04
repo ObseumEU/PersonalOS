@@ -19,7 +19,7 @@ import json
 import re
 import sqlite3
 
-from . import actors, tasks
+from . import actors, asks, tasks
 from .core import Ctx
 
 KINDS = ("approval", "ask", "review", "mention")
@@ -77,6 +77,10 @@ def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
             "message_link": (f"/chat?c={a['channel_id']}&m={a['message_id']}"
                              if a and a["message_id"] and a["channel_id"] else None),
         })
+        card = asks.card(conn, r["id"]) if a else None
+        if card:  # a decision card: a button per option, the recommendation, when it applies by itself
+            out[-1].update(options=card["options"], recommendation=card["recommendation"],
+                           default_at=card["default_at"])
     return out
 
 

@@ -19,13 +19,27 @@ attached) and a blocked task goes back to `next`, so its worker resumes it.
 Approvals (pos.approvals) keep their own queue; `ping_approval` gives them
 the same chat ping.
 
+A decision with `options` and a `recommendation` is one card in "Čeká na tebe"
+with a button per option (`choose`). If the owner does not answer within
+`default_after_hours` (72 by default), the recommendation is adopted by itself
+(`adopt_defaults`, a scheduler job) and he is told in his next morning brief
+(`default_digest`).
+
+The owner's chat message answers only the ask it replies to (a reply to, or a
+quote of, the question; the thread of the #team ping), or the single open ask in
+that DM when the question is at most ANSWER_WINDOW_MIN old. Anything else is new
+input, not an answer (prod 2026-10: #1454 and #1787 closed questions they did
+not answer, and he had to send them again).
+
 The bookkeeping lives in `owner_asks`, created on first use (no numbered
 migration, so it cannot collide with one added elsewhere).
 """
 
+import json
 import re
 import sqlite3
 import unicodedata
+from datetime import datetime, timedelta, timezone
 
 from . import actors, audit
 from .core import Ctx, now_iso
@@ -38,6 +52,8 @@ KINDS = {
     "approval": ("Schválení", "schval, nebo zamítni"),
 }
 TEAM = "team"
+DEFAULT_AFTER_HOURS = 72  # an unanswered decision with a recommendation takes it after this long
+ANSWER_WINDOW_MIN = 30  # the owner's next DM message answers the one open question asked this recently
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS owner_asks (
     id             INTEGER PRIMARY KEY,
@@ -54,9 +70,24 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS owner_asks (
 )"""
 
 
+# Added later (the decision card): ALTERed in on first use, like the table itself.
+_COLUMNS = {
+    "options": "TEXT",              # JSON list of the choices
+    "recommendation": "TEXT",       # the asker's advice (one of the options, or free text)
+    "default_at": "TEXT",           # when the recommendation is adopted without an answer
+    "decided_option": "TEXT",       # what was decided (a button, or the recommendation by default)
+    "decided_by": "TEXT",           # owner | default
+    "digested_at": "TEXT",          # a default decision the owner was told about (morning brief)
+}
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(_SCHEMA)
     conn.execute("CREATE INDEX IF NOT EXISTS owner_asks_ticket ON owner_asks (ticket_id)")
+    have = {r[1] for r in conn.execute("PRAGMA table_info(owner_asks)")}
+    for col, typ in _COLUMNS.items():
+        if col not in have:
+            conn.execute(f"ALTER TABLE owner_asks ADD COLUMN {col} {typ}")
 
 
 def _has_table(conn: sqlite3.Connection) -> bool:
@@ -172,11 +203,13 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
         options: list[str] | None = None, recommendation: str = "", blocking: bool = True,
         task_id: int | None = None, kind: str = "decision", topic: str | None = None,
         links: list[str] | None = None, after: str = "", priority: int | None = None,
-        chat_message_id: int | None = None) -> dict:
+        chat_message_id: int | None = None, default_after_hours: int | None = DEFAULT_AFTER_HOURS) -> dict:
     """Create the owner's ticket, ping the owner in #team and (when blocking)
     park the asking task. Returns {ticket, ref, message_id, deduped, blocking}.
     chat_message_id: the question is already a chat message to the owner (from_chat); it is
-    the ticket's ping, so no second one is posted."""
+    the ticket's ping, so no second one is posted.
+    options + recommendation make it a decision card (buttons in "Čeká na tebe"); without an
+    answer in default_after_hours (72; 0 or None: never) the recommendation is adopted."""
     from . import comments, tasks, versioning
 
     title, why = (title or "").strip(), (why or "").strip()
@@ -206,8 +239,14 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
                          "You already asked this and it was answered: read the ticket (get_task) and its "
                          "comments.")}
 
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()][:6]
+    rec = _match_option(opts, recommendation or "")
+    hours = int(default_after_hours or 0) if opts and rec else 0
+    if hours:
+        after = after or (f"Vyber jednu z možností (tlačítko v „Čeká na tebe“) nebo odpověz komentářem. Když do "
+                          f"{hours} h neodpovíš, platí moje doporučení „{rec}“ a dozvíš se to v ranním přehledu.")
     notes = _notes(asker=me["name"], kind=kind, title=title, why=why, details=details or "",
-                   options=[o for o in (options or []) if str(o).strip()], recommendation=recommendation or "",
+                   options=opts, recommendation=recommendation or "",
                    blocking=blocking, source=source, links=[str(x) for x in (links or []) if str(x).strip()],
                    after=after or "", owner=owner["name"])
     fields = {
@@ -224,10 +263,15 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
         if source.get("topic"):
             fields["topic"] = source["topic"]
     ticket = tasks.create(conn, ctx, fields)
+    default_at = ((datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(timespec="seconds")
+                  if hours else None)
     conn.execute(
-        """INSERT INTO owner_asks (ticket_id, asker_id, source_task_id, topic_key, kind, blocking, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (ticket["id"], ctx.actor_id, task_id, key, kind, int(bool(blocking)), now_iso()))
+        """INSERT INTO owner_asks (ticket_id, asker_id, source_task_id, topic_key, kind, blocking, created_at,
+                                   options, recommendation, default_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (ticket["id"], ctx.actor_id, task_id, key, kind, int(bool(blocking)), now_iso(),
+         json.dumps(opts, ensure_ascii=False) if opts else None, rec or (recommendation or "").strip() or None,
+         default_at))
     ask_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     if source:
         comments.log(conn, ctx, source["id"], f"Asked {owner['name']}: {ticket['ref']} — {title}"
@@ -242,12 +286,14 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
         mid = chat_message_id  # the owner already has the question in chat
     else:
         # chat.send commits: the ticket, the bookkeeping and the ping land together.
-        mid = _post(conn, ctx, _chat_body(owner=owner["name"], ref=ticket["ref"], title=title, why=why, kind=kind,
-                                          blocking=blocking and source is not None,
-                                          recommendation=recommendation or ""))
+        body = _chat_body(owner=owner["name"], ref=ticket["ref"], title=title, why=why, kind=kind,
+                          blocking=blocking and source is not None, recommendation=recommendation or "")
+        if hours:
+            body = body.replace(f" @{owner['name']}", f" Bez odpovědi do {hours} h platí doporučení. @{owner['name']}")
+        mid = _post(conn, ctx, body)
     conn.execute("UPDATE owner_asks SET message_id = ? WHERE id = ?", (mid, ask_id))
     return {"ref": ticket["ref"], "ticket_id": ticket["id"], "title": ticket["title"], "status": ticket["status"],
-            "message_id": mid, "deduped": False, "blocking": bool(blocking),
+            "message_id": mid, "deduped": False, "blocking": bool(blocking), "default_at": default_at,
             "note": ("Your task waits for the answer; you will get it in your inbox and the task comes back "
                      "to your queue. Finish this run now with a short summary." if blocking and source else
                      "The answer comes to your inbox.")}
@@ -258,6 +304,7 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
 def _asks_for(conn: sqlite3.Connection, ticket_id: int) -> list[sqlite3.Row]:
     if not _has_table(conn):
         return []
+    ensure_schema(conn)
     return conn.execute("SELECT * FROM owner_asks WHERE ticket_id = ?", (ticket_id,)).fetchall()
 
 
@@ -275,13 +322,15 @@ def _resume(conn: sqlite3.Connection, ctx: Ctx, a: sqlite3.Row, why: str) -> Non
 
 
 def _tell(conn: sqlite3.Connection, ctx: Ctx, a: sqlite3.Row, body: str) -> None:
-    from . import chat, wake
+    """The asker hears the answer from PersonalOS: a DM "from the owner" that he did not write
+    (prod #1454, #1787: "Owner resolved your ask …" in his own DM) is never sent."""
+    from . import chat, notices, wake
 
     asker = actors.get(conn, a["asker_id"])
     if asker["archived_at"] or a["asker_id"] == ctx.actor_id:
         return
     try:
-        chat.send_dm(conn, ctx, a["asker_id"], body[:3900], priority="change_plan",
+        chat.send_dm(conn, notices.system_ctx(conn), a["asker_id"], body[:3900], priority="change_plan",
                      attachments=[{"type": "task", "id": a["ticket_id"]}], system=True)
     except Exception:  # noqa: BLE001 - the answer is on the ticket either way
         return
@@ -318,6 +367,15 @@ def on_task_changed(conn: sqlite3.Connection, ctx: Ctx, before: sqlite3.Row, aft
         if a["status"] != "open":
             continue
         conn.execute("UPDATE owner_asks SET status = 'answered', answered_at = ? WHERE id = ?", (now_iso(), a["id"]))
+        if a["decided_by"] == "default":
+            who_ = f"Bez odpovědi Ownera platí doporučení „{a['decided_option']}“"
+            src = f" Continue {tasks.display_id(a['source_task_id'])}." if a["source_task_id"] else ""
+            _tell(conn, ctx, a, f"{who_} (ask {tasks.display_id(before['id'])} '{before['title']}'). "
+                                f"Go ahead with it; the owner is told in his morning brief and may still change it.{src}")
+            _resume(conn, ctx, a, f"default adopted on {tasks.display_id(before['id'])}")
+            audit.log(conn, ctx, "ask_owner:default", "task", before["id"], asker=a["asker_id"],
+                      option=a["decided_option"])
+            continue
         who = actors.get(conn, ctx.actor_id)["name"]
         ref = tasks.display_id(before["id"])
         last = conn.execute(
@@ -369,29 +427,159 @@ def from_chat(conn: sqlite3.Connection, ctx: Ctx, message: dict, task_id: int | 
                chat_message_id=message["id"])
 
 
+def _ago(iso: str | None) -> float:
+    """Minutes since `iso` (0 for a missing or bad value)."""
+    try:
+        t = datetime.fromisoformat((iso or "").replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds() / 60
+
+
 def on_owner_chat(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, message_id: int, reply_to: int | None,
-                  body: str) -> list[int]:
+                  body: str, quote_of: int | None = None) -> list[int]:
     """The owner answered in chat: an open ask whose question is a chat message is answered by his
-    reply in its thread, or by his next message in the same DM. Its ticket is done (the asker hears
-    it and a blocked task resumes, on_task_changed). Returns the tickets closed."""
+    reply to (or quote of) that very message, or in its thread; in a DM also by his next message
+    when it is the only open question there and it was asked at most ANSWER_WINDOW_MIN ago. Any
+    other message is new input (its agent, or in a group the channel's lead, gets it as usual), not
+    the answer to some older question. The answered ticket is done (the asker hears it and a
+    blocked task resumes, on_task_changed). Returns the tickets closed."""
+    from . import chat, tasks
+
+    if not _has_table(conn):
+        return []
+    ensure_schema(conn)
+    rows = conn.execute(
+        """SELECT a.*, m.channel_id, m.created_at AS asked_at, c.kind AS ch_kind FROM owner_asks a
+           JOIN chat_messages m ON m.id = a.message_id JOIN channels c ON c.id = m.channel_id
+           JOIN tasks t ON t.id = a.ticket_id
+           WHERE a.status = 'open' AND t.status != 'done' AND t.archived_at IS NULL AND m.id < ?
+             AND m.channel_id = ?""", (message_id, channel_id)).fetchall()
+    if not rows:
+        return []
+    answered = {x for x in (reply_to, quote_of) if x}
+    if reply_to:
+        root = chat._thread_of(conn, reply_to)
+        if root:
+            answered.add(root)
+    hit = [a for a in rows if a["message_id"] in answered]
+    if not hit and not answered:
+        in_dm = [a for a in rows if a["ch_kind"] == "dm"]
+        if len(in_dm) == 1 and _ago(in_dm[0]["asked_at"]) <= ANSWER_WINDOW_MIN:
+            hit = in_dm
+    closed = []
+    for a in hit:
+        tasks.update(conn, ctx, a["ticket_id"], {
+            "status": "done", "progress_note": f"Odpověď v chatu (zpráva {message_id}): {body[:400]}"})
+        closed.append(a["ticket_id"])
+    if rows and not closed:
+        audit.log(conn, ctx, "ask_owner:not_an_answer", "chat_message", message_id,
+                  open=[a["ticket_id"] for a in rows])
+    return closed
+
+
+# ------------------------------------------------------------------ the decision card
+
+def _match_option(options: list[str], recommendation: str) -> str:
+    """The option the recommendation names (by its words), else the recommendation itself."""
+    rec = (recommendation or "").strip()
+    if not rec:
+        return ""
+    key = topic_key(rec)
+    for o in options:
+        k = topic_key(o)
+        if k and (k == key or key.startswith(k + " ")):
+            return o
+    return rec
+
+
+def card(conn: sqlite3.Connection, ticket_id: int) -> dict | None:
+    """The decision card of an open ask: {options, recommendation, default_at} or None."""
+    if not _has_table(conn):
+        return None
+    ensure_schema(conn)
+    a = conn.execute("SELECT * FROM owner_asks WHERE ticket_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
+                     (ticket_id,)).fetchone()
+    if a is None or not a["options"]:
+        return None
+    return {"options": json.loads(a["options"]), "recommendation": a["recommendation"],
+            "default_at": a["default_at"]}
+
+
+def choose(conn: sqlite3.Connection, ctx: Ctx, ticket_id: int, option: str, note: str = "") -> dict:
+    """The owner pressed an option on the card: the ticket is done with it (the asker hears it and
+    its task resumes)."""
+    from . import tasks
+
+    ensure_schema(conn)
+    a = conn.execute("SELECT * FROM owner_asks WHERE ticket_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
+                     (ticket_id,)).fetchone()
+    if a is None:
+        raise tasks.Invalid(f"{tasks.display_id(ticket_id)} has no open decision")
+    t = conn.execute("SELECT assignee_id FROM tasks WHERE id = ?", (ticket_id,)).fetchone()
+    if not (actors.get(conn, ctx.actor_id)["is_owner"] or (t and t["assignee_id"] == ctx.actor_id)):
+        raise tasks.Invalid("only the one it is asked of decides it")
+    opts = json.loads(a["options"] or "[]")
+    option = (option or "").strip()
+    if opts and option not in opts:
+        raise tasks.Invalid(f"choose one of: {opts}")
+    if not option:
+        raise tasks.Invalid("an option is needed")
+    conn.execute("UPDATE owner_asks SET decided_option = ?, decided_by = 'owner' WHERE id = ?", (option, a["id"]))
+    text = f"Rozhodnutí: {option}" + (f" — {note.strip()}" if (note or "").strip() else "")
+    tasks.update(conn, ctx, ticket_id, {"status": "done", "progress_note": text[:500]})
+    audit.log(conn, ctx, "ask_owner:choose", "task", ticket_id, option=option)
+    conn.commit()
+    return {"ref": tasks.display_id(ticket_id), "decided": option}
+
+
+def adopt_defaults(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """Decisions the owner left unanswered past their default time: the recommendation is adopted
+    (the ticket is done by PersonalOS, the asker resumes), and the morning brief tells him."""
+    from . import tasks
+
+    if not _has_table(conn):
+        return {}
+    ensure_schema(conn)
+    now_s = (now or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+    rows = conn.execute(
+        """SELECT a.* FROM owner_asks a JOIN tasks t ON t.id = a.ticket_id
+           WHERE a.status = 'open' AND a.default_at IS NOT NULL AND a.default_at <= ?
+             AND a.recommendation IS NOT NULL AND t.status != 'done' AND t.archived_at IS NULL""",
+        (now_s,)).fetchall()
+    # The owner's own ticket, closed for him by the platform (its notes and the asker's DM say so):
+    # done, not handed in for review.
+    sys_ctx = Ctx(actors.owner_id(conn), via="system")
+    done = []
+    for a in rows:
+        conn.execute("UPDATE owner_asks SET decided_option = ?, decided_by = 'default' WHERE id = ?",
+                     (a["recommendation"], a["id"]))
+        tasks.update(conn, sys_ctx, a["ticket_id"], {
+            "status": "done",
+            "progress_note": f"Bez odpovědi platí doporučení: {a['recommendation']}"[:500]})
+        done.append(tasks.display_id(a["ticket_id"]))
+    conn.commit()
+    return {"adopted": done} if done else {}
+
+
+def default_digest(conn: sqlite3.Connection, mark: bool = True) -> list[str]:
+    """Czech lines for the owner's morning brief: decisions adopted by default since the last brief."""
     from . import tasks
 
     if not _has_table(conn):
         return []
+    ensure_schema(conn)
     rows = conn.execute(
-        """SELECT a.*, m.channel_id, c.kind AS ch_kind FROM owner_asks a JOIN chat_messages m ON m.id = a.message_id
-           JOIN channels c ON c.id = m.channel_id JOIN tasks t ON t.id = a.ticket_id
-           WHERE a.status = 'open' AND t.status != 'done' AND t.archived_at IS NULL AND m.id < ?
-             AND (m.id = ? OR (m.channel_id = ? AND c.kind = 'dm'))""",
-        (message_id, reply_to or 0, channel_id)).fetchall()
-    closed = []
-    for a in rows:
-        if a["message_id"] != reply_to and a["ch_kind"] != "dm":
-            continue
-        tasks.update(conn, ctx, a["ticket_id"], {
-            "status": "done", "progress_note": f"Odpověď v chatu (zpráva {message_id}): {body[:400]}"})
-        closed.append(a["ticket_id"])
-    return closed
+        """SELECT a.id, a.ticket_id, a.decided_option, t.title FROM owner_asks a JOIN tasks t ON t.id = a.ticket_id
+           WHERE a.decided_by = 'default' AND a.digested_at IS NULL ORDER BY a.id""").fetchall()
+    lines = [f"- {tasks.display_id(r['ticket_id'])} {r['title']}: platí „{r['decided_option']}“ (můžeš změnit "
+             "komentářem v ticketu)" for r in rows]
+    if mark and rows:
+        conn.execute(f"UPDATE owner_asks SET digested_at = ? WHERE id IN ({','.join('?' * len(rows))})",
+                     (now_iso(), *[r["id"] for r in rows]))
+    return lines
 
 
 # ------------------------------------------------------------------ approvals
@@ -432,8 +620,10 @@ def tell_decision(conn: sqlite3.Connection, ctx: Ctx, approval: dict) -> None:
     body = f"{who} {word} your request #{approval['id']} ({approval['action']})"
     body += f": {approval['comment']}" if approval.get("comment") else "."
     atts = [{"type": "task", "id": approval["task_id"]}] if approval.get("task_id") else None
+    from .notices import system_ctx
+
     try:
-        chat.send_dm(conn, ctx, rid, body, priority="fyi", attachments=atts, system=True)
+        chat.send_dm(conn, system_ctx(conn), rid, body, priority="fyi", attachments=atts, system=True)
     except Exception:  # noqa: BLE001
         return
     if r["kind"] != "human":

@@ -150,14 +150,20 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, hire_id: int, approve: bool, note
     sets = {"reports_to": h["lead_id"], "probation_until": until}
     if h["role"]:
         sets["role"] = h["role"]
+    # The same engine as a direct hire: Nabu Specialist (hire #8) got the Codex default and its only
+    # run failed on a 401 (prod 2026-10-01).
+    sets.update({"engine": "claude", "model": DEFAULT_MODEL})
     versioning.update(conn, owner, "actor", aid, sets, action="hired")
     versioning.update(conn, ctx, ENTITY, hire_id, {"status": "approved", "decided_by": ctx.actor_id,
                                                    "decided_at": now_iso(), "decision_note": note or None,
                                                    "agent_id": aid}, action="approve")
+    probe = start_probe(conn, ctx, aid, hire_id=hire_id, lead_id=h["lead_id"], requester_id=h["requested_by"])
     conn.commit()
-    _tell_requester(conn, ctx, h, f"{h['name']} is hired and reports to {h['lead_name']}; on probation until "
-                                  f"{until[:10]} (its lead reviews its work).")
-    return {**get(conn, hire_id), "api_key": made["api_key"]}
+    _tell_requester(conn, ctx, h, f"{h['name']} je vytvořený (vede ho {h['lead_name']}, zkušební doba do "
+                                  f"{until[:10]}), ale ještě NENÍ připravený: běží jeho zkušební běh {probe}. "
+                                  "Že je připravený, ohlásí PersonalOS, až běh projde; do té doby to nikomu "
+                                  "(ani Ownerovi) nehlas jako hotové.")
+    return {**get(conn, hire_id), "api_key": made["api_key"], "probe_task": probe, "ready": False}
 
 
 def _tell_requester(conn: sqlite3.Connection, ctx: Ctx, h: dict, text: str) -> None:
@@ -247,7 +253,7 @@ def hire(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, job_des
     owner decides). The agent gets its worker in the agent pool at once, its
     grants and a budget by class, 7 days of probation under its lead; its
     instructions go to git through the Dev agent; #team hears about it."""
-    from . import agents, chat, org, workers
+    from . import agents, org, workers
     from .access import service as access
     from .access import store as access_store
     from .guard import policy
@@ -332,16 +338,15 @@ def hire(conn: sqlite3.Connection, ctx: Ctx, *, name: str, purpose: str, job_des
     pool = workers.reply_path(conn, actors.get(conn, aid))
     audit.log(conn, ctx, "hire_direct", "actor", aid, name=name, lead=lead_row["id"], permissions=perms,
               budget_class=budget_class, worker=pool["name"] if pool else None, hire=hire_row["id"])
+    # "Hired" is not "ready": the new agent first runs a trivial task through its tools; #team and the
+    # one who hired hear "ready" only when it passed, the hiring lead the failure otherwise.
+    probe = start_probe(conn, ctx, aid, hire_id=hire_row["id"], lead_id=lead_row["id"], requester_id=ctx.actor_id)
     conn.commit()
-    try:
-        chat.post_to_team(conn, ctx.actor_id,
-                          f"Nový kolega: **{name}** ({purpose[:160]}). Vede ho {lead_row['name']}, přijal "
-                          f"{me['name']}; zkušební doba do {until[:10]}. Worker běží v agent poolu.")
-    except Exception:  # noqa: BLE001 - the hire stands either way
-        pass
     return {"created": True, "agent": {"id": aid, "name": name}, "lead": lead_row["name"],
             "worker": pool["name"] if pool else None, "probation_until": until, "hire_id": hire_row["id"],
-            "files_task": commit_task}
+            "files_task": commit_task, "probe_task": probe, "ready": False,
+            "note": (f"{name} exists but is not ready yet: its test run {probe} must pass first. PersonalOS tells "
+                     "you (and #team) when it did, or the failure. Do not report it as done or ready before.")}
 
 
 def _commit_agent_files(conn: sqlite3.Connection, ctx: Ctx, aid: int, name: str, purpose: str, sets: dict,
@@ -373,3 +378,102 @@ def _commit_agent_files(conn: sqlite3.Connection, ctx: Ctx, aid: int, name: str,
         "definition_of_done": f"`agents/{slug}/` je v main (commit prošel deployerem).",
     })
     return t["ref"]
+
+
+# ------------------------------------------------------------------ the test run: hired is not ready
+
+PROBE_SOURCE = "hire_probe:"
+
+
+def start_probe(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, *, hire_id: int, lead_id: int | None,
+                requester_id: int | None) -> str:
+    """The new agent's first task: a trivial one through its own tools (read the task, finish it).
+    Its run proves the worker, the engine and the key work (prod 2026-10-01: Nabu Specialist was
+    announced to the owner as done; its only run failed on a 401)."""
+    a = actors.get(conn, agent_id)
+    t = tasks.create(conn, Ctx(actors.owner_id(conn), via="system"), {
+        "title": f"Zkušební běh: {a['name']} ověří své nástroje",
+        "assignee": {"type": "agent", "id": agent_id}, "status": "next", "priority": 1, "topic": "hr",
+        "reviewer": agent_id,  # nothing to review: the run itself is the test
+        "source": f"{PROBE_SOURCE}{hire_id}",
+        "notes": ("Účel: první běh nového agenta. Ověřuje, že tvůj worker, model a klíč fungují.\n"
+                  "Odkud: přijetí (pos.hiring).\n\n"
+                  "Postup: 1) get_task na tento úkol; 2) complete_task s poznámkou „nástroje fungují“ a jednou "
+                  "větou, co je tvoje práce. Nic dalšího nedělej, nic neposílej."),
+        "definition_of_done": "Úkol je dokončený z běhu nového agenta (complete_task).",
+    })
+    audit.log(conn, ctx, "hire_probe", "task", t["id"], agent=agent_id, hire=hire_id, lead=lead_id,
+              requester=requester_id)
+    return t["ref"]
+
+
+def _probe(conn: sqlite3.Connection, task_id: int | None) -> dict | None:
+    if not task_id:
+        return None
+    t = conn.execute("SELECT id, source, assignee_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if t is None or not (t["source"] or "").startswith(PROBE_SOURCE):
+        return None
+    row = conn.execute("""SELECT detail FROM audit_log WHERE action = 'hire_probe' AND entity = 'task'
+                          AND entity_id = ? ORDER BY id LIMIT 1""", (task_id,)).fetchone()
+    d = json.loads(row["detail"]) if row and row["detail"] else {}
+    return {"task_id": t["id"], "agent_id": t["assignee_id"], "lead_id": d.get("lead"),
+            "requester_id": d.get("requester"), "hire_id": d.get("hire")}
+
+
+def _done_before(conn: sqlite3.Connection, task_id: int, action: str) -> bool:
+    return conn.execute("SELECT 1 FROM audit_log WHERE action = ? AND entity = 'task' AND entity_id = ?",
+                        (action, task_id)).fetchone() is not None
+
+
+def probe_passed(conn: sqlite3.Connection, task_row) -> bool:
+    """The test run finished its task: now the agent is ready. The one who hired it, its lead and
+    #team hear it (once). The caller commits."""
+    p = _probe(conn, task_row["id"])
+    if p is None or _done_before(conn, p["task_id"], "hire_ready"):
+        return False
+    from . import chat, notices
+
+    a = actors.get(conn, p["agent_id"])
+    ref = tasks.display_id(p["task_id"])
+    lead = actors.get(conn, p["lead_id"])["name"] if p["lead_id"] else "—"
+    text = f"{a['name']} je připravený: zkušební běh {ref} prošel (worker, model i nástroje fungují). Vede ho {lead}."
+    for to in dict.fromkeys(x for x in (p["requester_id"], p["lead_id"]) if x and x != p["agent_id"]):
+        try:
+            notices.dm(conn, to, text, attachments=[{"type": "task", "id": p["task_id"]}], wake_it=False)
+        except Exception:  # noqa: BLE001 - the agent is ready either way
+            pass
+    try:
+        chat.post_to_team(conn, actors.system_id(conn),
+                          f"Nový kolega: **{a['name']}** je připravený (zkušební běh prošel). Vede ho {lead}.")
+    except Exception:  # noqa: BLE001
+        pass
+    audit.log(conn, notices.system_ctx(conn), "hire_ready", "task", p["task_id"], agent=p["agent_id"],
+              hire=p["hire_id"])
+    return True
+
+
+def probe_failed(conn: sqlite3.Connection, agent_id: int, task_id: int | None, why: str = "") -> bool:
+    """A run of the test task failed: the hiring lead (and the one who hired) hear what failed; the
+    agent is not ready. True when this was a test run (the generic alert is then not sent)."""
+    p = _probe(conn, task_id)
+    if p is None or p["agent_id"] != agent_id:
+        return False
+    if _done_before(conn, p["task_id"], "hire_probe_failed") or _done_before(conn, p["task_id"], "hire_ready"):
+        return True
+    from . import notices
+    from .owner_notice import _czech_reason
+
+    a = actors.get(conn, agent_id)
+    ref = tasks.display_id(p["task_id"])
+    text = (f"Zkušební běh nového agenta {a['name']} ({ref}) selhal: {_czech_reason(why)}. Agent NENÍ připravený, "
+            "nehlas ho jako hotového. Oprav příčinu (engine a model, klíč, worker v poolu, přístupy) a pak "
+            f"{ref} vrať agentovi (komentář „zkus znovu“); „připravený“ přijde, až běh projde."
+            + (" Vypadá to na chybu platformy: přizvi SRE." if notices.is_platform_fault(why) else ""))
+    for to in dict.fromkeys(x for x in (p["lead_id"], p["requester_id"]) if x and x != agent_id):
+        try:
+            notices.dm(conn, to, text, attachments=[{"type": "task", "id": p["task_id"]}])
+        except Exception:  # noqa: BLE001
+            pass
+    audit.log(conn, notices.system_ctx(conn), "hire_probe_failed", "task", p["task_id"], agent=agent_id,
+              why=(why or "")[:300])
+    return True

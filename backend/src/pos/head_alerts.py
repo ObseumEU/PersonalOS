@@ -222,12 +222,25 @@ def notify(conn: sqlite3.Connection, agent_id: int, task_id: int | None, reason:
     try:
         if actors.get(conn, agent_id)["kind"] == "human":
             return None
+        from . import hiring, notices
+
+        if reason == "last_run_failed" and hiring.probe_failed(conn, agent_id, task_id, why):
+            return None  # a new hire's test run: its hiring lead heard it (pos.hiring)
         lead = lead_of(conn, agent_id)
+        if lead is not None and reason == "last_run_failed" and notices.is_platform_fault(why):
+            lead = notices.platform_contact(conn) or lead  # the platform failed, not the agent: the SRE fixes it
+            if lead == agent_id:
+                lead = lead_of(conn, agent_id)
         if lead is None or _recent(conn, agent_id, task_id, reason):
             return None
-        ctx = Ctx(agent_id, via="system")
+        # Signed by the platform (pos.notices), not by the agent that did not write it.
+        ctx = notices.system_ctx(conn)
         out = chat.send_dm(conn, ctx, lead, _body(conn, agent_id, task_id, reason, why),
                            attachments=[{"type": "task", "id": task_id}], system=True)
+        if actors.get(conn, lead)["kind"] != "human":
+            from . import wake
+
+            wake.wake(lead)
         audit.log(conn, ctx, "head_alert", "task", task_id, agent_id=agent_id, reason=reason, lead_id=lead,
                   message=out.get("id"))
         return out

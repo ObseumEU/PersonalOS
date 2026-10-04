@@ -274,12 +274,12 @@ def test_the_whole_meeting(conn, me, tmp_path):
     packet = weekly.packet_for(conn)
     assert packet["week"] == week
     with pytest.raises(weekly.Invalid):
-        weekly.publish(conn, cos, narrative=" ", questions=["?"])
+        weekly.publish(conn, cos, narrative=" ", questions=["?"], meeting=True)
     with pytest.raises(weekly.Invalid):
-        weekly.publish(conn, cos, narrative="x", questions=[f"q{i}" for i in range(6)])
+        weekly.publish(conn, cos, narrative="x", questions=[f"q{i}" for i in range(6)], meeting=True)
     pub = weekly.publish(conn, cos, narrative="## Co se stalo\nKlidný týden.", decisions=["Najmout grafika?"],
                          questions=["Co se povedlo?", "Co nešlo?", "Priority na příští týden?"],
-                         headline="Klidný týden, dva úkoly po termínu.")
+                         headline="Klidný týden, dva úkoly po termínu.", meeting=True)
     assert pub["status"] == "meeting" and pub["url"] == f"/reports/{week}"
     opening = _weekly_messages(conn)[-1]
     assert opening.startswith(f"Davide, týdenní report je hotový: [{week}](/reports/{week}). "
@@ -287,7 +287,7 @@ def test_the_whole_meeting(conn, me, tmp_path):
     assert "1. Co se povedlo?" in opening and "3. Priority na příští týden?" in opening and "@David" in opening
     assert chat.inbox_unread(conn, me.actor_id) >= 1  # the owner is pinged
     assert tasks.get(conn, me, t["id"])["status"] == "waiting"  # no tokens while waiting
-    assert weekly.publish(conn, cos, narrative="## Co se stalo\nOprava.", questions=["x"])["updated"]
+    assert weekly.publish(conn, cos, narrative="## Co se stalo\nOprava.", questions=["x"], meeting=True)["updated"]
     assert len(_weekly_messages(conn)) == 1  # an update does not ping twice
 
     # Someone else may not run the meeting.
@@ -318,6 +318,10 @@ def test_the_whole_meeting(conn, me, tmp_path):
 
     # Goals and next week's tasks, then close.
     g = goals.create(conn, cos, {"title": "Platby v e-shopu", "target": "50 plateb do 31. 3.", "owner": "David"})
+    assert g["status"] == "proposed"  # the Chief of Staff proposes; the CEO (or the owner) confirms
+    with pytest.raises(goals.Invalid):
+        goals.update(conn, cos, g["id"], {"status": "active"})
+    goals.update(conn, me, g["id"], {"status": "active"})
     # (agents never give the owner a task: pos.tasks.refuse_owner_assignee; the CoS follows it up)
     nt = tasks.create(conn, cos, {"title": "Napojit platební bránu", "status": "next",
                                   "assignee": {"type": "agent", "id": cos.actor_id},
@@ -348,7 +352,7 @@ def _open_meeting(conn, me, cos):
     out = weekly.weekly_job(conn)
     t = tasks.parse_id(out["task"])
     tasks.claim(conn, cos, t)
-    weekly.publish(conn, cos, narrative="## Co se stalo\nNic.", questions=["Priority?"])
+    weekly.publish(conn, cos, narrative="## Co se stalo\nNic.", questions=["Priority?"], meeting=True)
     return out["week"], t
 
 
@@ -430,7 +434,57 @@ def test_meeting_tools_over_mcp(tmp_path):
     ])
     assert [e for e, _ in res] == [False, False, False, False], res
     assert res[0][1]["week"] == out["week"] and res[1][1]["title"] == "Platby"
-    assert res[2][1]["status"] == "meeting" and res[3][1]["status"] == "meeting"
+    assert res[1][1]["status"] == "proposed"  # the Chief of Staff's goal waits for the CEO
+    # the review does not wait for the owner: published, no meeting, his questions kept in the report only
+    assert res[2][1]["status"] == "published" and res[3][1]["status"] == "published"
     # Another agent cannot publish or close the meeting.
     refused = run(actors.assistant_id(connect(db)), [("meeting_close", {"notes": "x", "summary": "y"})])
     assert refused[0][0] and "Chief of Staff" in str(refused[0][1])
+
+
+def test_the_review_publishes_with_one_decision_card_and_never_waits_for_the_owner(conn, me, tmp_path):
+    """Prod 2026-10: both weekly meetings closed without the owner; he never answers open strategy
+    questions in #weekly but answers direct asks 31/31. Now: the report, the link, at most one card."""
+    from pos import asks, needs_me
+
+    cos = _cos(conn, me, tmp_path)
+    out = weekly.weekly_job(conn)
+    t = tasks.parse_id(out["task"])
+    tasks.claim(conn, cos, t)
+    with pytest.raises(weekly.Invalid):  # a card needs options and a recommendation
+        weekly.publish(conn, cos, narrative="## Co se stalo\nx", decision={"title": "Cena", "why": "x"})
+    pub = weekly.publish(conn, cos, narrative="## Co se stalo\nPilot běží.", headline="Pilot Knihy běží.",
+                         questions=["Jaká je strategie?"],
+                         decision={"title": "Cena Knihy pro pilot", "why": "Bez ceny nejde prodávat.",
+                                   "options": ["490 Kč", "690 Kč", "990 Kč"], "recommendation": "690 Kč"})
+    assert pub["status"] == "published" and pub["card"]["ref"].startswith("T-")
+    msg = _weekly_messages(conn)[-1]
+    assert pub["card"]["ref"] in msg and "?" not in msg.split("\n", 1)[1]  # no open questions to him
+    assert tasks.get(conn, me, t)["status"] != "waiting"  # nothing waits for him
+    card = next(i for i in needs_me.collect(conn, me)["items"] if i["kind"] == "ask")
+    assert card["options"] == ["490 Kč", "690 Kč", "990 Kč"] and card["recommendation"] == "690 Kč"
+    assert card["default_at"]
+    asks.choose(conn, me, tasks.parse_id(pub["card"]["ref"]), "490 Kč")
+    assert tasks.get(conn, me, tasks.parse_id(pub["card"]["ref"]))["status"] == "done"
+    # his message in #weekly without a meeting still reaches the Chief of Staff
+    chat.send(conn, me, weekly.channel_id(conn), "Dobrý report.")
+    assert conn.execute("SELECT 1 FROM tasks WHERE assignee_id = ? AND title LIKE 'Chat: answer%'",
+                        (cos.actor_id,)).fetchone()
+
+
+def test_goals_steer_with_numbers_the_ceo_sets_them_and_the_owner_may_veto(conn, me, tmp_path):
+    ceo = agents.create_agent(conn, me, name="CEO", purpose="ceo", lifetime="long_lived", data_dir=tmp_path,
+                              permissions=["tasks:read", "tasks:write"])["agent"]["id"]
+    conn.execute("UPDATE actors SET role = 'ceo' WHERE id = ?", (ceo,))
+    g = goals.create(conn, Ctx(ceo), {"title": "Kniha: placení zákazníci", "metric": "placení zákazníci",
+                                     "baseline": 0, "current": 2, "target_value": 10, "owner": "CEO",
+                                     "due": "2026-12-31"})
+    assert g["status"] == "active" and g["confirmed_by"] == ceo  # the CEO sets it itself
+    assert g["progress_effective"] == 20 and g["current_at"]
+    g = goals.update(conn, Ctx(ceo), g["id"], {"current": 5})
+    assert g["progress_effective"] == 50
+    assert goals.brief(g)["current"] == 5
+    with pytest.raises(goals.Invalid):
+        goals.veto(conn, Ctx(ceo), g["id"], "ne")
+    v = goals.veto(conn, me, g["id"], "Teď ne, nejdřív Obseum AI.")
+    assert v["status"] == "dropped" and v["veto_note"].startswith("Teď ne")
