@@ -23,6 +23,7 @@ Environment:
     WORKER_CLAUDE_DISALLOWED  tools hidden from a Claude agent (saves their definitions on every turn)
     WORKER_CLAUDE_EFFORT     Claude effort level (low, medium, high, xhigh, max)
     WORKER_CLAUDE_MAX_USD    Claude cost cap per run (--max-budget-usd)
+    WORKER_CLAUDE_CACHE_TTL  prompt-cache TTL (5m or 1h) when neither the profile nor PersonalOS sets one
     WORKER_TRIAGE, WORKER_TRIAGE_MODEL, WORKER_TRIAGE_REPOS, WORKER_CLAUDE_MAX_USD_S
                      the cheap check before a full run and effort/cap by task size (pos_worker.triage)
     WORKER_MAX_STEPS     stop a run after this many completed steps and hand the task back (0 = no cap)
@@ -132,6 +133,20 @@ def tool_count(shown: list[str], me: dict, servers: dict) -> int:
     estimate for every other server."""
     pos = len(shown) if shown else len(me.get("pos_tools") or me.get("all_pos_tools") or []) or 100
     return pos + EXTRA_SERVER_TOOLS * len([n for n in servers if n != "pos"])
+
+
+CACHE_TTLS = ("5m", "1h")
+
+
+def cache_env(me: dict) -> dict[str, str]:
+    """The prompt-cache TTL for the CLI (CLAUDE_CODE_PROMPT_CACHE_TTL, Claude Code >= 2.1): the agent's
+    profile "cache_ttl", else what PersonalOS chose by its run cadence (pos.cache_policy, /me
+    cache_ttl), else WORKER_CLAUDE_CACHE_TTL; none of them: the CLI's own default."""
+    for value in ((me.get("profile") or {}).get("cache_ttl"), me.get("cache_ttl"),
+                  os.environ.get("WORKER_CLAUDE_CACHE_TTL")):
+        if value in CACHE_TTLS:
+            return {"CLAUDE_CODE_PROMPT_CACHE_TTL": value}
+    return {}
 
 
 def run_cap(worker_cap: float | None, agent_cap: float | None) -> float | None:
@@ -261,7 +276,7 @@ def main() -> None:
                 disallowed_tools=[f"mcp__pos__{t}" for t in hidden] + disallowed,
                 # The command guard (pos_worker.command_hook) auto-allows safe engineering commands only
                 # inside this folder, the agent's own worktree; git commits carry the agent's own name.
-                env={"POS_AGENT_WORKDIR": where, **git_identity(me),
+                env={"POS_AGENT_WORKDIR": where, **git_identity(me), **cache_env(me),
                      **({"POS_RUN_ID": str(me["run_id"])} if me.get("run_id") else {})},
                 # By the task's size when the check gave one (S: low effort, a smaller cap).
                 # The cap is the lower of this worker's and the agent's max USD per run (pos.access).

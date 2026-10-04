@@ -492,6 +492,11 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
             else:
                 changes["status"] = "review"
     handed_in = changes.get("status") == "review" and row["status"] != "review"
+    gate = None
+    if handed_in:  # an agent's done-claim carries evidence (pos.evidence); before the review policy reads it
+        from . import evidence
+
+        gate = evidence.on_hand_in(conn, ctx, row, changes.get("progress_note"))
     triaged = None
     policy = None
     if handed_in and "reviewer_id" not in extra:
@@ -559,8 +564,8 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         hiring.probe_passed(conn, row)  # a new hire's test run passed: now it is "ready"
     if handed_in and not auto_accepted:
         _ask_reviewer(conn, ctx, out)
-    if handed_in and nudge:
-        out["platform_note"] = nudge
+    if handed_in and (nudge or gate):
+        out["platform_note"] = " ".join(x for x in (gate, nudge) if x)
     if auto_accepted:
         from .agents import retire_if_done
 

@@ -32,3 +32,5 @@ def isolated_codex_home(tmp_path, monkeypatch):
     monkeypatch.delenv("POS_WORKER_KEYS_DIR", raising=False)
     # New mail is routed at once here; test_support.py turns the customer-issue intake on.
     monkeypatch.setenv("POS_SUPPORT_INTAKE", "0")
+    # Hand-in evidence (pos.evidence) never runs git or HTTP here; test_evidence.py turns it on.
+    monkeypatch.setenv("POS_EVIDENCE_CHECKS", "0")

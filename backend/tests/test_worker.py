@@ -739,6 +739,34 @@ def test_a_clear_small_task_runs_at_low_effort_and_the_check_is_paid_for(setup, 
     assert worker.step() == "ok"
 
 
+def test_a_run_sized_by_personalos_runs_at_low_effort(setup, fake_claude, tmp_path, monkeypatch):
+    """A routine review packet comes with run_size S (pos.review_packet): low effort, no triage hint."""
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    client, conn, owner, agent_id, key = setup
+    from pos import tasks
+    from pos_worker import triage
+
+    tasks.create(conn, owner, {"title": "Review: digest", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    seen = {}
+    worker = worker_for(client, key, fake_claude, tmp_path)
+    make, nxt = worker.new_session, worker.client.next_work
+
+    def new_session(engine, model, me):
+        seen.update(triage.size_settings(me.get("size"), "medium", 6.0), hint=me.get("size_hint"))
+        return make(engine, model, me)
+
+    def next_work(wait):
+        out = nxt(wait)
+        if out.get("task"):
+            out["task"]["run_size"] = "S"
+        return out
+
+    worker.new_session, worker.client.next_work = new_session, next_work
+    assert worker.step() == "ok"
+    assert seen["effort"] == "low" and seen["hint"] is None
+
+
 FAKE_HAIKU = r'''
 import json, sys
 args = sys.argv[1:]

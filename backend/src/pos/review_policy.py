@@ -210,6 +210,9 @@ def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
     from . import schedules, verification
 
     high = is_high(conn, row, note)
+    from . import evidence
+
+    high = high or evidence.flagged(conn, row["id"])  # a done-claim without evidence: never auto-accepted
     verified = verification.has_line(note)
     code = is_code(conn, row, note)
     summary = len((note or "").strip()) >= MIN_SUMMARY
@@ -235,7 +238,71 @@ def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
         qa = qa_id(conn)
         if qa and qa != row["assignee_id"]:
             return Decision("code" if not high else "high", "route", qa, "code goes to the QA Reviewer")
+    if not row["reviewer_id"]:
+        other = ceo_offload_if_default(conn, row, note)
+        if other:
+            return Decision("high" if high else "normal", "route", other,
+                            "the CEO reviews only owner-facing and strategic results")
     return Decision("high" if high else "normal", "keep", reason=high)
+
+
+# Who reviews instead of the CEO a result that is neither owner-facing nor strategic: the assignee's
+# own lead (below the CEO), else an operations reviewer (the COO), else the QA Reviewer. Prod
+# 2026-10-04: 22 of the first 40 review runs were the CEO's (it created the tasks it delegated, so
+# pos.tasks.reviewer_of made it the reviewer of all of them), ~$0.21 each and the slowest queue.
+GENERAL_REVIEWER_ROLES = ("project_manager",)
+STRATEGIC_TOPICS = {"board", "strategy", "strategie", "goals", "cile", "cíle"}
+
+
+def owner_facing_or_strategic(conn: sqlite3.Connection, row, note: str | None) -> str:
+    """Why the CEO itself reviews this result ('' when someone else can): what needs_ceo names
+    (plans, money, customers, outbound, the owner's own request, a decision asked), the owner's
+    request in the wider sense (pos.business.owner_request), or a board/strategy topic."""
+    why = needs_ceo(conn, row, note)
+    if why:
+        return why
+    if (row["topic"] or "").lower() in STRATEGIC_TOPICS:
+        return f"topic {row['topic']}"
+    from .business import owner_request
+
+    try:
+        if owner_request(conn, row):
+            return "the owner's request"
+    except Exception:  # noqa: BLE001 - unsure: the CEO keeps it
+        return "unknown"
+    return ""
+
+
+def ceo_offload(conn: sqlite3.Connection, row) -> int | None:
+    """The reviewer instead of the CEO: the assignee's lead below the CEO, a general reviewer, the QA
+    Reviewer; None when there is nobody (the CEO keeps it)."""
+    from .business import _can_review, ceo_id
+
+    ceo, assignee = ceo_id(conn), row["assignee_id"]
+    lead = team_lead(conn, assignee)
+    if lead and lead not in (ceo, assignee):
+        return lead
+    for role in GENERAL_REVIEWER_ROLES:
+        r = conn.execute("SELECT id FROM actors WHERE role = ? AND archived_at IS NULL ORDER BY id LIMIT 1",
+                         (role,)).fetchone()
+        if r and r["id"] not in (ceo, assignee) and _can_review(conn, r["id"]):
+            return r["id"]
+    qa = qa_id(conn)
+    return qa if qa and qa not in (ceo, assignee) else None
+
+
+def ceo_offload_if_default(conn: sqlite3.Connection, row, note: str | None) -> int | None:
+    """Another reviewer when the default one (pos.tasks.reviewer_of) is the CEO and the result is
+    neither owner-facing nor strategic; else None."""
+    from .business import ceo_id
+    from .tasks import reviewer_of
+
+    ceo = ceo_id(conn)
+    if not ceo or row["assignee_id"] == ceo or reviewer_of(conn, row) != ceo:
+        return None
+    if owner_facing_or_strategic(conn, row, note):
+        return None
+    return ceo_offload(conn, row)
 
 
 def needs_ceo(conn: sqlite3.Connection, row, note: str | None) -> str:
@@ -275,6 +342,8 @@ def owner_stand_in(conn: sqlite3.Connection, row, note: str | None) -> int | Non
     from .business import _can_review, ceo_id
 
     target = None if needs_ceo(conn, row, note) else team_lead(conn, row["assignee_id"])
+    if target and target == ceo_id(conn) and not owner_facing_or_strategic(conn, row, note):
+        target = ceo_offload(conn, row) or target  # the CEO only for owner-facing and strategic results
     target = target or ceo_id(conn)
     if not target or target == row["assignee_id"] or not _can_review(conn, target):
         return None
@@ -394,7 +463,8 @@ def measure(conn: sqlite3.Connection, since: str, until: str) -> dict:
             out["reasons"][d.reason] = out["reasons"].get(d.reason, 0) + 1
             continue
         if d.action == "route":
-            out["after"]["qa"] += 1
+            out["after"]["qa" if d.reviewer_id == qa_id(conn) else
+                         "team_lead" if d.reviewer_id == team_lead(conn, row.get("assignee_id")) else "other"] += 1
             continue
         # What hand-in gave it: an explicit reviewer stays, the owner's goes to its stand-in.
         reviewer = versions[0].get("reviewer_id")

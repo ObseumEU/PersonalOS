@@ -48,7 +48,8 @@ INTERNAL_SOURCES = {"github", "file", "meeting", "meetings", "personalos"}
 SKIP_ROLES = {"access_manager", "monitor", "deployer", "automation"}
 # Task sources that are the system talking (reviews, alerts, invoices import): no pre-load.
 SYSTEM_SOURCES = ("access", "event:sentinel", "event:grafana", "sentinel", "grafana", "system", "deployer",
-                  "invoices", "scheduler")
+                  "invoices", "scheduler",
+                  "review:")  # a review run gets its packet (pos.review_packet), not passages
 MIN_SHARED = 2          # content words a passage must share with the task's query
 MAX_POINTERS = 3        # external passages listed (id only)
 _WORD_RE = re.compile(r"[^\W\d_]{3,}|\b[A-Z][A-Z0-9]+\b", re.UNICODE)

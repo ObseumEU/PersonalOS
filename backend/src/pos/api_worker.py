@@ -88,7 +88,7 @@ def _state(conn: sqlite3.Connection, actor_id: int, run_id: int | None = None) -
 
 @router.get("/me")
 def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
-    from . import business, verification
+    from . import business, cache_policy, evidence, verification
     from .guard import prompt as guard_prompt
 
     row = actors.get(conn, ctx.actor_id)
@@ -104,7 +104,10 @@ def me(conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
         # pool runs many agents in one container, so each one's settings come from here, not the env.
         "profile": agents_code.worker_profile(row["name"], role=row["role"]),
         # Platform notes for its prompt (pos.business: e.g. contacting the owner past the chain of command).
-        "nudges": business.nudges(conn, ctx.actor_id) + verification.nudges(conn, ctx.actor_id),
+        "nudges": business.nudges(conn, ctx.actor_id) + verification.nudges(conn, ctx.actor_id)
+        + evidence.nudges(conn, ctx.actor_id),
+        # The prompt-cache TTL by how often it runs (pos.cache_policy; agent.json "cache_ttl" wins).
+        "cache_ttl": cache_policy.ttl_for(conn, ctx.actor_id),
         **_state(conn, ctx.actor_id),
     }
 
@@ -168,6 +171,12 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             row = None
     if row:
         out["task"] = tasks.get(conn, ctx, row["id"])
+        if review_work.is_item(row):
+            # The reviewer decides from a packet built here (and similar small reviews in one run),
+            # instead of exploring the result itself (pos.review_packet).
+            from . import review_packet
+
+            out["task"] = review_packet.serve(conn, row, out["task"], live, (cutoff, None))
         # The owner asked for this himself: the worker allows the profile's higher step cap (max_steps_owner).
         out["task"]["owner_request"] = business.owner_request(conn, conn.execute(
             "SELECT * FROM tasks WHERE id = ?", (row["id"],)).fetchone())

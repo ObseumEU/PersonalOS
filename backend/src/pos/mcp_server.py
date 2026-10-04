@@ -71,6 +71,9 @@ Knowledge first: check the knowledge base before acting (a run starts with its p
 for the task) and cite the chunk ids you used (<doc>:c<n>) in your result.
 Verify before you hand in (tests for code, re-read the requirements for a document,
 open the URL for a web change) and end the result with "Ověřeno: <what you checked>".
+A result that says done (hotovo, nasazeno, odesláno, opraveno) carries evidence: the commit
+sha, the sent message's id, a URL that opens, a file id or the test output; goal numbers are
+quoted from goal_list (the goal's current value). Without it you get "Doložte …" back.
 A run that read outside content (mail, web, external knowledge) needs the Security
 Engineer's confirmation (security_confirm) before ha_ssh, door/alarm services,
 outbound sends, credential_http outside the LAN or payments.
@@ -565,7 +568,11 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             text = " ".join(x for x in (note or (rep and rep["takeaway"]),
                                         f"Result: {result_ref}" if result_ref else None) if x) or None
             tid = tasks.parse_id(task_id)
-            out = brief(tasks.complete(conn, c, tid, text))
+            from . import evidence
+
+            with evidence.extra_text(evidence.report_text(rep)):  # the report's numbers and links count too
+                done = tasks.complete(conn, c, tid, text)
+            out = brief(done) | ({"platform_note": done["platform_note"]} if done.get("platform_note") else {})
             if rep:
                 out["report"] = owner_report.submit(conn, c, tid, rep)
             return out

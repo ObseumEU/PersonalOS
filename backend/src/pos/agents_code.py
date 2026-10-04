@@ -271,7 +271,8 @@ def is_dormant(name: str) -> bool:
 # What agent.json "profile" may set for the agent's worker (pos_worker reads it from /api/worker/me);
 # it overrides the worker's environment for this agent only (the agent pool serves many agents).
 PROFILE_KEYS = {"pos_tools", "claude_tools", "claude_builtin", "claude_disallowed", "max_usd_run", "max_steps",
-                "max_steps_owner", "workdir"}
+                "max_steps_owner", "workdir",
+                "cache_ttl"}  # "5m" | "1h": overrides pos.cache_policy's choice by the run cadence
 WORKDIR_ROOTS = ("/work/", "/repos/")
 MIN_STEPS = 200      # a step cap below this stops real work (agents are autonomous, 2026-09-27)
 RUN_USD_SCALE = 5    # the worker's per-run USD cap, 5x the file

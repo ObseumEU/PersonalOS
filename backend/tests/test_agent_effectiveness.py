@@ -191,10 +191,11 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
     out = handed("Import z Home Assistant", "Import opraven jen zčásti, chyba u dvou senzorů trvá.",
                  source="event:gmail")
     assert out["status"] == "review" and out["reviewer_id"] == cto
-    # The work of the CEO's direct report: its lead is the CEO.
+    # The work of the CEO's direct report: its lead is the CEO, but the CEO reviews only owner-facing
+    # and strategic results (pos.review_policy.ceo_offload): a general reviewer takes it.
     t = _task(conn, owner, ids["Writer"], title="Článek o serverech", source="event:gmail")
     out = tasks.complete(conn, Ctx(ids["Writer"], via="mcp"), t["id"], "Článek má problém se zdroji, řeším.")
-    assert out["status"] == "review" and out["reviewer_id"] == ceo
+    assert out["status"] == "review" and out["reviewer_id"] not in (ceo, owner.actor_id)
     # 5. A plan, money, something waiting for an approval: the CEO.
     out = handed("Plán automatizace na Q4", "Tři varianty, doporučuji B.", source="event:gmail")
     assert out["status"] == "review" and out["reviewer_id"] == ceo
@@ -218,8 +219,9 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
     today = datetime.now(timezone.utc).date().isoformat()
     m = review_policy.measure(conn, today, today)
     assert m["handed_in"] == 12, m
-    assert m["after"] == {"auto_accept": 4, "qa": 1, "team_lead": 3, "ceo": 3, "owner": 0, "other": 1}, m
-    assert m["after"]["ceo"] == m["ceo_before"] == 3  # the head's work, the plan, the invoice
+    # The head's work goes to a general reviewer now (pos.review_policy.ceo_offload): "other".
+    assert m["after"] == {"auto_accept": 4, "qa": 1, "team_lead": 3, "ceo": 2, "owner": 0, "other": 2}, m
+    assert m["after"]["ceo"] == m["ceo_before"] == 2  # the plan, the invoice
 
 
 def test_the_sweep_moves_the_ceos_stand_in_reviews_to_the_team_lead(env):
@@ -359,7 +361,7 @@ def test_a_hand_in_without_a_verification_line_gets_a_nudge(env):
     assert out["status"] == "review" and "verification line" in out["platform_note"]
     assert verification.nudges(conn, w)
     t2 = _task(conn, Ctx(ids["CEO"]), w, title="Analýza trhu", topic="obchod")
-    out = tasks.complete(conn, Ctx(w, via="mcp"), t2["id"], "Hotovo.\n\n**Ověřeno:** zadání znovu přečteno, 3/3 body")
+    out = tasks.complete(conn, Ctx(w, via="mcp"), t2["id"], "Analýza sepsána.\n\n**Ověřeno:** zadání znovu přečteno, 3/3 body")
     assert "platform_note" not in out
     assert verification.has_line("- Verified: opened https://x.cz, 200") and not verification.has_line("ověřím zítra")
     assert verification.tests_passed("12 passed") and not verification.tests_passed("11 passed, 1 failed")

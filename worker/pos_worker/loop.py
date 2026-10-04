@@ -307,6 +307,9 @@ class Worker:
         if check and check.get("size"):
             me["size"] = check["size"]  # effort and cost cap follow it (new_session)
             me["size_hint"] = f"A first check sized this task {check['size']}; keep to that size's budget."
+        elif task.get("run_size") in ("S", "M", "L"):
+            # PersonalOS sized the run itself (a routine review packet: pos.review_packet): low effort.
+            me["size"] = task["run_size"]
         claude = engine == "claude"
         if claude:
             me["stable_prompt"] = stable_prompt(me)
