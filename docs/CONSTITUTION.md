@@ -50,7 +50,8 @@ vrstvy bez souhlasu jejich vlastníka.
 
 Když pravidlo nejde jednoznačně použít, zvol opatrnější cestu: nic
 neodesílej, nic nemaž, udělej rollback, pokud jsi něco pokazil, a vytvoř úkol
-pro majitele s popisem situace.
+pro svého vedoucího s popisem situace. K majiteli to posune jen CEO, když je
+to opravdu potřeba.
 
 ## Vynucení
 

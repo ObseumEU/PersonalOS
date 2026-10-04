@@ -36,7 +36,7 @@ GUARDRAILS = f"""\
   for the owner.
 - Every run is audited: say which task you are working on and why you act.
 - When unsure, take the safer path: roll back what you broke and create a
-  task for the owner.
+  task for your lead (only the CEO takes things to the owner).
 """
 
 
