@@ -540,9 +540,10 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
                         "handoff_task", "schedule_create", "check_inbox", "chat_send", "chat_read"],
           "guardrails": "RULES", "feedback": [{"kind": "praise", "body": "quick"}]}
     stable = stable_prompt(me)
-    # Its instructions say how to report, chat and hand off; it sees no schedule tool.
-    assert "schedule_create" not in stable and "team chat" not in stable and "you need not call" not in stable
-    assert "request_outbound" in stable and "definition_of_done" in stable
+    # One shared "How to work" block; a line whose tool the agent does not see is left out.
+    assert "schedule_create" not in stable and "memory_update" not in stable and stable.count("# How to work") == 1
+    assert "request_outbound" in stable and "definition_of_done" in stable and "Not due yet" not in stable
+    assert "Outcome first" in stable and "no claim_task" in stable and "Ověřeno:" in stable
     a = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [], include_guardrails=False, include_stable=False)
     b = build_task_prompt({**me, "feedback": []}, {"ref": "T-002", "title": "Two"}, [], include_guardrails=False,
                           include_stable=False)
@@ -551,10 +552,28 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
     assert stable_prompt({**me, "task_ref": "T-002", "feedback": []}) == stable  # byte-stable across runs
     codex = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [])
     assert codex.startswith("RULES\n\n---\n\n# You are Software Engineer") and "# Your task T-001" in codex
-    # An agent without its own guidance keeps the generic lines it has tools for.
+    # The lines it has tools for, and nothing more.
     monkeypatch.delenv("WORKER_POS_TOOLS")
     plain = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["chat_send", "schedule_create"]})
-    assert "team chat" in plain and "schedule_create" in plain and "handoff_task" not in plain
+    assert "Team chat" in plain and "schedule_create" in plain and "handoff_task" not in plain
+    assert "Not due yet" not in plain and "Autonomy" in plain
+    due = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["update_task"]})
+    assert "Not due yet" in due and "do_date" in due
+
+
+def test_the_browser_and_files_guides_go_only_to_roles_that_use_them():
+    from pos_worker.prompt import files_guide, web_guide
+
+    tools = ["sandbox_exec", "sandbox_share", "file_create", "file_share"]
+    perms = ["tool:browser"]
+    cfo = {"instructions": "The weekly cost chart: made in the sandbox, `sandbox_share`.", "pos_tools": tools,
+           "permissions": perms}
+    legal = {"instructions": "You review contracts.", "pos_tools": tools, "permissions": perms}
+    assert files_guide(cfo) and not web_guide(cfo)
+    assert not files_guide(legal) and not web_guide(legal)
+    assert web_guide({**legal, "instructions": "Verify the page in the browser."})
+    assert web_guide(legal, role_only=False)  # the browser eval
+    assert files_guide({"pos_tools": tools}) and web_guide({"permissions": perms})  # no instructions: by its tools
 
 
 # ------------------------------------------------------------------ triage, size and back-off

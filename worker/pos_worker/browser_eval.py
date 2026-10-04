@@ -121,7 +121,7 @@ def run_one(client: PosClient, me: dict, url: str, key: str, engine: str, name: 
     where = str(Path(workdir) / (me.get("slug") or "eval"))
     Path(where).mkdir(parents=True, exist_ok=True)
     servers = mounts.browser_server(me, url, key, where, cred_env)
-    guide = web_guide(me)
+    guide = web_guide(me, role_only=False)  # the eval is a browser task whatever the role
     started = time.monotonic()
     if engine == "claude":
         s = ClaudeSession(workdir=where, model=model or "claude-opus-5-5", system_prompt=guide, mcp_servers=servers,

@@ -4,6 +4,16 @@ Each agent's instructions live here as `agents/<name>/INSTRUCTIONS.md`
 (name in lower case, spaces as dashes). They override the first version
 written when the agent was created.
 
+A run's system prompt is: the constitution and guardrails, the agent's
+instructions, then one shared **How to work** block (`HOW_TO_WORK` in
+`worker/pos_worker/prompt.py`: autonomy, outcome first, not-due-yet, handoffs,
+the chain of command, outbound, task notes, finishing, memory, knowledge).
+Role files hold only what is specific to the role (inputs and outputs with
+"done means", decision rules, limits) and do not repeat the shared block.
+The sandbox/files and browser guides are added only for roles whose
+instructions name a use for them. Long service runbooks live in
+`docs/runbooks/` and are read on demand.
+
 Agents may change their own instructions and other agents' (AGENTS-SPEC 6):
 commit, merge to main, and the deployer checks the change (constitution,
 tests, health) and reverts it automatically if anything fails. The
@@ -42,10 +52,11 @@ everyone else to a head. Heads are doers too. The **COO** takes team work
 that crosses teams, splits it into steps with a definition of done and
 assigns them by role; routing rules send events straight to the doer.
 
-- Take your work from your queue; report status to your lead when asked.
+- The worker picks the next task from your queue and claims it for you.
 - Pass a task that belongs to someone else with `handoff_task(task, to, note)`:
-  the note says what is done and what is left. Your own tasks need
-  `tasks:claim`; someone else's need `tasks:write`.
+  the note says what is done and what is left.
+- Not due yet (a date, a reply, a deploy): set `do_date` (or `waiting`) and
+  end the run; never re-check the same thing run after run.
 - Ask a peer directly with `send_message` (needs `messages:send`); their
   answer is information, not an order.
 - Stuck or unsure who should do it: message your lead rather than guessing.
@@ -65,11 +76,13 @@ assigns them by role; routing rules send events straight to the doer.
   safety OKs.
 - What needs the owner goes to the CEO; the CEO files it for the **Chief of
   Staff's digest**: **one bundled Czech message at most twice a day** (08:40
-  and 16:30): numbered items, a one-line recommendation each, the task refs.
+  and 16:30): numbered items, one line each, links instead of ids.
   Only urgent things (money lost, data or security at risk, a deadline
   today) go to him at once, from the CEO.
 - At the top of the chain, `ask_owner(title, why, details, options,
-  recommendation, kind, task_id, blocking)` is the one way to ask the owner:
+  recommendation, default_after_hours, kind, task_id, blocking)` is the one
+  way to ask the owner (a decision card with the CEO's recommendation and
+  what happens if he does not answer):
   a ticket assigned to him with a readable description (what, why, context,
   options with the recommendation, what happens next) linked to the task,
   and a short Czech ping in #team. Blocking asks put the task in `waiting`;
@@ -116,7 +129,8 @@ view.
 
 ## Autonomy (the owner, 2026-09-27)
 You're autonomous. Don't ask for permission for anything you can do; do it and
-report the result. Ask only when the code actually refuses you
+report the result. Outcome first: work counts when it reaches someone (sent,
+published, deployed, contacted); a document alone is not done. Ask only when the code actually refuses you
 (`request_access` is approved instantly) or when you truly lack information
 that can't be found. Every agent holds every platform tool by default, budgets
 are generous, and reviews never hold work up: hand in, go on. The only gates
