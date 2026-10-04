@@ -27,13 +27,23 @@ from .core import Ctx
 
 DECISIONS = [
     {
+        # The recommendation is the Kniha Lead's, from the record (not a guess): plan/10-decision-log.md
+        # 2026-10-01 "Pracovní cena pilotu" (T-244) and the package plan/13-balik-znacka-cena-garance.md
+        # (T-282), with the Hormozi reasoning cited there.
         "topic": "owner-decision kniha-cena-pilotu",
         "title": "Cena Knihy pro placený pilot",
         "why": "Bez ceny nelze pilot prodávat; balík značka + cena + garance čeká od 29. 9. (T-282).",
-        "details": ("Kniha Lead připravil balík (plan/13-balik-znacka-cena-garance.md, T-282) se dvěma cenami. "
-                    "Do rozhodnutí oslovení i texty běží bez ceny (T-246, T-507)."),
-        "options": ["1 990 Kč za knihu v pilotu", "2 490 Kč za knihu v pilotu"],
-        "recommendation": "1 990 Kč za knihu v pilotu",
+        "details": ("Návrh Kniha Leada (decision log Knihy 1. 10., T-244; balík plan/13, T-282): placený pilot "
+                    "pro 10 rodin, rodiny 1–5 za 1 990 Kč (−50 % z plné ceny 3 990 Kč), rodiny 6–10 za 2 490 Kč, "
+                    "poté zakladatelská cena 3 490 Kč; jen jádro, bez bonusů; povinná zpětná vazba; podmíněná "
+                    "garance (vrácení peněz, když vypravěč 60 dní neodpoví nebo rodina neschválí náhled ani po "
+                    "2 kolech). Důvod (Hormozi): sleva s pravdivým důvodem a zdražování po krocích, placený "
+                    "pilot je skutečný test poptávky; 1 990 Kč ≈ 1 645 Kč bez DPH je nad variabilními náklady "
+                    "≈ 1 195 Kč. Původní plán (plan/02) měl rodiny 1–5 zdarma. Do rozhodnutí oslovení běží jen "
+                    "s nezávazným „kolem 2 000 Kč“ (T-246, T-507)."),
+        "options": ["Návrh Kniha Leada: rodiny 1–5 za 1 990 Kč, 6–10 za 2 490 Kč, pak 3 490 Kč",
+                    "Původní plán: rodiny 1–5 zdarma, pak 3 490 Kč"],
+        "recommendation": "Návrh Kniha Leada: rodiny 1–5 za 1 990 Kč, 6–10 za 2 490 Kč, pak 3 490 Kč",
         "default_after_hours": 0,  # a price binds customers: only his click
         "source": 282,
     },
