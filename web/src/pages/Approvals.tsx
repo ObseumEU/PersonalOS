@@ -2,6 +2,7 @@ import { Check, X } from "lucide-react";
 import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState } from "react";
 import { type Approval, agentsApi } from "../agentsApi";
+import { outboundApi } from "../outboundApi";
 import { ActorChip } from "../components/agents/bits";
 import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
@@ -27,7 +28,9 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
     }
   }
   const shot = typeof a.details?.screenshot === "string" ? (a.details.screenshot as string) : null;
-  const details = Object.entries(a.details ?? {}).filter(([k]) => k !== "screenshot");
+  const details = Object.entries(a.details ?? {}).filter(
+    ([k]) => k !== "screenshot" && !(typeof a.details?.text === "string" && (k === "payload" || k === "image_url")),
+  );
   const result = a.result;
   return (
     <div className="panel fade-in flex min-w-0 flex-col gap-3 p-4">
@@ -80,6 +83,16 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
           {result.owner_task ? t("appr.by_hand", { task: result.owner_task }) : ""}
           {result.error ? ` · ${result.error}` : ""}
         </span>
+      )}
+      {a.action === "linkedin.post" && result?.status === "ready_to_publish" && (
+        <button
+          className="btn-accent self-start"
+          onClick={() =>
+            outboundApi.publishLinkedIn(a.id).then(onDone, (e) => setError(e instanceof Error ? e.message : String(e)))
+          }
+        >
+          {t("outbound.linkedin_publish")}
+        </button>
       )}
       {error && <span className="text-xs break-words text-red-400">{error}</span>}
     </div>

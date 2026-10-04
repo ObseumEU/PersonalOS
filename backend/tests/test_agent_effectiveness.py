@@ -432,7 +432,13 @@ def test_a_gmail_draft_in_a_tainted_run_is_not_held_but_a_send_is(env):
     taint.check(conn, c, "credential_http", {"method": "PUT",
                                              "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts/r-1"})
     assert conn.execute("SELECT COUNT(*) FROM taint_holds").fetchone()[0] == 0
-    # Real sends stay gated: email.send, sending a draft, Gmail's send API.
+    # email.send is a Gmail draft for the owner by default (2026-10-04): not a sink either.
+    taint.check(conn, c, "request_outbound", {"action": "email.send", "payload": {"to": "zakaznik@example.com"}})
+    assert conn.execute("SELECT COUNT(*) FROM taint_holds").fetchone()[0] == 0
+    # Real sends stay gated: email.send once the owner switched it to auto, sending a draft, Gmail's send API.
+    from pos import outbound_gmail
+
+    outbound_gmail.set_mode(conn, env["owner"], "auto")
     with pytest.raises(Forbidden, match="Security Engineer"):
         taint.check(conn, c, "request_outbound", {"action": "email.send", "payload": {"to": "zakaznik@example.com"}})
     with pytest.raises(Forbidden):

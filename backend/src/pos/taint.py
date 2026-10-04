@@ -191,6 +191,29 @@ def sink(tool: str, args: dict) -> tuple[str, str] | None:
     return None
 
 
+def _email_draft(conn: sqlite3.Connection, args: dict) -> bool:
+    if str(args.get("action") or "") != "email.send" or str(args.get("kind") or "") == "money":
+        return False
+    from . import outbound_gmail
+
+    return outbound_gmail.mode_for(conn, args.get("payload") or {}) == "draft"
+
+
+PRELOAD_REF = "knowledge pre-load"
+
+
+def send_trigger(conn: sqlite3.Connection, ctx: Ctx, taint: list[dict]) -> list[dict]:
+    """The outside content that can have triggered a send in this run: only this run's own reads (not the
+    2-hour fallback when the run is known), and not the knowledge pre-load (background passages the platform
+    put in the prompt; the agent's task came from a member). A task that came from outside content (mail,
+    GitHub, Discord) still counts: its reply goes through the Security Engineer's quick check, as built."""
+    runs = [ctx.run_id] if ctx.run_id else live_runs(conn, ctx.actor_id)
+    out = [t for t in taint if t.get("ref") != PRELOAD_REF]
+    if runs:
+        out = [t for t in out if t.get("run_id") in runs]
+    return out
+
+
 def _is_draft_action(action: str) -> bool:
     """email.draft, gmail.draft, gmail.create_draft …: a draft, not a send."""
     a = action.strip().lower()
@@ -215,7 +238,11 @@ def check(conn: sqlite3.Connection, ctx: Ctx, tool: str, args: dict) -> None:
     s = sink(tool, args)
     if s is None or not _is_agent(conn, ctx.actor_id):
         return
+    if tool == "request_outbound" and _email_draft(conn, args):
+        return  # e-mail goes out as a Gmail draft the owner sends himself: nothing leaves (like gmail_create_draft)
     taint = taint_of(conn, ctx.actor_id, ctx.run_id)
+    if tool == "request_outbound":
+        taint = send_trigger(conn, ctx, taint)
     if not taint:
         return
     target, why = s

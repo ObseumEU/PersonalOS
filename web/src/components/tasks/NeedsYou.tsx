@@ -219,7 +219,11 @@ export function ApprovalCard({
   const [rejecting, setRejecting] = useState(false);
   const [text, setText] = useState("");
   const { busy, act } = useAct(onDone);
-  const details = Object.entries(a.details ?? {}).filter(([, v]) => v !== null && v !== "");
+  const preview = typeof a.details?.text === "string";
+  const image = typeof a.details?.image_url === "string" ? (a.details.image_url as string) : null;
+  const details = Object.entries(a.details ?? {}).filter(
+    ([k, v]) => v !== null && v !== "" && !(preview && (k === "payload" || k === "image_url")),
+  );
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[15px] leading-snug">
@@ -236,6 +240,11 @@ export function ApprovalCard({
             </div>
           ))}
         </dl>
+      )}
+      {image && (
+        <a href={image} target="_blank" rel="noreferrer">
+          <img src={image} alt={String(a.details?.image_alt ?? "")} className="max-h-72 max-w-full rounded border border-line" />
+        </a>
       )}
       {rejecting ? (
         <form

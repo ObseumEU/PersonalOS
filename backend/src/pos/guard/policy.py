@@ -30,6 +30,8 @@ OUTBOUND_ACTIONS: set[str] = {
     "github.comment",
     "github.issue",
     "github.review",
+    "github.pr",
+    "linkedin.post",
     "payment",
     "web.post",
 }
@@ -101,6 +103,8 @@ OUTBOUND_KINDS = (ORDINARY, *APPROVAL_KINDS)
 
 # Actions that are money by what they are, whatever the payload says.
 MONEY_ACTIONS = frozenset({"payment"})
+# Actions that are the owner's personal channel by what they are (his LinkedIn profile).
+PERSONAL_CHANNEL_ACTIONS = frozenset({"linkedin.post"})
 # The owner's personal channels: posting there is always his call.
 PERSONAL_CHANNEL_HOSTS = (
     "linkedin.com", "lnkd.in", "facebook.com", "fb.com", "instagram.com", "x.com", "twitter.com", "threads.net",
@@ -114,7 +118,9 @@ PERSONAL_CHANNEL_WORDS = re.compile(
 _MONEY_TEXT = re.compile(
     r"\b(we(?:'ll| will)? (?:buy|purchase|pay for|order)|i(?:'ll| will)? (?:buy|purchase|pay for)|purchase order|"
     r"wire transfer|bank transfer|please charge|charge (?:our|my) card|subscribe (?:us|me) to|"
-    r"zaplatíme|uhradíme|koupíme|objednáváme|závazně objednáv\w*|převedeme|pošleme platbu|předplatíme)\b",
+    r"zaplatíme|uhradíme|koupíme|objednáváme|závazně objednáv\w*|převedeme|pošleme platbu|předplatíme|"
+    r"ads? budget|boost(?:ed)? post|sponsored post|placen\w* reklam\w*|sponzorovan\w* příspěv\w*|"
+    r"rozpočet na reklam\w*)\b",
     re.IGNORECASE)
 _COMMITMENT_TEXT = re.compile(
     r"\b(price quote|quotation|our (?:offer|quote|pricing proposal)|binding offer|contract|agreement|"
@@ -149,6 +155,8 @@ def classify_outbound(action: str, payload: dict | None = None, kind: str | None
         return kind, f"marked as {kind}: {APPROVAL_KINDS[kind]}"
     if action in MONEY_ACTIONS:
         return "money", f"{action} moves money"
+    if action in PERSONAL_CHANNEL_ACTIONS:
+        return "personal_channel", f"{action} posts on the owner's personal channel"
     target = str(payload.get("url") or payload.get("channel") or payload.get("platform") or "")
     host = _host(target) if target else ""
     if host and any(host == h or host.endswith("." + h) for h in PERSONAL_CHANNEL_HOSTS):

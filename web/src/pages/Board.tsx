@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import { approvalHref, taskHref } from "../taskSheet";
 import { type BoardCard, type BoardRow, agentsApi } from "../agentsApi";
 import { ActorChip, StatusDot } from "../components/agents/bits";
+import DraftTrustPanel from "../components/outbound/DraftTrustPanel";
 import { PageHeader, Panel } from "../components/ui";
 import { t } from "../i18n";
 import { useLiveReload } from "../liveStream";
@@ -55,6 +56,7 @@ export default function Board() {
           {t("work.board.approvals")}
         </Link>
       </div>
+      <DraftTrustPanel />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <Panel title={t("work.board.panel")} right={t("work.board.live")} className="min-w-0 xl:col-span-9" bodyClassName="overflow-x-auto">
           <div className="grid min-w-[760px] grid-cols-[200px_repeat(4,minmax(0,1fr))]">

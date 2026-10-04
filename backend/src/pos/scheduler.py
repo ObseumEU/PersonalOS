@@ -413,6 +413,22 @@ def outbound_digest(conn: sqlite3.Connection) -> dict:
     return outbound.digest(conn)
 
 
+def outbound_drafts(conn: sqlite3.Connection) -> dict:
+    """E-mail drafts the owner sent or discarded: close his item, record the outcome (pos.outbound_drafts)."""
+    from . import outbound_drafts as drafts
+
+    return drafts.sync(conn)
+
+
+def outbound_replies(conn: sqlite3.Connection) -> dict:
+    """Replies to what we sent (thread follow-ups) and the LinkedIn token's expiry."""
+    from . import outbound_ledger, outbound_linkedin
+
+    out = outbound_ledger.check_replies(conn)
+    out.update(outbound_linkedin.expiry_check(conn))
+    return {k: v for k, v in out.items() if v}
+
+
 def invoices_poll(conn: sqlite3.Connection) -> dict:
     from .invoices import service
 
@@ -517,6 +533,8 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "github_triage": github_triage,
     "weekly_publish_overdue": weekly_publish_overdue,
     "outbound_digest": outbound_digest,
+    "outbound_drafts": outbound_drafts,
+    "outbound_replies": outbound_replies,
     "invoices_poll": invoices_poll,
     "support_intake": support_intake,
     "agents_watch": agents_watch,
@@ -564,6 +582,9 @@ DEFAULT_JOBS = [
     ("Access: daily digest for the owner", "daily 18:00", "access_digest"),
     # Ú1: ordinary outbound goes out without approval; the CEO reviews everything sent, daily.
     ("Outbound: daily review of everything sent (CEO)", "daily 18:30", "outbound_digest"),
+    # E-mail goes out as drafts the owner sends himself: see what he sent or discarded, close his item.
+    ("Outbound: e-mail drafts the owner sent or discarded", "every 10m", "outbound_drafts"),
+    ("Outbound: replies to what we sent", "every 60m", "outbound_replies"),
     ("Access: weekly budget review (Access manager)", "weekly mon 07:30", "access_weekly"),
     # The Chief of Staff's weekly report and meeting (pos.weekly); the time is editable on Automations.
     ("Weekly company report and meeting (Asistent vedení)",

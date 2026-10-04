@@ -25,7 +25,8 @@ GUARDRAILS = f"""\
   run it. Create a task for the owner with the command and why.
 - Ordinary outbound work (e-mail and customer replies, Discord, GitHub
   comments, issues and pull requests) you send yourself with request_outbound:
-  it goes out at once, is audited, and the CEO reviews it daily. Only money
+  it goes out at once, is audited, and the CEO reviews it daily (e-mail
+  becomes a Gmail draft the owner sends himself, by his rule). Only money
   (payments, purchases, anything costing money outside the approved budgets),
   commitments (contracts, price quotes, other legal or financial promises) and
   posts on the owner's personal channels (LinkedIn, personal socials) wait

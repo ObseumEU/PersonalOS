@@ -970,32 +970,6 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                                             "ref": ref, "url": url, "author": author,
                                             "meta": {"labels": labels or []}})
 
-    @mcp.tool(description="Send something out of PersonalOS (constitution Ú1). Ordinary work (e-mail and "
-                          "customer replies, Discord, GitHub comments, issues and reviews) goes out at once, "
-                          "is audited and lands in the CEO's daily review: no approval, no waiting. Money "
-                          "(payment, purchase, anything costing money outside the approved budgets), commitments "
-                          "(contract, price quote, other legal or financial promise) and posts on the owner's "
-                          "personal channels (LinkedIn, personal socials) go to the owner's approval queue "
-                          "instead and run once approved. action: email.send {to, subject, body, in_reply_to?}, "
-                          "github.comment {repo, number, body}, github.issue {repo, title, body, labels?}, "
-                          "github.review {repo, number, body, event?}, discord.post {content}, payment {to, "
-                          "amount, reason}, web.post {url, content}. kind (optional): ordinary | money | "
-                          "commitment | personal_channel; say it when you know it. It only ever moves a send "
-                          "toward approval: rules that see money, a quote or a personal channel win. Returns "
-                          "status sent | not_configured | failed, or the approval (sent: false).")
-    def request_outbound(ctx: Context, action: str, payload: dict[str, Any], task_id: str | None = None,
-                         why: str = "", kind: str | None = None) -> dict:
-        from . import outbound
-
-        with session(ctx, "request_outbound", action=action, task_id=task_id) as (conn, c):
-            tid = tasks.parse_id(task_id) if task_id else None
-            if tid:
-                tasks.get(conn, c, tid)
-            from . import taint
-
-            taint.check(conn, c, "request_outbound", {"action": action, "payload": payload, "kind": kind})
-            return outbound.request(conn, c, action, payload, tid, why=why, kind=kind)
-
     @mcp.tool(description="The event routing rules (which events go to which member).")
     def list_routes(ctx: Context) -> list[dict]:
         from . import routing
@@ -1408,6 +1382,9 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     from .integrations import register_mcp_tools
 
     register_mcp_tools(mcp, session)
+    from .mcp import outbound as mcp_outbound
+
+    mcp_outbound.register(mcp, session)  # request_outbound, outbound_stats (pos.mcp.outbound)
     return mcp
 
 

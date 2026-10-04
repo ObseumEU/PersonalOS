@@ -88,6 +88,53 @@ def connectors(conn=Depends(get_db)):
     }
 
 
+@router.get("/outbound/policy")
+def outbound_policy(conn=Depends(get_db)):
+    """How e-mail goes out (draft for the owner | auto) and which mailboxes can draft or send."""
+    from . import outbound_gmail, outbound_linkedin
+
+    return {**outbound_gmail.policy(conn), "linkedin": outbound_linkedin.status()}
+
+
+class EmailPolicyIn(BaseModel):
+    mode: str
+    auto_domains: list[str] | None = None
+
+
+@router.put("/outbound/policy")
+def set_outbound_policy(body: EmailPolicyIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import outbound_gmail
+
+    try:
+        return outbound_gmail.set_mode(conn, ctx, body.mode, body.auto_domains)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.get("/outbound/stats")
+def outbound_stats(days: int = 7, conn=Depends(get_db)):
+    return outbound.outbound_stats(conn, max(1, min(days, 90)))
+
+
+@router.get("/outbound/drafts")
+def outbound_drafts_waiting(conn=Depends(get_db)):
+    from . import outbound_drafts
+
+    return {"waiting": outbound_drafts.waiting(conn), "trust": outbound_drafts.draft_trust(conn)}
+
+
+class DraftStateIn(BaseModel):
+    state: str
+
+
+@router.post("/outbound/drafts/{draft_id}")
+def mark_draft(draft_id: int, body: DraftStateIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Odesláno / Zahodit by hand (the sync sees it in Gmail anyway)."""
+    from . import outbound_drafts
+
+    return outbound_drafts.mark(conn, ctx, draft_id, body.state)
+
+
 @router.get("/routes")
 def list_routes(conn=Depends(get_db)):
     return routing.list_rules(conn)

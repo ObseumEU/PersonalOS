@@ -30,15 +30,34 @@ The same `(source, ref)` is only processed once.
 
 ## Outbound providers
 
-Each one is off until you give it credentials (in `.env`, restart `api`).
-While off, a sent (or approved) action becomes a task for you with the prepared
-content, so nothing is sent silently and nothing is lost.
+Every send goes through the ledger (`pos.outbound_ledger`): idempotent per (action, thread or target,
+content hash), rate-limited (per agent and day, 3 e-mails a day to one address, a company cap), audited
+(`outbound:<action>`), in the CEO's 18:30 digest and in `outbound_stats(days)` (`GET /api/outbound/stats`,
+MCP `outbound_stats`). `POS_OUTBOUND_DRY_RUN=1` builds and audits everything and sends nothing.
+A connector that is off returns `not_configured` (an approved item becomes a task for you).
 
-| Action | Settings |
+| Action | How it goes out | Settings |
+|---|---|---|
+| `email.send` | **A Gmail draft** in the right mailbox and thread with your signature; you send it from one "Čeká na tebe" item (grouped per `campaign`); the sync (`outbound_drafts`, every 10 min) sees you send or discard it and closes the item; "důvěra v koncepty" counts unchanged / edited / discarded. Nastavení → "E-maily odesílat automaticky" switches to `auto` (`outbound.email.mode`; per-domain exceptions `outbound.email.auto_domains`). | drafts: `POS_GMAIL_COMPOSE_TOKEN_<ADDRESS>` (`gmail.compose`); auto: `POS_GMAIL_SEND_TOKEN_<ADDRESS>` (`gmail.send`, one consent: `ssh -t -L 8767:127.0.0.1:8767 svr03 /opt/server/personalos/app/deploy/prod/gmail-send-login.sh <address>`; obtained for david.rosko@obseum.cz on 2026-10-04) |
+| `github.comment`, `github.issue`, `github.review`, `github.pr` | at once | `POS_GITHUB_TOKEN` |
+| `discord.post` | at once | `POS_DISCORD_WEBHOOK_URL` (a channel webhook: Discord → channel → Integrations → Webhooks) |
+| `linkedin.post` | **always your approval first**; the card shows the text and the image; then the Posts API, or "připraveno k publikaci" (your item with the text, and a "Publikovat na LinkedIn" button once connected) | see below |
+| `payment`, `web.post` | never automatic: approved, a task for you | – |
+| Kniha web | not an action: the `production` branch and the kniha-deployer | – |
+
+### LinkedIn (your steps, once)
+
+1. https://www.linkedin.com/developers/apps/new → app "PersonalOS" (company page: Obseum), logo, accept the terms.
+2. Products: add **Sign In with LinkedIn using OpenID Connect** and **Share on LinkedIn** (both self-serve).
+3. Auth → Authorized redirect URLs: `https://personalos.obseum.cz/api/integrations/linkedin/callback`.
+4. Put the Client ID and Primary Client Secret in `/opt/server/personalos/app/.env` as
+   `POS_LINKEDIN_CLIENT_ID` and `POS_LINKEDIN_CLIENT_SECRET` (or hand them to the deployer); restart `api`.
+5. Open https://personalos.obseum.cz/api/integrations/linkedin/start (logged in, on the LAN/VPN) and allow
+   `openid profile w_member_social`. The token is stored encrypted in `<data>/secrets/linkedin.bin`; about
+   60 days later you get one item to reconnect.
+
+| Other | Settings |
 |---|---|
-| `email.send` | `POS_SMTP_HOST`, `POS_SMTP_PORT` (587), `POS_SMTP_USER`, `POS_SMTP_PASSWORD` (Gmail: an app password), `POS_SMTP_FROM` |
-| `github.comment` | `POS_GITHUB_TOKEN` (fine-grained token, issues: write) |
-| `discord.post` | `POS_DISCORD_WEBHOOK_URL` |
 | Machine events (knowlage new mail) | `POS_EVENTS_TOKENS=knowlage:<token>`; knowlage sets `KB_EVENTS_URL=http://personalos/api/events` (the web joins knowlage's network kb_default) and `KB_EVENTS_TOKEN=<token>`. The token opens only `POST /api/events`; labels (workspaces, `channel:<domain>`) and optional `headers` feed routing rules and the mail prefilter. |
 | GitHub webhook | `POS_GITHUB_WEBHOOK_SECRET`; in GitHub point the webhook at `https://<your host>/api/hooks/github` (events: issues, pull requests, issue comments) |
 
@@ -53,6 +72,6 @@ DEV_AGENT_CODEX_CONFIG=mcp_servers.github.url="https://api.githubcopilot.com/mcp
 DEV_GITHUB_TOKEN=<fine-grained token for the ObseumEU repos>
 ```
 
-Things only the owner can provide: the SMTP / Gmail credentials, GitHub
+Things only the owner can provide: the Gmail consents, the LinkedIn app, GitHub
 tokens and the webhook secret, the Discord webhook or bot token, and the
 per-agent KB keys on the knowlage server.

@@ -1,6 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import FreezeCard from "../components/agents/FreezeCard";
+import EmailModeCard from "../components/outbound/EmailModeCard";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { SETTINGS } from "../sections";
@@ -11,6 +12,7 @@ export default function Settings() {
     <div className="flex flex-col gap-5">
       <PageHeader kicker={t("settings.kicker")} title={t("nav.settings")} sub={t("settings.sub")} />
       <FreezeCard />
+      <EmailModeCard />
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {SETTINGS.map((s) => {
           const Icon = s.icon;
