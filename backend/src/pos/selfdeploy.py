@@ -35,13 +35,23 @@ revert commits are by; default "PersonalOS Deployer" when the checkout has no id
 A revert that fails too is never reverted again (one attempt per range). DEPLOY_REQUIRE_REVIEW=1 (promote mode): the QA Reviewer
 approves each new tip first (pos.deploy_review); until then the tick waits.
 
-A merge conflict (promote mode) is never retried as such: the deployer first rebases the branch onto
-the current main once, in a scratch worktree (never for commits that touch protected paths, whose
-owner signatures a rebase would drop); a clean rebase goes on through the tests like any merge.
-Otherwise the branch's owner gets one task (per branch) with the conflicting files and hunks and
-the instruction to rebase, and the tip is parked: later ticks only re-check it silently
-(git merge-tree) when main moves, and try it again only once it merges cleanly or a new commit
-arrives. Every rejection carries a one-line reason (GET /api/deploys/health sums them up).
+A branch that is behind main (promote mode) is rebased onto the current main before it is
+promoted, once per tip, in a scratch worktree, not only after a merge conflict; never for commits
+that touch protected paths, whose owner signatures a rebase would drop: those are merged as they
+are. A clean rebase goes on through the tests like any merge, and main records it as a merge
+of the agent's own tip (the rebase's tree, the original tip as the second parent, not the rebased
+copies): main then contains agent/dev, the next tick rebases only what is new on the branch, and
+the agent fast-forwards. Before, main got the rebased copies and agent/dev kept the originals, so
+every later commit on the branch conflicted again with its own promoted history (deploys 27-30,
+a branch 41 commits behind). The deployer never writes to agent/dev (the agent's clone is
+mounted read-only and has the branch checked out) and never rewrites main; the agent brings the
+branch up to date with `git fetch deployer main` and `git rebase deployer/main` (the deployer's
+checkout; the clone's `origin` has no credentials and stayed days behind).
+A conflict is never retried as such: the branch's owner gets one task (per branch) with the
+conflicting files and hunks and the instruction to rebase, and the tip is parked: later ticks
+only re-check it silently (git merge-tree) when main moves, and try it again only once it merges
+cleanly or a new commit arrives. Every rejection carries a one-line reason (GET
+/api/deploys/health sums them up).
 
 DEPLOY_SELF_CMD: the compose command that recreates the deployer itself (e.g. `docker compose
 … up -d --build --no-deps deployer`). After a deploy that changed the deployer's own code it runs
@@ -370,6 +380,11 @@ def _conflict_detail(repo: Path) -> tuple[list[str], str]:
     return files, hunks
 
 
+def _is_ancestor(wt: Path, older: str, newer: str) -> bool:
+    return subprocess.run(["git", "merge-base", "--is-ancestor", older, newer], cwd=wt,
+                          capture_output=True).returncode == 0
+
+
 def auto_rebase(wt: Path, base: str, tip: str) -> tuple[str | None, list[str], str]:
     """Rebase `tip` onto `base` once, in a scratch worktree (the deploy worktree and the agent's
     branch stay untouched). Returns (the rebased tip, [], "") or (None, conflicting files, hunks)."""
@@ -398,8 +413,8 @@ def conflict_log(source: str, target: str, files: list[str], hunks: str, why: st
     listing = "\n".join(f"  - {f}" for f in files) or "  (git named no file)"
     return (f"CONFLICT: {source} does not merge into {target}. Conflicting files:\n{listing}\n\n"
             f"Not promoted: {why}. The deployer will not try this commit again.\n"
-            f"What to do: rebase your branch onto the current {target} (git fetch, then git rebase "
-            f"<remote>/{target}), resolve the conflicts in the files above, run the tests, and commit. "
+            f"What to do: rebase your branch onto the current {target} (git fetch deployer {target}, then "
+            f"git rebase deployer/{target}: the deployer's checkout; origin can be days behind), resolve the conflicts in the files above, run the tests, and commit. "
             f"The new commit is picked up on the next tick.\n\nHunks:\n{hunks[-3500:]}")
 
 
@@ -415,7 +430,7 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     git(wt, "fetch", remote, target)
     base = git(wt, "rev-parse", f"{remote}/{target}")
     tip = git(wt, "rev-parse", source)
-    if subprocess.run(["git", "merge-base", "--is-ancestor", tip, base], cwd=wt).returncode == 0:
+    if _is_ancestor(wt, tip, base):
         return Result(base, tip, "nothing")  # everything on the branch is already in main
     if not _should_try(state, tip, base, lambda t, b: merges_cleanly(wt, t, b)):
         last = _load(state) or {}
@@ -456,31 +471,37 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
              f"Merge {source}: {subject}\n\nPromoted by the PersonalOS deployer after checks{note}.\n\n"
              f"Agent: {res.author or 'unknown'}", rev], cwd=wt, capture_output=True, text=True)
 
-    first = merge(tip)
-    if first.returncode != 0:
+    def conflict(files: list[str], hunks: str, why: str) -> Result:
+        more = " ..." if len(files) > 5 else ""
+        res.reason = f"merge conflict in {', '.join(files[:5]) or '?'}{more}"
+        return fail("merge", conflict_log(source, target, files, hunks, why), conflict=files)
+
+    protected = _touches_protected(wt, commits)
+    candidate, note = tip, ""
+    if not _is_ancestor(wt, base, tip) and not protected:  # behind main: rebase first, not only on a conflict
+        rebased, files, hunks = auto_rebase(wt, base, tip)
+        if rebased:
+            candidate, note = rebased, f" (rebased onto {target} automatically)"
+            res.log = (f"{source} was behind {target}: promoted after an automatic rebase onto {target} "
+                       f"({rebased[:10]}); {target} records {tip[:10]} as merged, so the branch fast-forwards "
+                       f"(git fetch deployer {target} && git merge --ff-only deployer/{target}).")
+        elif not merges_cleanly(wt, tip, base):  # a merge can still be clean (main took the branch's side)
+            return conflict(files, hunks, f"an automatic rebase onto {target} {base[:10]} conflicted")
+    first = merge(candidate, note)
+    if first.returncode == 0 and candidate != tip:
+        # The rebase's tree, but the agent's own tip as the second parent (not the rebased copies):
+        # main then contains agent/dev, the next tick merges only what is new on it, and the agent
+        # fast-forwards. Nothing pushes to the agent's clone (it is read-only here) or rewrites main.
+        msg = git(wt, "log", "-1", "--format=%B", "HEAD")
+        git(wt, "reset", "--hard", git(wt, *identity(wt), "commit-tree", "HEAD^{tree}", "-p", base, "-p", tip,
+                                       "-m", msg))
+    if first.returncode != 0:  # only a branch merged as it is (protected paths) can conflict here
         files, hunks = _conflict_detail(wt)
         subprocess.run(["git", "merge", "--abort"], cwd=wt, capture_output=True)
         git(wt, "reset", "--hard", base)
-        why = ""
-        if _touches_protected(wt, commits):
-            why = "no automatic rebase: the branch changes protected paths (a rebase drops the owner's signatures)"
-        else:
-            rebased, r_files, r_hunks = auto_rebase(wt, base, tip)
-            if rebased is None:
-                files, hunks = r_files or files, r_hunks or hunks
-                why = f"an automatic rebase onto {target} {base[:10]} conflicted too"
-            elif merge(rebased, f" (rebased onto {target} automatically)").returncode != 0:
-                subprocess.run(["git", "merge", "--abort"], cwd=wt, capture_output=True)
-                git(wt, "reset", "--hard", base)
-                why = "the automatic rebase did not merge either"
-            else:
-                res.log = (f"{source} conflicted with {target}; promoted a clean automatic rebase ({rebased[:10]}). "
-                           f"Rebase {source} onto {target} before the next commit.")
-        if why:
-            more = " ..." if len(files) > 5 else ""
-            res.reason = f"merge conflict in {', '.join(files[:5]) or '?'}{more}"
-            return fail("merge", conflict_log(source, target, files, hunks or (first.stdout + first.stderr), why),
-                        conflict=files)
+        why = ("no automatic rebase: the branch changes protected paths (a rebase drops the owner's signatures)"
+               if protected else "the merge conflicted")
+        return conflict(files, hunks or (first.stdout + first.stderr), why)
     if test_cmd:
         ok, log = sh(test_cmd, wt)
         if not ok:

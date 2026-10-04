@@ -427,6 +427,61 @@ def test_a_conflict_that_a_rebase_resolves_ships_without_a_task(tmp_path, report
     assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # the same tip is not promoted twice
 
 
+def test_a_branch_behind_main_is_rebased_promoted_and_then_contained_in_main(tmp_path, reporter):
+    """Deploys 27-30: agent/dev never took main back (its origin was days behind), the deployer promoted
+    rebased copies, and every later commit on the branch conflicted with those copies again. Now a
+    branch behind main is rebased before the merge (no conflict needed), main records the agent's own
+    tip as merged, and the next commit on the still stale branch merges cleanly."""
+    rep, client, conn = reporter
+    origin, work, other, deploy, kw = _promote_setup(tmp_path)
+    lines = "".join(f"{i}\n" for i in range(1, 8))
+    _on_main(other, {"lines.txt": lines}, "Lines")
+    git(work, "pull", "-q", "--ff-only", "origin", "main")
+    first = commit(work, {"lines.txt": lines.replace("4\n", "4 branch\n")}, "Branch: line 4\n\nAgent: Software Engineer")
+    _on_main(other, {"lines.txt": lines.replace("2\n", "2 main\n")}, "Main: line 2")  # behind, no conflict
+
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok" and "automatic rebase" in res.log
+    show = lambda path: git(tmp_path, "--git-dir", str(origin), "show", f"main:{path}")  # noqa: E731
+    assert show("lines.txt") == lines.replace("2\n", "2 main\n").replace("4\n", "4 branch\n").strip()
+    assert "rebased onto main automatically" in git(tmp_path, "--git-dir", str(origin), "log", "-1", "--format=%B",
+                                                    "main")
+    parents = git(tmp_path, "--git-dir", str(origin), "log", "-1", "--format=%P", "main").split()
+    assert parents[1] == first  # the agent's own commit, not a rebased copy: main contains agent/dev
+    assert git(work, "rev-parse", "agent/dev") == first  # the agent's clone is never written to
+
+    # main changes the branch's line again; the agent, still stale, commits something else
+    _on_main(other, {"lines.txt": show("lines.txt").replace("4 branch", "4 main") + "\n"}, "Main: line 4")
+    commit(work, {"notes.txt": "new\n"}, "Notes\n\nAgent: Software Engineer")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "ok"  # a rebased copy would conflict here
+    assert "4 main" in show("lines.txt") and show("notes.txt") == "new"
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'deployer'").fetchone()
+    assert [d["status"] for d in client.get("/api/deploys").json()] == ["ok", "ok"]
+
+    # agent/dev takes main back as a fast-forward: nothing of its own history to replay
+    git(work, "fetch", "-q", "origin", "main")
+    git(work, "merge", "-q", "--ff-only", "origin/main")
+    assert git(work, "rev-parse", "agent/dev") == git(tmp_path, "--git-dir", str(origin), "rev-parse", "main")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"
+
+
+def test_a_rebase_conflict_is_one_task_and_the_tip_stays_parked(tmp_path, reporter):
+    rep, client, conn = reporter
+    origin, work, other, deploy, kw = _promote_setup(tmp_path)
+    commit(work, {"app.txt": "good from the branch\n", "a.txt": "a\n"}, "Branch\n\nAgent: Software Engineer")
+    _on_main(other, {"app.txt": "good from main\n"}, "Main")
+
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.stage == "merge" and "automatic rebase onto main" in res.log and "<<<<<<<" in res.log
+    assert "git rebase deployer/main" in res.log
+    for i in range(2):  # the same tip: never a second attempt, report or task, whether main moves or not
+        assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"
+        _on_main(other, {f"other{i}.txt": "x"}, f"Unrelated {i}")
+    assert len(client.get("/api/deploys").json()) == 1
+    assert conn.execute("SELECT COUNT(*) FROM tasks WHERE source = 'deployer'").fetchone()[0] == 1
+    assert "pos-rebase-" not in git(deploy, "worktree", "list")
+
+
 def test_reason_of_a_rejection_and_the_repeat_count(reporter):
     rep, client, conn = reporter
     tests_log = "....F\nFAILED tests/test_x.py::test_a - assert 1 == 2\nFAILED tests/test_x.py::test_b\n2 failed"
