@@ -40,9 +40,14 @@ services:
       # The SRE's runbook (pos.ops_runbook): the host executor's socket (ops/runbook/README.md).
       # No socket there = the tool answers "executor not installed" and runs nothing.
       POS_OPS_RUNBOOK_SOCKET: ${POS_OPS_RUNBOOK_SOCKET:-/run/pos-ops-runbook/runbook.sock}
+      # Review packets and the evidence gate also read the Software Engineer's checkout (agent/dev,
+      # commits the deployer has not merged yet), mounted read-only below.
+      POS_REVIEW_REPOS: ${POS_REVIEW_REPOS:-/repos/personalos,/repos/personalos-dev,/agent-work/kniha}
+      POS_EVIDENCE_REPOS: ${POS_EVIDENCE_REPOS:-/repos/personalos,/repos/personalos-dev,/agent-work/kniha}
     volumes:
       # A directory of the checkout (git creates it, owned by drosko); only the socket lives there.
       - ./ops/runbook/run:/run/pos-ops-runbook
+      - ../dev-work/PersonalOS:/repos/personalos-dev:ro
     # Memory (svr03 runs deep in swap): limits from the 7-day working-set peaks (Prometheus,
     # container:memory_working_set_bytes, 2026-09-29) plus headroom. api 406 MB, web 8, deployer 590,
     # agent-pool 1140 (its 4g limit is in docker-compose.yml), sentinel 41.

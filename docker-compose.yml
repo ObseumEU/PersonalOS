@@ -25,10 +25,10 @@ services:
       POS_SANDBOX_URL: ${POS_SANDBOX_URL:-http://pos-sandbox:8200}
       # Read-only git repositories (mounted below): review packets show the diff of a hand-in's commit
       # (pos.review_packet) and the evidence gate checks that its sha exists (pos.evidence).
-      # /repos/personalos = this checkout's history, /agent-work/PersonalOS and /agent-work/kniha = the
-      # agents' checkouts (commits not merged or pushed yet).
-      POS_REVIEW_REPOS: ${POS_REVIEW_REPOS:-/repos/personalos,/agent-work/PersonalOS,/agent-work/kniha}
-      POS_EVIDENCE_REPOS: ${POS_EVIDENCE_REPOS:-/repos/personalos,/agent-work/PersonalOS,/agent-work/kniha}
+      # /repos/personalos = this checkout's history, /agent-work/kniha = the Kniha agents' checkout
+      # (commits not pushed yet). The server adds the Software Engineer's checkout (deploy/prod).
+      POS_REVIEW_REPOS: ${POS_REVIEW_REPOS:-/repos/personalos,/agent-work/kniha}
+      POS_EVIDENCE_REPOS: ${POS_EVIDENCE_REPOS:-/repos/personalos,/agent-work/kniha}
       # The checkout's .git belongs to the host user, not root: let git read it.
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
