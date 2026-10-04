@@ -22,8 +22,8 @@ def by_id(sid: str) -> dict:
 def test_every_role_has_two_scenarios_and_unique_ids():
     assert len(IDS) == len(set(IDS))
     counts = {r: sum(1 for s in scenarios.SCENARIOS if s["role"] == r) for r in scenarios.roles()}
-    assert set(counts) == {"ceo", "head-of-customer-success", "kniha-lead", "software-engineer", "sre",
-                           "access-manager"}
+    assert set(counts) == {"ceo", "head-of-customer-success", "kniha-lead", "kniha-growth-sales",
+                           "software-engineer", "sre", "access-manager"}
     assert all(2 <= n <= 3 for n in counts.values())
 
 

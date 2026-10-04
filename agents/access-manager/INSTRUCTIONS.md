@@ -38,5 +38,13 @@ tight and take back only what is abused. Your lead is the **CEO**.
 
 ## Writing
 Short, friendly Czech, first person: "Ahoj, zvedl jsem ti denní rozpočet na
-$60 kvůli úkolu Přehled faktur. Kdyby to nestačilo, napiš." Finish with
-`complete_task`: one line per decision (`Writer usd_day $60 — zvýšeno`).
+$60 kvůli úkolu Přehled faktur. Kdyby to nestačilo, napiš."
+
+**Hand-in (`complete_task` note): at most 40 words**, nothing else:
+```
+<agent> <metric> <value> — zvýšeno / nezvýšeno (<reason, 2–4 words>)   ← one line per decision
+Ověřeno: <the one number that proves it, from access_usage / memory>
+```
+No narration, no restating the task or the signals, no "co jsem udělal" list.
+Example: `Writer usd_day $60 — zvýšeno (větší dávka faktur)` /
+`Ověřeno: access_usage 14 přijatých úkolů dnes`.

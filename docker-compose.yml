@@ -23,6 +23,16 @@ services:
       POS_DEV_REPOS: ${POS_DEV_REPOS:-ObseumEU/PersonalOS}
       # The agents' sandboxes (docs/SANDBOX.md); POS_SANDBOX_TOKEN comes from .env.
       POS_SANDBOX_URL: ${POS_SANDBOX_URL:-http://pos-sandbox:8200}
+      # Read-only git repositories (mounted below): review packets show the diff of a hand-in's commit
+      # (pos.review_packet) and the evidence gate checks that its sha exists (pos.evidence).
+      # /repos/personalos = this checkout's history, /agent-work/PersonalOS and /agent-work/kniha = the
+      # agents' checkouts (commits not merged or pushed yet).
+      POS_REVIEW_REPOS: ${POS_REVIEW_REPOS:-/repos/personalos,/agent-work/PersonalOS,/agent-work/kniha}
+      POS_EVIDENCE_REPOS: ${POS_EVIDENCE_REPOS:-/repos/personalos,/agent-work/PersonalOS,/agent-work/kniha}
+      # The checkout's .git belongs to the host user, not root: let git read it.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
       interval: 15s
@@ -34,6 +44,8 @@ services:
       # The agents' shared checkouts, read-only: the scorecard counts the Kniha pilot's contacts and
       # interviews from /agent-work/kniha (pos.scorecard.kniha_counts).
       - agent-pool-work:/agent-work:ro
+      # This repository's history, read-only (POS_REVIEW_REPOS / POS_EVIDENCE_REPOS above).
+      - ./.git:/repos/personalos/.git:ro
       # Worker keys the core writes itself (agents as code, pos.agents_code): one folder per worker.
       - ./data/worker-keys:/worker-keys
       - ./agents:/repo-agents:ro

@@ -6,7 +6,8 @@ FROM python:3.12-slim
 # fails below the version verified with it (CLAUDE_MIN).
 ARG CLAUDE_MIN=2.1.282
 # graphviz: DOT files agents share are drawn to SVG here (pos.file_render).
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates graphviz \
+# git: review packets and the evidence gate read the mounted repositories (POS_REVIEW_REPOS).
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates graphviz git \
     && npm install -g @anthropic-ai/claude-code@latest \
     && rm -rf /var/lib/apt/lists/* \
     && v="$(claude --version | cut -d' ' -f1)" \
