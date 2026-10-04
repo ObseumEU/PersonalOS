@@ -37,6 +37,12 @@ services:
       POS_GRAFANA_HEALTH_URL: ${POS_GRAFANA_HEALTH_URL:-http://192.168.1.186:3000/api/health}
       POS_LOKI_URL: ${POS_LOKI_URL:-http://192.168.1.186:3100}
       POS_PROMETHEUS_URL: ${POS_PROMETHEUS_URL:-http://192.168.1.186:9090}
+      # The SRE's runbook (pos.ops_runbook): the host executor's socket (ops/runbook/README.md).
+      # No socket there = the tool answers "executor not installed" and runs nothing.
+      POS_OPS_RUNBOOK_SOCKET: ${POS_OPS_RUNBOOK_SOCKET:-/run/pos-ops-runbook/runbook.sock}
+    volumes:
+      # A directory of the checkout (git creates it, owned by drosko); only the socket lives there.
+      - ./ops/runbook/run:/run/pos-ops-runbook
     # Memory (svr03 runs deep in swap): limits from the 7-day working-set peaks (Prometheus,
     # container:memory_working_set_bytes, 2026-09-29) plus headroom. api 406 MB, web 8, deployer 590,
     # agent-pool 1140 (its 4g limit is in docker-compose.yml), sentinel 41.

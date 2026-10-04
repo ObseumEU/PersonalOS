@@ -111,6 +111,19 @@ deduplicated and redacted), `POST /api/incidents/<id>/ack`,
   Monitor paragraph (a cheap run) only when there were incidents. Quiet days:
   nothing, except "7 dní bez incidentu" on Mondays.
 
+## The SRE's runbook on svr03 (`ops_runbook`)
+
+No agent has a shell on svr03. The SRE (permission `ops:runbook`, not an autonomy default)
+runs a fixed catalogue instead: `ops_runbook(action, params, reason, task_id?)` and
+`ops_runbook_list()`. Read-only `docker_ps`, `docker_stats`, `docker_logs` (≤ 24 h, ≤ 500
+lines), `df`, `free`, `uptime`, `systemctl_user_status`, `journalctl_tail` (≤ 300 lines);
+actions `compose_up` (our stacks' app services, never a database), `restart` (allowlist),
+`backup_run`, `towerdog_stop`/`towerdog_start`, `refresh_known_hosts` (GitHub's pinned keys).
+Every call needs a reason and leaves an audit row `ops_runbook:<action>` with the run id;
+output is redacted and cut to 8k. Anything else: one task for the CTO, never the owner. The
+host side (a user service of drosko on a unix socket, re-validating every request) and its
+install: `ops/runbook/README.md`.
+
 ## When PersonalOS itself is down
 
 The sentinel keeps events in its outbox (retried every tick, in order) and,

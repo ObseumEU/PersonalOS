@@ -40,6 +40,8 @@ PERMISSIONS = {
     "access:manage": "decide other agents' grants and budgets (the Access manager; only the owner grants it)",
     "ops:monitor": "read the sentinel's incident logs and close incidents (the Monitor agent)",
     "ops:observe": "query Loki logs (<=1 h, <=200 lines, redacted) and a Prometheus metrics snapshot (the Monitor agent)",
+    "ops:runbook": "run the fixed, audited svr03 runbook (pos.ops_runbook: diagnostics, compose up, restart, backup; "
+                   "the SRE; not an autonomy default)",
 }
 BUILTIN_PERMISSIONS = {
     actors.ASSISTANT_NAME: ["tasks:read", "tasks:write", "tasks:claim", "approvals:request", "agents:create",

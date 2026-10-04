@@ -1,0 +1,20 @@
+# The SRE's runbook executor (pos.ops_runbook, ops/runbook/README.md): drosko's systemd --user
+# service on svr03 (linger is on, so it runs without a login). Installed by install.sh.
+[Unit]
+Description=PersonalOS ops runbook executor (fixed catalogue, unix socket)
+Documentation=file:///opt/server/personalos/app/ops/runbook/README.md
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/lib/pos-ops-runbook/executor.py --socket /opt/server/personalos/app/ops/runbook/run/runbook.sock
+Restart=on-failure
+RestartSec=5
+# Nothing secret in the environment; the executor passes a minimal one to its commands.
+UnsetEnvironment=SSH_AUTH_SOCK
+NoNewPrivileges=true
+UMask=0077
+MemoryMax=128M
+
+[Install]
+WantedBy=default.target

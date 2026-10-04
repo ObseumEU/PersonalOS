@@ -162,6 +162,7 @@ TOOL_PERMISSIONS = {
     "deploy_review": "tasks:review",
     # Observability (pos.observability): a narrow Loki read and a fixed metrics snapshot.
     "loki_query": "ops:observe", "metrics_snapshot": "ops:observe", "deploy_health": "ops:observe",
+    "ops_runbook": "ops:runbook", "ops_runbook_list": "ops:runbook",  # the SRE's svr03 runbook (pos.ops_runbook)
     # Access (pos.access): request_access and my_access are for everyone; deciding is the Access manager's.
     **{t: "access:manage" for t in ("access_review_requests", "access_decide", "access_grant", "access_revoke",
                                      "access_set_budget", "access_usage", "access_audit", "access_resume_agent",

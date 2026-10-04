@@ -56,6 +56,9 @@ GATED = ("usd_day", "usd_month", "tokens_day", "tokens_month", "runs_day")
 # cred:<name> (one 1Password credential, pos.credentials) is granted on request like anything else.
 OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials")
 CRED_PREFIX = "cred"
+# Permission groups that are not autonomy defaults and that only the owner grants on request:
+# ops:runbook runs commands on svr03 (pos.ops_runbook; the SRE has it from pos.ops_runbook.ensure).
+RESTRICTED = frozenset({"ops:runbook"})
 SCOPES = ("repo", "connector")
 
 SETTINGS_KEY = "access.settings"
@@ -123,6 +126,16 @@ def kind_of(capability: str) -> str:
                       "scope:repo:<x> / scope:connector:<x> / scope:browser:<host>")
 
 
+def restricted(capability: str | None) -> bool:
+    """A RESTRICTED group, or a tool grant for one of its tools (tool:ops_runbook)."""
+    from .. import mcp_server
+
+    cap = (capability or "").strip()
+    if cap in RESTRICTED:
+        return True
+    return cap.startswith("tool:") and mcp_server.TOOL_PERMISSIONS.get(cap[5:]) in RESTRICTED
+
+
 def scaled(metric: str, amount: float | None) -> float | None:
     """A budget number from before the autonomy switch, loosened (usd_run 5x, the rest 20x)."""
     if amount is None:
@@ -139,7 +152,7 @@ def autonomy_caps() -> list[str]:
     host capacity; granted at once on request)."""
     from .. import agents, mcp_server
 
-    perms = {p for p in agents.PERMISSIONS if p != PERM}
+    perms = {p for p in agents.PERMISSIONS if p != PERM and p not in RESTRICTED}
     tools = {f"tool:{t}" for t, group in mcp_server.TOOL_PERMISSIONS.items()
              if group not in agents.PERMISSIONS and not t.startswith("access_")}
     return sorted(perms | tools | {"tool:browser"})
@@ -663,7 +676,7 @@ def request_access(conn: sqlite3.Connection, ctx: Ctx, *, what: str, why: str, c
     if dup:
         return {"request_id": dup["id"], "status": dup["status"], "deduped": True,
                 "note": "You already asked for this; the decision comes to your inbox."}
-    needs_owner = kind == "owner_only"
+    needs_owner = kind == "owner_only" or restricted(capability)
     rid = _insert_request(conn, agent_id=ctx.actor_id, requested_by=ctx.actor_id, trigger="request", what=what,
                           capability=capability, metric=metric, amount=amount, hours=hours, why=why[:2000],
                           task_id=task_id, blocking=int(bool(blocking and source)), needs_owner=int(needs_owner))

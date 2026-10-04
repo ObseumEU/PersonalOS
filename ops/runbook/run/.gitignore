@@ -1,0 +1,3 @@
+# Only the executor's socket lives here (bind-mounted into the API container); never committed.
+*
+!.gitignore

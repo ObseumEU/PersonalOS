@@ -110,6 +110,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from . import observability
 
             observability.ensure(conn)  # Grafana alerts → the Monitor, and its ops:observe grant
+            from . import ops_runbook
+
+            ops_runbook.ensure(conn)  # the SRE's ops:runbook grant, once
             if os.environ.get("POS_WORKER_KEYS_DIR"):
                 agents_code.write_worker_keys(conn, Path(os.environ["POS_WORKER_KEYS_DIR"]))
             if settings.scheduler:
