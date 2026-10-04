@@ -55,6 +55,9 @@ groups:
       - record: host:swap_used:ratio
         expr: >-
           1 - max by (host) (node_memory_SwapFree_bytes) / (max by (host) (node_memory_SwapTotal_bytes) > 0)
+      # Pages swapped back in per second: real memory pressure, unlike idle pages left in swap (T-615).
+      - record: host:swap_in_pages:rate5m
+        expr: max by (host) (rate(node_vmstat_pswpin[5m]))
       - record: host:disk_used:ratio
         expr: >-
           1 - max by (host, mountpoint) (node_filesystem_avail_bytes{fstype=~"ext4|xfs|btrfs|vfat"})
