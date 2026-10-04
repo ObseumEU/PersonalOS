@@ -208,10 +208,10 @@ def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
     assert "Daily standup" in {s["name"] for s in schedules.list_schedules(
         conn, actor_id=actors.find_by_name(conn, "COO")["id"])}                  # the COO's own standup
     assert report["archive"]
-    # the review moved the proper way: versioned, and the Software Engineer was told and woken
+    # the review moved the proper way: versioned, and the Software Engineer has it as work (a review item)
     assert tasks.get(conn, owner, rev["id"])["reviewer_id"] == se["id"]
-    assert conn.execute("""SELECT 1 FROM chat_inbox i JOIN chat_messages m ON m.id = i.message_id
-                           WHERE i.actor_id = ? AND m.body LIKE ?""", (se["id"], f"{rev['ref']}%review%")).fetchone()
+    assert conn.execute("SELECT 1 FROM tasks WHERE source = ? AND assignee_id = ? AND status = 'next'",
+                        (f"review:{rev['id']}", se["id"])).fetchone()
     assert conn.execute("SELECT 1 FROM history WHERE entity = 'task' AND entity_id = ? AND action = 'reviewer'",
                         (rev["id"],)).fetchone()
     # an archived agent keeps no access and gets no work

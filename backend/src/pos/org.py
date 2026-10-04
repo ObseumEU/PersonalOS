@@ -287,6 +287,7 @@ def handoff(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = ""
     target = _member(conn, to)
     if target["id"] == row["assignee_id"]:
         raise tasks.Invalid(f"{tasks.display_id(task_id)} is already with {target['name']}")
+    tasks.refuse_owner_assignee(conn, ctx, target["id"], row["source"])
     note = (note or "").strip()
     changes = tasks.resolve_assignee(conn, ctx, {"type": target["kind"], "id": target["id"]})
     if row["status"] in ("inbox", "working", "waiting"):

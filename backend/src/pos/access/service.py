@@ -581,6 +581,34 @@ def signals(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None
 
 
 LIMIT_HIT_DEDUP_H = 24  # one limit-hit request per (agent, limit) in this window
+LOOP_RUNS = 5  # runs of one task in 24 h that make a limit hit a loop (signals.looks_like_loop)
+LOOP_HOLD_H = 24
+
+
+def hold_looping_task(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None) -> dict | None:
+    """A limit hit caused by a loop (one task run LOOP_RUNS+ times in 24 h): that task is held
+    (retry_after LOOP_HOLD_H, a comment, an audit line) so raising the limit does not feed the loop.
+    A person assigning it again, or a comment, lifts the hold. Returns {task, until} or None."""
+    from .. import comments, tasks
+
+    now = now or utcnow()
+    r = conn.execute(
+        """SELECT task_id, COUNT(*) AS n FROM runs WHERE actor_id = ? AND started_at >= ? AND task_id IS NOT NULL
+           AND status != 'blocked' GROUP BY task_id ORDER BY n DESC LIMIT 1""",
+        (agent_id, _iso(now - timedelta(days=1)))).fetchone()
+    if r is None or r["n"] < LOOP_RUNS:
+        return None
+    until = _iso(now + timedelta(hours=LOOP_HOLD_H))
+    t = conn.execute("SELECT retry_after, status FROM tasks WHERE id = ?", (r["task_id"],)).fetchone()
+    if t is None or t["status"] in ("done", "review") or (t["retry_after"] or "") >= _iso(now + timedelta(hours=1)):
+        return None
+    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (until, r["task_id"]))
+    ctx = Ctx(agent_id, via="system")
+    comments.log(conn, ctx, r["task_id"], f"Held until {until}: {r['n']} runs in 24 h hit the agent's limit "
+                 "(a loop). Its lead or a person looks at it; a comment or a new assignment lifts the hold.",
+                 "system")
+    audit.log(conn, ctx, "access_loop_hold", "task", r["task_id"], runs=r["n"], until=until)
+    return {"task": tasks.display_id(r["task_id"]), "until": until}
 
 
 def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float, lim: float,
@@ -591,6 +619,7 @@ def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float
     every hit, 173 runs a day)."""
     store.ensure_schema(conn)
     now = utcnow()
+    held = hold_looping_task(conn, agent_id, now)
     row = conn.execute(
         """SELECT id, detail FROM access_requests WHERE agent_id = ? AND metric = ? AND trigger = 'limit_hit'
            AND (status = 'pending' OR created_at >= ?) ORDER BY id DESC LIMIT 1""",
@@ -610,7 +639,8 @@ def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float
     rid = _insert_request(conn, agent_id=agent_id, requested_by=None, trigger="limit_hit", what="budget",
                           metric=metric, amount=None, hours=None, task_id=task_id,
                           why=f"{name} narazil na limit {METRICS[metric]}: {_fmt(metric, used_)} z {_fmt(metric, lim)}.",
-                          detail={"used": used_, "limit": lim, "signals": signals(conn, agent_id)})
+                          detail={"used": used_, "limit": lim, "signals": signals(conn, agent_id),
+                                  **({"held": held} if held else {})})
     audit.log(conn, Ctx(agent_id, via="system"), "access_limit_hit", "actor", agent_id, metric=metric,
               used=used_, limit=lim, request=rid)
     _wake_manager(conn, f"#{rid}: {name} narazil na limit {METRICS[metric]}", subject=f"{name} · limit {metric}")
@@ -1403,6 +1433,18 @@ def _wake_manager(conn: sqlite3.Connection, line: str, subject: str | None = Non
                           (am, title[:200], since)).fetchone()
     if recent:
         ctx = Ctx(am, via="system")
+        reopened = conn.execute("SELECT 1 FROM audit_log WHERE action = 'access_queue_reopen' AND entity = 'task' "
+                                "AND entity_id = ? AND at >= ?", (recent["id"], since)).fetchone()
+        if reopened:
+            # Reopened once today already: the rest only counts, no reopen and no new run (prod
+            # 2026-10-02/03: the queue task was reopened on every refused run, 176 full runs, $17,
+            # 164 identical DMs, and the company cap stopped every agent for a day).
+            n = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'access_queue_repeat' AND entity = 'task' "
+                             "AND entity_id = ? AND at >= ?", (recent["id"], since)).fetchone()[0] + 1
+            audit.log(conn, ctx, "access_queue_repeat", "task", recent["id"], line=line[:200], repeats=n)
+            if n == 1 or n % 10 == 0:
+                comments.log(conn, ctx, recent["id"], f"Znovu (do {QUEUE_REOPEN_H} h, {n}×): {line}", "system")
+            return
         versioning.update(conn, ctx, tasks.ENTITY, recent["id"], {"status": "next", "completed_at": None},
                           action="reopen")
         comments.log(conn, ctx, recent["id"], f"Znovu (do {QUEUE_REOPEN_H} h): {line}", "system")

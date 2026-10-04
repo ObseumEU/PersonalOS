@@ -23,7 +23,8 @@ Whatever would wait for the owner goes to a stand-in first (owner_stand_in, T-47
 for what needs judgment (plans, money and commitments, customers and outbound, the owner's own
 requests, results asking for a decision, and the work of the CEO's direct reports); everything else
 to the **assignee's team lead** (reports_to, skipping the assignee and the owner). A result nobody
-reviewed in SLA_HOURS (12 h) moves to the reviewer's lead (pos.business.review_sla).
+reviewed in 24 h moves to the reviewer's lead, and each reviewer gets one review digest a day
+(pos.business.review_sla); an agent reviewer has each result as a "Review: T-x" task (pos.review_work).
 
 The small-task rules need the result's verification line (pos.verification). An explicit
 `request_review` (the agent chose its reviewer) and a reviewer the owner set are respected.
@@ -107,6 +108,19 @@ def is_routine(conn: sqlite3.Connection, row) -> bool:
     return not CHANGE_RE.search(f"{s['name'] if s else ''} {row['title'] or ''}")
 
 
+_TREF_RE = re.compile(r"\bT-(\d{1,6})\b")
+
+
+def tracked_in(conn: sqlite3.Connection, row, note: str | None) -> list[str]:
+    """Other tasks the result links (T-123) that exist: where its findings are tracked."""
+    out = []
+    for x in dict.fromkeys(int(n) for n in _TREF_RE.findall(note or "")):
+        if x != row["id"] and conn.execute("SELECT 1 FROM tasks WHERE id = ? AND archived_at IS NULL",
+                                           (x,)).fetchone():
+            out.append(f"T-{x:03d}")
+    return out
+
+
 def is_triage(row) -> bool:
     """An incoming item (a mail, an event) someone sorted: a reply, a task, or nothing."""
     return (row["source"] or "").startswith("event:")
@@ -172,7 +186,8 @@ def experienced(conn: sqlite3.Connection, actor_id: int | None, now: datetime | 
         return False
     since = ((now or datetime.now(timezone.utc)) - timedelta(days=EXPERIENCE_DAYS)).isoformat(timespec="seconds")
     r = conn.execute("""SELECT COUNT(*) AS n, COALESCE(SUM(CASE WHEN returned_count > 0 THEN 1 ELSE 0 END), 0) AS ret
-                        FROM tasks WHERE assignee_id = ? AND status = 'done' AND completed_at >= ?""",
+                        FROM tasks WHERE assignee_id = ? AND status = 'done' AND completed_at >= ?
+                        AND COALESCE(source, '') NOT LIKE 'review:%'""",
                      (actor_id, since)).fetchone()
     return r["n"] >= EXPERIENCED_ACCEPTED and r["ret"] <= EXPERIENCED_MAX_RETURN_RATE * r["n"]
 
@@ -201,6 +216,11 @@ def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
     if not high:
         if is_routine(conn, row) and summary and schedules.all_green(note) and not CODE_RE.search(note or ""):
             return Decision("low", "accept", reason="a routine task from a schedule, nothing to act on")
+        tracked = tracked_in(conn, row, note) if is_routine(conn, row) and summary else []
+        if tracked and not CODE_RE.search(note or ""):
+            # Its findings already have their own tasks (the SRE's check -> T-183): nothing left to review.
+            return Decision("low", "accept", reason="a routine check whose findings are tracked in "
+                                                    + ", ".join(tracked))
         if is_doc(row, note) and not CODE_RE.search(note or ""):
             return Decision("low", "accept", reason="a document or note that asks nobody for a decision")
         if is_triage(row) and summary and not code and schedules.all_green(note) \
@@ -271,6 +291,9 @@ def auto_accept(conn: sqlite3.Connection, task_id: int, reason: str, follow_ups:
     before = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     versioning.update(conn, ctx, "task", task_id, {"status": "done", "progress": 100, "completed_at": now_iso()},
                       action="auto_accept")
+    from . import review_work
+
+    review_work.close_for(conn, task_id, "auto-accepted")
     comments.log(conn, ctx, task_id, f"Auto-accepted (low risk: {reason}). Review policy: pos.review_policy; "
                                      "anyone who may review it can reopen it.", "review")
     audit.log(conn, ctx, "review_auto_accept", "task", task_id, reason=reason)
@@ -288,7 +311,7 @@ def auto_accept(conn: sqlite3.Connection, task_id: int, reason: str, follow_ups:
 
 # ------------------------------------------------------------------ the backlog
 
-def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = None) -> dict:
+def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = None, sla: bool = True) -> dict:
     """Run the policy over every result waiting for review: low risk accepted, code to the QA
     Reviewer, then the SLA (over 12 h to the reviewer's lead, the owner's to the CEO)."""
     from . import business, tasks
@@ -321,6 +344,9 @@ def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = 
                                       "the owner's review goes to the team lead, the CEO only for judgment calls")
     if apply:
         conn.commit()
+    if not sla:  # the caller runs the SLA itself (pos.prodfix_workflow: after the review items exist)
+        return {"waiting": len(rows), "auto_accepted": accepted, "to_qa": routed, "to_lead": to_lead, "sla": {},
+                "applied": apply}
     sla = business.review_sla(conn, now=now, limit=200, dry_run=not apply)
     if not apply:  # the dry run: what the policy handles above does not wait for the SLA
         handled = {x.split(" ", 1)[0].split("→", 1)[0].rstrip(":") for x in accepted + routed + to_lead}

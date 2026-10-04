@@ -530,18 +530,21 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                           "an agent name, or an outside person's name. Dates are YYYY-MM-DD. notes is the "
                           "description: write what the task is for, where it came from (your task ref, the "
                           "message or event) and what done looks like; set definition_of_done too. Left "
-                          "empty, PersonalOS generates a generic description from the fields.")
+                          "empty, PersonalOS generates a generic description from the fields. project or "
+                          "goal (a goal id) and value_kind (business | platform) say what the work serves; "
+                          "left empty they default from your team and project. Agents never assign tasks "
+                          "to the owner: use ask_owner.")
     def create_task(ctx: Context, title: str, notes: str | None = None, topic: str | None = None,
                     priority: int | None = None, do_date: str | None = None, deadline: str | None = None,
                     estimate_min: int | None = None, energy: str | None = None, assignee: str | None = None,
                     parent_id: str | None = None, definition_of_done: str | None = None,
                     visibility: str | None = None, status: str | None = None, project: str | None = None,
-                    reviewer: str | None = None) -> dict:
+                    reviewer: str | None = None, goal: int | None = None, value_kind: str | None = None) -> dict:
         fields = {k: v for k, v in dict(
             title=title, notes=notes, topic=topic, priority=priority, do_date=do_date, deadline=deadline,
             estimate_min=estimate_min, energy=energy, assignee=assignee, parent_id=parent_id,
             definition_of_done=definition_of_done, visibility=visibility, status=status, project=project,
-            reviewer=reviewer,
+            reviewer=reviewer, goal=goal, value_kind=value_kind,
         ).items() if v is not None}
         with session(ctx, "create_task", title=title) as (conn, c):
             return brief(tasks.create(conn, c, fields))

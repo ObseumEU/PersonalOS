@@ -31,7 +31,9 @@ def test_whoever_asked_reviews_and_nobody_approves_their_own_work(team):
     tasks.claim(c, writer, t["id"])
     out = tasks.complete(c, writer, t["id"], "draft ready")
     assert out["status"] == "review" and tasks.get(c, me, t["id"])["reviewer_name"] == "COO"
-    assert chat.inbox_unread(c, pm.actor_id) >= 1  # the PM heard of it
+    # the PM heard of it: a review work item in its queue (pos.review_work), which starts its run
+    assert c.execute("SELECT assignee_id FROM tasks WHERE source = ? AND status = 'next'",
+                     (f"review:{t['id']}",)).fetchone()[0] == pm.actor_id
     with pytest.raises(Forbidden):
         tasks.review(c, writer, t["id"], True)  # own work
     with pytest.raises(Forbidden):

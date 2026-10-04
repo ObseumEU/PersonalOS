@@ -447,6 +447,18 @@ def memories_ensure(conn: sqlite3.Connection) -> dict:
     return out if out.get("created") else {}
 
 
+def heads_sweep(conn: sqlite3.Connection) -> dict:
+    from . import head_alerts
+
+    return head_alerts.sweep(conn)
+
+
+def heads_second_line(conn: sqlite3.Connection) -> dict:
+    from . import head_alerts
+
+    return head_alerts.sweep(conn, second_line=True)
+
+
 def ceo_business_focus(conn: sqlite3.Connection) -> dict:
     from . import effectiveness
 
@@ -457,6 +469,9 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "learning_weekly": learning_weekly,
     "memories_ensure": memories_ensure,
     "ceo_business_focus": ceo_business_focus,
+    "heads_sweep": heads_sweep,
+    "heads_sweep_afternoon": heads_sweep,
+    "heads_second_line": heads_second_line,
     "projects_weekly": projects_weekly,
     "review_sla": review_sla,
     "idle_agents": idle_agents,
@@ -531,7 +546,7 @@ DEFAULT_JOBS = [
     # Business value (pos.business): reviews never wait over 24 h (the owner's go to the CEO first),
     # idle agents are flagged to the CEO, the company's GitHub issues and PRs reach the CTO's triage,
     # and a weekly report nobody published is published from its numbers.
-    ("Reviews: over 12 h to the reviewer's lead, the owner's to the CEO", "every 60m", "review_sla"),
+    ("Reviews: over 24 h to the reviewer's lead, the owner's to the CEO; a daily digest per reviewer", "every 60m", "review_sla"),
     # Agent effectiveness (pos.learning, pos.effectiveness): lessons → the Performance Coach weekly, every
     # agent has a memory note, the CEO's business-focus digest (target ≥ 50 % of spend on business work).
     ("Lessons of the week → the Performance Coach", "weekly mon 06:45", "learning_weekly"),
@@ -547,6 +562,11 @@ DEFAULT_JOBS = [
     # Customer mail (pos.support): a problem or bug → one task for the project's developer; the reply draft
     # after the fix (or when the time box runs out); follow-ups in the same thread.
     ("Customers: new mail → customer issues, reply drafts, follow-ups", "every 2m", "support_intake"),
+    # Heads see their team's stuck work (pos.head_alerts.sweep): code, no model run. It replaced the 16 LLM
+    # "Hlídání výpadků" routines (2x a day per head) and the COO's 11:00 second line.
+    ("Heads: stuck team work (morning)", "daily 09:00", "heads_sweep"),
+    ("Heads: stuck team work (afternoon)", "daily 15:00", "heads_sweep_afternoon"),
+    ("COO: stuck work across teams (second line)", "daily 11:00", "heads_second_line"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on

@@ -195,7 +195,8 @@ def test_one_invoice_is_one_escalation(conn, owner, company):
     other = tasks.create(conn, ceo, {"title": "Plán týdne", "assignee": "CTO", "notes": "Nový úkol bez odkazu."})
     assert not other.get("deduplicated")
     # the owner's tickets (ask_owner) keep their own dedup
-    ticket = tasks.create(conn, cfo, {"title": "Schválit platbu", "assignee": "me", "notes": f"K {mail['ref']}"})
+    ticket = tasks.create(conn, cfo, {"title": "Schválit platbu", "assignee": "me", "notes": f"K {mail['ref']}",
+                                      "source": "ask_owner"})
     assert not ticket.get("deduplicated")
 
 

@@ -155,6 +155,7 @@ def reassign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = "
     target = _member(conn, to)
     if target["id"] == row["assignee_id"]:
         raise tasks.Invalid(f"{ref} is already with {target['name']}")
+    tasks.refuse_owner_assignee(conn, ctx, target["id"], row["source"])
     note = (note or "").strip()
 
     reasons = blockers(conn, row, target)

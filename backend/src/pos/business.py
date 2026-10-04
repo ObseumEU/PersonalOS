@@ -14,8 +14,9 @@ keep it that way:
   task count on that task (`tasks.interventions`, history action `intervene`,
   audit `intervention` with the kind), deduplicated per task and kind for
   30 minutes. Each kind has an estimate of the owner's minutes.
-- **Review SLA**: a result waiting over 12 h for an agent reviewer goes to that
-  reviewer's lead; a result that would wait for the owner goes to the CEO first
+- **Review SLA**: a result waiting over 24 h for an agent reviewer goes to that
+  reviewer's lead (one message per new reviewer), and each reviewer gets one review digest a day
+  instead of a reminder per task; a result that would wait for the owner goes to the CEO first
   (at hand-in, and after 12 h for older ones); low-risk results are auto-accepted and code goes to
   the QA Reviewer at hand-in (pos.review_policy); the CEO accepts what it can and
   hands the owner only what truly needs him (request_review reviewer=Owner).
@@ -99,6 +100,40 @@ BUSINESS_SOURCES = {"event:gmail", "event:discord", "event:calendar"}
 _REPO_RE = re.compile(r"([\w.-]+/[\w.-]+)[#!]\d+")
 
 
+BUSINESS_TEAMS = {"kniha", "growth", "customers", "finance", "home", "sales", "obseum-ai"}
+PLATFORM_TEAMS = {"engineering", "people", "platform"}
+
+
+def _team_kind(conn: sqlite3.Connection, row) -> str | None:
+    """business | platform from the task's project (its slug, else its lead's team) and the
+    assignee's (else the creator's) team; None when they say nothing."""
+    keys = row.keys() if hasattr(row, "keys") else row
+    pid = row["project_id"] if "project_id" in keys else None
+    if pid:
+        try:
+            p = conn.execute("""SELECT p.slug, a.team FROM projects p LEFT JOIN actors a ON a.id = p.lead_id
+                                WHERE p.id = ?""", (pid,)).fetchone()
+        except sqlite3.OperationalError:
+            p = None
+        if p is not None:
+            for v in (p["slug"], p["team"]):
+                if (v or "").lower() in BUSINESS_TEAMS:
+                    return "business"
+    for who in (row["assignee_id"], row["created_by"] if "created_by" in keys else None):
+        if not who:
+            continue
+        a = conn.execute("SELECT team, kind FROM actors WHERE id = ?", (who,)).fetchone()
+        if a is None or a["kind"] == "human":
+            continue
+        team = (a["team"] or "").lower()
+        if team in BUSINESS_TEAMS:
+            return "business"
+        if team in PLATFORM_TEAMS:
+            return "platform"
+        break  # the assignee's team decides when it has one
+    return None
+
+
 def is_demo(row) -> bool:
     title = (row["title"] or "").strip().lower()
     return title in DEMO_TITLES or bool(DEMO_RE.search(row["title"] or "")) or (row["topic"] or "") == "acme"
@@ -116,7 +151,14 @@ def classify(conn: sqlite3.Connection, row, roles: dict[int, str | None] | None 
     if source == "event:github" or source.startswith("event:github"):
         m = _REPO_RE.search(row["title"] or "")
         return "platform" if not m or m[1].lower() in PLATFORM_REPOS else "business"
-    if source in PLATFORM_SOURCES or topic in PLATFORM_TOPICS:
+    if source in PLATFORM_SOURCES or source.startswith("review:"):
+        return "platform"
+    # The work's project and team count before its topic: a Kniha developer's "dev" task is the Kniha
+    # product, business (prod: Kniha roles were counted as platform).
+    team_kind = _team_kind(conn, row)
+    if team_kind == "business":
+        return "business"
+    if topic in PLATFORM_TOPICS:
         return "platform"
     if source in BUSINESS_SOURCES or topic in BUSINESS_TOPICS:
         return "business"
@@ -130,7 +172,7 @@ def classify(conn: sqlite3.Connection, row, roles: dict[int, str | None] | None 
             role = r["role"] if r else None
     if role in BUSINESS_ROLES:
         return "business"
-    if role in PLATFORM_ROLES:
+    if role in PLATFORM_ROLES or team_kind == "platform":
         return "platform"
     # What the owner asks for himself is business; coordination between agents is platform.
     creator = row["created_by"]
@@ -385,18 +427,32 @@ def _source_keys(conn: sqlite3.Connection, text: str, roots: set[int]) -> set[st
     return keys
 
 
+def _not_an_escalation(source: str | None, created_by, assignee_id) -> bool:
+    """Scheduled work, platform items (review work, routines) and an agent's task for itself are no
+    escalation: they are never merged into another task, nor another task into them."""
+    src = (source or "").lower()
+    return (src.startswith(("schedule:", "review:", "meeting")) or src in PLATFORM_SOURCES
+            or (created_by is not None and created_by == assignee_id))
+
+
 def find_duplicate_escalation(conn: sqlite3.Connection, ctx: Ctx, values: dict) -> int | None:
-    """An open escalation (last DEDUP_DAYS) of the same item: it is named directly, both go back to
-    the same source task, or both carry the same source link or document code. None otherwise."""
+    """An open escalation (last DEDUP_DAYS) of the same item: it is named directly, both name the same
+    source task, or both carry the same source link or document code in their own text. None otherwise.
+
+    A shared source reference is required; a chain of older tasks reached by following refs is not one
+    (prod 2026-10-02: the CEO's scheduled daily report shared a distant root with T-232, a quota alert, and
+    was merged into it, so the promised 16:00 report never ran). Scheduled and self-assigned tasks are
+    never merged, and are never the target of a merge."""
     me = conn.execute("SELECT kind FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
     if not me or me["kind"] not in ("ai", "agent") or values.get("parent_id"):
+        return None
+    if _not_an_escalation(values.get("source"), ctx.actor_id, values.get("assignee_id")):
         return None
     text = f"{values.get('title') or ''}\n{values.get('notes') or ''}"
     refs = _refs(text)
     if not is_escalation(conn, ctx.actor_id, values.get("assignee_id"), values.get("topic")):
         return None
-    roots = _roots(conn, refs) if refs else set()
-    keys = _source_keys(conn, text, roots)
+    keys = _source_keys(conn, text, set())
     if not refs and not keys:
         return None
     since = (datetime.now(timezone.utc) - timedelta(days=DEDUP_DAYS)).isoformat(timespec="seconds")
@@ -404,12 +460,12 @@ def find_duplicate_escalation(conn: sqlite3.Connection, ctx: Ctx, values: dict) 
             """SELECT * FROM tasks WHERE archived_at IS NULL AND status NOT IN ('done', 'someday') AND created_at >= ?
                AND parent_id IS NULL AND created_by IN (SELECT id FROM actors WHERE kind IN ('ai', 'agent'))
                ORDER BY id""", (since,)).fetchall():
+        if _not_an_escalation(c["source"], c["created_by"], c["assignee_id"]):
+            continue
         if not is_escalation(conn, c["created_by"], c["assignee_id"], c["topic"]):
             continue
-        c_refs = _refs(_text(c))
-        c_roots = _roots(conn, c_refs) if c_refs else set()
-        # It names an open escalation directly, both go back to the same source item, or the same link/code.
-        if c["id"] in refs or c_roots & roots or (keys and _source_keys(conn, _text(c), c_roots) & keys):
+        # It names an open escalation directly, both name the same source task, or the same link/code.
+        if c["id"] in refs or (refs & _refs(_text(c))) or (keys and _source_keys(conn, _text(c), set()) & keys):
             return c["id"]
     return None
 
@@ -425,17 +481,31 @@ def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: di
             f"new task.\n\n{(values.get('notes') or '')[:1500]}")
     comments.log(conn, ctx, existing, body, "comment")
     audit.log(conn, ctx, "escalation_dedup", "task", existing, title=values.get("title", "")[:200])
-    row = conn.execute("SELECT assignee_id, status FROM tasks WHERE id = ?", (existing,)).fetchone()
+    row = conn.execute("SELECT assignee_id, status, created_by, source FROM tasks WHERE id = ?", (existing,)).fetchone()
     target = values.get("assignee_id")
-    if target and row["assignee_id"] == ctx.actor_id and target != ctx.actor_id \
-            and not actors.get(conn, target)["is_owner"]:
+    creator = actors.get(conn, row["created_by"]) if row["created_by"] else None
+    # Passed up only by the one holding it, never the owner's own request or scheduled work, and its
+    # creator hears of it (a task is never moved behind its creator's back).
+    if (target and row["assignee_id"] == ctx.actor_id and target != ctx.actor_id
+            and not actors.get(conn, target)["is_owner"] and creator is not None and not creator["is_owner"]
+            and not _not_an_escalation(row["source"], None, None)):
         from . import org, versioning
 
         try:
             org.handoff(conn, ctx, existing, int(target),
                         note=f"passed up instead of a new task: {values.get('title', '')[:200]}")
+            if creator["id"] not in (ctx.actor_id, target) and not creator["archived_at"]:
+                from . import chat
+
+                chat.send_dm(conn, ctx, creator["id"],
+                             f"{tasks.display_id(existing)} (yours) was passed up to "
+                             f"{actors.get(conn, target)['name']} as the same item escalated again.",
+                             attachments=[{"type": "task", "id": existing}], priority="fyi", system=True)
             if row["status"] == "review":
                 versioning.update(conn, ctx, tasks.ENTITY, existing, {"status": "next"}, action="handoff")
+                from . import review_work
+
+                review_work.close_for(conn, existing, "passed up as an escalation")
             return
         except Exception:  # noqa: BLE001 - the comment is there either way
             log.exception("could not pass %s up", existing)
@@ -454,7 +524,8 @@ def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: di
 
 # ------------------------------------------------------------------ review SLA
 
-REVIEW_SLA_HOURS = 12  # pos.review_policy.SLA_HOURS (was 24 h until the 2026-10 review burn-down)
+REVIEW_SLA_HOURS = 24  # a review nobody did this long moves to the reviewer's lead
+DIGEST_AFTER_HOURS = 12  # a result waiting this long puts its reviewer on the daily digest
 
 
 def system_ctx(conn: sqlite3.Connection) -> Ctx:
@@ -482,76 +553,135 @@ def _can_review(conn: sqlite3.Connection, actor_id: int) -> bool:
     return _can_review_as_agent(conn, actor_id)
 
 
-def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int = 30,
+def _escalation_target(conn: sqlite3.Connection, row, reviewer: int, owner: int, ceo: int | None) -> int | None:
+    """Who takes over a review nobody did in REVIEW_SLA_HOURS: the reviewer's nearest lead who may
+    review (never the owner, never the assignee), else the CEO; the owner's reviews go to his
+    stand-in (the CEO, or the team lead for what needs no judgment). None: it stays (the CEO's own
+    reviews: its lead is the owner; it gets the daily digest)."""
+    if reviewer == owner:
+        return review_triage_target(conn, row)
+    if reviewer == ceo:
+        return None
+    lead = conn.execute("SELECT reports_to FROM actors WHERE id = ?", (reviewer,)).fetchone()
+    lead = lead["reports_to"] if lead else None
+    hops = 0
+    while lead and hops < 6:
+        a = conn.execute("SELECT is_owner, reports_to FROM actors WHERE id = ?", (lead,)).fetchone()
+        if a is None or a["is_owner"]:
+            lead = None
+            break
+        if lead != row["assignee_id"] and _can_review(conn, lead):
+            break
+        lead, hops = a["reports_to"], hops + 1
+    return lead or (ceo if ceo and ceo not in (reviewer, row["assignee_id"]) else None)
+
+
+def _digest_due(conn: sqlite3.Connection, reviewer: int, now: datetime) -> bool:
+    """One digest per reviewer per day (Europe/Prague)."""
+    from .core import TZ
+
+    midnight = now.astimezone(TZ).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    return conn.execute("""SELECT 1 FROM audit_log WHERE action = 'review_digest' AND entity = 'actor'
+                           AND entity_id = ? AND at >= ?""",
+                        (reviewer, midnight.isoformat(timespec="seconds"))).fetchone() is None
+
+
+def _age_h(at: str, now: datetime) -> int:
+    t = datetime.fromisoformat(at)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return max(0, int((now - t).total_seconds() // 3600))
+
+
+def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int | None = None,
                dry_run: bool = False) -> dict:
-    """Results waiting over REVIEW_SLA_HOURS: the reviewer's lead takes them over; the owner's go to
-    the CEO to triage. The CEO's own reviews get one reminder per SLA period (its lead is the owner).
-    `dry_run`: only say what would move (pos.review_policy's backlog run)."""
-    from . import chat, comments, tasks, versioning, wake
+    """The hourly review job (scheduler `review_sla`):
+
+    - a result waiting over REVIEW_SLA_HOURS (24 h) moves to the reviewer's lead (the owner's to his
+      stand-in, pos.review_policy.owner_stand_in). Every reviewer's rows are looked at (prod: a
+      LIMIT 30 was always filled by the CEO's oldest rows, so the QA/CTO rows never escalated). Each
+      new reviewer gets one message listing what moved to it, not one per task;
+    - every reviewer (agents and people, never the owner) with results waiting over
+      DIGEST_AFTER_HOURS gets one digest a day listing them, instead of a reminder DM per task
+      (prod: ~58 reminder DMs a day, 26 % of all chat);
+    - the review work items are kept in step (pos.review_work.sync).
+
+    Everything is sent in the platform's voice (system_ctx), never the owner's. `dry_run`: only say
+    what would move and who would get a digest. `limit` is kept for callers; it no longer cuts the scan."""
+    from . import chat, comments, review_work, tasks, versioning, wake
 
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=REVIEW_SLA_HOURS)).isoformat(timespec="seconds")
+    digest_cutoff = (now - timedelta(hours=DIGEST_AFTER_HOURS)).isoformat(timespec="seconds")
     owner = actors.owner_id(conn)
     ceo = ceo_id(conn)
-    moved, reminded = [], []
-    rows = conn.execute("SELECT * FROM tasks WHERE status = 'review' AND archived_at IS NULL AND updated_at < ? "
-                        "ORDER BY updated_at LIMIT ?", (cutoff, limit)).fetchall()
-    for row in rows:
-        reviewer = tasks.reviewer_of(conn, row)
-        ref = tasks.display_id(row["id"])
-        target = None
-        if reviewer == owner:
-            target = review_triage_target(conn, row)
-            why = "the owner's review goes to a stand-in first (it leaves him only what truly needs him)"
-        elif reviewer == ceo:
-            last = conn.execute("""SELECT MAX(at) FROM audit_log WHERE action = 'review_reminder' AND entity = 'task'
-                                   AND entity_id = ?""", (row["id"],)).fetchone()[0]
-            if (not last or last < cutoff) and dry_run:
-                reminded.append(ref)
-            elif not last or last < cutoff:
-                sys_ctx = system_ctx(conn)
-                chat.send_dm(conn, sys_ctx, ceo, f"{ref} '{row['title']}' waits for your review over "
-                                                 f"{REVIEW_SLA_HOURS} h: accept it, return it, or hand it to the "
-                                                 "owner only if it truly needs him (request_review).",
-                             priority="fyi", attachments=[{"type": "task", "id": row["id"]}], system=True)
-                audit.log(conn, sys_ctx, "review_reminder", "task", row["id"])
-                wake.wake(ceo)
-                reminded.append(ref)
+    sys_ctx = system_ctx(conn)
+    moved: list[str] = []
+    reminded: list[str] = []
+    moved_to: dict[int, list[str]] = {}
+    waiting_sql = """SELECT * FROM tasks WHERE status = 'review' AND archived_at IS NULL
+                     AND COALESCE(source, '') NOT LIKE 'review:%' ORDER BY updated_at"""
+    for row in conn.execute(waiting_sql).fetchall():
+        # The clock runs from when the reviewer had it as work: the hand-in, or its review item (a
+        # backlog older than the items is not moved up the chain the hour the items appear).
+        item = conn.execute("SELECT MAX(created_at) FROM tasks WHERE source = ?",
+                            (review_work.source_of(row["id"]),)).fetchone()[0]
+        if max(row["updated_at"], item or "") >= cutoff:
             continue
-        else:
-            lead = conn.execute("SELECT reports_to FROM actors WHERE id = ?", (reviewer,)).fetchone()
-            lead = lead["reports_to"] if lead else None
-            hops = 0
-            while lead and hops < 6 and (lead == row["assignee_id"] or not _can_review(conn, lead)
-                                         or conn.execute("SELECT is_owner FROM actors WHERE id = ?",
-                                                         (lead,)).fetchone()[0]):
-                if conn.execute("SELECT is_owner FROM actors WHERE id = ?", (lead,)).fetchone()[0]:
-                    lead = None
-                    break
-                r = conn.execute("SELECT reports_to FROM actors WHERE id = ?", (lead,)).fetchone()
-                lead, hops = (r["reports_to"] if r else None), hops + 1
-            target = lead or (ceo if ceo and ceo not in (reviewer, row["assignee_id"]) else None)
-            why = f"no review in {REVIEW_SLA_HOURS} h: the reviewer's lead takes it over"
+        reviewer = tasks.reviewer_of(conn, row)
+        target = _escalation_target(conn, row, reviewer, owner, ceo)
         if not target or target == reviewer:
             continue
-        if dry_run:
-            moved.append(f"{ref}→{actors.get(conn, target)['name']}")
-            continue
-        sys_ctx = system_ctx(conn)
-        versioning.update(conn, sys_ctx, tasks.ENTITY, row["id"], {"reviewer_id": target}, action="review_escalate")
+        ref = tasks.display_id(row["id"])
         name = actors.get(conn, target)["name"]
+        moved.append(f"{ref}→{name}")
+        if dry_run:
+            continue
+        why = ("the owner's review goes to a stand-in first (it leaves him only what truly needs him)"
+               if reviewer == owner else f"no review in {REVIEW_SLA_HOURS} h: the reviewer's lead takes it over")
+        versioning.update(conn, sys_ctx, tasks.ENTITY, row["id"], {"reviewer_id": target}, action="review_escalate")
         comments.log(conn, sys_ctx, row["id"], f"Review moved to {name}: {why}.", "system")
         audit.log(conn, sys_ctx, "review_escalate", "task", row["id"], **{"from": reviewer, "to": target})
         if reviewer == owner:
             audit.log(conn, sys_ctx, "review_triage", "task", row["id"], to=target)
-        chat.send_dm(conn, sys_ctx, target, f"{ref} '{row['title']}' is yours to review now ({why}). Accept it or "
-                                            "return it with what should change (review_task)"
-                     + ("; hand the owner only what truly needs him (request_review reviewer=Owner)."
-                        if reviewer == owner else "."),
-                     priority="fyi", attachments=[{"type": "task", "id": row["id"]}], system=True)
+        review_work.ensure(conn, row["id"], why)
+        moved_to.setdefault(target, []).append(
+            f"- {ref} '{row['title'][:80]}'" + (" (the owner's: hand him only what truly needs him, "
+                                                 "request_review reviewer=Owner)" if reviewer == owner else ""))
+    for target, lines in moved_to.items():
+        chat.send_dm(conn, sys_ctx, target,
+                     f"{len(lines)} review(s) moved to you (nobody reviewed them in {REVIEW_SLA_HOURS} h). "
+                     "Accept each or return it with what should change (review_task):\n" + "\n".join(lines[:40])
+                     + (f"\n… and {len(lines) - 40} more (to_review)" if len(lines) > 40 else ""),
+                     priority="fyi", system=True)
         wake.wake(target)
-        moved.append(f"{ref}→{name}")
+    # The daily digest: one message per reviewer listing everything that waits for it.
+    waiting: dict[int, list[sqlite3.Row]] = {}
+    for row in conn.execute(waiting_sql).fetchall():
+        waiting.setdefault(tasks.reviewer_of(conn, row), []).append(row)
+    for reviewer, items in waiting.items():
+        r = actors.get(conn, reviewer)
+        if r["is_owner"] or r["archived_at"] or not any(i["updated_at"] < digest_cutoff for i in items):
+            continue
+        if not _digest_due(conn, reviewer, now):
+            continue
+        reminded += [tasks.display_id(i["id"]) for i in items]
+        if dry_run:
+            continue
+        lines = [f"- {tasks.display_id(i['id'])} '{i['title'][:80]}' waits for your review "
+                 f"({_age_h(i['updated_at'], now)} h)" for i in items[:30]]
+        more = f"\n… and {len(items) - 30} more (list_tasks view=to_review)" if len(items) > 30 else ""
+        work = " Each one is a 'Review: T-x' task in your queue." if r["kind"] != "human" else ""
+        chat.send_dm(conn, sys_ctx, reviewer,
+                     f"Review digest: {len(items)} result(s) wait for your review.{work} Accept each or return "
+                     "it with what should change (review_task); hand the owner only what truly needs him "
+                     "(request_review reviewer=Owner).\n" + "\n".join(lines) + more,
+                     priority="fyi", system=True)
+        audit.log(conn, sys_ctx, "review_digest", "actor", reviewer, tasks=len(items))
+        if r["kind"] != "human":
+            wake.wake(reviewer)
     if not dry_run:
+        review_work.sync(conn, now=now)
         conn.commit()
     return {k: v for k, v in (("moved", moved), ("reminded", reminded)) if v}
 
@@ -669,7 +799,8 @@ def work_delivered(conn: sqlite3.Connection, s: str, u: str) -> dict:
     n, minutes, business = 0, 0, 0
     for t in conn.execute("""SELECT * FROM tasks WHERE status = 'done' AND completed_at >= ? AND completed_at < ?
                              AND archived_at IS NULL AND parent_id IS NULL AND assignee_type IN ('ai', 'agent')
-                             AND COALESCE(topic, '') != 'chat'""", (s, u)).fetchall():
+                             AND COALESCE(topic, '') != 'chat' AND COALESCE(source, '') NOT LIKE 'review:%'""",
+                          (s, u)).fetchall():
         kind = classify(conn, t, roles)
         if kind == "demo":
             continue

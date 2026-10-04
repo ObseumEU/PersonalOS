@@ -317,6 +317,7 @@ def test_refusals_of_one_branch_are_one_task_for_the_engineer_never_the_owner(re
     assert "Branch: dev/agent/dev" in t["notes"]
     tasks.claim(conn, Ctx(se, via="mcp"), t["id"])
     tasks.complete(conn, Ctx(se, via="mcp"), t["id"], "rebased")  # handed in, then refused again
+    conn.commit()  # (the MCP session commits; the deployer reports through the API's own connection)
     assert refuse("2", "Software Engineer")["task"] == first["task"]
     assert refuse("3", "David Rosko")["task"] == first["task"]  # a person's commit: still the branch's owner
     t = tasks.get(conn, owner, t["id"])

@@ -296,11 +296,23 @@ def _agent_row(conn: sqlite3.Connection, agent_id: int) -> sqlite3.Row:
     return row
 
 
+# Roles that may pause (and stop) any agent, not only their own team: the COO and the Access manager
+# stop a looping agent at once (prod 2026-10-02: the Access manager's loop of 176 runs hit the company's
+# $50/day cap and every agent stood for a day). Resuming stays with people and the agent's leads.
+PAUSE_ANY_ROLES = ("project_manager", "coo", "access_manager")
+
+
+def may_pause_any(conn: sqlite3.Connection, actor_id: int) -> bool:
+    a = actors.get(conn, actor_id)
+    return a["kind"] != "human" and not a["archived_at"] and (a["role"] or "").lower() in PAUSE_ANY_ROLES
+
+
 def pause(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, paused: bool) -> dict:
     from .org import manages
 
-    if actors.get(conn, ctx.actor_id)["kind"] != "human" and not manages(conn, ctx.actor_id, agent_id):
-        raise _Forbidden("only people and the agent's leads pause it")
+    if (actors.get(conn, ctx.actor_id)["kind"] != "human" and not manages(conn, ctx.actor_id, agent_id)
+            and not (paused and may_pause_any(conn, ctx.actor_id) and agent_id != ctx.actor_id)):
+        raise _Forbidden("only people and the agent's leads pause it (and the COO and the Access manager)")
     _agent_row(conn, agent_id)
     versioning.update(conn, ctx, "actor", agent_id, {"paused_at": now_iso() if paused else None},
                       action="pause" if paused else "resume")
@@ -313,8 +325,9 @@ def stop(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
     from .org import manages
 
     _agent_row(conn, agent_id)
-    if actors.get(conn, ctx.actor_id)["kind"] != "human" and not manages(conn, ctx.actor_id, agent_id):
-        raise _Forbidden("only people and the agent's leads stop it")
+    if (actors.get(conn, ctx.actor_id)["kind"] != "human" and not manages(conn, ctx.actor_id, agent_id)
+            and not (may_pause_any(conn, ctx.actor_id) and agent_id != ctx.actor_id)):
+        raise _Forbidden("only people and the agent's leads stop it (and the COO and the Access manager)")
     stopped = runner.cancel_all(conn, f"stopped by {actors.get(conn, ctx.actor_id)['name']}", actor_id=agent_id)
     audit.log(conn, ctx, "stop_agent", "actor", agent_id, runs=stopped)
     return pause(conn, ctx, agent_id, True)
@@ -337,12 +350,15 @@ def archive_no_commit(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason:
            AND status NOT IN ('done', 'someday')""", (agent_id,))]
     from . import reassign
 
+    # The platform moves the work, not the archiving agent's own choice: the rule that an agent never
+    # gives the owner a task (pos.tasks.refuse_owner_assignee) is for its own tool calls.
+    pctx = Ctx(ctx.actor_id, via="archive", run_id=ctx.run_id)
     for task_id in open_ids:
         note = f"{row['name']} was archived" + (f" ({reason})" if reason else "")
         try:
-            reassign.reassign(conn, ctx, task_id, to, note, force=True)
+            reassign.reassign(conn, pctx, task_id, to, note, force=True)
         except tasks.Invalid:  # refused (e.g. a private task the lead may not see): to the owner
-            tasks.assign(conn, ctx, task_id, {"type": "human", "id": actors.owner_id(conn)})
+            tasks.assign(conn, pctx, task_id, {"type": "human", "id": actors.owner_id(conn)})
     # Reviews it holds go to the same member, and a result waiting for review reaches them now.
     reviews = [r["id"] for r in conn.execute(
         """SELECT id FROM tasks WHERE reviewer_id = ? AND archived_at IS NULL

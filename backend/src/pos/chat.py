@@ -615,15 +615,29 @@ def _loop(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, others: list[int]
     return other["id"]
 
 
+def _loop_lead(conn: sqlite3.Connection, me: sqlite3.Row, other: sqlite3.Row) -> int | None:
+    """Who sorts out a loop between two agents: their lead (either one's), else the COO, else the CEO;
+    never the owner and never one of the two (T-414: a CEO ↔ Head of Growth loop went to the owner)."""
+    pair = {me["id"], other["id"]}
+    for cand in (me["reports_to"], other["reports_to"], role_member(conn, "project_manager"),
+                 role_member(conn, "ceo")):
+        if not cand or cand in pair:
+            continue
+        a = conn.execute("SELECT kind, is_owner, archived_at FROM actors WHERE id = ?", (cand,)).fetchone()
+        if a is not None and not a["is_owner"] and not a["archived_at"] and a["kind"] != "human":
+            return cand
+    return None
+
+
 def _escalate_loop(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, other: sqlite3.Row, n: int,
                    window: int) -> None:
     from . import tasks
 
     me = actors.get(conn, ctx.actor_id)
-    lead_id = me["reports_to"] or other["reports_to"] or role_member(conn, "ceo")
+    lead_id = _loop_lead(conn, me, other)
     audit.log(conn, ctx, "chat_loop", "channel", ch["id"], between=[me["id"], other["id"]], messages=n,
               lead=lead_id)
-    if not lead_id or lead_id in (me["id"], other["id"]):
+    if not lead_id:
         return
     lead = actors.get(conn, lead_id)
     tasks.create(conn, Ctx(lead_id, via="system"), {
@@ -700,6 +714,12 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         if dup is not None:  # a double submit or a retried call: the message is there already
             return {**message_view(conn, dup, ctx.actor_id), "duplicate": True, "delivered_to_run": None,
                     "inbox": []}
+    if ch["kind"] == "dm" and meeting is None:
+        from . import flood
+
+        merged = flood.coalesce(conn, ctx, author, ch, body, attachments, system=system, priority=priority)
+        if merged is not None:  # a one-way flood: added to the sender's last message, nobody woken
+            return merged
     if agent_author and attachments:
         # The same file version into the same conversation within minutes is one message (the CFO shared
         # a chart with sandbox_share, then answered the asking message with chat_send and the same file).

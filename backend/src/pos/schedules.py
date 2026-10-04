@@ -14,7 +14,7 @@ and personal channels need approval per firing), the kill switch (nothing fires 
 Limits for agents (HR policy): at most `max_active_schedules_per_agent` active
 schedules, and nothing more often than every `min_schedule_interval_minutes`.
 A firing is skipped while the previous task from the same schedule is still
-open, and deferred while the assignee has no runtime (budget, usage limits).
+open (a result waiting for review counts as closed), and deferred while the assignee has no runtime (budget, usage limits).
 Schedules are versioned (history, restore) and archived instead of deleted.
 """
 
@@ -35,7 +35,10 @@ TEMPLATE_FIELDS = ("title", "notes", "definition_of_done", "priority", "topic", 
 KINDS = ("task", "meeting")  # a meeting schedule starts a meeting (pos.meetings) instead of making a task
 MEETING_KEYS = ("channel", "topic", "agenda", "participants", "rounds", "facilitator", "budget_usd",
                 "max_minutes", "turn_minutes")
-OPEN = ("inbox", "next", "working", "waiting", "review")
+# A firing is skipped while the previous task is still being worked on. A result waiting in `review`
+# counts as closed for the routine: the work is done, and the daily SRE/Nexus/knowlage checks
+# stopped for a week behind T-177..T-179 waiting for the CEO's review (prod 2026-09-27..10-04).
+OPEN = ("inbox", "next", "working", "waiting")
 DEFER_MINUTES = 15
 
 

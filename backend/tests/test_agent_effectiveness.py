@@ -118,10 +118,10 @@ def test_a_small_task_by_an_experienced_agent_with_passing_tests_is_accepted(env
     assert out["status"] == "review" and out["reviewer_id"] == ids["QA Reviewer"]
 
 
-def test_the_backlog_sweep_dry_runs_then_applies_and_the_sla_is_12_hours(env):
+def test_the_backlog_sweep_dry_runs_then_applies_and_the_sla_is_24_hours(env):
     conn, ids = env["conn"], env["ids"]
     ceo = ids["CEO"]
-    old = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat(timespec="seconds")
+    old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(timespec="seconds")
 
     def waiting(title, assignee, reviewer, note, **kw):
         t = tasks.create(conn, Ctx(ceo), {"title": title, "assignee": {"type": "agent", "id": assignee}, **kw})
@@ -137,14 +137,15 @@ def test_the_backlog_sweep_dry_runs_then_applies_and_the_sla_is_12_hours(env):
     assert dry["applied"] is False and dry["waiting"] == 3
     assert any(f"T-{digest:03d}" in a for a in dry["auto_accepted"])
     assert any(f"T-{code:03d}→QA Reviewer" in r for r in dry["to_qa"])
-    assert f"T-{plan:03d}→CEO" in dry["sla"].get("moved", [])  # over 12 h: the CTO's lead takes it
+    assert f"T-{plan:03d}→CEO" in dry["sla"].get("moved", [])  # over 24 h: the CTO's lead takes it
     assert conn.execute("SELECT status FROM tasks WHERE id = ?", (digest,)).fetchone()[0] == "review"  # dry
     done = review_policy.sweep(conn, apply=True)
     assert done["applied"]
     assert conn.execute("SELECT status FROM tasks WHERE id = ?", (digest,)).fetchone()[0] == "done"
     assert conn.execute("SELECT reviewer_id FROM tasks WHERE id = ?", (code,)).fetchone()[0] == ids["QA Reviewer"]
     assert conn.execute("SELECT reviewer_id FROM tasks WHERE id = ?", (plan,)).fetchone()[0] == ceo
-    assert business.REVIEW_SLA_HOURS == review_policy.SLA_HOURS == 12
+    # escalation after 24 h; the daily digest (and the effectiveness target) at 12 h
+    assert business.REVIEW_SLA_HOURS == 24 and business.DIGEST_AFTER_HOURS == review_policy.SLA_HOURS == 12
 
 
 def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgment_calls(env):

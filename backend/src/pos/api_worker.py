@@ -129,13 +129,25 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     # A "working" task is offered again only when no worker is still on it
     # (a second worker of the same agent must not pick up the same task).
     live, cutoff = _live_run_sql()
-    row = conn.execute(
-        f"""SELECT id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
-           AND (status = 'next' OR (status = 'working' AND NOT {live}))
-           AND (retry_after IS NULL OR retry_after <= ?)
-           ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 1""",
-        (ctx.actor_id, cutoff, None, now_iso()),
-    ).fetchone()
+    from . import review_work
+    from .core import today
+
+    row = None
+    for _ in range(5):  # a review item whose result no longer waits is closed and skipped (pos.review_work)
+        # A task planned for a later day (do_date, Europe/Prague) waits for that day unless it is already
+        # being worked on (prod: T-516 with do_date 9 Oct was picked 241 times).
+        row = conn.execute(
+            f"""SELECT id, source, assignee_id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
+               AND (status = 'next' OR (status = 'working' AND NOT {live}))
+               AND (retry_after IS NULL OR retry_after <= ?)
+               AND (status = 'working' OR do_date IS NULL OR do_date <= ?)
+               ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 1""",
+            (ctx.actor_id, cutoff, None, now_iso(), today().isoformat()),
+        ).fetchone()
+        if row is None or not review_work.stale(conn, row):
+            break
+        conn.commit()
+        row = None
     out: dict = {"state": st, "unread_messages": unread}
     if row:
         from .access import service as access
@@ -246,6 +258,7 @@ def progress(task_id: str, body: dict, conn=Depends(get_db), ctx: Ctx = Depends(
 
 
 BACKOFF_HOURS = 24  # a handed-back or failed task is not requeued automatically sooner
+IDLE_BACKOFF_HOURS = 6  # an ok run that left its task open (next/working) is not requeued sooner
 
 
 def back_off(conn: sqlite3.Connection, task_id: int) -> None:
@@ -255,6 +268,35 @@ def back_off(conn: sqlite3.Connection, task_id: int) -> None:
 
     until = (datetime.now(timezone.utc) + timedelta(hours=BACKOFF_HOURS)).isoformat(timespec="seconds")
     conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (until, task_id))
+
+
+def idle_back_off(conn: sqlite3.Connection, task_id: int, actor_id: int) -> str | None:
+    """An ok run ended and its task is still open with the same agent (`next`, or `working` with
+    nothing handed in): no new run at once (prod: T-516 re-queued 241 times). Held IDLE_BACKOFF_HOURS,
+    or until its do_date (Europe/Prague) when that is later. A person assigning it, a comment or a
+    message lifts it (pos.routing, pos.comments). Returns the new retry_after, or None."""
+    from datetime import datetime, timedelta, timezone
+
+    from .core import TZ
+
+    t = conn.execute("SELECT status, assignee_id, do_date, retry_after, topic, source FROM tasks WHERE id = ?",
+                     (task_id,)).fetchone()
+    if t is None or t["assignee_id"] != actor_id or t["status"] not in ("next", "working"):
+        return None
+    if (t["topic"] or "") == "chat" or (t["source"] or "").startswith("meeting"):
+        return None
+    until = datetime.now(timezone.utc) + timedelta(hours=IDLE_BACKOFF_HOURS)
+    if t["do_date"]:
+        try:
+            day = datetime.fromisoformat(t["do_date"]).replace(tzinfo=TZ).astimezone(timezone.utc)
+            until = max(until, day)
+        except ValueError:
+            pass
+    at = until.isoformat(timespec="seconds")
+    if (t["retry_after"] or "") >= at:
+        return None
+    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (at, task_id))
+    return at
 
 
 def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
@@ -545,6 +587,11 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
                 conn.commit()
         except Exception:  # noqa: BLE001 - the run's end is what matters here
             conn.rollback()
+    if body.status == "ok" and row["task_id"] and row["status"] == "ok":
+        if idle_back_off(conn, row["task_id"], ctx.actor_id):
+            conn.commit()
+            out["held_until"] = conn.execute("SELECT retry_after FROM tasks WHERE id = ?",
+                                             (row["task_id"],)).fetchone()[0]
     if body.status == "cancelled" and row["task_id"] and not (body.detail or "").startswith("could not claim"):
         from . import owner_notice
 

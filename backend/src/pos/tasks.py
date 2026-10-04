@@ -106,6 +106,25 @@ def resolve_assignee(conn: sqlite3.Connection, ctx: Ctx, value) -> dict:
     return {"assignee_type": row["kind"], "assignee_id": row["id"], "assignee_name": row["name"]}
 
 
+OWNER_ASSIGN_SOURCES = ("ask_owner",)  # an agent's question for the owner goes through pos.asks
+TO_OWNER_REFUSED = ("Agents do not give tasks to the owner. Ask him with ask_owner (a question or a decision "
+                    "only he can make), or give the task to your lead or the CEO.")
+
+
+def refuse_owner_assignee(conn: sqlite3.Connection, ctx: Ctx, assignee_id: int | None,
+                          source: str | None = None) -> None:
+    """An agent's own tool call (MCP) never assigns a task to the owner (prod: 6 open tasks agents
+    gave him, nobody worked on them). Platform flows (worker hand-backs, the command guard, support
+    drafts) keep their own rules."""
+    if ctx.via != "mcp" or not assignee_id or (source or "") in OWNER_ASSIGN_SOURCES:
+        return
+    if assignee_id != actors.owner_id(conn):
+        return
+    me = conn.execute("SELECT kind FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
+    if me is not None and me["kind"] != "human":
+        raise Invalid(TO_OWNER_REFUSED)
+
+
 def _row(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None:
@@ -277,6 +296,7 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     project = fields.pop("project", None)
     parent_id = fields.pop("parent_id", None)
     owner = fields.pop("owner_id", None)
+    goal = fields.pop("goal", None)
     source = fields.pop("source", ctx.via)
     unknown = set(fields) - EDITABLE
     if unknown:
@@ -326,6 +346,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         values["project_id"] = project_info.match_project(conn, values)
         if values["project_id"] is None:
             values.pop("project_id")
+    refuse_owner_assignee(conn, ctx, values.get("assignee_id"), values.get("source"))
+    if me["kind"] != "human" and parent_id is None:
+        _work_context(conn, ctx, values, goal)  # every agent's task has a project or goal and a value kind
     from . import business
 
     dup = business.find_duplicate_escalation(conn, ctx, values)
@@ -349,11 +372,59 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         values["notes"] = task_descriptions.build(conn, values)
         values["description_generated"] = 1
     new_id = versioning.insert(conn, ctx, ENTITY, values)["id"]
+    if goal not in (None, ""):
+        from . import goals
+
+        goals.link_to(conn, ctx, int(goal), display_id(new_id))
     if me["kind"] != "human" and values.get("assignee_id") == actors.owner_id(conn):
         from . import head_alerts
 
         head_alerts.assigned(conn, ctx, new_id)  # an agent's task for the owner: its head hears of it
     return get(conn, ctx, new_id)
+
+
+def _default_project(conn: sqlite3.Connection, actor_id: int | None) -> int | None:
+    """The project an agent's work belongs to by default: the active project named after its team
+    (#kniha for the Kniha team), else the one active project it leads."""
+    if not actor_id:
+        return None
+    a = conn.execute("SELECT team, kind FROM actors WHERE id = ?", (actor_id,)).fetchone()
+    if a is None or a["kind"] == "human":
+        return None
+    try:
+        if a["team"]:
+            p = conn.execute("SELECT id FROM projects WHERE lower(slug) = lower(?) AND status = 'active'",
+                             (a["team"],)).fetchone()
+            if p:
+                return p["id"]
+        led = conn.execute("SELECT id FROM projects WHERE lead_id = ? AND status = 'active'", (actor_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    return led[0]["id"] if len(led) == 1 else None
+
+
+def _work_context(conn: sqlite3.Connection, ctx: Ctx, values: dict, goal) -> None:
+    """An agent's new top-level task carries its project (or a goal) and its value kind, so the cost
+    and the work count where they belong (business vs platform). Defaults: the creator's team project
+    or the project it leads (else the assignee's); the value kind from pos.business.classify, which
+    counts the project and the team (Kniha roles are business)."""
+    from . import business
+
+    if goal not in (None, ""):
+        from . import goals
+
+        goals.get(conn, int(goal))  # exists (a wrong goal fails before the task is written)
+    elif values.get("project_id") is None:
+        pid = _default_project(conn, ctx.actor_id) or _default_project(conn, values.get("assignee_id"))
+        if pid:
+            values["project_id"] = pid
+    if not values.get("value_kind"):
+        business.ensure_schema(conn)
+        kind = business.classify(conn, {"id": None, "parent_id": None, "value_kind": None, "title": "",
+                                        "topic": None, "source": None, "assignee_id": None, "created_by": None,
+                                        "project_id": None, **values})
+        if kind in ("business", "platform"):
+            values["value_kind"] = kind
 
 
 def capture(conn: sqlite3.Connection, ctx: Ctx, text: str, source: str | None = None) -> dict:
@@ -379,6 +450,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         extra["reviewer_id"] = resolve_reviewer(conn, ctx, value) if value not in (None, "") else None
     if "assignee" in changes:
         extra.update(resolve_assignee(conn, ctx, changes.pop("assignee")))
+        refuse_owner_assignee(conn, ctx, extra.get("assignee_id"), row["source"])
     unknown = set(changes) - EDITABLE
     if unknown:
         raise Invalid(f"unknown fields: {sorted(unknown)}")
@@ -447,6 +519,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         elif changes["status"] != "done":
             extra["completed_at"] = None
     versioning.update(conn, ctx, ENTITY, task_id, {**changes, **extra}, action="accept" if accepted else "update")
+    if row["status"] == "review" and changes.get("status") not in (None, "review"):
+        from . import review_work
+
+        review_work.close_for(conn, task_id, "accepted" if accepted else f"the result is {changes['status']} now")
     if triaged:
         from . import audit
 
@@ -521,8 +597,10 @@ def hand_review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, reviewer_id: i
 
 
 def notify_reviewer(conn: sqlite3.Connection, ctx: Ctx, task_id: int, why: str) -> bool:
-    """Tell the reviewer of a task waiting for review (again): a DM with the task, and wake it."""
-    from . import chat, wake
+    """Tell the reviewer of a task waiting for review (again). An agent reviewer gets a review work
+    item in its queue and is woken (pos.review_work: a DM alone started no run); a person (not the
+    owner, who sees Needs review on the board) gets a DM, never in the owner's name."""
+    from . import chat, review_work, wake
 
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if row is None or row["status"] != "review" or row["archived_at"]:
@@ -531,12 +609,25 @@ def notify_reviewer(conn: sqlite3.Connection, ctx: Ctx, task_id: int, why: str) 
     r = actors.get(conn, rid)
     if r["archived_at"] or r["is_owner"] or rid == ctx.actor_id:
         return False  # the owner sees Needs review on the board; nobody DMs themself
-    chat.send_dm(conn, ctx, rid, f"{display_id(task_id)} '{row['title']}' waits for your review ({why}). "
-                                 "Accept it or return it with what should change (review_task).",
-                 priority="fyi", attachments=[{"type": "task", "id": task_id}], system=True)
     if r["kind"] != "human":
+        if review_work.ensure(conn, task_id, why) is None:
+            return False
         wake.wake(rid)
+        return True
+    chat.send_dm(conn, _not_owner(conn, ctx), rid,
+                 f"{display_id(task_id)} '{row['title']}' waits for your review ({why}). "
+                 "Accept it or return it with what should change (review_task).",
+                 priority="fyi", attachments=[{"type": "task", "id": task_id}], system=True)
     return True
+
+
+def _not_owner(conn: sqlite3.Connection, ctx: Ctx) -> Ctx:
+    """The platform's notices are never sent in the owner's name (pos.business.system_ctx)."""
+    if conn.execute("SELECT is_owner FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()[0]:
+        from .business import system_ctx
+
+        return system_ctx(conn)
+    return ctx
 
 
 def resolve_project(conn: sqlite3.Connection, ctx: Ctx, value) -> int:
@@ -658,15 +749,18 @@ def _ask_reviewer(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> None:
     r = actors.get(conn, rid)
     if r["is_owner"] or r["archived_at"]:
         return
-    from . import chat, wake
+    from . import chat, review_work, wake
 
     by = actors.get(conn, ctx.actor_id)["name"]
+    if r["kind"] != "human":
+        # An agent reviews as work: an item in its queue starts its run (pos.review_work).
+        if review_work.ensure(conn, task["id"], f"handed in by {by}") is not None:
+            wake.wake(rid)
+        return
     chat.send_dm(conn, ctx, rid, f"{by} handed in {task['ref']} '{task['title']}' for your review. "
                                  "Accept it or return it with what should change (review_task). "
                                  f"Report: /report/{task['ref']}",
                  priority="fyi", attachments=[{"type": "task", "id": task["id"]}], system=True)
-    if r["kind"] != "human":
-        wake.wake(rid)
 
 
 def _no_pseudo_tools(conn: sqlite3.Connection, ctx: Ctx, text: str | None) -> None:
@@ -720,7 +814,9 @@ def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comme
         "returned_count": row["returned_count"] + 1,
         "progress_note": f"Returned: {comment}" if comment else "Returned",
     }, action="return")
-    from . import business, comments
+    from . import business, comments, review_work
+
+    review_work.close_for(conn, task_id, "returned")
 
     comments.log(conn, ctx, task_id, f"Returned: {comment}" if comment else "Returned", "return")
     business.record_intervention(conn, ctx, task_id, "return", comment or "")
@@ -745,6 +841,7 @@ def intervene(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str = "") 
 def assign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, assignee) -> dict:
     row = _row(conn, ctx, task_id)
     cols = resolve_assignee(conn, ctx, assignee)
+    refuse_owner_assignee(conn, ctx, cols.get("assignee_id"), row["source"])
     changes: dict = {}
     if cols["assignee_type"] == "external":
         changes["status"] = "waiting"

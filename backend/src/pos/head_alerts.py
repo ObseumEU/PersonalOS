@@ -11,6 +11,9 @@ org chart, never the owner) when a run failed or was stopped by the budget, or
 when the agent gave a task to the owner. At most one per (agent, task, reason)
 within DEDUP_HOURS (the audit log is the memory). The kill switch, a pause and a
 manual stop never alert. Errors are swallowed: the run's finish must not fail.
+
+`sweep`: the scheduler's twice-daily list for every head (09:00, 15:00) and the COO's cross-team
+second line (11:00), one DM each, in code. It replaced the heads' LLM routines "Hlídání výpadků".
 """
 
 import sqlite3
@@ -22,7 +25,7 @@ from .core import Ctx, Forbidden, NotFound, now_iso
 DEDUP_HOURS = 6
 PIPELINES = ("system", "support", "runner", "scheduler")  # Ctx.via of platform flows acting for an agent
 PIPELINE_SOURCES = ("support:", "taint_hold:")
-ALL_SEEING = ("ceo", "coo")  # roles that see every team
+ALL_SEEING = ("ceo", "coo", "project_manager")  # roles that see every team (the COO is "project_manager")
 OPEN = ("inbox", "next", "working", "waiting")
 REASONS = {
     "last_run_failed": "běh skončil chybou",
@@ -254,3 +257,85 @@ def assigned(conn: sqlite3.Connection, ctx: Ctx, task_id: int, before_assignee: 
         notify(conn, ctx.actor_id, task_id, "owner_assigned")
     except Exception:  # noqa: BLE001
         return
+
+
+# ------------------------------------------------------------------ the heads' twice-daily sweep (code)
+
+SWEEP_HOURS = 4  # work that has not moved this long is stuck for the sweep
+SECOND_LINE_HOURS = 8  # the COO's cross-team second line: stuck this long despite the heads' sweep
+SWEEP_REPEAT_HOURS = 12  # the same list for the same head is not sent again within this long
+SECOND_LINE_ROLES = ("project_manager", "coo")
+
+
+def _heads(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Agents with a team below them, except the CEO (it hears of what its heads cannot solve)."""
+    return conn.execute("""SELECT * FROM actors a WHERE a.kind != 'human' AND a.archived_at IS NULL
+                           AND COALESCE(a.role, '') != 'ceo' AND EXISTS (SELECT 1 FROM actors b
+                           WHERE b.reports_to = a.id AND b.archived_at IS NULL) ORDER BY a.id""").fetchall()
+
+
+def _send_digest(conn: sqlite3.Connection, head: int, items: list[dict], title: str, dry_run: bool) -> bool:
+    """One DM with the list, unless the same list went to this head in the last SWEEP_REPEAT_HOURS."""
+    import json
+
+    key = ",".join(sorted(f"{i['ref']}:{i['reason']}" for i in items))
+    last = conn.execute("""SELECT detail FROM audit_log WHERE action = 'head_digest' AND entity = 'actor'
+                           AND entity_id = ? AND at >= ? ORDER BY id DESC LIMIT 1""",
+                        (head, _ago(SWEEP_REPEAT_HOURS))).fetchone()
+    if last and json.loads(last["detail"] or "{}").get("key") == key:
+        return False
+    if dry_run:
+        return True
+    from .business import system_ctx
+
+    labels = {**REASONS, "retry_after": "čeká na další pokus (retry_after)", "no_activity": "bez pohybu"}
+    lines = [f"- {i['ref']} „{i['title'][:70]}“ ({i['assignee'] or '?'}): {labels.get(i['reason'], i['reason'])}"
+             + (f", {i['hours_idle']} h" if i.get("hours_idle") is not None else "") for i in items[:25]]
+    more = f"\n… a dalších {len(items) - 25} (stuck_tasks)" if len(items) > 25 else ""
+    ctx = system_ctx(conn)
+    chat.send_dm(conn, ctx, head,
+                 f"{title}: {len(items)} úkol(ů) stojí.\n" + "\n".join(lines) + more
+                 + "\nCo udělat: vyřeš sám (task_reassign, upřesnit komentářem, rozpočet přes request_access); "
+                   "úkol u Ownera, který patří agentům, převezmi; co nejde, úkol pro COO, ne Davidovi.",
+                 priority="fyi", system=True)
+    audit.log(conn, ctx, "head_digest", "actor", head, key=key, tasks=len(items))
+    return True
+
+
+def sweep(conn: sqlite3.Connection, *, second_line: bool = False, dry_run: bool = False) -> dict:
+    """The code that replaced the 16 LLM "Hlídání výpadků" routines (2x a day per head, ~$117 a month):
+    each head gets one DM listing its team's stuck work (stuck(): no movement for SWEEP_HOURS, a failed
+    run, the budget, held back, or a task left with the owner); nothing stuck, nothing sent.
+    `second_line`: the COO gets one cross-team list of what is stuck over SECOND_LINE_HOURS (its 11:00
+    routine). No model run; the heads act on the list in their next run."""
+    out: dict = {}
+    if second_line:
+        from .chat import role_member
+
+        coo = next((role_member(conn, r) for r in SECOND_LINE_ROLES if role_member(conn, r)), None)
+        if coo is None:
+            return {}
+        items = []
+        for head in _heads(conn):
+            if head["id"] == coo:
+                continue
+            items += [i for i in stuck(conn, head["id"], hours=SECOND_LINE_HOURS)["stuck"]
+                      if i["reason"] != "retry_after"]
+        seen, uniq = set(), []
+        for i in items:
+            if i["ref"] not in seen:
+                seen.add(i["ref"])
+                uniq.append(i)
+        if uniq and _send_digest(conn, coo, uniq, "Druhá pojistka napříč týmy", dry_run):
+            out["sent"] = {actors.get(conn, coo)["name"]: len(uniq)}
+    else:
+        sent = {}
+        for head in _heads(conn):
+            items = [i for i in stuck(conn, head["id"], hours=SWEEP_HOURS)["stuck"] if i["reason"] != "retry_after"]
+            if items and _send_digest(conn, head["id"], items, "Zaseknutá práce tvého týmu", dry_run):
+                sent[head["name"]] = len(items)
+        if sent:
+            out["sent"] = sent
+    if not dry_run:
+        conn.commit()
+    return out

@@ -56,10 +56,11 @@ def test_prodfix_cleans_up_what_the_bugs_left_and_is_idempotent(tmp_path):
     assert tasks.get(conn, owner, ticket["ticket_id"])["status"] == "done"
     assert conn.execute("SELECT status FROM owner_asks WHERE ticket_id = ?", (ticket["ticket_id"],)).fetchone()[0] \
         == "answered"
-    inbox = lambda a: [r[0] for r in conn.execute(  # noqa: E731
-        "SELECT m.body FROM chat_inbox i JOIN chat_messages m ON m.id = i.message_id WHERE i.actor_id = ?", (a,))]
-    assert any(silent["ref"] in b and "review" in b for b in inbox(qa))                 # told again
-    assert any(held["ref"] in b and "review" in b for b in inbox(se))
+    # told again: an agent reviewer gets a review work item in its queue (pos.review_work)
+    item = lambda t, a: conn.execute(  # noqa: E731
+        "SELECT 1 FROM tasks WHERE source = ? AND assignee_id = ? AND status = 'next'", (f"review:{t['id']}", a)
+    ).fetchone()
+    assert item(silent, qa) and item(held, se)
     assert report["reviews"]
     again = prodfix_ops.run(conn, apply=True)
     assert not any(again[k] for k in ("grants", "tasks", "incidents", "chat"))

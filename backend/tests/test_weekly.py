@@ -318,7 +318,9 @@ def test_the_whole_meeting(conn, me, tmp_path):
 
     # Goals and next week's tasks, then close.
     g = goals.create(conn, cos, {"title": "Platby v e-shopu", "target": "50 plateb do 31. 3.", "owner": "David"})
-    nt = tasks.create(conn, cos, {"title": "Napojit platební bránu", "status": "next", "assignee": "David",
+    # (agents never give the owner a task: pos.tasks.refuse_owner_assignee; the CoS follows it up)
+    nt = tasks.create(conn, cos, {"title": "Napojit platební bránu", "status": "next",
+                                  "assignee": {"type": "agent", "id": cos.actor_id},
                                   "notes": "### Proč\nCíl platby.", "definition_of_done": "Brána běží."})
     goals.link_to(conn, cos, g["id"], nt["ref"])
     closed = weekly.close(conn, cos, notes="### Zápis\n- Launch se povedl.\n- Cíl: platby.",
