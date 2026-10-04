@@ -132,6 +132,11 @@ def test_the_backlog_sweep_dry_runs_then_applies_and_the_sla_is_24_hours(env):
     digest = waiting("Digest: faktura zaplacena", ids["Writer"], ceo, "Zapsáno do souhrnu.", topic="digest")
     code = waiting("Fix workeru", ids["Software Engineer"], ceo, "commit 1234abcd, Ověřeno: 3 passed")
     plan = waiting("Plán obchodu", ids["Writer"], ids["CTO"], "Návrh je v poznámce.", topic="obchod")
+    # the SLA clock starts at the review item (a backlog result without one waits for its batch)
+    from pos import review_work
+
+    review_work.ensure(conn, plan)
+    conn.execute("UPDATE tasks SET created_at = ? WHERE source = ?", (old, review_work.source_of(plan)))
     conn.commit()
     dry = review_policy.sweep(conn)
     assert dry["applied"] is False and dry["waiting"] == 3

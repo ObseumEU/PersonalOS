@@ -70,6 +70,7 @@ DEFAULT_SETTINGS = {
     "spike_budget_share": 0.5,    # ... and above this share of the agent's own daily budget in one hour
     "spike_cooldown_h": 1.0,      # no second pause within this long after a resume
     "cap_alert_ratio": 0.8,       # ping the CEO when the company cap is this full
+    "business_reserve_ratio": 0.8,  # past this share of the company usd_day cap only business tasks start
 }
 
 
@@ -556,6 +557,20 @@ def limited_until(conn: sqlite3.Connection, agent_id: int, now: datetime | None 
                 at = at.replace(tzinfo=timezone.utc)
         until = at if until is None or at > until else until
     return _iso(until) if until and until > now else None
+
+
+def business_only(conn: sqlite3.Connection, now: datetime | None = None) -> bool:
+    """The company's 24 h spend is past `business_reserve_ratio` of its usd_day cap: the rest of the
+    cap is kept for business work, so the picker offers agents only business tasks (platform work and
+    review items wait for the window to free up; messages are still answered)."""
+    if not store.ready(conn):
+        return False
+    now = now or utcnow()
+    cap = limit(conn, None, "usd_day", now)
+    if not cap:
+        return False
+    ratio = float(settings(conn).get("business_reserve_ratio") or 0)
+    return ratio > 0 and used(conn, None, "usd_day", now) >= ratio * cap
 
 
 def run_cap_usd(conn: sqlite3.Connection, agent_id: int) -> float | None:

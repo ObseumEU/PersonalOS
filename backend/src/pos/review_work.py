@@ -27,6 +27,10 @@ from .core import Ctx, now_iso
 
 SOURCE = "review:"
 RECREATE_HOURS = 24  # an item completed without reviewing comes back at most once a day (sync)
+# A backlog drains in batches: sync creates at most this many new items in any 24 h (hand-ins via
+# `ensure` count too). Prod 2026-10-04: ~94 waiting results would have become 94 model runs at once
+# (QA 40, CEO 37), enough to hit the $50/day company cap and stop the business work.
+DAILY_NEW_ITEMS = 25
 
 
 def source_of(task_id: int) -> str:
@@ -149,14 +153,30 @@ def stale(conn: sqlite3.Connection, item) -> bool:
     return True
 
 
-def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = True) -> dict:
+def _created_since(conn: sqlite3.Connection, since: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM tasks WHERE source LIKE 'review:%' AND created_at >= ?",
+                        (since,)).fetchone()[0]
+
+
+def deferred(conn: sqlite3.Connection, row, reviewer: int | None) -> bool:
+    """`row` waits for an agent's review but has never had an item: a backlog result the batching
+    has not reached yet (its SLA clock starts at its item, pos.business.review_sla)."""
+    return (_agent_reviewer(conn, reviewer) and reviewer != row["assignee_id"]
+            and conn.execute("SELECT 1 FROM tasks WHERE source = ?", (source_of(row["id"]),)).fetchone() is None)
+
+
+def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = True,
+         daily_new: int | None = None) -> dict:
     """Every result waiting for an agent's review has its open item; stale items are closed. An item
-    completed without a review comes back after RECREATE_HOURS. `apply=False`: only report."""
-    from . import tasks
+    completed without a review comes back after RECREATE_HOURS. New items are created in batches:
+    at most `daily_new` (DAILY_NEW_ITEMS) in any 24 h, business results first, then the oldest; the
+    rest wait for the next hourly run ("deferred"). `apply=False`: only report."""
+    from . import business, tasks
 
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(hours=RECREATE_HOURS)).isoformat(timespec="seconds")
-    created, moved, closed = [], [], []
+    created, moved, closed, deferred_ = [], [], [], []
+    room = max(0, (DAILY_NEW_ITEMS if daily_new is None else daily_new) - _created_since(conn, since))
     for it in conn.execute("SELECT * FROM tasks WHERE source LIKE 'review:%' AND archived_at IS NULL "
                            "AND status != 'done'").fetchall():
         tid = reviewed_id(it)
@@ -165,8 +185,9 @@ def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = Tr
             closed.append(tasks.display_id(it["id"]))
             if apply:
                 _close(conn, it["id"], "the result left review")
+    todo = []
     for row in conn.execute("SELECT * FROM tasks WHERE status = 'review' AND archived_at IS NULL "
-                            "AND COALESCE(source, '') NOT LIKE 'review:%' ORDER BY updated_at").fetchall():
+                            "AND COALESCE(source, '') NOT LIKE 'review:%' ORDER BY updated_at, id").fetchall():
         rid = tasks.reviewer_of(conn, row)
         if not _agent_reviewer(conn, rid) or rid == row["assignee_id"]:
             continue
@@ -176,10 +197,20 @@ def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = Tr
         if not items and conn.execute("SELECT 1 FROM tasks WHERE source = ? AND completed_at >= ?",
                                       (source_of(row["id"]), since)).fetchone():
             continue  # its item was completed today without a review: it comes back tomorrow
-        name = actors.get(conn, rid)["name"]
-        (moved if items else created).append(f"{tasks.display_id(row['id'])}→{name}")
+        todo.append((row, rid, bool(items)))
+    # moves first (no new run), then business before platform, oldest first (stable sort)
+    todo.sort(key=lambda x: (not x[2], business.classify(conn, x[0]) != "business"))
+    for row, rid, has_item in todo:
+        label = f"{tasks.display_id(row['id'])}→{actors.get(conn, rid)['name']}"
+        if not has_item:
+            if room <= 0:
+                deferred_.append(label)
+                continue
+            room -= 1
+        (moved if has_item else created).append(label)
         if apply:
             ensure(conn, row["id"], "waiting for your review")
     if apply:
         conn.commit()
-    return {k: v for k, v in (("created", created), ("moved", moved), ("closed", closed)) if v}
+    return {k: v for k, v in (("created", created), ("moved", moved), ("closed", closed),
+                              ("deferred", deferred_)) if v}

@@ -368,3 +368,44 @@ def test_the_prod_fix_dry_runs_on_a_copy_then_applies_once(conn, owner, co, tmp_
     again = prodfix_workflow.run(conn, apply=True)
     assert not again["routines"] and not again["owner"] and not again["t232"]
     assert json.dumps(again)  # serialisable report
+
+
+# ------------------------------------------------------------------ the review backlog drains in batches
+
+def test_the_review_backlog_drains_in_daily_batches_business_first_and_waits_for_its_item(conn, owner, co):
+    ceo, klead = co["ceo"], co["klead"]
+    old = [tasks.create(conn, owner, {"title": f"Platforma {i}", "assignee": "QA Reviewer", "topic": "ops"})
+           for i in range(4)]
+    biz = [tasks.create(conn, klead, {"title": f"Kniha {i}", "assignee": {"type": "agent", "id": klead.actor_id}})
+           for i in range(3)]
+    for n, t in enumerate(old + biz):  # the platform rows are the oldest
+        conn.execute("UPDATE tasks SET status = 'review', reviewer_id = ?, updated_at = ? WHERE id = ?",
+                     (ceo.actor_id, _ago(100 - n), t["id"]))
+    conn.commit()
+    dry = review_work.sync(conn, apply=False, daily_new=4)
+    assert len(dry["created"]) == 4 and len(dry["deferred"]) == 3 and _item(conn, old[0]["id"]) is None
+    out = review_work.sync(conn, daily_new=4)
+    made = {t["id"] for t in old + biz if _item(conn, t["id"]) is not None}
+    assert {t["id"] for t in biz} <= made and old[0]["id"] in made and len(made) == 4  # business, then oldest
+    assert len(out["deferred"]) == 3
+    assert not review_work.sync(conn, daily_new=4).get("created")  # the day's batch is used up
+    # the SLA does not move a deferred result up the chain (its clock starts at its item)
+    moved = business.review_sla(conn, dry_run=True).get("moved", [])
+    assert not any(tasks.display_id(t["id"]) in x for t in old[1:] for x in moved)
+
+
+def test_near_the_company_cap_the_picker_offers_only_business_work(conn, owner, co):
+    se = co["se"]
+    access.set_budget(conn, owner, None, "usd_day", 50.0, "company cap")
+    plat = tasks.create(conn, co["cto"], {"title": "Úklid logů", "topic": "ops", "priority": 1,
+                                          "assignee": {"type": "agent", "id": se.actor_id}})
+    kniha = tasks.create(conn, co["cto"], {"title": "Platební brána pro zákazníka", "topic": "sales",
+                                           "priority": 3, "assignee": {"type": "agent", "id": se.actor_id}})
+    w = Ctx(se.actor_id, via="worker")
+    assert api_worker._next_work(conn, w)["task"]["id"] == plat["id"]
+    conn.execute("INSERT INTO engine_usage (at, engine, actor_id, input_tokens, output_tokens, cost_usd) "
+                 "VALUES (?, 'claude', ?, 1000, 0, 41.0)", (now_iso(), co["qa"].actor_id))
+    conn.commit()
+    assert access.business_only(conn)
+    out = api_worker._next_work(conn, w)
+    assert out["task"]["id"] == kniha["id"] and out["state"]["business_only"]

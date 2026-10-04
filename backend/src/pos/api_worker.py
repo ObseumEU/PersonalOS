@@ -129,29 +129,37 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     # A "working" task is offered again only when no worker is still on it
     # (a second worker of the same agent must not pick up the same task).
     live, cutoff = _live_run_sql()
-    from . import review_work
+    from . import business, review_work
+    from .access import service as access
     from .core import today
 
+    # Near the company's daily cap only business tasks start (pos.access.business_only); a task already
+    # being worked on is finished either way.
+    reserve = access.business_only(conn)
+    if reserve:
+        st["business_only"] = True
     row = None
-    for _ in range(5):  # a review item whose result no longer waits is closed and skipped (pos.review_work)
-        # A task planned for a later day (do_date, Europe/Prague) waits for that day unless it is already
-        # being worked on (prod: T-516 with do_date 9 Oct was picked 241 times).
-        row = conn.execute(
-            f"""SELECT id, source, assignee_id FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
-               AND (status = 'next' OR (status = 'working' AND NOT {live}))
-               AND (retry_after IS NULL OR retry_after <= ?)
-               AND (status = 'working' OR do_date IS NULL OR do_date <= ?)
-               ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 1""",
-            (ctx.actor_id, cutoff, None, now_iso(), today().isoformat()),
-        ).fetchone()
-        if row is None or not review_work.stale(conn, row):
-            break
-        conn.commit()
-        row = None
+    # A task planned for a later day (do_date, Europe/Prague) waits for that day unless it is already
+    # being worked on (prod: T-516 with do_date 9 Oct was picked 241 times).
+    candidates = conn.execute(
+        f"""SELECT * FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
+           AND (status = 'next' OR (status = 'working' AND NOT {live}))
+           AND (retry_after IS NULL OR retry_after <= ?)
+           AND (status = 'working' OR do_date IS NULL OR do_date <= ?)
+           ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 50""",
+        (ctx.actor_id, cutoff, None, now_iso(), today().isoformat()),
+    ).fetchall()
+    for cand in candidates:
+        # a review item whose result no longer waits is closed and skipped (pos.review_work)
+        if review_work.stale(conn, cand):
+            conn.commit()
+            continue
+        if reserve and cand["status"] != "working" and business.classify(conn, cand) != "business":
+            continue
+        row = cand
+        break
     out: dict = {"state": st, "unread_messages": unread}
     if row:
-        from .access import service as access
-
         # Over its own limit (runs_day, usd_day...): no task until the limit resets, so neither this
         # worker nor the pool's probe starts a run that would only be refused (pos.access).
         until = access.limited_until(conn, ctx.actor_id)
@@ -159,8 +167,6 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             st["limited_until"] = until
             row = None
     if row:
-        from . import business
-
         out["task"] = tasks.get(conn, ctx, row["id"])
         # The owner asked for this himself: the worker allows the profile's higher step cap (max_steps_owner).
         out["task"]["owner_request"] = business.owner_request(conn, conn.execute(

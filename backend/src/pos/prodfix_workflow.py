@@ -18,8 +18,9 @@ audit-logged in the platform's voice (the Executive Assistant, "via prodfix"), n
              and T-232 says which two items were wrongly linked to it.
 4. reviews   the review backlog: the review policy runs over it (low risk accepted, routine checks
              whose findings are tracked accepted, code to the QA Reviewer), the SLA moves what waited
-             over 24 h, and every result left for an agent reviewer becomes a "Review: T-x" task in
-             that reviewer's queue (pos.review_work).
+             over 24 h, and the results left for an agent reviewer become "Review: T-x" tasks in that
+             reviewer's queue (pos.review_work) in batches: at most 25 new ones a day, business
+             results first, then the oldest; the hourly SLA job creates the rest on later days.
 """
 
 import argparse
@@ -168,6 +169,9 @@ def step_reviews(conn: sqlite3.Connection, ctx: Ctx, apply: bool) -> list[str]:
         per[x.split("→", 1)[1]] = per.get(x.split("→", 1)[1], 0) + 1
     out.append("review items created: " + (", ".join(f"{k} {v}" for k, v in sorted(per.items(), key=lambda kv: -kv[1]))
                                            or "none"))
+    if items.get("deferred"):
+        out.append(f"review items deferred to later days (batching, {review_work.DAILY_NEW_ITEMS}/day): "
+                   f"{len(items['deferred'])}")
     out += [f"review item {x}" for x in items.get("created", [])]
     out += [f"review item moved {x}" for x in items.get("moved", [])]
     out += [f"review item closed {x}" for x in items.get("closed", [])]

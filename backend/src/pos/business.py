@@ -631,6 +631,8 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
         if max(row["updated_at"], item or "") >= cutoff:
             continue
         reviewer = tasks.reviewer_of(conn, row)
+        if item is None and review_work.deferred(conn, row, reviewer):
+            continue  # a backlog result the batching has not reached: its clock starts at its item
         target = _escalation_target(conn, row, reviewer, owner, ceo)
         if not target or target == reviewer:
             continue
