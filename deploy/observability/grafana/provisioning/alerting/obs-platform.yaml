@@ -84,23 +84,36 @@ groups:
           summary: "{{ $labels.host }}: swap {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} used for 10 minutes"
           dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
 
+      # Swap alone is not pressure: the kernel leaves idle pages in swap while RAM is free (T-615).
+      # A is the swap ratio, kept only for hosts under real pressure: swap > 70 % with memory > 80 %,
+      # or pages swapped back in faster than 500/s. No series means no pressure.
       - uid: obs-swap-warn
-        title: Swap above 50%
+        title: Swap pressure
         condition: C
         data:
           - refId: A
             relativeTimeRange: {from: 600, to: 0}
             datasourceUid: obs-prometheus
-            model: {refId: A, expr: "host:swap_used:ratio", instant: true}
+            model:
+              refId: A
+              instant: true
+              expr: >-
+                host:swap_used:ratio and on(host)
+                ((host:swap_used:ratio > 0.7 and on(host) host:memory_used:ratio > 0.8)
+                or on(host) max by (host) (rate(node_vmstat_pswpin[5m])) > 500)
+          - refId: B
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model: {refId: B, expr: "max by (host) (rate(node_vmstat_pswpin[5m]))", instant: true}
           - refId: C
             datasourceUid: __expr__
-            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0.5]}}]}
-        for: 30m
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0]}}]}
+        for: 15m
         noDataState: OK
         execErrState: Error
         labels: {team: platform, kind: swap, severity: warning}
         annotations:
-          summary: "{{ $labels.host }}: swap {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} used for 30 minutes (memory pressure: see the container memory panel)"
+          summary: "{{ $labels.host }}: swap {{ with $values.A }}{{ humanizePercentage .Value }}{{ end }} under memory pressure for 15 minutes (swap-in {{ with $values.B }}{{ printf \"%.0f\" .Value }}{{ end }} pages/s; see the container memory panel)"
           dashboard: https://grafana.obseum.cloud/d/obs-server-overview?var-host={{ $labels.host }}
 
       # ops/backup/backup.sh on svr03 writes pos_backup_last_success_timestamp_seconds{target=local|agent186|gdrive}
