@@ -228,6 +228,7 @@ def outbound_stats(conn: sqlite3.Connection, days: int = 7) -> dict:
         "by_agent_kind": count(lambda r: f"{r['actor_name'] or '?'} · {r['kind']}"),
         "replies": len(replied), "threads_sent": len(threads),
         "reply_rate": round(len(replied) / len(threads), 2) if threads else None,
+        "failed": by_status.get("failed", 0), "not_configured": by_status.get("not_configured", 0),
         "not_sent": {k: v for k, v in by_status.items() if k not in ("sent", "sending", "drafted")},
         "waiting_for_owner": pending, "drafts_waiting": drafts, "draft_trust": _trust(conn, days),
     }

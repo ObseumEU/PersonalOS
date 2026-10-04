@@ -68,7 +68,7 @@ def render(conn: sqlite3.Connection, campaign: str) -> tuple[str, str, bool]:
              "pozná a položku zavře.\n\n### Koncepty\n" + "\n".join(_line(r) for r in rows) +
              "\n\n### Proč koncepty\nTvoje rozhodnutí: e-maily agentů jdou zatím jako koncepty. Až budeš "
              "agentům věřit, přepni v Nastavení „E-maily odesílat automaticky“ (důvěra v koncepty je na "
-             "stránce Tým → Práce).")
+             "stránce Firma).")
     return title[:200], notes, not waiting
 
 

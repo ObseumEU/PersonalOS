@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, ChevronLeft, Minus, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import DraftTrustPanel from "../components/outbound/DraftTrustPanel";
 import { PageHeader, Panel } from "../components/ui";
 import company from "../i18n/cs/company";
 import { register, t } from "../i18n/core";
@@ -256,6 +257,10 @@ export default function Company() {
                 <Stat label={t("co.world.helped")} value={w.customers_helped} />
               </div>
             </Panel>
+          </section>
+
+          <section id="draft-trust" className="scroll-mt-4">
+            <DraftTrustPanel />
           </section>
 
           <section id="spend" className="scroll-mt-4">

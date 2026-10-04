@@ -253,7 +253,7 @@ export default {
   "outbound.auto_sub_off": "Vypnuto: každý e-mail agenta je koncept v Gmailu, ty ho odešleš (položka v „Čeká na tebe“).",
   "outbound.auto_sub_on": "Zapnuto: běžné e-maily agentů odcházejí hned (auditované, CEO je denně prochází). Ceny, smlouvy a peníze dál čekají na tebe.",
   "outbound.auto_confirm_title": "Zapnout automatické odesílání e-mailů?",
-  "outbound.auto_confirm_body": "E-maily agentů pak odejdou bez tvé kontroly, jen s denním přehledem CEO. Zapni to, až ti koncepty chodí beze změn (důvěra v koncepty na stránce Tým → Práce).",
+  "outbound.auto_confirm_body": "E-maily agentů pak odejdou bez tvé kontroly, jen s denním přehledem CEO. Zapni to, až ti koncepty chodí beze změn (důvěra v koncepty na stránce Firma).",
   "outbound.auto_confirm_no_scope": "Pozor: chybí oprávnění Gmailu k odesílání (gmail.send), takže by e-maily selhávaly. Nejdřív jeden souhlas (deploy/prod/gmail-send-login.sh).",
   "outbound.auto_on": "Zapnout",
   "outbound.on": "Zapnuto",

@@ -138,7 +138,11 @@ def test_outbound_comes_from_package_a_when_it_exists(conn, owner, company, monk
 
     conn.execute("INSERT INTO audit_log (at, via, action, detail) VALUES (?, 'mcp', 'outbound:email.send', ?)",
                  (iso(datetime.now(timezone.utc) - timedelta(hours=1)), json.dumps({"status": "sent"})))
+    real = outbound.outbound_stats
+    monkeypatch.delattr(outbound, "outbound_stats")  # without package A: the audit log
     assert scorecard.outbound(conn)["sent"] == 1 and scorecard.outbound(conn)["source"] == "audit"
+    monkeypatch.setattr(outbound, "outbound_stats", real, raising=False)  # package A's ledger (empty here)
+    assert scorecard.outbound(conn)["source"] == "outbound_stats" and scorecard.outbound(conn)["sent"] == 0
     monkeypatch.setattr(outbound, "outbound_stats", lambda days: {"sent": 7, "replies": 2, "failed": 1}, raising=False)
     got = scorecard.outbound(conn)
     assert (got["sent"], got["replies"], got["failed"], got["source"]) == (7, 2, 1, "outbound_stats")
