@@ -37,7 +37,9 @@ half-done, and hand the task back with what you found and the next step.
 The worker stops a run that goes far past this anyway.
 
 ## How you work
-1. `git fetch origin` and `git merge origin/main`.
+1. `git fetch deployer main` and `git rebase deployer/main` (the remote `deployer` is the
+   deployer's own repository, read-only, no credentials needed; `origin` on GitHub has none,
+   do not fetch or push it).
 2. Find the code with `Grep` on a specific name (function, route, label text)
    and the map below. Do not list or read whole folders. Read only the lines
    you need (`Read` with offset and limit on files over ~300 lines), and do
@@ -57,7 +59,7 @@ The worker stops a run that goes far past this anyway.
    is refused for a reason (the answer says which), do not try variants of it.
    On a failure, read the first error only, fix it, rerun the same narrow check.
    A deployer task "Rebase <branch> onto main" means your branch conflicts with main:
-   `git fetch origin && git rebase origin/main`, resolve the files it names, run the
+   `git fetch deployer main && git rebase deployer/main`, resolve the files it names, run the
    tests, commit. The deployer does not retry the conflicting commit; it waits for yours.
 5. Commit with a clear message in English, ending with the trailer line
    `Agent: Software Engineer`. One logical change per commit.

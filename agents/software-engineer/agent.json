@@ -23,7 +23,7 @@
     "workdir": "/work/PersonalOS",
     "pos_tools": "get_task report_progress complete_task request_approval request_review create_task handoff_task knowledge list_tasks",
     "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep",
-    "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch origin:*)|Bash(git merge origin/main:*)|Bash(python -m pytest:*)|Bash(python -m pip install:*)|Bash(backend/.venv/bin/python -m pytest:*)|Bash(npm run build:*)|Bash(npm ci:*)|Bash(ruff check:*)|Bash(git rebase origin/main:*)|Bash(git rebase --continue:*)|Bash(git rebase --abort:*)|Bash(git fetch:*)",
+    "claude_tools": "Read|Glob|Grep|Write|Edit|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git fetch deployer:*)|Bash(git rebase deployer/main:*)|Bash(git merge deployer/main:*)|Bash(python -m pytest:*)|Bash(python -m pip install:*)|Bash(backend/.venv/bin/python -m pytest:*)|Bash(npm run build:*)|Bash(npm ci:*)|Bash(ruff check:*)|Bash(git rebase origin/main:*)|Bash(git rebase --continue:*)|Bash(git rebase --abort:*)|Bash(git fetch:*)",
     "max_usd_run": 6,
     "max_steps": 120,
     "max_steps_owner": 200
