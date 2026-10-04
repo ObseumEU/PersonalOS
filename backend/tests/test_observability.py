@@ -329,3 +329,25 @@ def test_grafana_watch_asks_once_then_reports_it_back(app):
     assert observability.watch(conn, lambda: (True, "HTTP 200")) == {"back": True}
     msgs = [r["body"] for r in conn.execute("SELECT body FROM chat_messages")]
     assert any("Grafana" in m and "zase" in m for m in msgs)
+
+
+def test_swap_pressure_alert_only_joins_series_with_a_host_label():
+    """obs-swap-warn joins on(host): a raw node_* series without `host` would never match (T-615)."""
+    import re
+    from pathlib import Path
+
+    import yaml
+
+    obs = Path(__file__).resolve().parents[2] / "deploy" / "observability"
+    rules = yaml.safe_load((obs / "agent186" / "rules.yml").read_text(encoding="utf-8"))
+    recorded = {r["record"] for g in rules["groups"] for r in g["rules"] if "record" in r}
+    alerting = yaml.safe_load(
+        (obs / "grafana" / "provisioning" / "alerting" / "obs-platform.yaml").read_text(encoding="utf-8"))
+    rule = next(r for g in alerting["groups"] for r in g["rules"] if r["uid"] == "obs-swap-warn")
+    exprs = [d["model"]["expr"] for d in rule["data"] if d["datasourceUid"] == "obs-prometheus"]
+    assert len(exprs) == 2
+    for expr in exprs:
+        assert not re.search(r"\bnode_\w+", expr), expr
+        used = set(re.findall(r"\bhost:\w+:\w+", expr))
+        assert used and used <= recorded, used - recorded
+    assert "host:swap_in_pages:rate5m" in recorded

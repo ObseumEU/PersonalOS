@@ -100,11 +100,11 @@ groups:
               expr: >-
                 host:swap_used:ratio and on(host)
                 ((host:swap_used:ratio > 0.7 and on(host) host:memory_used:ratio > 0.8)
-                or on(host) max by (host) (rate(node_vmstat_pswpin[5m])) > 500)
+                or on(host) host:swap_in_pages:rate5m > 500)
           - refId: B
             relativeTimeRange: {from: 600, to: 0}
             datasourceUid: obs-prometheus
-            model: {refId: B, expr: "max by (host) (rate(node_vmstat_pswpin[5m]))", instant: true}
+            model: {refId: B, expr: "host:swap_in_pages:rate5m", instant: true}
           - refId: C
             datasourceUid: __expr__
             model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [0]}}]}
