@@ -1,4 +1,4 @@
-import { Check, X } from "lucide-react";
+import { Check, RefreshCw, X } from "lucide-react";
 import { TaskLink } from "../taskSheet";
 import { useCallback, useEffect, useState } from "react";
 import { type Approval, agentsApi } from "../agentsApi";
@@ -104,7 +104,18 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
 export default function Approvals() {
   const [items, setItems] = useState<Approval[] | null>(null);
   const [all, setAll] = useState(false);
-  const load = useCallback(() => agentsApi.approvals(all ? "all" : "pending").then(setItems), [all]);
+  const [failed, setFailed] = useState<string | null>(null);
+  const load = useCallback(
+    () =>
+      agentsApi.approvals(all ? "all" : "pending").then(
+        (xs) => {
+          setItems(xs);
+          setFailed(null);
+        },
+        (e) => setFailed(e instanceof Error ? e.message : String(e)),
+      ),
+    [all],
+  );
   useEffect(() => {
     load();
   }, [load]);
@@ -126,6 +137,15 @@ export default function Approvals() {
         right={`${items?.length ?? 0}`}
         bodyClassName="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3"
       >
+        {failed && (
+          <div role="alert" className="flex flex-wrap items-center gap-3 p-3 text-sm md:col-span-2 xl:col-span-3">
+            <span className="break-words text-red-400">{t("act.load_failed", { error: failed })}</span>
+            <button className="btn" onClick={load}>
+              <RefreshCw size={14} /> {t("act.retry")}
+            </button>
+          </div>
+        )}
+        {items === null && !failed && <p className="p-3 text-sm text-ink-2">{t("act.loading")}</p>}
         {items?.length === 0 && <p className="p-3 text-sm text-ink-2">{t("appr.empty")}</p>}
         {items?.map((a) => (
           <Item key={a.id} a={a} onDone={load} />

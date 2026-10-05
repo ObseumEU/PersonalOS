@@ -60,6 +60,8 @@ export default {
   "act.search": "Hledat",
   "act.saved": "Uloženo",
   "act.loading": "načítám…",
+  "act.retry": "Zkusit znovu",
+  "act.load_failed": "Nepovedlo se načíst: {error}",
 
   // time
   "time.never": "nikdy",
