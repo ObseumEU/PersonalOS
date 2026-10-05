@@ -195,7 +195,9 @@ def haiku(conn: sqlite3.Connection):
 
 
 def classify_mail(conn: sqlite3.Connection, mail: dict, *, model=None, kb=kb_history) -> tuple[dict, dict | None, str]:
-    """(classification, project or None, knowlage history)."""
+    """(classification, project or None, knowlage history). A forwarded mail counts as its original sender's
+    (cls.unwrap_forward): a forward from our own domain is not "our own mail"."""
+    mail = cls.unwrap_forward(mail, mailboxes=tuple(gapi.mailboxes()))
     sure = cls.prefilter(mail, mailboxes=tuple(gapi.mailboxes()))
     if sure is not None:
         return sure, None, ""

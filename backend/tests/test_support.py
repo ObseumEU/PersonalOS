@@ -134,6 +134,40 @@ def test_newsletter_is_not_a_customer():
     assert len(calls) == 1
 
 
+FW_BY_US = mail("Fwd: BAK Ramcova Nabidka Rozsireni", "David Roško <david.rosko@obseum.cz>",
+                "Posílám dál, prosím vyřešit.\n\n---------- Forwarded message ---------\n"
+                "From: Petr Svoboda <petr.svoboda@bak.cz>\nDate: Mon, 29 Sep 2026\nSubject: Ramcova nabidka\n"
+                "To: David Roško <david.rosko@obseum.cz>\n\nDobrý den, posíláme podklady k rozšíření rámcové "
+                "nabídky. Můžete potvrdit termín?")
+FW_BY_CUSTOMER = mail("FW: Obseum s.r.o. – cenová nabídka na Alerting Chatpulse", "Jan Novák <jan.novak@o2.cz>",
+                      "Dobrý den, objednávku schvalujeme, prosíme o potvrzení.\n\n"
+                      "From: David Roško <david.rosko@obseum.cz>\nSent: Friday\nSubject: cenová nabídka\n\n"
+                      "Posíláme nabídku na Alerting Chatpulse.")
+
+
+def test_a_mail_forwarded_by_us_counts_as_its_original_sender():
+    calls = []
+    out = cls.classify(FW_BY_US, model=model_says({"kind": "question", "confidence": 0.8}, calls),
+                       mailboxes=(OBSEUM,))
+    assert out["kind"] == "question" and out["source"] == "llm"  # not "our own mail" from the pre-filter
+    assert out["customer"] == "bak.cz"
+    facts = json.loads(calls[0].split("<mail>\n")[1].split("\n</mail>")[0])
+    assert facts["from"] == "Petr Svoboda <petr.svoboda@bak.cz>" and facts["forwarded_by_us"].endswith("obseum.cz>")
+    # Without a model: the heuristic, never the pre-filter's "own mail".
+    assert cls.prefilter(FW_BY_US, mailboxes=(OBSEUM,)) is None
+
+
+def test_a_customer_forwarding_our_offer_stays_the_customer():
+    calls = []
+    out = cls.classify(FW_BY_CUSTOMER, model=model_says({"kind": "question", "confidence": 0.8}, calls))
+    assert out["customer"] == "o2.cz" and out["kind"] == "question"
+    assert '"forwarded": true' in calls[0] and "order" in calls[0]  # the prompt says what a forward is
+    unwrapped = cls.unwrap_forward(FW_BY_CUSTOMER)
+    assert unwrapped["sender"] == FW_BY_CUSTOMER["sender"] and "forwarded_by" not in unwrapped
+    assert cls.forwarded_senders(FW_BY_CUSTOMER["body"]) == ["David Roško <david.rosko@obseum.cz>"]
+    assert cls.unwrap_forward(BUG_CS) is BUG_CS  # not a forward: untouched
+
+
 def test_a_broken_model_answer_falls_back():
     assert cls.parse("no json here", BUG_CS) is None
     assert cls.parse('{"kind": "spam"}', BUG_CS) is None
