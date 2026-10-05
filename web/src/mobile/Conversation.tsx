@@ -7,7 +7,7 @@ import { type Channel, type ChatMessage, chatApi } from "../chatApi";
 import Messenger, { type FileAtt, useSender, visibleBody } from "../chat/Messenger";
 import { applyReply, upsert } from "../chat/timeline";
 import { toast } from "../components/overlay";
-import { filesApi } from "../filesApi";
+import { AttachChips, MicButton, useAttachments } from "../components/compose";
 import { t } from "../i18n/core";
 import { type Task } from "../tasksApi";
 import { useMembers, workLabel } from "./ChatList";
@@ -19,8 +19,8 @@ const APPROVAL_REF = /schválení #(\d+)/i;
 /** The composer, pinned to the bottom (above the keyboard, safe-area aware). Sending is optimistic: the parent shows the bubble at once. */
 function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel; replyTo: number | null; placeholder: string; onSend: (body: string, files: FileAtt[]) => void }) {
   const [body, setBody] = useState("");
-  const [files, setFiles] = useState<FileAtt[]>([]);
-  const [uploading, setUploading] = useState<string | null>(null);
+  const att = useAttachments();
+  const { files, uploading } = att;
   const [picker, setPicker] = useState(false);
   const photo = useRef<HTMLInputElement>(null);
   const any = useRef<HTMLInputElement>(null);
@@ -42,25 +42,21 @@ function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel;
       chatApi.typing(channel.id, replyTo).catch(() => undefined);
     }
   };
-  const upload = async (list: FileList | null) => {
+  const upload = (list: FileList | null) => {
     setPicker(false);
-    for (const f of Array.from(list ?? [])) {
-      setUploading(f.name);
-      try {
-        const up = await filesApi.upload(f);
-        setFiles((fs) => [...fs, { type: "file", id: up.id, name: up.name, mime: up.mime, preview: up.preview }]);
-      } catch (e) {
-        toast(e instanceof Error ? e.message : String(e), { error: true });
-      }
-    }
-    setUploading(null);
+    void att.add(list);
+  };
+  // The dictated words go in like typed ones (the box grows with them).
+  const dictate = (v: string) => {
+    setBody(v);
+    requestAnimationFrame(grow);
   };
   const submit = () => {
     const text = body.trim();
     if ((!text && !files.length) || uploading) return;
     onSend(text, files);
     setBody("");
-    setFiles([]);
+    att.clear();
     requestAnimationFrame(grow);
     area.current?.focus(); // the keyboard stays open, like a messenger
   };
@@ -73,19 +69,7 @@ function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel;
 
   return (
     <div className="shrink-0 border-t border-line bg-bg px-2 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]">
-      {(files.length > 0 || uploading) && (
-        <div className="flex flex-wrap gap-1.5 px-1 pb-2">
-          {files.map((f) => (
-            <span key={f.id} className="flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface pr-1 pl-3 text-[13px]">
-              <span className="max-w-[40vw] truncate">{f.name}</span>
-              <button aria-label={t("m.chat.remove_attachment")} onClick={() => setFiles((fs) => fs.filter((x) => x.id !== f.id))} className="grid h-7 w-7 place-items-center text-ink-2">
-                <X size={14} />
-              </button>
-            </span>
-          ))}
-          {uploading && <span className="flex h-8 items-center text-[13px] text-ink-2">{t("m.chat.uploading", { name: uploading })}</span>}
-        </div>
-      )}
+      <AttachChips files={files} uploading={uploading} onRemove={att.remove} className="px-1 pb-2" />
       <div className="flex items-end gap-1.5">
         <button aria-label={t("m.chat.attach")} onClick={() => setPicker(true)} className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-ink-2 active:bg-raised">
           <Paperclip size={20} />
@@ -95,12 +79,14 @@ function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel;
           rows={1}
           value={body}
           onChange={(e) => change(e.target.value)}
+          onPaste={att.onPaste}
           onKeyDown={key}
           placeholder={placeholder}
           aria-label={t("chat.message")}
           enterKeyHint={desktop ? "send" : "enter"}
           className="max-h-[140px] min-h-11 min-w-0 flex-1 resize-none rounded-3xl border border-line bg-surface px-4 py-2.5 text-[16px] leading-snug outline-none focus:border-accent"
         />
+        <MicButton value={body} onChange={dictate} className="h-11 w-11" size={20} />
         <button
           aria-label={t("m.chat.send")}
           onPointerDown={(e) => e.preventDefault() /* keeps the textarea focused: the keyboard does not close */}

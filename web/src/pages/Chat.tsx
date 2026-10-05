@@ -1,4 +1,4 @@
-import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, MessagesSquare, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
+import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, MessagesSquare, Paperclip, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
 import { TaskLink } from "../taskSheet";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -10,6 +10,7 @@ import { FileCard } from "../files/FileCard";
 import ThreadList, { useThreads } from "../chat/ThreadList";
 import { applyReply, upsert as upsertMsg } from "../chat/timeline";
 import { WorkingDot, WorkingOnText, workingOn } from "../components/agents/WorkingOn";
+import { type Attached, AttachChips, MicButton, useAttachments } from "../components/compose";
 import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
 import { LOCALE, t } from "../i18n";
@@ -299,9 +300,11 @@ function Composer({
   onSent?: () => void;
   placeholder?: string;
   /** Optimistic sending (the messenger view shows the bubble at once); else the composer posts and waits. */
-  send?: (text: string, priority: Priority | null) => void;
+  send?: (text: string, priority: Priority | null, files: Attached[]) => void;
 }) {
   const [body, setBody] = useState("");
+  const att = useAttachments();
+  const filePick = useRef<HTMLInputElement>(null);
   const [priority, setPriority] = useState<Priority | "">("");
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState<string | null>(null);
@@ -345,18 +348,20 @@ function Composer({
   };
   const submit = () => {
     const text = body.trim();
-    if (!text) return;
+    if ((!text && !att.files.length) || att.uploading) return;
     if (send) {
-      send(text, priority || null);
+      send(text, priority || null, att.files);
       setBody("");
+      att.clear();
       setPriority("");
       setError(null);
       onSent?.();
       return;
     }
-    chatApi.send(channel.id, text, replyTo?.id ?? null, priority || null).then(
+    chatApi.send(channel.id, text, replyTo?.id ?? null, priority || null, att.files.map((f) => ({ type: "file", id: f.id }))).then(
       () => {
         setBody("");
+        att.clear();
         setPriority("");
         setError(null);
         onSent?.();
@@ -413,18 +418,25 @@ function Composer({
           ))}
         </div>
       )}
+      <AttachChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
       <div className="flex items-end gap-2">
+        <button type="button" aria-label={t("m.chat.attach")} title={`${t("m.chat.attach")}. ${t("compose.paste_hint")}`} onClick={() => filePick.current?.click()} className="grid h-[38px] w-9 shrink-0 place-items-center rounded text-ink-2 hover:text-ink">
+          <Paperclip size={16} />
+        </button>
+        <input ref={filePick} type="file" multiple hidden onChange={(e) => { void att.add(e.target.files); e.target.value = ""; }} />
         <textarea
           ref={ref}
           rows={2}
           value={body}
           onChange={(e) => onChange(e.target.value)}
+          onPaste={att.onPaste}
           onKeyDown={onKey}
           aria-label={t("chat.message")}
           placeholder={placeholder ?? t("chat.placeholder", { channel: channel.title })}
           className="min-w-0 flex-1 resize-none rounded border border-line bg-bg p-2 text-[14px] outline-none focus:border-accent"
         />
-        <button className="btn-accent h-[38px]!" onClick={submit} aria-label={t("act.send")}>
+        <MicButton value={body} onChange={setBody} className="h-[38px] w-[38px]" size={17} />
+        <button className="btn-accent h-[38px]!" onClick={submit} disabled={!!att.uploading} aria-label={t("act.send")}>
           <Send size={14} />
         </button>
       </div>
@@ -905,7 +917,7 @@ export default function Chat() {
                     channel={channel}
                     members={members}
                     onSent={isDm ? undefined : scrollDown}
-                    send={isDm ? (text, priority) => sender.send(text, [], null, priority) : undefined}
+                    send={isDm ? (text, priority, files) => sender.send(text, files, null, priority) : undefined}
                     placeholder={ceoDm && channel.id === ceoDm.id ? t("chat.ceo_placeholder") : undefined}
                   />
                 ) : null}
@@ -941,7 +953,7 @@ export default function Chat() {
                     channel={channel}
                     members={members}
                     replyTo={rootMsg}
-                    send={(text, priority) => sender.send(text, [], rootMsg.id, priority)}
+                    send={(text, priority, files) => sender.send(text, files, rootMsg.id, priority)}
                     placeholder={t("chat.reply_placeholder")}
                   />
                 </>

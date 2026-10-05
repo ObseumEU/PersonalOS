@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "re
 import { LOCALE, label, t } from "../../i18n";
 import { taskChanged } from "../../taskSheet";
 import { type Actor, type Comment, type Task, type TaskLive as Live, type Version, tasksApi } from "../../tasksApi";
+import { AttachChips, FileLinks, MicButton, splitFileLines, useAttachments } from "../compose";
 import { FeedbackForm } from "../Feedback";
 import Markdown from "../Markdown";
 import { toast } from "../overlay";
@@ -250,6 +251,7 @@ export const isTalk = (c: Comment) => TALK.includes(c.kind);
 export function Discussion({ task, comments, meId, onSent }: { task: Task; comments: Comment[] | null; meId: number | null; onSent: () => void }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const att = useAttachments();
   const end = useRef<HTMLDivElement>(null);
   const seen = useRef<number | null>(null);
   const talk = (comments ?? []).filter(isTalk);
@@ -260,11 +262,12 @@ export function Discussion({ task, comments, meId, onSent }: { task: Task; comme
     seen.current = talk.length;
   }, [talk.length, comments]);
   const send = async () => {
-    if (!draft.trim()) return;
+    if ((!draft.trim() && !att.files.length) || att.uploading) return;
     setBusy(true);
     try {
-      await tasksApi.comment(task.ref, draft.trim());
+      await tasksApi.comment(task.ref, draft.trim(), att.ids);
       setDraft("");
+      att.clear();
       onSent();
       taskChanged();
     } catch (e) {
@@ -307,8 +310,9 @@ export function Discussion({ task, comments, meId, onSent }: { task: Task; comme
                     <span>{hm(c.created_at)}</span>
                   </span>
                   <Collapsible limit={260} deps={c.body}>
-                    <Markdown text={c.body.replace(/^\d{1,3} %:\s*/, "")} compact className="text-[14px]" />
+                    <Markdown text={splitFileLines(c.body).text.replace(/^\d{1,3} %:\s*/, "")} compact className="text-[14px]" />
                   </Collapsible>
+                  <FileLinks files={splitFileLines(c.body).files} />
                 </div>
               </div>
             </li>
@@ -326,19 +330,22 @@ export function Discussion({ task, comments, meId, onSent }: { task: Task; comme
         <label htmlFor="talk-reply" className="sr-only">
           {t("tk.talk.reply")}
         </label>
+        <AttachChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
         <div className="flex items-end gap-2">
           <textarea
             id="talk-reply"
             rows={2}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={att.onPaste}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
             }}
             placeholder={t("tk.talk.placeholder")}
             className="min-w-0 flex-1 resize-y rounded-md border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent"
           />
-          <button type="submit" className="btn-accent h-10!" disabled={busy || !draft.trim()} aria-label={t("tk.talk.send")}>
+          <MicButton value={draft} onChange={setDraft} className="h-10 w-10" />
+          <button type="submit" className="btn-accent h-10!" disabled={busy || !!att.uploading || (!draft.trim() && !att.files.length)} aria-label={t("tk.talk.send")}>
             <Send size={15} /> <span className="hidden sm:inline">{t("tk.talk.send")}</span>
           </button>
         </div>

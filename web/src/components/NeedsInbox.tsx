@@ -8,6 +8,7 @@ import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe
 import { approvalHref, setSheetOrder, taskHref } from "../taskSheet";
 import { tasksApi } from "../tasksApi";
 import DecisionOptions from "./DecisionOptions";
+import { AttachChips, MicButton, useAttachments } from "./compose";
 import { toast } from "./overlay";
 import { Panel } from "./ui";
 
@@ -24,6 +25,7 @@ function Item({ it }: { it: NeedsItem }) {
   const [mode, setMode] = useState<Mode>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const att = useAttachments();
   const { Icon, key, cls } = KIND[it.kind];
   const loc = useLocation();
   // Tasks, asks, reviews and approvals open in the panel over this page, at "Co potřebuju od tebe".
@@ -46,13 +48,13 @@ function Item({ it }: { it: NeedsItem }) {
 
   const submit = () => {
     const body = text.trim();
-    if (mode === "reply" && !body) return;
+    if (mode === "reply" && ((!body && !att.files.length) || att.uploading)) return;
     if (mode === "reply" && it.kind === "mention")
       return run(async () => {
-        await chatApi.send(it.channel_id!, body, it.thread ?? null);
+        await chatApi.send(it.channel_id!, body, it.thread ?? null, null, att.files.map((f) => ({ type: "file", id: f.id })));
         await chatApi.read(it.channel_id!, it.id);
       }, t("needs.done.replied"));
-    if (mode === "reply" && it.kind === "ask") return run(() => tasksApi.comment(it.ref!, body), t("needs.done.answered"));
+    if (mode === "reply" && it.kind === "ask") return run(() => tasksApi.comment(it.ref!, body, att.ids), t("needs.done.answered"));
     if (mode === "reject") return run(() => agentsApi.decide(it.id, false, body || undefined), t("needs.done.rejected"));
     if (mode === "return") return run(() => tasksApi.review(it.ref!, false, body || undefined), t("needs.done.returned"));
   };
@@ -128,6 +130,7 @@ function Item({ it }: { it: NeedsItem }) {
           </Link>
         )}
       </div>
+      {mode === "reply" && <AttachChips files={att.files} uploading={att.uploading} onRemove={att.remove} className="pl-[30px]" />}
       {mode && (
         <form
           className="flex flex-col gap-2 pl-[30px] sm:flex-row"
@@ -139,16 +142,20 @@ function Item({ it }: { it: NeedsItem }) {
           <label className="sr-only" htmlFor={`needs-${it.key}`}>
             {t(`needs.input.${mode}`)}
           </label>
-          <input
-            id={`needs-${it.key}`}
-            autoFocus
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder={t(`needs.input.${mode}`)}
-            className="h-9 min-w-0 flex-1 rounded border border-line bg-bg px-2.5 text-sm outline-none focus:border-accent"
-          />
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <input
+              id={`needs-${it.key}`}
+              autoFocus
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onPaste={mode === "reply" ? att.onPaste : undefined}
+              placeholder={t(`needs.input.${mode}`)}
+              className="h-9 min-w-0 flex-1 rounded border border-line bg-bg px-2.5 text-sm outline-none focus:border-accent"
+            />
+            <MicButton value={text} onChange={setText} className="h-9 w-9" size={16} />
+          </span>
           <span className="flex gap-2">
-            <button className="btn-accent h-9!" disabled={busy || (mode === "reply" && !text.trim())}>
+            <button className="btn-accent h-9!" disabled={busy || (mode === "reply" && ((!text.trim() && !att.files.length) || !!att.uploading))}>
               {mode === "reply" ? t("act.send") : mode === "reject" ? t("act.reject") : t("act.return")}
             </button>
             <button type="button" className="btn h-9!" onClick={() => setMode(null)}>

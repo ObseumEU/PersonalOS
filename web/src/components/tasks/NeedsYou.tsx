@@ -5,6 +5,7 @@ import { label, t } from "../../i18n";
 import { refreshNeedsMe } from "../../needsMeApi";
 import { taskChanged, TaskLink } from "../../taskSheet";
 import { type Related, type Task, tasksApi } from "../../tasksApi";
+import { AttachChips, MicButton, useAttachments } from "../compose";
 import { toast } from "../overlay";
 import { type AskInfo, parseAsk } from "./text";
 
@@ -48,9 +49,11 @@ function AskCard({
 }) {
   const [choice, setChoice] = useState<number | null>(null);
   const [text, setText] = useState("");
+  const att = useAttachments();
   const { busy, act } = useAct(onDone);
   const answer = [choice !== null ? info.options[choice].text : "", text.trim()].filter(Boolean).join(" — ");
-  const send = () => answer && act(() => tasksApi.complete(ticketRef, answer), t("tk.needs.sent", { who: asker }));
+  const ready = (!!answer || att.files.length > 0) && !att.uploading;
+  const send = () => ready && act(() => tasksApi.complete(ticketRef, answer, att.ids), t("tk.needs.sent", { who: asker }));
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-col gap-1">
@@ -122,20 +125,25 @@ function AskCard({
         <label htmlFor={`answer-${ticketRef}`} className="sr-only">
           {t("tk.needs.answer_label")}
         </label>
+        <AttachChips files={att.files} uploading={att.uploading} onRemove={att.remove} />
+        <span className="flex items-end gap-2">
         <textarea
           id={`answer-${ticketRef}`}
           data-needs-focus={autoFocus ? "" : undefined}
           rows={2}
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onPaste={att.onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
           }}
           placeholder={info.options.length ? t("tk.needs.answer_note") : t("tk.needs.answer_placeholder")}
           className={field}
         />
+        <MicButton value={text} onChange={setText} className="h-10 w-10" />
+        </span>
         <span className="flex flex-wrap items-center gap-2">
-          <button type="submit" className="btn-accent h-9!" disabled={busy || !answer}>
+          <button type="submit" className="btn-accent h-9!" disabled={busy || !ready}>
             <Send size={14} /> {t("tk.needs.send")}
           </button>
           <span className="text-xs text-ink-2">{t("tk.needs.send_hint", { who: asker })}</span>

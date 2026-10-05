@@ -229,4 +229,12 @@ export default {
   "misc.ask_label": "Zeptej se PersonalOS",
   "misc.ask_title": "Odpoví naše znalostní báze s ověřenými citacemi",
   "misc.knowlage": "Znalostní báze (knowlage)",
+  // dictation and pasted pictures (components/compose.tsx)
+  "compose.mic_start": "Diktovat (klepni znovu pro zastavení)",
+  "compose.mic_stop": "Zastavit diktování",
+  "compose.mic_listening": "Poslouchám…",
+  "compose.mic_denied": "Mikrofon není povolený. Povol ho prohlížeči pro tuto stránku a zkus to znovu.",
+  "compose.mic_error": "Diktování se nepovedlo ({error}).",
+  "compose.mic_unsupported": "Tenhle prohlížeč diktování neumí. Na telefonu použij mikrofon na klávesnici, na počítači Chrome nebo Edge.",
+  "compose.paste_hint": "Obrázek vložíš i přes Ctrl+V.",
 } as Record<string, string>;

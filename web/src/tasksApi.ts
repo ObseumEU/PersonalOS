@@ -203,7 +203,8 @@ export const tasksApi = {
     api<Task>(`/api/tasks/${ref}`, { method: "PATCH", body: JSON.stringify(changes) }),
   addStep: (ref: string, title: string, assignee?: string) =>
     post<Task>(`/api/tasks/${ref}/steps`, { title, ...(assignee ? { assignee } : {}) }),
-  complete: (ref: string, note?: string) => post<Task>(`/api/tasks/${ref}/complete`, note ? { note } : {}),
+  complete: (ref: string, note?: string, attachments: number[] = []) =>
+    post<Task>(`/api/tasks/${ref}/complete`, { ...(note ? { note } : {}), ...(attachments.length ? { attachments } : {}) }),
   review: (ref: string, accept: boolean, comment?: string) => post<Task>(`/api/tasks/${ref}/review`, { accept, comment }),
   intervene: (ref: string, note: string) => post<Task>(`/api/tasks/${ref}/intervene`, { note }),
   archive: (ref: string) => post<Task>(`/api/tasks/${ref}/archive`),
@@ -211,7 +212,8 @@ export const tasksApi = {
   clarify: (ref: string, action: string, fields?: Record<string, unknown>) =>
     post<Task>(`/api/tasks/${ref}/clarify`, { action, fields }),
   comments: (ref: string) => api<Comment[]>(`/api/tasks/${ref}/comments`),
-  comment: (ref: string, body: string) => post<Comment>(`/api/tasks/${ref}/comments`, { body }),
+  comment: (ref: string, body: string, attachments: number[] = []) =>
+    post<Comment>(`/api/tasks/${ref}/comments`, attachments.length ? { body, attachments } : { body }),
   history: (ref: string) => api<Version[]>(`/api/tasks/${ref}/history`),
   restore: (ref: string, version: number) => post<Task>(`/api/tasks/${ref}/restore`, { version }),
   reassignOptions: (ref: string) => api<Candidate[]>(`/api/tasks/${ref}/reassign/options`),
