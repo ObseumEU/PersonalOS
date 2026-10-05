@@ -403,8 +403,8 @@ export default function Messenger(props: MessengerProps) {
           {list.length === 0 && pending.length === 0 && props.empty}
           {list.map((r) =>
             r.kind === "day" ? (
-              <div key={r.key} className="sticky top-1 z-[5] my-3 flex justify-center">
-                <span className="rounded-full border border-line bg-surface/90 px-3 py-0.5 text-[12px] text-ink-2 backdrop-blur">{r.label}</span>
+              <div key={r.key} className="my-3 flex justify-center">
+                <span className="rounded-full border border-line bg-surface px-3 py-0.5 text-[12px] text-ink-2">{r.label}</span>
               </div>
             ) : (
               <Bubble

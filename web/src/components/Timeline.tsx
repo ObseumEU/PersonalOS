@@ -27,7 +27,14 @@ export default function Timeline({ events }: { events: AgendaEvent[] }) {
             return (
               <div key={tick} className="absolute top-0" style={{ left: `${pct(tick)}%` }}>
                 <div className={`w-px bg-ink-3 ${major ? "h-2" : "h-1"}`} />
-                {major && <span className="absolute top-2.5 -translate-x-1/2 text-xs text-ink-2 tabular-nums">{hhmm(tick)}</span>}
+                {/* The edge labels align inward: centred, "08:00" was cut to ":00" at the left edge. */}
+                {major && (
+                  <span
+                    className={`absolute top-2.5 text-xs whitespace-nowrap text-ink-2 tabular-nums ${tick === START ? "" : tick === END ? "-translate-x-full" : "-translate-x-1/2"}`}
+                  >
+                    {hhmm(tick)}
+                  </span>
+                )}
               </div>
             );
           })}
