@@ -110,6 +110,12 @@ services:
       - ${POS_CHECKOUT}:${POS_CHECKOUT}
       - /var/run/docker.sock:/var/run/docker.sock
       - ${POS_DEV_WORK:-./data/dev-work}:/dev-work:ro
+    # origin/main = this checkout's main (the agents' deployer/main) = the last good deploy (T-730).
+    healthcheck:
+      test: ["CMD", "python", "-m", "pos.selfdeploy", "--repo", "${POS_CHECKOUT}", "--check-mirror"]
+      interval: 5m
+      timeout: 30s
+      start_period: 5m
     # init reaps the git/docker/pytest children it spawns (~200 zombies after an hour without it);
     # the test run (pytest -n auto, npm build) is its peak.
     init: true

@@ -25,6 +25,8 @@ agents commit to a branch (agent/dev); the deployer merges it into the latest
 main in its own worktree, runs the constitution check, the tests and a
 staging stack with a health check, and only then pushes the merge to main.
 On failure nothing reaches main and the author gets a task with the log.
+After the push it also moves the checkout's own main (the agents fetch it read-only as
+`deployer/main`); `--check-mirror` is the health check that the three hashes agree (T-730).
 
     python -m pos.selfdeploy --repo <deploy worktree> --promote-from agent/dev --watch 60
 
@@ -365,6 +367,40 @@ def _should_try(state: Path, tip: str, base: str, clean=None) -> bool:
     return bool(clean and clean(tip, base))  # still conflicting (or cannot tell): stays parked
 
 
+def publish_main(wt: Path, target: str, sha: str) -> str:
+    """Move the checkout's own refs/heads/<target> to `sha`. The agents fetch main from this
+    checkout's .git (mounted read-only as their remote `deployer`), but the promote push only
+    moves <remote>/<target>: the local branch stood on ce70637 while production ran 11741bc,
+    and every rebase onto it conflicted at the merge again (T-730). Fast-forward only.
+    Returns "" or one line saying why the mirror is not on `sha`."""
+    ref = f"refs/heads/{target}"
+    have = subprocess.run(["git", "rev-parse", "-q", "--verify", f"{ref}^{{commit}}"], cwd=wt,
+                          capture_output=True, text=True).stdout.strip()
+    if have == sha:
+        return ""
+    if have and subprocess.run(["git", "merge-base", "--is-ancestor", have, sha], cwd=wt).returncode != 0:
+        return f"mirror: {ref} {have[:10]} is not an ancestor of {sha[:10]}; not moved (a person has to look)"
+    moved = subprocess.run(["git", "update-ref", ref, sha, *([have] if have else [])], cwd=wt,
+                           capture_output=True, text=True)
+    now = subprocess.run(["git", "rev-parse", "-q", "--verify", ref], cwd=wt, capture_output=True, text=True)
+    if moved.returncode != 0 or now.stdout.strip() != sha:
+        return (f"mirror: {ref} is {now.stdout.strip()[:10] or 'missing'}, not the merge {sha[:10]}: "
+                f"{(moved.stderr or '').strip()[-300:]}")
+    return ""
+
+
+def mirror_check(wt: Path, remote: str, target: str, prod: str | None) -> tuple[bool, str]:
+    """The deployer's health check: its <remote>/<target> = the mirror's <target> (what the
+    agents fetch as deployer/<target>) = production (the last good deploy)."""
+    def rev(name: str) -> str:
+        return subprocess.run(["git", "rev-parse", "-q", "--verify", name], cwd=wt,
+                              capture_output=True, text=True).stdout.strip()
+
+    deployer, mirror = rev(f"{remote}/{target}" if remote else target), rev(f"refs/heads/{target}")
+    line = f"deployer {deployer[:10] or '?'}, mirror {mirror[:10] or '?'}, prod {(prod or '?')[:10]}"
+    return bool(deployer) and deployer == mirror == (prod or deployer), line
+
+
 def merges_cleanly(wt: Path, tip: str, base: str) -> bool:
     """Would `tip` merge into `base` without conflicts? Checked without touching the worktree."""
     p = subprocess.run(["git", "merge-tree", "--write-tree", base, tip], cwd=wt,
@@ -430,6 +466,8 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
     git(wt, "fetch", remote, target)
     base = git(wt, "rev-parse", f"{remote}/{target}")
     tip = git(wt, "rev-parse", source)
+    if err := publish_main(wt, target, base):  # heals a mirror left behind (main moved elsewhere)
+        print(err, flush=True)
     if _is_ancestor(wt, tip, base):
         return Result(base, tip, "nothing")  # everything on the branch is already in main
     if not _should_try(state, tip, base, lambda t, b: merges_cleanly(wt, t, b)):
@@ -536,6 +574,9 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
         return Result(base, tip, "nothing", stage="push", log=push.stderr[-2000:])
     _remember(state, tip, base, "ok")
     res.new = merged
+    if err := publish_main(wt, target, merged):  # main is out: the error goes to the log, not a rejection
+        print(err, flush=True)
+        res.log = f"{res.log}\n{err}".strip()
     reporter.report(res)
     return res
 
@@ -604,6 +645,8 @@ def main() -> None:
     ap.add_argument("--watch", type=int, default=0, help="seconds between checks")
     ap.add_argument("--promote-from", default="", help="branch agents commit to (promote mode)")
     ap.add_argument("--source-remote", default="", help="remote to fetch the promote branch from first")
+    ap.add_argument("--check-mirror", action="store_true",
+                    help="health check: exit 1 unless <remote>/main = the checkout's main = the last good deploy")
     a = ap.parse_args()
     if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
         open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
@@ -613,6 +656,10 @@ def main() -> None:
     kw = dict(remote=os.environ.get("DEPLOY_REMOTE", "origin"), branch=os.environ.get("DEPLOY_BRANCH", "main"),
               test_cmd=os.environ.get("DEPLOY_TEST_CMD", DEFAULT_TEST), up_cmd=os.environ.get("DEPLOY_UP_CMD", DEFAULT_UP),
               health_url=os.environ.get("DEPLOY_HEALTH_URL", "http://localhost:8090/api/health"))
+    if a.check_mirror:  # health check: deployer's main = the agents' deployer/main = production
+        ok, line = mirror_check(Path(a.repo), kw["remote"], kw["branch"], reporter.last_good())
+        print(f"mirror {'ok' if ok else 'MISMATCH'}: {line}", flush=True)
+        raise SystemExit(0 if ok else 1)
     while True:
         if reporter.frozen():
             print("kill switch is on (or PersonalOS is unreachable): not deploying", flush=True)
@@ -642,6 +689,9 @@ def main() -> None:
             print(f"gave {fixed} root-owned files back to the checkout's owner", flush=True)
         if res.status != "nothing":
             print(f"{res.old[:10]}..{res.new[:10]}: {res.status} {res.stage}", flush=True)
+        if res.status == "ok" and a.promote_from:
+            ok, line = mirror_check(Path(a.repo), kw["remote"], kw["branch"], res.new)
+            print(f"mirror {'ok' if ok else 'MISMATCH'}: {line}", flush=True)
         if res.status == "ok" and self_cmd and deployer_changed(Path(a.repo), res.old, res.new):
             ok, out = restart_self(self_cmd, Path(a.repo))
             print(f"recreating the deployer from a helper container: {'started' if ok else 'failed'} {out}", flush=True)
