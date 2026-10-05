@@ -170,7 +170,7 @@ def step_reviews(conn: sqlite3.Connection, ctx: Ctx, apply: bool) -> list[str]:
     out.append("review items created: " + (", ".join(f"{k} {v}" for k, v in sorted(per.items(), key=lambda kv: -kv[1]))
                                            or "none"))
     if items.get("deferred"):
-        out.append(f"review items deferred to later days (batching, {review_work.DAILY_NEW_ITEMS}/day): "
+        out.append(f"review items deferred to later hours (review budget ${review_work.daily_budget():.0f}/day): "
                    f"{len(items['deferred'])}")
     out += [f"review item {x}" for x in items.get("created", [])]
     out += [f"review item moved {x}" for x in items.get("moved", [])]

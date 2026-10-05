@@ -27,6 +27,13 @@ to the **assignee's team lead** (reports_to, skipping the assignee and the owner
 reviewed in 24 h moves to the reviewer's lead, and each reviewer gets one review digest a day
 (pos.business.review_sla); an agent reviewer has each result as a "Review: T-x" task (pos.review_work).
 
+No auto-accept without evidence (prod 10-02..10-05: 68 automatic accepts in 3 days, 38 of them "a
+routine task from a schedule", the CEO's and CTO's weekly plans among them): every low rule needs the
+result to show what it rests on: a verification line (pos.verification) or a concrete piece of
+evidence (pos.evidence.extract: a commit, a URL, a file or note id, a sent message), or, for a
+routine check, the tasks its findings are tracked in. A plan (a "plán" anywhere in the title, the
+weekly plans from a schedule) is never routine.
+
 The small-task rules need the result's verification line (pos.verification). An explicit
 `request_review` (the agent chose its reviewer) and a reviewer the owner set are respected.
 
@@ -129,8 +136,23 @@ def is_triage(row) -> bool:
     return (row["source"] or "").startswith("event:")
 
 
+PLAN_WORD_RE = re.compile(r"\bpl[áa]n\w*|\bplan(?:s|ning)?\b|\bstrategi|\broadmap", re.IGNORECASE)
+
+
 def is_plan(row) -> bool:
     return (row["topic"] or "").lower() in PLAN_TOPICS or bool(PLAN_RE.search(row["title"] or ""))
+
+
+def plan_like(row) -> bool:
+    """A plan by its topic or any word of its title ("CEO: pondělní plán", "CTO: technický plán týdne")."""
+    return is_plan(row) or bool(PLAN_WORD_RE.search(row["title"] or ""))
+
+
+def evidenced(note: str | None) -> bool:
+    """The result shows what it rests on: a verification line or a concrete piece of evidence."""
+    from . import evidence, verification
+
+    return verification.has_line(note) or any(evidence.extract(note).values())
 
 
 def sent_outside(conn: sqlite3.Connection, task_id: int) -> str:
@@ -251,17 +273,19 @@ def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
     verified = verification.has_line(note)
     code = is_code(conn, row, note)
     summary = len((note or "").strip()) >= MIN_SUMMARY
+    shown = evidenced(note)
+    routine = is_routine(conn, row) and summary and not plan_like(row)
     if not high:
-        if is_routine(conn, row) and summary and schedules.all_green(note) and not CODE_RE.search(note or ""):
+        if routine and shown and schedules.all_green(note) and not CODE_RE.search(note or ""):
             return Decision("low", "accept", reason="a routine task from a schedule, nothing to act on")
-        tracked = tracked_in(conn, row, note) if is_routine(conn, row) and summary else []
+        tracked = tracked_in(conn, row, note) if routine else []
         if tracked and not CODE_RE.search(note or ""):
             # Its findings already have their own tasks (the SRE's check -> T-183): nothing left to review.
             return Decision("low", "accept", reason="a routine check whose findings are tracked in "
                                                     + ", ".join(tracked))
-        if is_doc(row, note) and not CODE_RE.search(note or ""):
+        if is_doc(row, note) and shown and not plan_like(row) and not CODE_RE.search(note or ""):
             return Decision("low", "accept", reason="a document or note that asks nobody for a decision")
-        if is_triage(row) and summary and not code and schedules.all_green(note) \
+        if is_triage(row) and summary and shown and not code and schedules.all_green(note) \
                 and not DECISION_RE.search(note or ""):
             return Decision("low", "accept", reason="an incoming item triaged, nothing to act on, nothing sent")
         if verified and not code and is_small(conn, row):

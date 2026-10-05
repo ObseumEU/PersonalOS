@@ -36,6 +36,7 @@ keep it that way:
 Nothing here costs model tokens; the knowlage lookups are two cheap searches.
 """
 
+import json
 import logging
 import os
 import re
@@ -588,6 +589,18 @@ def _digest_due(conn: sqlite3.Connection, reviewer: int, now: datetime) -> bool:
                         (reviewer, midnight.isoformat(timespec="seconds"))).fetchone() is None
 
 
+def _reminded(conn: sqlite3.Connection, reviewer: int) -> set[int]:
+    """The results a reviewer's earlier digests already named (each result is named once)."""
+    out: set[int] = set()
+    for r in conn.execute("SELECT detail FROM audit_log WHERE action = 'review_digest' AND entity = 'actor' "
+                          "AND entity_id = ?", (reviewer,)):
+        try:
+            out |= {int(i) for i in (json.loads(r["detail"] or "{}").get("ids") or [])}
+        except (ValueError, TypeError, AttributeError):
+            continue
+    return out
+
+
 def _age_h(at: str, now: datetime) -> int:
     t = datetime.fromisoformat(at)
     if t.tzinfo is None:
@@ -604,8 +617,9 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
       LIMIT 30 was always filled by the CEO's oldest rows, so the QA/CTO rows never escalated). Each
       new reviewer gets one message listing what moved to it, not one per task;
     - every reviewer (agents and people, never the owner) with results waiting over
-      DIGEST_AFTER_HOURS gets one digest a day listing them, instead of a reminder DM per task
-      (prod: ~58 reminder DMs a day, 26 % of all chat);
+      DIGEST_AFTER_HOURS gets at most one digest a day listing them, instead of a reminder DM per task
+      (prod: ~58 reminder DMs a day, 26 % of all chat); a result is named in one digest only (one
+      reminder, not one a day: 127 reminders in 3 days, 10-05); a digest with nothing new is not sent;
     - the review work items are kept in step (pos.review_work.sync).
 
     Everything is sent in the platform's voice (system_ctx), never the owner's. `dry_run`: only say
@@ -665,23 +679,27 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
         waiting.setdefault(tasks.reviewer_of(conn, row), []).append(row)
     for reviewer, items in waiting.items():
         r = actors.get(conn, reviewer)
-        if r["is_owner"] or r["archived_at"] or not any(i["updated_at"] < digest_cutoff for i in items):
+        if r["is_owner"] or r["archived_at"]:
             continue
-        if not _digest_due(conn, reviewer, now):
+        done_before = _reminded(conn, reviewer)
+        fresh = [i for i in items if i["updated_at"] < digest_cutoff and i["id"] not in done_before]
+        if not fresh or not _digest_due(conn, reviewer, now):
             continue
-        reminded += [tasks.display_id(i["id"]) for i in items]
+        reminded += [tasks.display_id(i["id"]) for i in fresh]
         if dry_run:
             continue
         lines = [f"- {tasks.display_id(i['id'])} '{i['title'][:80]}' waits for your review "
-                 f"({_age_h(i['updated_at'], now)} h)" for i in items[:30]]
-        more = f"\n… and {len(items) - 30} more (list_tasks view=to_review)" if len(items) > 30 else ""
+                 f"({_age_h(i['updated_at'], now)} h)" for i in fresh[:30]]
+        more = f"\n… and {len(fresh) - 30} more (list_tasks view=to_review)" if len(fresh) > 30 else ""
+        total = f" ({len(items)} in your review queue in all)" if len(items) > len(fresh) else ""
         work = " Each one is a 'Review: T-x' task in your queue." if r["kind"] != "human" else ""
         chat.send_dm(conn, sys_ctx, reviewer,
-                     f"Review digest: {len(items)} result(s) wait for your review.{work} Accept each or return "
-                     "it with what should change (review_task); hand the owner only what truly needs him "
+                     f"Review digest: {len(fresh)} result(s) wait for your review{total}.{work} Accept each or "
+                     "return it with what should change (review_task); hand the owner only what truly needs him "
                      "(request_review reviewer=Owner).\n" + "\n".join(lines) + more,
                      priority="fyi", system=True)
-        audit.log(conn, sys_ctx, "review_digest", "actor", reviewer, tasks=len(items))
+        audit.log(conn, sys_ctx, "review_digest", "actor", reviewer, tasks=len(fresh),
+                  ids=[i["id"] for i in fresh])
         if r["kind"] != "human":
             wake.wake(reviewer)
     if not dry_run:

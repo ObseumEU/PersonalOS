@@ -19,6 +19,8 @@ asks for a review of a review. People reviewers (not the owner) keep the DM; the
 review on the board. The review policy's auto-accept (pos.review_policy) is unchanged.
 """
 
+import math
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -27,10 +29,43 @@ from .core import Ctx, now_iso
 
 SOURCE = "review:"
 RECREATE_HOURS = 24  # an item completed without reviewing comes back at most once a day (sync)
-# A backlog drains in batches: sync creates at most this many new items in any 24 h (hand-ins via
-# `ensure` count too). Prod 2026-10-04: ~94 waiting results would have become 94 model runs at once
-# (QA 40, CEO 37), enough to hit the $50/day company cap and stop the business work.
-DAILY_NEW_ITEMS = 25
+# A backlog drains within a daily review budget (a cap on cost, not on count). Prod 2026-10-04: ~94
+# waiting results would have become 94 model runs at once (QA 40, CEO 37), enough to hit the $50/day
+# company cap; the count cap that followed (25 new items a day, whatever they cost) let the queue grow
+# to 70 results, 57 of them 3-7 days old (10-05), while a review run costs ~$0.18. Now sync creates
+# new items while the review runs of the last 24 h plus the items still waiting for their run (at
+# the measured average cost) stay under REVIEW_DAILY_USD (POS_REVIEW_DAILY_USD): ~45 a day.
+REVIEW_DAILY_USD = 8.0
+DEFAULT_ITEM_USD = 0.25  # what a review run costs until there are enough measured ones
+COST_SAMPLE_DAYS, COST_MIN_ITEMS = 7, 5
+DAILY_NEW_ITEMS = REVIEW_DAILY_USD  # kept for callers that print the batching (now dollars a day)
+
+
+def daily_budget() -> float:
+    try:
+        return max(0.0, float(os.environ.get("POS_REVIEW_DAILY_USD", "") or REVIEW_DAILY_USD))
+    except ValueError:
+        return REVIEW_DAILY_USD
+
+
+def item_cost(conn: sqlite3.Connection, now: datetime) -> float:
+    """The average cost of one review item's runs over the last COST_SAMPLE_DAYS (engine_usage)."""
+    since = (now - timedelta(days=COST_SAMPLE_DAYS)).isoformat(timespec="seconds")
+    r = conn.execute("""SELECT COUNT(DISTINCT u.task_id) AS n, COALESCE(SUM(u.cost_usd), 0) AS c
+                        FROM engine_usage u JOIN tasks t ON t.id = u.task_id
+                        WHERE t.source LIKE 'review:%' AND u.at >= ?""", (since,)).fetchone()
+    return r["c"] / r["n"] if r["n"] >= COST_MIN_ITEMS and r["c"] > 0 else DEFAULT_ITEM_USD
+
+
+def committed_usd(conn: sqlite3.Connection, now: datetime, per_item: float) -> float:
+    """What reviews cost in the last 24 h plus what the open items not yet run will cost."""
+    since = (now - timedelta(hours=24)).isoformat(timespec="seconds")
+    spent = conn.execute("""SELECT COALESCE(SUM(u.cost_usd), 0) FROM engine_usage u JOIN tasks t ON t.id = u.task_id
+                            WHERE t.source LIKE 'review:%' AND u.at >= ?""", (since,)).fetchone()[0]
+    pending = conn.execute("""SELECT COUNT(*) FROM tasks t WHERE t.source LIKE 'review:%' AND t.status != 'done'
+                              AND t.archived_at IS NULL
+                              AND NOT EXISTS (SELECT 1 FROM engine_usage u WHERE u.task_id = t.id)""").fetchone()[0]
+    return spent + pending * per_item
 
 
 def source_of(task_id: int) -> str:
@@ -165,18 +200,27 @@ def deferred(conn: sqlite3.Connection, row, reviewer: int | None) -> bool:
             and conn.execute("SELECT 1 FROM tasks WHERE source = ?", (source_of(row["id"]),)).fetchone() is None)
 
 
+def room_for_new(conn: sqlite3.Connection, now: datetime, budget_usd: float | None = None) -> int:
+    """How many new review items fit in the daily review budget now."""
+    per_item = item_cost(conn, now)
+    budget = daily_budget() if budget_usd is None else budget_usd
+    return max(0, math.floor((budget - committed_usd(conn, now, per_item)) / per_item + 1e-9))
+
+
 def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = True,
-         daily_new: int | None = None) -> dict:
+         daily_new: int | None = None, budget_usd: float | None = None) -> dict:
     """Every result waiting for an agent's review has its open item; stale items are closed. An item
-    completed without a review comes back after RECREATE_HOURS. New items are created in batches:
-    at most `daily_new` (DAILY_NEW_ITEMS) in any 24 h, business results first, then the oldest; the
-    rest wait for the next hourly run ("deferred"). `apply=False`: only report."""
+    completed without a review comes back after RECREATE_HOURS. New items are created within the
+    daily review budget (room_for_new; `daily_new`: a plain count per 24 h instead), in priority
+    order: the highest priority first, business before platform, then the oldest; the rest wait for
+    the next hourly run ("deferred"). `apply=False`: only report."""
     from . import business, tasks
 
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(hours=RECREATE_HOURS)).isoformat(timespec="seconds")
     created, moved, closed, deferred_ = [], [], [], []
-    room = max(0, (DAILY_NEW_ITEMS if daily_new is None else daily_new) - _created_since(conn, since))
+    room = (max(0, daily_new - _created_since(conn, since)) if daily_new is not None
+            else room_for_new(conn, now, budget_usd))
     for it in conn.execute("SELECT * FROM tasks WHERE source LIKE 'review:%' AND archived_at IS NULL "
                            "AND status != 'done'").fetchall():
         tid = reviewed_id(it)
@@ -198,8 +242,8 @@ def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = Tr
                                       (source_of(row["id"]), since)).fetchone():
             continue  # its item was completed today without a review: it comes back tomorrow
         todo.append((row, rid, bool(items)))
-    # moves first (no new run), then business before platform, oldest first (stable sort)
-    todo.sort(key=lambda x: (not x[2], business.classify(conn, x[0]) != "business"))
+    # moves first (no new run), then by priority (1 = urgent), business before platform, oldest first
+    todo.sort(key=lambda x: (not x[2], x[0]["priority"] or 2, business.classify(conn, x[0]) != "business"))
     for row, rid, has_item in todo:
         label = f"{tasks.display_id(row['id'])}→{actors.get(conn, rid)['name']}"
         if not has_item:

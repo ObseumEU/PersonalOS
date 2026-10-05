@@ -399,6 +399,34 @@ def test_the_review_backlog_drains_in_daily_batches_business_first_and_waits_for
     assert not any(tasks.display_id(t["id"]) in x for t in old[1:] for x in moved)
 
 
+def test_review_items_are_capped_by_cost_not_count_and_come_in_priority_order(conn, owner, co):
+    """10-05: a 25-a-day count cap let 70 results pile up while a review costs ~$0.18. New items now
+    fit a daily review budget at the measured cost per review, the most urgent first."""
+    ceo = co["ceo"]
+    rows = [tasks.create(conn, owner, {"title": f"Výsledek {i}", "assignee": "Head of Growth", "topic": "ops",
+                                       "priority": 3 if i < 6 else 1}) for i in range(8)]
+    for n, t in enumerate(rows):
+        conn.execute("UPDATE tasks SET status = 'review', reviewer_id = ?, updated_at = ? WHERE id = ?",
+                     (ceo.actor_id, _ago(100 - n), t["id"]))
+    # five earlier reviews ran today at $0.50 each: the measured cost per item and $2.50 spent
+    for i in range(5):
+        done = tasks.create(conn, owner, {"title": f"Review: staré {i}", "assignee": "CEO"})
+        conn.execute("UPDATE tasks SET source = ?, status = 'done' WHERE id = ?", (f"review:{90000 + i}", done["id"]))
+        conn.execute("INSERT INTO engine_usage (at, engine, actor_id, task_id, cost_usd) VALUES (?, 'claude', ?, ?, 0.5)",
+                     (_ago(2), ceo.actor_id, done["id"]))
+    conn.commit()
+    assert review_work.item_cost(conn, datetime.now(timezone.utc)) == pytest.approx(0.5)
+    out = review_work.sync(conn, budget_usd=4.0)  # $4 - $2.50 spent = 3 more items at $0.50
+    made = [t["id"] for t in rows if _item(conn, t["id"]) is not None]
+    assert len(out["created"]) == 3 and len(out["deferred"]) == 5
+    assert set(made) == {rows[6]["id"], rows[7]["id"], rows[0]["id"]}  # priority 1 first, then the oldest
+    # the three items wait for their run: their cost is committed, nothing more fits today
+    assert review_work.room_for_new(conn, datetime.now(timezone.utc), 4.0) == 0
+    assert not review_work.sync(conn, budget_usd=4.0).get("created")
+    # the default budget is far above the old count cap at the measured cost (~$0.18 a review)
+    assert review_work.REVIEW_DAILY_USD / 0.18 > 40
+
+
 def test_near_the_company_cap_the_picker_offers_only_business_work(conn, owner, co):
     se = co["se"]
     access.set_budget(conn, owner, None, "usd_day", 50.0, "company cap")

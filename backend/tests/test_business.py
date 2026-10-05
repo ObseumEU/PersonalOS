@@ -230,9 +230,11 @@ def test_review_sla_moves_old_reviews_up(conn, owner, company):
     conn.execute("UPDATE tasks SET status = 'review', reviewer_id = ? WHERE id = ?", (owner.actor_id, old["id"]))
     out = business.review_sla(conn, now=datetime.now(timezone.utc) + timedelta(hours=25))
     assert f"{old['ref']}→CEO" in out["moved"]
-    # the CEO's own reviews: a reminder, not an escalation to the owner
+    # the CEO's own reviews: a reminder (its digest named it), not an escalation to the owner
+    assert t["id"] in business._reminded(conn, ceo.actor_id)
+    # ... and one reminder only: a later digest does not name it again
     out = business.review_sla(conn, now=datetime.now(timezone.utc) + timedelta(hours=60))
-    assert t["ref"] in out.get("reminded", [])
+    assert t["ref"] not in out.get("reminded", []) and f"{t['ref']}→" not in str(out.get("moved"))
 
 
 # ------------------------------------------------------------------ idle agents

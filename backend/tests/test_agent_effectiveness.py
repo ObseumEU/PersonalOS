@@ -129,7 +129,8 @@ def test_the_backlog_sweep_dry_runs_then_applies_and_the_sla_is_24_hours(env):
                      "WHERE id = ?", (reviewer, note, old, t["id"]))
         return t["id"]
 
-    digest = waiting("Digest: faktura zaplacena", ids["Writer"], ceo, "Zapsáno do souhrnu.", topic="digest")
+    digest = waiting("Digest: faktura zaplacena", ids["Writer"], ceo, "Zapsáno do souhrnu (poznámka #12).",
+                     topic="digest")
     code = waiting("Fix workeru", ids["Software Engineer"], ceo, "commit 1234abcd, Ověřeno: 3 passed")
     plan = waiting("Plán obchodu", ids["Writer"], ids["CTO"], "Návrh je v poznámce.", topic="obchod")
     # the SLA clock starts at the review item (a backlog result without one waits for its batch)
@@ -164,9 +165,13 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
         t = _task(conn, owner, ha, title=title, **kw)
         return tasks.complete(conn, w, t["id"], note)
 
-    # 1. A task from a schedule with nothing to act on: accepted (created by the owner's schedule).
+    # 1. A task from a schedule with nothing to act on: accepted (created by the owner's schedule),
+    # when it shows what it checked; a bare "all fine" is no evidence (no rubber stamp).
     out = handed("Denní kontrola kapacity", "V normě: disk 60 %, swap 10 %, bez restartů, 0 errors.",
                  source="schedule:901")
+    assert out["status"] == "review"
+    out = handed("Denní kontrola kapacity", "V normě: disk 60 %, swap 10 %, bez restartů, 0 errors.\n"
+                 "Ověřeno: df -h a free -m na svr03.", source="schedule:901")
     assert out["status"] == "done"
     assert conn.execute("SELECT 1 FROM audit_log WHERE action = 'review_auto_accept' AND entity_id = ?",
                         (out["id"],)).fetchone()
@@ -180,7 +185,7 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
     assert out["status"] == "done"
     # A mail triaged to nothing: accepted ("Rozhodnutí: nic" is the verdict, not an ask).
     out = handed("BAK rámcová nabídka", "## Rozhodnutí: Nic (FYI)\nNaše vlastní odchozí pošta, nikdo nečeká "
-                 "na odpověď.", topic="mail", source="event:gmail")
+                 "na odpověď.\nOvěřeno: odesílatel je naše adresa.", topic="mail", source="event:gmail")
     assert out["status"] == "done"
     # 3. Code: the QA Reviewer, even when the owner's event created it.
     se = ids["Software Engineer"]
@@ -218,10 +223,23 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
     # The measurement over today: the routine no longer reaches the CEO.
     today = datetime.now(timezone.utc).date().isoformat()
     m = review_policy.measure(conn, today, today)
-    assert m["handed_in"] == 12, m
+    assert m["handed_in"] == 13, m  # with the routine check that showed no evidence
     # The head's work goes to a general reviewer now (pos.review_policy.ceo_offload): "other".
-    assert m["after"] == {"auto_accept": 4, "qa": 1, "team_lead": 3, "ceo": 2, "owner": 0, "other": 2}, m
+    assert m["after"] == {"auto_accept": 4, "qa": 1, "team_lead": 4, "ceo": 2, "owner": 0, "other": 2}, m
     assert m["after"]["ceo"] == m["ceo_before"] == 2  # the plan, the invoice
+
+
+def test_a_plan_from_a_schedule_is_never_accepted_as_routine(env):
+    """10-05: "CEO: pondělní plán" and "CTO: technický plán týdne" were auto-accepted as routine checks."""
+    conn, owner, ids = env["conn"], env["owner"], env["ids"]
+    cto = ids["CTO"]
+    tracker = tasks.create(conn, owner, {"title": "Swap", "assignee": "Software Engineer"})
+    t = _task(conn, owner, cto, title="CTO: technický plán týdne", source="schedule:903")
+    out = tasks.complete(conn, Ctx(cto, via="mcp"), t["id"],
+                         f"Plán týdne v poznámce #35: 1. {tracker['ref']} swap, středa.\nOvěřeno: poznámka uložena.")
+    assert out["status"] == "review"
+    assert not conn.execute("SELECT 1 FROM audit_log WHERE action = 'review_auto_accept' AND entity_id = ?",
+                            (out["id"],)).fetchone()
 
 
 def test_the_sweep_moves_the_ceos_stand_in_reviews_to_the_team_lead(env):
