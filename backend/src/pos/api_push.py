@@ -1,12 +1,16 @@
-"""REST API for Web Push (pos.push, docs/MOBILE.md): this device's subscription and the member's settings."""
+"""REST API for Web Push (pos.push, docs/MOBILE.md): this device's subscription and the member's settings,
+and the approve/reject buttons on an approval notification."""
+
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from . import push
+from . import approvals, push
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .config import Settings, get_settings
+from .core import Ctx, Forbidden
 
 router = APIRouter(prefix="/api/push", tags=["push"], dependencies=[Depends(require_user)])
 
@@ -83,3 +87,30 @@ def test(request: Request, conn=Depends(get_db), ctx=Depends(get_ctx), settings:
                   device_id=sid if has_device_sub else None)
     conn.commit()
     return {"sent": n}
+
+
+class ActionIn(BaseModel):
+    approval_id: int
+    decision: Literal["approve", "reject"]
+    token: str
+    endpoint: str
+
+
+@router.post("/action")
+def action(body: ActionIn, request: Request, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """"Schválit" / "Zamítnout" pressed on an approval notification (the service worker calls this). Only with
+    that device's one-time token for this approval, its subscription endpoint and the same device's session
+    (pos.push.use_action); otherwise 403, and the service worker opens the app at the approval instead."""
+    try:
+        push.use_action(conn, token=body.token, approval_id=body.approval_id, endpoint=body.endpoint,
+                        actor_id=ctx.actor_id, device_id=request.session.get("sid"))
+    except push.PushError as e:
+        conn.commit()  # the token is spent either way
+        raise HTTPException(403, str(e)) from e
+    conn.commit()
+    try:
+        out = approvals.decide(conn, Ctx(ctx.actor_id, via="push"), body.approval_id, body.decision == "approve")
+    except Forbidden as e:  # decided meanwhile elsewhere, or not the owner
+        raise HTTPException(409, str(e)) from e
+    conn.commit()
+    return {"ok": True, "status": out["status"]}
