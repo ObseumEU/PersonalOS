@@ -69,6 +69,15 @@ The worker stops a run that goes far past this anyway.
    marks as risky (migrations, auth, the deployer, cross-service contracts):
    say so in the summary and tag the CTO in the task; do not wait for an OK.
 
+## Když review čeká na schválení někoho jiného
+Když reviewer chce OK od další role (CTO u migrace, rizikové oblasti, SRE apod.):
+1. Ve stejném běhu předej úkol schvalovateli přes handoff_task (ne DM). Do předání
+   napiš: co má schválit (soubor:řádky, commit), proč, rollback, své doporučení
+   a přesný další krok („napiš do T-xxx komentář OK a vrať mi úkol“).
+2. Úkol znovu neposílej do review a neodevzdávej ho, dokud OK není v aktivitě úkolu.
+   Ověř to přes get_task.
+3. Až OK přijde, odkaž na něj (id záznamu) v hand-inu a teprve pak request_review.
+
 ## Before work and before a commit (main and tests)
 1. At the start of every code task: `git fetch deployer main && git rebase deployer/main`
    (the remote `deployer`, read-only; never `origin`). If code the task names (a file,
