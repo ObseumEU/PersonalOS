@@ -129,6 +129,9 @@ def test_summary_refuses_a_role_play_with_fake_tool_calls_and_uses_the_fallback(
     assert not task_summary.usable_text("Pracuji na úkolu X. Budu zkoumat repo.")
     assert not task_summary.usable_text("x" * (task_summary.MAX_MODEL_CHARS + 1))
     assert task_summary.usable_text("Jde o průzkum repa Kniha. Právě probíhá.")
+    # the owner is "ty": a formal summary ("Máte na řadě 11 konceptů…") is written again
+    assert not task_summary.usable_text("Máte na řadě 11 e-mailových konceptů, které čekají na vaši akci.")
+    assert task_summary.usable_text("Máš na řadě 11 konceptů e-mailů; čekají na tvoje odeslání.")
 
 
 def test_a_bad_cached_summary_is_never_served_and_is_written_again(tmp_path, monkeypatch):

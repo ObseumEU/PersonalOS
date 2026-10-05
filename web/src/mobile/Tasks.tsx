@@ -33,7 +33,10 @@ export default function Tasks() {
   const [text, setText] = useState("");
   const load = useCallback(() => {
     setTasks(null);
-    tasksApi.list(view === "review" ? "to_review" : view).then(setTasks, () => setTasks([]));
+    tasksApi
+      .list(view === "review" ? "to_review" : view)
+      // "Dnes" is work still to do today: results handed in for review (100 %) belong to "K revizi".
+      .then((xs) => setTasks(view === "today" ? xs.filter((x) => x.status !== "review") : xs), () => setTasks([]));
   }, [view]);
   useEffect(load, [load]);
   useEffect(() => {

@@ -113,7 +113,7 @@ def _prompt(conn: sqlite3.Connection, task: dict) -> str:
         "Jsi jen shrnovač textu, ne řešitel úkolu: úkol neprovádíš, nemáš žádné nástroje a nic nespouštíš "
         "(žádné příkazy, žádné volání nástrojů, žádné XML). Odpověz jen samotným shrnutím.\n"
         "Napiš shrnutí úkolu pro majitele firmy (CEO), který není programátor a má málo času; oslovuj ho v druhé "
-        "osobě (ty), nikdy jménem. Přesně 2 až 3 krátké věty česky, nejdřív závěr (co si z toho odnést), "
+        "osobě (ty: 'máš', 'tvoje', 'pošleš'; nikdy 'máte', 'vaše', 'Vám'), nikdy jménem. Přesně 2 až 3 krátké věty česky, nejdřív závěr (co si z toho odnést), "
         "bez nadpisů, odrážek a Markdownu, bez žargonu (žádné 'run', 'grant', 'capability', 'chunk', 'value "
         "equation', 'Core Four', ID běhů, čísla poznámek a zpráv; odborný pojem vysvětli pár slovy). "
         "1. věta: závěr, o co jde a jak to dopadlo. 2. věta: kde to teď stojí, co je slabé nebo chybí. "
@@ -134,6 +134,10 @@ def _clean(text: str | None) -> str:
 # úkolu …") with a fake `git clone` in tool-call markup. That is no summary; a real one is
 # 2-3 short sentences.
 MAX_MODEL_CHARS = 3 * MAX_CHARS
+# The owner is "ty" everywhere (the list showed "Máš 2 koncepty…" next to "Máte na řadě 11…"): a summary
+# that addresses him formally is written again.
+_FORMAL = re.compile(r"\b(máte|Máte|vám|Vám|vás|Vás|váš|Váš|vaše|Vaše|vaši|vaší|vašich|vašim|vašemu|byste|Byste|"
+                     r"potřebujete|můžete|Můžete|chcete|uvidíte|najdete|zkontrolujte|odešlete|schvalte|rozhodněte)\b")
 _ROLEPLAY = re.compile(r"^\s*(pracuji na|začínám|budu (?:explorovat|pracovat|zkoumat)|jdu na to|i am working|i'm working|"
                        r"i'll start|let me)\b", re.I)
 
@@ -144,7 +148,7 @@ def usable_text(text: str) -> bool:
     from . import pseudo_tools
 
     return (bool(text) and not pseudo_tools.contains(text) and len(text) <= MAX_MODEL_CHARS
-            and not _ROLEPLAY.match(text))
+            and not _ROLEPLAY.match(text) and not _FORMAL.search(text))
 
 
 def _llm(conn: sqlite3.Connection, task: dict) -> tuple[str, int | None] | None:
@@ -257,7 +261,7 @@ def cached_for(conn: sqlite3.Connection, ids: list[int], viewer_id: int | None =
     if _has_table(conn):
         marks = ",".join("?" for _ in ids)
         out = {r["task_id"]: _clean(r["text"]) for r in conn.execute(
-            f"SELECT task_id, text FROM task_summaries WHERE task_id IN ({marks})", ids)}
+            f"SELECT task_id, text FROM task_summaries WHERE task_id IN ({marks})", ids) if usable_text(r["text"])}
     done = {r[0] for r in conn.execute(
         f"SELECT id FROM tasks WHERE status IN ('review', 'done') AND id IN ({','.join('?' for _ in ids)})", ids)}
     for tid, text in owner_report.takeaways_for(conn, [i for i in ids if i in done],
