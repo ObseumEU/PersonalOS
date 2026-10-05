@@ -164,6 +164,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import outbound_drafts
 
     outbound_drafts.register_mcp(mcp, session)  # gmail_update_draft, gmail_delete_draft: only drafts PersonalOS made
+    from . import kniha_reservations
+
+    kniha_reservations.register_mcp(mcp, session)  # Kniha reservations counted without personal data
     from . import taint
 
     taint.register_mcp(mcp, session)  # security_confirm: the Security Engineer's verdict on a tainted run's action

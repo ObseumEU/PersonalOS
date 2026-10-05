@@ -136,6 +136,52 @@ def test_a_project_member_wins_an_ambiguous_reviewer_name(db):
     conn.close()
 
 
+def test_kniha_reservations_are_counted_without_personal_data(tmp_path, monkeypatch):
+    from pos import kniha_reservations as kr
+
+    rows = [
+        {"kind": "gift", "email": "jana.novakova@seznam.cz", "recipient": "Babička Marie", "referral": "Petr Novák",
+         "source": "hero", "createdAt": "2026-10-03T10:00:00Z", "src": "other:p-01", "utm_source": "facebook"},
+        {"kind": "self", "email": "JANA.novakova@seznam.cz", "recipient": "", "referral": "", "source": "cenik",
+         "createdAt": "2026-10-04T09:00:00Z", "src": "p01", "utm_source": "jan.svoboda@firma.cz"},
+        {"kind": "lead_magnet", "email": "karel@example.cz", "source": "volný text se jménem Karel Dvořák",
+         "createdAt": "2026-10-05T08:00:00Z", "src": "wo-01"},
+        {"kind": "gift", "email": "test@obseum.cz", "source": "test-form", "createdAt": "2026-10-05T08:00:00Z"},
+    ]
+    f = tmp_path / "reservations.jsonl"
+    f.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n{broken\n", encoding="utf-8")
+    monkeypatch.setenv("POS_KNIHA_RESERVATIONS", str(f))
+    out = kr.summary()
+    assert out["total"] == 3 and out["tests_left_out"] == 1 and out["unreadable_lines"] == 1
+    assert out["unique_contacts"] == 2 and out["gift_recipient_filled"] == 1 and out["referral_filled"] == 1
+    assert {s["src"]: s["count"] for s in out["by_src"]} == {"p01": 2, "wo01": 1}
+    assert out["by_kind"] == {"gift": 1, "self": 1, "lead_magnet": 1}
+    assert out["by_day"] == {"2026-10-03": 1, "2026-10-04": 1, "2026-10-05": 1}
+    text = json.dumps(out, ensure_ascii=False).lower()
+    for personal in ("@", "marie", "novák", "novakova", "karel", "svoboda"):
+        assert personal not in text, personal
+    assert kr.summary(since="2026-10-04")["total"] == 2
+    with pytest.raises(ValueError):
+        kr.summary(since="včera")
+    monkeypatch.setenv("POS_KNIHA_RESERVATIONS", str(tmp_path / "none.jsonl"))
+    assert kr.summary()["available"] is False
+
+
+def test_only_the_kniha_team_and_the_ceo_get_the_reservations_tool():
+    from pathlib import Path
+
+    from pos.access import service as access
+
+    assert "tool:kniha_reservations_summary" not in access.autonomy_caps()  # not for everyone by default
+    assert "kniha:reservations" not in access.autonomy_caps()
+    assert access.restricted("tool:kniha_reservations_summary")
+    root = Path(__file__).resolve().parents[2] / "agents"
+    holders = {d.name for d in root.iterdir() if (d / "agent.json").is_file()
+               and "tool:kniha_reservations_summary" in json.loads((d / "agent.json").read_text("utf-8")).get("grants", [])}
+    assert holders == {"ceo", "kniha-lead", "kniha-developer", "kniha-marketing-lead", "kniha-growth-sales",
+                       "kniha-content-creator"}
+
+
 def test_a_routine_or_notify_only_report_needs_no_inline_content(db):
     path, ids = db
     plain = {"takeaway": "Kontrola proběhla, vše v pořádku.", "next": "Nic dalšího."}

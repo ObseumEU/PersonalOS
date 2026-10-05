@@ -42,6 +42,8 @@ PERMISSIONS = {
     "ops:observe": "query Loki logs (<=1 h, <=200 lines, redacted) and a Prometheus metrics snapshot (the Monitor agent)",
     "ops:runbook": "run the fixed, audited svr03 runbook (pos.ops_runbook: diagnostics, compose up, restart, backup; "
                    "the SRE; not an autonomy default)",
+    "kniha:reservations": "count the Kniha web's reservations without personal data (kniha_reservations_summary; "
+                          "the Kniha team and the CEO by grant; not an autonomy default)",
 }
 BUILTIN_PERMISSIONS = {
     actors.ASSISTANT_NAME: ["tasks:read", "tasks:write", "tasks:claim", "approvals:request", "agents:create",

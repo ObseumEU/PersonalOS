@@ -58,7 +58,7 @@ OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials")
 CRED_PREFIX = "cred"
 # Permission groups that are not autonomy defaults and that only the owner grants on request:
 # ops:runbook runs commands on svr03 (pos.ops_runbook; the SRE has it from pos.ops_runbook.ensure).
-RESTRICTED = frozenset({"ops:runbook"})
+RESTRICTED = frozenset({"ops:runbook", "kniha:reservations"})
 SCOPES = ("repo", "connector")
 
 SETTINGS_KEY = "access.settings"

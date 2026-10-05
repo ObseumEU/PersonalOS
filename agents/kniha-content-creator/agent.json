@@ -27,6 +27,7 @@
     "max_steps_owner": 300
   },
   "grants": [
-    "tool:knowledge"
+    "tool:knowledge",
+    "tool:kniha_reservations_summary"
   ]
 }

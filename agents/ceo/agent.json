@@ -51,6 +51,7 @@
   ],
   "note": "Top of the chain of command: the only agent that contacts the owner (the Chief of Staff's digest and weekly report, the Hlídač's critical incidents and the Access manager's digest are the named exceptions). Runs in the agent pool.",
   "grants": [
-    "tool:knowledge"
+    "tool:knowledge",
+    "tool:kniha_reservations_summary"
   ]
 }
