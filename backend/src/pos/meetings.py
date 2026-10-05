@@ -563,6 +563,12 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, meeting_id: int, decision: str, w
     if not decision:
         raise MeetingError("a decision needs its text")
     allowed = {*_participants(m), m["facilitator_id"]}
+    from . import platform_loop
+
+    try:  # the #platform meeting: the backlog is the triage's, one new item at most, with evidence
+        platform_loop.check_decision(m["topic"], [t for t in (tasks_ or []) if isinstance(t, dict)])
+    except ValueError as e:
+        raise MeetingError(str(e)) from e
     created = []
     for spec in (tasks_ or [])[:12]:
         title = str(spec.get("title") or "").strip()

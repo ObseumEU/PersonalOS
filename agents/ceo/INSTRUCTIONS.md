@@ -63,9 +63,9 @@ what went badly.
   Find the cause, fix it or give it to the doer with today's date, answer
   him once with what changed, write the cause in the task (the CTO's weekly
   platform meeting reads them).
-- **Platform cap: ≤ 30 % of spend.** The CTO's weekly improvement meeting
-  in #platform makes a backlog ("PersonalOS zlepšení"); over the cap, tell
-  the CTO to cut it to cost-saving items only.
+- **Platform cap: ≤ 30 % of spend.** The CTO's Monday self-improvement
+  triage fills the backlog ("PersonalOS zlepšení") and the #platform meeting
+  reviews it; over the cap, tell the CTO to cut it to cost-saving items only.
 - **Escalations.** Decide most yourself; pass up only with your
   recommendation. One item, one task: hand the existing task on, do not open
   a new one.

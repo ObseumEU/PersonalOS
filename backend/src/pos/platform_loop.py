@@ -6,16 +6,18 @@
 - **Monday 10:00 "Platforma: zlepšení týdne"** (job `platform_meeting`): a meeting (pos.meetings) led by
   the CTO. Its agenda is built in code: the scorecard's platform section (runs, reviews, loops, spend
   against the ≤ 30 % cap), last week's failed runs, failed deploys and incidents, and the owner's
-  frustration (flagged messages, double answers, unanswered asks; pos.frustration). Output: 3–5 backlog
-  items (2 when the platform is over its cap), each with evidence, a metric, the file area and an owner,
-  created by `meeting_decide` in the project; the Software Engineer ships them through the normal deploy
-  flow.
+  frustration (flagged messages, double answers, unanswered asks; pos.frustration), and the Monday 08:30
+  self-improvement triage (pos.improve.loop): its task, the items it made in the project with their
+  signal and target, and last week's verdicts. The triage makes the backlog; the meeting discusses its
+  items and verdicts (order, owners, what to drop) and adds **at most one** item of its own, only with
+  evidence (`meeting_decide` refuses more, or one without **Důkaz**: NEW_ITEMS_MAX); the Software
+  Engineer ships them through the normal deploy flow.
 - **Friday 12:00 retro** (job `platform_retro`): the platform metrics this week against last week and the
   backlog's state, posted in #platform; the same section goes into the Chief of Staff's weekly packet
   (`packet_section`, read by pos.weekly_packet), so the 14:00 report carries it.
 
 The cap (platform ≤ 30 % of spend) is the CEO's to enforce: its Monday plan carries the share
-(pos.scorecard.with_scorecard) and the meeting's agenda shrinks the backlog when it is over.
+(pos.scorecard.with_scorecard); over it, the meeting's one item may only cut cost or failures.
 """
 
 import logging
@@ -34,6 +36,8 @@ TOPIC = "Platforma: zlepšení týdne"
 FACILITATOR = "CTO"
 PARTICIPANTS = ("Software Engineer", "QA Reviewer", "SRE", "Security Engineer")
 AGENDA_MAX = 2900
+NEW_ITEMS_MAX = 1  # the meeting's own backlog items; the backlog comes from the 08:30 triage
+EVIDENCE = ("důkaz", "dukaz", "evidence")
 RETRO_KPIS = (("runs_failed", "selhané běhy"), ("fail_rate", "podíl selhání"), ("review_queue", "fronta revizí"),
               ("review_oldest_hours", "nejstarší revize (h)"), ("loops", "smyčky"), ("frustrations", "frustrace majitele"),
               ("double_answers", "dvojí odpovědi"), ("unanswered", "bez odpovědi"), ("platform_share", "podíl platformy"))
@@ -122,47 +126,66 @@ def frustrations(conn: sqlite3.Connection, now: datetime | None = None) -> list[
             for f in frustration.flagged(conn, s, u)[-5:]]
 
 
-def _signal_lines(conn: sqlite3.Connection, limit: int = 5) -> list[str]:
-    """The top signals of the daily digest (pos.improve.signals); the CTO's 08:30 triage already made
-    tasks from them, so the meeting does not duplicate those."""
+def _triage_lines(conn: sqlite3.Connection, project_id: int | None, now: datetime | None) -> list[str]:
+    """The 08:30 triage's task, the items it made and last week's verdicts (pos.improve.loop)."""
     try:
-        from .improve import signals
+        from .improve import loop
 
-        day, rows = signals.latest(conn)
-        top = signals.ranked(rows, limit)
+        rv = loop.triage_review(conn, project_id, now)
     except Exception:  # noqa: BLE001 - the meeting goes on without them
-        log.exception("signal digest unavailable")
-        return []
-    if not top:
-        return []
-    return ["**Signály (denní digest, už v pondělní triáži CTO; neduplikuj):**",
-            *[f"- `{r['key']}` {signals._num(r['count_7d'])}/7 d (předtím {signals._num(r.get('prev_7d'))})"
-              for r in top]]
+        log.exception("triage review unavailable")
+        return ["**Triáž (08:30):** nedostupná"]
+    tri = rv["triage"]
+    out = [f"**Triáž (08:30):** {tri['ref']} [{tri['status']}]" if tri else "**Triáž (08:30):** tento týden žádná"]
+    for i in rv["items"]:
+        target = (f" `{i['signal']}` {loop._num(i['baseline'])} → {loop._num(i['target'])}" if i.get("signal") else
+                  " bez bloku Cíl")
+        out.append(f"- {i['ref']} [{i['status']}] {i['title']} ({i['assignee'] or '—'}){target}")
+    if tri and not rv["items"]:
+        out.append("- zatím žádné položky")
+    out.append("**Výsledky ověření (7 dní):**")
+    out += [f"- {v}" for v in rv["verdicts"]] or ["- žádné"]
+    return out
 
 
-def agenda(conn: sqlite3.Connection, now: datetime | None = None) -> str:
-    """The meeting's agenda: the input in numbers and what the meeting must produce."""
+def agenda(conn: sqlite3.Connection, now: datetime | None = None, project_id: int | None = None) -> str:
+    """The meeting's agenda: the input in numbers, the triage's items and verdicts, and what the meeting
+    produces (no backlog of its own: at most one item with evidence)."""
     from . import scorecard
 
     card = scorecard.view(conn, now)
     share = card["spend"].get("platform_share")
     over = share is not None and share > scorecard.PLATFORM_CAP
-    items = "2" if over else "3–5"
     fails = failures(conn, now) or ["nic"]
     frus = frustrations(conn, now) or ["žádná označená zpráva"]
     text = "\n".join([
         "**Vstup (čísla z kódu, 7 dní):**", scorecard.render_platform(card),
         "**Selhání a incidenty:**", *[f"- {x}" for x in fails],
         "**Frustrace majitele:**", *[f"- {x}" for x in frus],
-        *_signal_lines(conn),
-        f"**Výstup:** {items} položky backlogu v projektu „{PROJECT}“ (meeting_decide tasks). Každá: název; v notes "
-        "**Důkaz** (číslo nebo zpráva odsud), **Metrika** (co se zlepší a o kolik do pátku), **Oblast** (soubory "
-        "a moduly); assignee vlastník (implementace Software Engineer přes normální deploy); definition_of_done "
-        "s metrikou. Nejdřív to, co trápí majitele.",
-        ("**Strop překročen:** platforma " + f"{round(share * 100)} % > 30 % nákladů: jen položky, které snižují "
-         "náklady nebo selhání." if over else "**Strop:** platforma ≤ 30 % nákladů (hlídá CEO)."),
+        *_triage_lines(conn, project_id, now),
+        "**Výstup:** backlog dělá triáž, porada ho nezakládá znovu. Projděte položky triáže a verdikty: pořadí, "
+        "vlastník, co vypustit nebo vrátit (task_refs v meeting_decide). Nejvýš **1** nová položka a jen s "
+        "**Důkaz** v notes (číslo nebo zpráva odsud), který triáž nepokrývá; k tomu **Metrika**, **Oblast** a "
+        "vlastník. Bez takového důkazu žádná nová položka. Nejdřív to, co trápí majitele.",
+        ("**Strop překročen:** platforma " + f"{round(share * 100)} % > 30 % nákladů: nová položka jen taková, "
+         "která snižuje náklady nebo selhání." if over else "**Strop:** platforma ≤ 30 % nákladů (hlídá CEO)."),
     ])
     return text[:AGENDA_MAX]
+
+
+def check_decision(topic: str, specs: list[dict]) -> None:
+    """meetings.decide for this meeting: at most NEW_ITEMS_MAX new items, each with evidence in its notes
+    (the backlog is the triage's; ValueError otherwise)."""
+    if topic != TOPIC:
+        return
+    new = [t for t in specs if str(t.get("title") or "").strip()]
+    if len(new) > NEW_ITEMS_MAX:
+        raise ValueError(f"the platform meeting adds at most {NEW_ITEMS_MAX} item: the backlog comes from the "
+                         "08:30 self-improvement triage; discuss its items (task_refs) instead")
+    for t in new:
+        if not any(w in str(t.get("notes") or "").lower() for w in EVIDENCE):
+            raise ValueError("a new platform item needs its evidence: **Důkaz** in the notes (a number or a "
+                             "message from the agenda)")
 
 
 def start_meeting(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
@@ -174,7 +197,8 @@ def start_meeting(conn: sqlite3.Connection, now: datetime | None = None) -> dict
     if not cto or not people or not where["channel_id"]:
         return {"skipped": "no CTO or no participants"}
     try:
-        m = meetings.start(conn, Ctx(cto, via="schedule"), where["channel_id"], TOPIC, agenda(conn, now),
+        m = meetings.start(conn, Ctx(cto, via="schedule"), where["channel_id"], TOPIC,
+                           agenda(conn, now, where["project_id"]),
                            participants=people, rounds=2, facilitator=cto)
     except (meetings.MeetingError, Exception) as e:  # noqa: BLE001 - a running meeting, a paused agent: next week
         conn.rollback()

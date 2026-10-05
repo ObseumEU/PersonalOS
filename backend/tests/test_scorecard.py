@@ -374,3 +374,40 @@ def test_platform_channel_project_meeting_and_retro(conn, owner, company):
     sec = packet["platform_improvement"]
     assert sec["available"] and [t["title"] for t in sec["backlog"]["done"]] == ["Zkrátit frontu revizí"]
     assert "review_queue" in sec["metrics"]
+
+
+def test_platform_meeting_discusses_the_triage_and_adds_one_item_with_evidence(conn, owner, company):
+    from pos.improve import loop
+
+    where = platform_loop.ensure(conn)
+    now = datetime.now(timezone.utc)
+    ctx = Ctx(company["cto"], via="mcp")
+    tri = _task(conn, ctx, "Triáž zlepšení", created=now - timedelta(hours=2), source=loop.TRIAGE_SOURCE)
+    item = _task(conn, ctx, "Opravit claim_task", created=now - timedelta(hours=1), assignee="Software Engineer",
+                 notes="### Důkaz\nrun:1\n\n" + loop.target_block("tool_error:claim_task.working_not_claimable", 122, 30))
+    old = _task(conn, ctx, "Stará položka", created=now - timedelta(days=3))
+    conn.execute("UPDATE tasks SET project_id = ? WHERE id IN (?, ?)", (where["project_id"], item, old))
+    conn.commit()
+
+    rv = loop.triage_review(conn, where["project_id"], now)
+    assert rv["triage"]["ref"] == tasks.display_id(tri)
+    assert [i["ref"] for i in rv["items"]] == [tasks.display_id(item)]  # the old one predates the triage
+    assert rv["items"][0]["signal"] == "tool_error:claim_task.working_not_claimable"
+
+    out = platform_loop.start_meeting(conn)
+    text = conn.execute("SELECT agenda FROM meetings WHERE id = ?", (out["meeting"],)).fetchone()[0]
+    assert f"**Triáž (08:30):** {tasks.display_id(tri)}" in text
+    assert "Opravit claim_task" in text and "`tool_error:claim_task.working_not_claimable` 122 → 30" in text
+    assert "Výsledky ověření" in text and "Nejvýš **1** nová položka" in text
+    assert "Stará položka" not in text
+
+    # Two new items, or one without evidence: refused. One with evidence: made.
+    two = [{"title": "A", "notes": "Důkaz: x"}, {"title": "B", "notes": "Důkaz: y"}]
+    with pytest.raises(meetings.MeetingError, match="at most 1"):
+        meetings.decide(conn, ctx, out["meeting"], "Dvě", tasks_=two)
+    with pytest.raises(meetings.MeetingError, match="evidence"):
+        meetings.decide(conn, ctx, out["meeting"], "Bez důkazu", tasks_=[{"title": "C", "notes": "Metrika: 0"}])
+    d = meetings.decide(conn, ctx, out["meeting"], "Jedna", tasks_=[{"title": "D", "notes": "**Důkaz** fronta 25"}])
+    assert len(d["tasks"]) == 1
+    # Other meetings are not limited.
+    platform_loop.check_decision("Jiná porada", two)

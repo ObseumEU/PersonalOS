@@ -435,6 +435,37 @@ def triage_notes(day: str, top: list[dict], open_items: list[dict], verdicts: li
     ])
 
 
+def triage_review(conn: sqlite3.Connection, project_id: int | None, now: datetime | None = None) -> dict:
+    """What the Monday 10:00 #platform meeting discusses (pos.platform_loop): this week's triage task,
+    the items made in the project since it (with their signal and target state) and the verdicts of
+    the last 7 days. The meeting makes no backlog of its own."""
+    from .. import tasks
+
+    now = _now(now)
+    ensure_schema(conn)
+    tri = conn.execute("""SELECT id, status, created_at FROM tasks WHERE source = ? AND archived_at IS NULL
+                          AND created_at >= ? ORDER BY id DESC LIMIT 1""",
+                       (TRIAGE_SOURCE, _iso(now - timedelta(days=7)))).fetchone()
+    items = []
+    if tri is not None and project_id:
+        for r in conn.execute("""SELECT t.id, t.title, t.status, t.assignee_name, t.notes, g.signal_key,
+                                        g.status AS target_status FROM tasks t
+                                 LEFT JOIN improve_targets g ON g.task_id = t.id
+                                 WHERE t.project_id = ? AND t.created_at >= ? AND t.archived_at IS NULL
+                                 AND t.parent_id IS NULL AND COALESCE(t.source, '') NOT IN (?, ?)
+                                 AND COALESCE(t.source, '') NOT LIKE 'meeting:%'
+                                 ORDER BY t.id LIMIT 10""",
+                              (project_id, tri["created_at"], TRIAGE_SOURCE, COACH_SOURCE)):
+            p = parse_target(r["notes"] or "")
+            items.append({"ref": tasks.display_id(r["id"]), "title": r["title"][:100], "status": r["status"],
+                          "assignee": r["assignee_name"], "signal": r["signal_key"] or (p or {}).get("signal"),
+                          "baseline": (p or {}).get("baseline"), "target": (p or {}).get("target"),
+                          "target_status": r["target_status"]})
+    since = (now.astimezone(TZ).date() - timedelta(days=7)).isoformat()
+    return {"triage": {"ref": tasks.display_id(tri["id"]), "status": tri["status"]} if tri else None,
+            "items": items, "verdicts": _recent_verdicts(conn, since)}
+
+
 def weekly_triage(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     """Monday 08:30: one task for the CTO with the digest (no tokens here)."""
     from .. import platform_loop, tasks
