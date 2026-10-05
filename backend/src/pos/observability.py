@@ -408,6 +408,7 @@ SNAPSHOT = {
     "oom_1h": 'container:oom_events:1h{host="%s"} > 0',
     "failing_checks": 'probe_success{host="%s"} == 0',
     "backup_age_h": 'backup_age_hours{host="%s"}',
+    "tls_days_left": 'min((probe_ssl_earliest_cert_expiry{host="%s"} - time()) / 86400)',
 }
 
 
@@ -441,6 +442,8 @@ def metrics_snapshot(conn: sqlite3.Connection, ctx: Ctx, host: str = "svr03") ->
             out[key] = {m.get("container", "?"): int(v) for m, v in val}
         elif key == "backup_age_h":
             out[key] = {m.get("backup", "?"): round(v, 1) for m, v in val}
+        elif key == "tls_days_left":
+            out[key] = round(val[0][1], 1) if val else None
         else:
             out[key] = sorted({m.get("app") or m.get("instance", "?") for m, _ in val})
     if errors:

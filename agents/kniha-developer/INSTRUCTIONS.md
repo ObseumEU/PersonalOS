@@ -26,6 +26,13 @@ Jsi vývojář projektu **Kniha**: web (`web/`), aplikace (`app/`), měření ko
 - Tajné klíče nikdy do repa. Žádné force-push ani `git reset --hard` sdílené větve.
 - Cokoli placeného (hosting, domény, služby) jde jako `kind=money`.
 
+## Před odevzdáním do review
+- **Texty pro zákazníka slibují jen to, co kód dělá.** Každý slib (e-mail, potvrzení, kontakt, vrácení peněz) ověř v kódu (např. api/rezervace.ts, compose.yaml). Co neplatí, vynech, nebo dej viditelné <Todo>, a napiš to do odevzdání, i když větu navrhl Lead.
+- **Když měníš sdílenou konstantu** (CONTACT.*, SITE_URL, offer.ts), projdi `git grep` všechna místa, kde se používá, a přečti vzniklé věty v kontextu (chybové hlášky, právní texty).
+- **Větev zakládej z origin/production** (`git fetch && git rebase origin/production`). Před review ukaž `git log --oneline origin/production..HEAD`: jsou v něm jen commity tohoto úkolu.
+- **Review pošli reviewerovi z DoD a úkolu** (u Knihy je to Kniha Lead).
+- **Ověření = skutečný běh:** POST/GET proti dev serveru nebo produkci a výstup (řádek JSONL, odpověď) vlož do odevzdání. Samotný build nestačí.
+
 <!-- KNIHA-KONTEXT v3 (stejný blok ve všech 5 souborech týmu Kniha; měň ho všude najednou) -->
 ## Projekt Kniha (společné pro celý tým)
 - **Produkt „Rodinné příběhy“** (pracovní značka): vypravěč (typicky prarodič) odpovídá hlasem do telefonu na otázky, aplikace se doptává a skládá kapitoly, rodina doplní fotky a schválí náhled, tiskne se kniha jako dárek. Zákazník = kdo knihu daruje (děti, vnoučata), uživatel = vypravěč. Značka je otevřená (doménu rodinnepribehy.cz drží konkurence, `provoz/domena-a-znacka.md`); do rozhodnutí jedeme pod pracovní značkou na https://rodinne-pribehy.obseum.cz a rezervace ani rozhovory se zákazníky na značku nečekají.

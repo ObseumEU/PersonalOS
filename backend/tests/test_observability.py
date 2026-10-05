@@ -305,12 +305,14 @@ def test_metrics_snapshot(app, monkeypatch):
             return [{"metric": {"app": "litellm"}, "value": [0, "0"]}]
         if "backup_age_hours" in expr:
             return [{"metric": {"backup": "nexus"}, "value": [0, "30.04"]}]
+        if "probe_ssl_earliest_cert_expiry" in expr:
+            return [{"metric": {}, "value": [0, "41.27"]}]
         return []
     monkeypatch.setattr(observability, "_prom_query", prom)
     out = observability.metrics_snapshot(app["conn"], Ctx(app["mid"]), "svr03")
     assert out["swap_used"] == 0.75 and out["disk_used"] == {"/": 0.63}
     assert out["top_memory"] == [{"container": "kb-kb-1", "mb": 640}] and out["failing_checks"] == ["litellm"]
-    assert out["backup_age_h"] == {"nexus": 30.0}
+    assert out["backup_age_h"] == {"nexus": 30.0} and out["tls_days_left"] == 41.3
     assert all('host="svr03"' in e for e in seen)
     with pytest.raises(Invalid):
         observability.metrics_snapshot(app["conn"], Ctx(app["mid"]), 'svr03"} or vector(1) or {x="')
@@ -351,3 +353,19 @@ def test_swap_pressure_alert_only_joins_series_with_a_host_label():
         used = set(re.findall(r"\bhost:\w+:\w+", expr))
         assert used and used <= recorded, used - recorded
     assert "host:swap_in_pages:rate5m" in recorded
+
+
+def test_tls_expiry_alert_warns_14_days_ahead_per_probe():
+    from pathlib import Path
+
+    import yaml
+
+    path = (Path(__file__).resolve().parents[2] / "deploy" / "observability" / "grafana" / "provisioning"
+            / "alerting" / "obs-platform.yaml")
+    alerting = yaml.safe_load(path.read_text(encoding="utf-8"))
+    rule = next(r for g in alerting["groups"] for r in g["rules"] if r["uid"] == "obs-tls-expiry")
+    expr = next(d["model"]["expr"] for d in rule["data"] if d["datasourceUid"] == "obs-prometheus")
+    assert "probe_ssl_earliest_cert_expiry" in expr and "by (app, instance)" in expr and "/ 86400" in expr
+    cond = next(d["model"] for d in rule["data"] if d["refId"] == rule["condition"])
+    assert cond["conditions"][0]["evaluator"] == {"type": "lt", "params": [14]}
+    assert rule["for"] == "1h" and rule["labels"]["severity"] == "warning" and rule["labels"]["class"] == "config"

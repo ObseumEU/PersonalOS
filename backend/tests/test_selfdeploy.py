@@ -142,6 +142,52 @@ def test_promote_mode_merges_only_checked_work(tmp_path, reporter):
     assert tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])["assignee_name"] == "Software Engineer"
 
 
+def test_promote_moves_the_mirror_the_agents_fetch_and_says_when_it_cannot(tmp_path, reporter):
+    """T-730: the agents fetch main from the deployer checkout's .git (remote `deployer`); the promote
+    push moved only origin/main, so their deployer/main stood on an old commit (ce70637)."""
+    rep, client, conn = reporter
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "work"  # the deployer checkout: its .git is the agents' read-only mirror
+    git(tmp_path, "clone", str(origin), str(work))
+    (work / "check.py").write_text(CHECK)
+    first = commit(work, {"app.txt": "good v1"}, "initial")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-q", "-b", "agent/dev")
+    deploy = tmp_path / "deploy"
+    git(work, "worktree", "add", "--detach", str(deploy), "main")
+    agent = tmp_path / "agent"
+    git(tmp_path, "clone", "-q", "--bare", str(work / ".git"), str(agent))
+    kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
+              up_cmd="", health_url=None)
+
+    # A: after a merge the mirror's main is the merge, and an agent's fetch gets it
+    commit(work, {"app.txt": "good v2"}, "Improve app\n\nAgent: Software Engineer")
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok"
+    assert git(work, "rev-parse", "refs/heads/main") == res.new == git(work, "rev-parse", "origin/main")
+    git(agent, "fetch", "-q", str(work / ".git"), "main")
+    assert git(agent, "rev-parse", "FETCH_HEAD") == res.new
+    assert selfdeploy.mirror_check(deploy, "origin", "main", rep.last_good()) == (
+        True, f"deployer {res.new[:10]}, mirror {res.new[:10]}, prod {res.new[:10]}")
+
+    # a mirror left behind (main moved elsewhere) catches up on the next tick, even with nothing to promote
+    git(work, "update-ref", "refs/heads/main", first)
+    assert not selfdeploy.mirror_check(deploy, "origin", "main", res.new)[0]
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"
+    assert git(work, "rev-parse", "refs/heads/main") == res.new
+
+    # B: the mirror cannot follow (diverged): never forced, the error is in the deploy log, the check fails
+    git(work, "update-ref", "refs/heads/main",
+        git(work, "-c", "user.name=Software Engineer", "-c", "user.email=dev@pos", "commit-tree", f"{first}^{{tree}}", "-p", first, "-m", "stray"))
+    commit(work, {"app.txt": "good v3"}, "Polish app\n\nAgent: Software Engineer")
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok" and "mirror: refs/heads/main" in res.log and "not an ancestor" in res.log
+    assert "mirror: refs/heads/main" in client.get("/api/deploys").json()[0]["log"]
+    ok, line = selfdeploy.mirror_check(deploy, "origin", "main", res.new)
+    assert not ok and f"deployer {res.new[:10]}" in line
+
+
 def test_promote_rolls_production_back_when_health_fails_and_respects_the_kill_switch(tmp_path, reporter,
                                                                                          monkeypatch):
     from pos import killswitch

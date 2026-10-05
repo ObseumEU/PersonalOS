@@ -334,6 +334,29 @@ groups:
           summary: "{{ $labels.app }} health check failing for 5 minutes ({{ $labels.instance }})"
           dashboard: https://grafana.obseum.cloud/d/obs-apps
 
+      # Days until the earliest certificate in the chain expires; the blackbox http prober reports it for
+      # every HTTPS target (T-686).
+      - uid: obs-tls-expiry
+        title: TLS certificate expiring
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: obs-prometheus
+            model:
+              refId: A
+              instant: true
+              expr: 'min by (app, instance) (probe_ssl_earliest_cert_expiry{job="blackbox"} - time()) / 86400'
+          - refId: C
+            datasourceUid: __expr__
+            model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: lt, params: [14]}}]}
+        for: 1h
+        noDataState: OK
+        execErrState: Error
+        labels: {team: platform, kind: tls_expiry, class: config, severity: warning}
+        annotations:
+          summary: "{{ $labels.app }}: TLS certificate expires in {{ with $values.A }}{{ printf \"%.0f\" .Value }}{{ end }} days ({{ $labels.instance }})"
+
       - uid: obs-error-spike
         title: App error-rate spike
         condition: C

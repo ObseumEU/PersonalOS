@@ -111,6 +111,15 @@ FAKE_TOOLS_RETRY = (
     "(the tool-use interface you were given), then report what they actually returned. If the tool you "
     "need is not available to you, say so plainly (name the tool) instead of writing the call as text.")
 
+# The share of a run's cost cap kept back: when the session reaches the rest, it gets this share to
+# wrap up and the task goes back with its state instead of failing on error_max_budget_usd (T-731).
+WRAPUP_SHARE = 0.15
+BUDGET_MARKER = "error_max_budget_usd"
+BUDGET_WRAPUP = (
+    "This run's cost cap is nearly used up: stop the work now. Commit nothing half-done. Do not hand the task "
+    "in. Reply only with the state for the next run, in short Markdown: what is done (commits, files, checks "
+    "and their results), what is left, and the exact next step.")
+
 
 OWNER_STEP_FACTOR = 2  # an owner-assigned task without max_steps_owner gets twice the agent's cap
 
@@ -328,6 +337,11 @@ class Worker:
         outcome = "ok"
         last_tool = ""
         fake_retried = False
+        cap = getattr(session, "max_budget_usd", None)
+        reserve = round(cap * WRAPUP_SHARE, 2) if cap else 0
+        if reserve:
+            session.max_budget_usd = round(cap - reserve, 2)
+        wrapping_up = False
         while True:
             interrupted = None
             for ev in session.run(prompt):
@@ -373,6 +387,18 @@ class Worker:
                 resumes += 1
                 log.info("%s: injected new instructions into the running session (resume %d)", ref, resumes)
                 continue
+            if wrapping_up:
+                # The wrap-up's answer (or, if it failed too, the last message) is the state handed back.
+                outcome = "budget"
+                session.failed = ""
+                break
+            if session.failed and reserve and BUDGET_MARKER in session.failed:
+                log.info("%s: run cost cap reached; %s USD kept back to hand the task back", ref, reserve)
+                session.max_budget_usd = reserve
+                session.failed = ""
+                prompt = BUDGET_WRAPUP
+                wrapping_up = True
+                continue
             if session.failed:
                 outcome = "error"
                 break
@@ -399,8 +425,9 @@ class Worker:
     def _after_run(self, ref: str, run_id: int, engine: str, session, check: dict | None, outcome: str) -> str:
         # The check's usage line first, so PersonalOS counts its cost with the run's.
         jsonl = "\n".join(x for x in ((check or {}).get("jsonl", ""), session.jsonl) if x)
-        done = self._call(self.client.finish_run, run_id, outcome, jsonl,
-                          session.failed or ("stopped" if outcome == "cancelled" else ""),
+        detail = session.failed or {"cancelled": "stopped", "budget": "cost cap reached, handed back with its state"
+                                    }.get(outcome, "")
+        done = self._call(self.client.finish_run, run_id, "ok" if outcome == "budget" else outcome, jsonl, detail,
                           delays=(*RETRY_DELAYS, 60, 60, 60))  # the result is worth a longer wait
         if done.get("requeued"):  # the runtime hit its usage limit; PersonalOS retries on the other one
             log.info("%s: %s hit its usage limit, task requeued", ref, engine)
@@ -416,4 +443,7 @@ class Worker:
                 self._call(self.client.complete, ref, session.last_message[:2000] or "Done.")
         elif outcome == "error":
             self._call(self.client.handback, ref, session.failed[:400])
+        elif outcome == "budget" and now["status"] == "working":
+            state = pseudo_tools.clean(session.last_message)[:400] or "no state written"
+            self._call(self.client.handback, ref, f"run cost cap reached; state: {state}")
         return outcome

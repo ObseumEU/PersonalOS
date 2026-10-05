@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import socket
+import types
 from pathlib import Path
 
 import anyio
@@ -519,3 +520,88 @@ def test_manager_paths_and_output_clipping():
     assert cut and "cut" in text and len(text) < 13000
     assert m._clip(b"short") == ("short", False)
     assert hashlib.sha256(PNG).hexdigest()  # PNG fixture is valid bytes
+
+
+class _Box:
+    """A container that answers exec with 409 Conflict while it is not running (T-667)."""
+
+    def __init__(self, m, status, conflicts=None):
+        self.m, self.status, self.id, self.name = m, status, "abc", "pos-sbx-12"
+        self.calls = []
+        self.conflicts = conflicts  # None: 409 exactly while not running; N: the first N exec calls
+        self.client = types.SimpleNamespace(api=self)
+
+    def reload(self):
+        pass
+
+    def start(self):
+        self.calls.append("start")
+        self.status = "running"
+
+    def unpause(self):
+        self.calls.append("unpause")
+        self.status = "running"
+
+    def _conflict(self):
+        class Conflict(self.m.APIError):
+            status_code = 409
+
+            def __init__(self):
+                Exception.__init__(self, "409 Client Error: Conflict")
+        if self.conflicts is None:
+            if self.status != "running":
+                raise Conflict()
+        elif self.conflicts > 0:
+            self.conflicts -= 1
+            raise Conflict()
+
+    def exec_create(self, cid, cmd, **kw):
+        self._conflict()
+        return {"Id": "e1"}
+
+    def exec_start(self, eid, demux=True):
+        return b"ok", b""
+
+    def exec_inspect(self, eid):
+        return {"ExitCode": 0}
+
+
+@pytest.mark.parametrize("status,action", [("exited", "start"), ("paused", "unpause")])
+def test_exec_into_a_stopped_or_paused_sandbox_starts_it_and_retries(status, action):
+    m = _manager()
+    box = _Box(m, status)
+    assert m._exec(box, ["true"]) == (0, b"ok", b"")
+    assert box.calls == [action] and box.status == "running"
+
+
+def test_exec_that_keeps_conflicting_says_the_sandbox_is_not_running():
+    m = _manager()
+    box = _Box(m, "running", conflicts=2)
+    with pytest.raises(m.Problem) as e:
+        m._exec(box, ["true"])
+    assert e.value.status == 503 and "not running" in str(e.value)
+
+
+def test_ensure_unpauses_a_paused_sandbox(monkeypatch):
+    m = _manager()
+    box = _Box(m, "paused")
+    fake = types.SimpleNamespace(containers=types.SimpleNamespace(get=lambda name: box, list=lambda **kw: []))
+    monkeypatch.setattr(m, "client", lambda: fake)
+    assert m.ensure("12") is box and box.calls == ["unpause"]
+
+
+def test_sandbox_is_marked_busy_before_ensure(monkeypatch):
+    """Otherwise a capacity stop or the reaper can stop it between ensure() and the exec."""
+    m = _manager()
+    seen = {}
+
+    def ensure(agent, team="all"):
+        seen["busy"] = m._inflight.get(m.cname(agent))
+        raise m.Problem(503, "stop here")
+
+    monkeypatch.setattr(m, "ensure", ensure)
+    for op, args in [(m.op_exec, ("ls",)), (m.op_read, ("a",)), (m.op_list, ()), (m.op_write, ("a", ""))]:
+        seen.clear()
+        with pytest.raises(m.Problem):
+            op("12", "all", *args)
+        assert seen["busy"] == 1, op.__name__
