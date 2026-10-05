@@ -577,9 +577,22 @@ def business_only(conn: sqlite3.Connection, now: datetime | None = None) -> bool
     return ratio > 0 and used(conn, None, "usd_day", now) >= ratio * cap
 
 
+# A coding run stopped at its cost cap loses its work. Measured to 10-05: Software Engineer runs
+# p50 $0.24, p95 $1.69, max $3.40 (cap $30); Kniha Developer p95 $1.25, max $1.86, and 7 runs killed at
+# its $0.52 cap (10-01/02; $1.50 since). A developer's per-run cap is never below this.
+CODING_ROLES = ("developer",)
+CODING_RUN_USD_MIN = 4.0
+
+
 def run_cap_usd(conn: sqlite3.Connection, agent_id: int) -> float | None:
-    """The agent's max USD per run (the worker passes it to the engine)."""
-    return limit(conn, agent_id, "usd_run")
+    """The agent's max USD per run (the worker passes it to the engine); a coding agent's at least
+    CODING_RUN_USD_MIN."""
+    cap = limit(conn, agent_id, "usd_run")
+    if cap is not None and cap < CODING_RUN_USD_MIN:
+        role = conn.execute("SELECT role FROM actors WHERE id = ?", (agent_id,)).fetchone()
+        if role is not None and (role["role"] or "") in CODING_ROLES:
+            return CODING_RUN_USD_MIN
+    return cap
 
 
 def signals(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None) -> dict:

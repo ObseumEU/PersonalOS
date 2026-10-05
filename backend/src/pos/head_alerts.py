@@ -31,6 +31,7 @@ REASONS = {
     "last_run_failed": "běh skončil chybou",
     "budget_exhausted": "běh zastavil limit rozpočtu",
     "owner_assigned": "úkol předal Ownerovi",
+    "no_result": "úkol běžel opakovaně bez výsledku (bez complete_task) a je pozastavený",
 }
 
 
@@ -210,6 +211,8 @@ def _body(conn: sqlite3.Connection, agent_id: int, task_id: int, reason: str, wh
             lines.append(f"Další automatický pokus nejdřív: {t['retry_after']}.")
         act = ("požádej o vyšší limit (request_access) nebo úkol předej jinému agentovi"
                if reason == "budget_exhausted" else
+               "úkol rozděl na menší, nebo ho předej jinému agentovi (task_reassign)" if reason == "no_result"
+               else
                "podívej se na běh v trace, úkol upřesni komentářem a vrať, nebo ho předej jinému agentovi")
         lines.append(f"Co můžeš udělat: {act}. Přehled týmu: stuck_tasks.")
     return "\n".join(lines)

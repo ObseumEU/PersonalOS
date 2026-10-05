@@ -164,6 +164,45 @@ def test_a_next_task_with_a_live_run_is_not_offered_again(setup, monkeypatch):
     assert client.get("/api/worker/next?wait=0", headers=h).json()["task"]["ref"] == t["ref"]
 
 
+def test_a_task_run_again_and_again_without_a_result_is_held_and_its_lead_told(setup, monkeypatch):
+    """T-107: a run that ends without complete_task is dispatched again (T-517: 176 runs, T-516: 57).
+    After NO_RESULT_RUNS runs without a result the task is held and the agent's lead hears of it."""
+    from pos import api_worker, head_alerts
+
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    monkeypatch.delenv("POS_CODEX_DISABLED")
+    client, conn, owner, agent_id, key = setup
+    told = []
+    monkeypatch.setattr(head_alerts, "notify", lambda c, a, t, reason, why="": told.append((a, t, reason)))
+    t = tasks.create(conn, owner, {"title": "Never finished", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    h = {"Authorization": f"Bearer {key}"}
+    for i in range(api_worker.NO_RESULT_RUNS):
+        conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (t["id"],))  # as if a comment lifted it
+        conn.commit()
+        rid = client.post("/api/worker/runs", json={"task_id": t["ref"], "kind": "task"}, headers=h).json()["run_id"]
+        client.post(f"/api/worker/tasks/{t['ref']}/claim?run_id={rid}", headers=h)
+        out = client.post(f"/api/worker/runs/{rid}/finish", json={"status": "ok", "jsonl": "", "detail": ""},
+                          headers=h).json()
+    held = conn.execute("SELECT retry_after FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0]
+    assert out["held_until"] == held and held >= _ago(hours=-(api_worker.NO_RESULT_HOLD_HOURS - 1))
+    assert told == [(agent_id, t["id"], "no_result")]
+    assert conn.execute("SELECT 1 FROM audit_log WHERE action = 'no_result_hold' AND entity_id = ?",
+                        (t["id"],)).fetchone()
+
+
+def test_a_coding_agents_run_cap_is_enough_for_real_coding_work(setup):
+    from pos.access import service as access
+
+    client, conn, owner, agent_id, key = setup
+    access._insert_budget(conn, agent_id, "usd_run", 0.5, owner.actor_id, "platform", "test")
+    conn.execute("UPDATE actors SET role = 'sre' WHERE id = ?", (agent_id,))
+    conn.commit()
+    assert access.run_cap_usd(conn, agent_id) == 0.5
+    conn.execute("UPDATE actors SET role = 'developer' WHERE id = ?", (agent_id,))  # the Kniha Developer: $0.52
+    assert access.run_cap_usd(conn, agent_id) == access.CODING_RUN_USD_MIN >= 3.4  # the largest coding run seen
+
+
 def test_blocked_and_skipped_steps_do_not_keep_a_worker_alive():
     steps = iter(["skipped", "skipped", "skipped", "skipped", "skipped"])
     now = [0.0]

@@ -317,6 +317,52 @@ def idle_back_off(conn: sqlite3.Connection, task_id: int, actor_id: int) -> str 
     return at
 
 
+# A task re-dispatched again and again without a result (T-107: a run that ends without complete_task
+# comes back; T-517 ran 176 times, T-516 57): after this many runs of one agent on one task in
+# NO_RESULT_WINDOW_HOURS with nothing handed in, it is held for NO_RESULT_HOLD_HOURS and the agent's
+# lead is told (pos.head_alerts, reason no_result). The owner's comment or a person's reassignment
+# lifts the hold; the next run without a result holds it again at once.
+NO_RESULT_RUNS = 4
+NO_RESULT_WINDOW_HOURS = 72
+NO_RESULT_HOLD_HOURS = 48
+
+
+def no_result_hold(conn: sqlite3.Connection, task_id: int, actor_id: int) -> str | None:
+    """Hold a task its agent ran NO_RESULT_RUNS times without a result; returns the new retry_after."""
+    from datetime import datetime, timedelta, timezone
+
+    t = conn.execute("SELECT status, assignee_id, retry_after, topic, source, updated_at FROM tasks WHERE id = ?",
+                     (task_id,)).fetchone()
+    if t is None or t["assignee_id"] != actor_id or t["status"] not in ("next", "working"):
+        return None
+    if (t["topic"] or "") == "chat" or (t["source"] or "").startswith("meeting"):
+        return None
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=NO_RESULT_WINDOW_HOURS)).isoformat(timespec="seconds")
+    # runs since its last hand-in (a result in review or done resets the count)
+    last_hand_in = conn.execute("""SELECT MAX(at) FROM history WHERE entity = 'task' AND entity_id = ?
+                                   AND json_extract(data, '$.status') IN ('review', 'done')""",
+                                (task_id,)).fetchone()[0]
+    n = conn.execute("""SELECT COUNT(*) FROM runs WHERE task_id = ? AND actor_id = ? AND started_at >= ?
+                        AND status IN ('ok', 'error')""", (task_id, actor_id, max(since, last_hand_in or ""))
+                     ).fetchone()[0]
+    if n < NO_RESULT_RUNS:
+        return None
+    at = (now + timedelta(hours=NO_RESULT_HOLD_HOURS)).isoformat(timespec="seconds")
+    if (t["retry_after"] or "") >= at:
+        return None
+    from . import audit, business, comments, head_alerts
+
+    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (at, task_id))
+    comments.log(conn, business.system_ctx(conn), task_id,
+                 f"Úkol běžel {n}× bez výsledku (žádné complete_task): pozastaven do {at[:16].replace('T', ' ')} "
+                 "UTC, vedoucí agenta to ví. Dřív ho uvolní komentář majitele nebo nové přiřazení.", "system")
+    audit.log(conn, business.system_ctx(conn), "no_result_hold", "task", task_id, runs=n, until=at,
+              agent_id=actor_id)
+    head_alerts.notify(conn, actor_id, task_id, "no_result", f"{n} běhů za {NO_RESULT_WINDOW_HOURS} h bez výsledku")
+    return at
+
+
 def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
     from . import meetings, owner_notice
 
@@ -607,6 +653,11 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
             conn.rollback()
     if body.status == "ok" and row["task_id"] and row["status"] == "ok":
         if idle_back_off(conn, row["task_id"], ctx.actor_id):
+            conn.commit()
+            out["held_until"] = conn.execute("SELECT retry_after FROM tasks WHERE id = ?",
+                                             (row["task_id"],)).fetchone()[0]
+    if body.status in ("ok", "error") and row["task_id"] and not out.get("requeued"):
+        if no_result_hold(conn, row["task_id"], ctx.actor_id):  # the same task again and again, no result
             conn.commit()
             out["held_until"] = conn.execute("SELECT retry_after FROM tasks WHERE id = ?",
                                              (row["task_id"],)).fetchone()[0]
