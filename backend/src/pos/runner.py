@@ -242,6 +242,15 @@ def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "
         (status, now_iso(), tin, tout, detail[:4000], reported_model(jsonl) if jsonl else None,
          *work_counts(jsonl or ""), run_id),
     )
+    if jsonl:  # the CLI session's pointer and a compact summary of the tool calls (pos.transcripts)
+        try:
+            from . import transcripts
+
+            transcripts.record(conn, run_id, jsonl)
+        except Exception:  # noqa: BLE001 - a summary never fails the run's record
+            import logging
+
+            logging.getLogger("pos.runner").exception("run %s: transcript summary failed", run_id)
     conn.commit()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     for fn in _after:

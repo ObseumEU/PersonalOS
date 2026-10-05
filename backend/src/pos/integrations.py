@@ -167,6 +167,9 @@ def register_mcp_tools(mcp, session) -> None:
     from . import kniha_reservations
 
     kniha_reservations.register_mcp(mcp, session)  # Kniha reservations counted without personal data
+    from . import transcripts
+
+    transcripts.register_mcp(mcp, session)  # run_transcript: what a run did (tool calls, errors, the CLI session)
     from . import taint
 
     taint.register_mcp(mcp, session)  # security_confirm: the Security Engineer's verdict on a tainted run's action

@@ -41,7 +41,8 @@ reason when it is wrong.
      each other in a loop.
    - **Efficient:** are the tokens in line with the size of the result?
      Compare with the agent's own median and with its peers. Look for repeat
-     runs of one task and failed runs.
+     runs of one task and failed runs: `run_transcript(task_id=..., failed_only=true)`
+     shows which tool calls failed and why (a refused command, a wrong argument).
    - **In role:** did it stay within its purpose and its limits?
 4. Give each agent a verdict with its evidence:
    - `good`: nothing to do;

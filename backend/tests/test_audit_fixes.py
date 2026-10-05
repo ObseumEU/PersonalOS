@@ -295,6 +295,64 @@ def test_the_software_engineer_can_set_its_task_to_waiting(org):
     anyio.run(scenario)
 
 
+def _claude_jsonl(n_ok: int = 2) -> str:
+    sid = "5f1c2a9e-0000-4000-8000-000000000001"
+    ev = [{"type": "system", "subtype": "init", "cwd": "/work/PersonalOS", "session_id": sid, "model": "claude-opus-5-5"}]
+    for i in range(n_ok):
+        ev.append({"type": "assistant", "session_id": sid, "message": {"content": [
+            {"type": "tool_use", "id": f"ok{i}", "name": "Bash", "input": {"command": f"git status {i}"}}]}})
+        ev.append({"type": "user", "session_id": sid, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": f"ok{i}", "content": "clean"}]}})
+    ev.append({"type": "assistant", "session_id": sid, "message": {"content": [
+        {"type": "tool_use", "id": "bad", "name": "mcp__pos__update_task",
+         "input": {"task_id": "T-1", "fields": {"follow_up": "až odpoví"}, "token": "Bearer abcdefghijklmnop"}}]}})
+    ev.append({"type": "user", "session_id": sid, "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "bad", "is_error": True,
+         "content": [{"type": "text", "text": "Error: follow_up must be YYYY-MM-DD; mail jana@acme.cz"}]}]}})
+    ev.append({"type": "result", "num_turns": 4, "total_cost_usd": 0.12, "is_error": False,
+               "usage": {"input_tokens": 10, "output_tokens": 5}})
+    return "\n".join(json.dumps(e) for e in ev)
+
+
+def test_a_finished_run_keeps_its_session_pointer_and_a_compact_summary(org):
+    from pos import runner, transcripts
+
+    path, ids = org
+    conn = connect(path)
+    se = ids["Software Engineer"]
+    started = runner.start_external(conn, runner.RunRequest(se, "task", "x", engine="claude"))
+    runner.finish_external(conn, started.run_id, se, "ok", _claude_jsonl())
+    got = transcripts.get(conn, Ctx(ids["Performance Coach"]), started.run_id)
+    assert got["session"]["id"].startswith("5f1c2a9e") and got["session"]["cwd"] == "/work/PersonalOS"
+    assert got["session"]["path"] == "~/.claude/projects/-work-PersonalOS/5f1c2a9e-0000-4000-8000-000000000001.jsonl"
+    assert got["counts"]["tool_calls"] == 3 and got["counts"]["errors"] == 1
+    bad = [c for c in got["calls"] if c["error"]]
+    assert bad[0]["tool"] == "mcp__pos__update_task" and "YYYY-MM-DD" in bad[0]["result"]
+    text = json.dumps(got, ensure_ascii=False)
+    assert "abcdefghijklmnop" not in text and "jana@acme.cz" not in text  # redacted like log lines
+    only = transcripts.get(conn, Ctx(ids["Performance Coach"]), started.run_id, failed_only=True)
+    assert len(only["calls"]) == 1
+    with pytest.raises(Exception, match="reads its runs"):
+        transcripts.get(conn, Ctx(ids["Agent X"]), started.run_id)
+    conn.close()
+
+
+def test_a_long_transcript_is_capped_and_keeps_its_errors():
+    from pos import transcripts
+
+    s = transcripts.summarize(_claude_jsonl(n_ok=400))
+    assert s["counts"]["tool_calls"] == 401 and s["counts"]["errors"] == 1
+    assert len(s["calls"]) <= transcripts.MAX_CALLS
+    assert len(json.dumps(s["calls"], ensure_ascii=False)) <= transcripts.MAX_CHARS
+    assert any(c["error"] for c in s["calls"])  # the failure survives the cut
+    codex = "\n".join(json.dumps(e) for e in (
+        {"type": "thread.started", "thread_id": "th-1"},
+        {"type": "item.completed", "item": {"type": "command_execution", "command": "pytest", "exit_code": 1,
+                                            "aggregated_output": "1 failed", "status": "completed"}}))
+    c = transcripts.summarize(codex)
+    assert c["engine"] == "codex" and c["session_id"] == "th-1" and c["calls"][0]["error"]
+
+
 def test_a_routine_or_notify_only_report_needs_no_inline_content(db):
     path, ids = db
     plain = {"takeaway": "Kontrola proběhla, vše v pořádku.", "next": "Nic dalšího."}
