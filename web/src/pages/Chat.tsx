@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Keybo
 import { Link, useSearchParams } from "react-router-dom";
 import { type OrgMember, agentsApi } from "../agentsApi";
 import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, type TypingEntry, chatApi } from "../chatApi";
+import { completeMention, mentionCandidates, mentionQuery } from "../chat/mentions";
 import Messenger, { type FileAtt, ThreadChip, replyCount, useSender, visibleBody } from "../chat/Messenger";
 import { FileCard } from "../files/FileCard";
 import ThreadList, { useThreads } from "../chat/ThreadList";
@@ -316,21 +317,11 @@ function Composer({
   const lastTyping = useRef(0);
   const hasAgents = channel.members.some((m) => m.kind !== "human");
   // Members of the channel first, then everyone (mentioning an agent invites it).
-  const candidates = useMemo(() => {
-    if (query === null) return [];
-    const q = query.toLowerCase();
-    const inChannel = new Set(channel.members.map((m) => m.id));
-    return members
-      .filter((m) => m.name.toLowerCase().includes(q) && (channel.kind === "group" || inChannel.has(m.id)))
-      .sort((a, b) => Number(inChannel.has(b.id)) - Number(inChannel.has(a.id)) || Number(!b.name.toLowerCase().startsWith(q)) - Number(!a.name.toLowerCase().startsWith(q)))
-      .slice(0, 6);
-  }, [query, members, channel]);
+  const candidates = useMemo(() => mentionCandidates(query, members, channel), [query, members, channel]);
 
   const onChange = (value: string) => {
     setBody(value);
-    const caret = ref.current?.selectionStart ?? value.length;
-    const m = /(^|\s)@([^\s@]{0,24})$/.exec(value.slice(0, caret));
-    setQuery(m ? m[2] : null);
+    setQuery(mentionQuery(value, ref.current?.selectionStart ?? value.length));
     setPick(0);
     if (Date.now() - lastTyping.current > 3000) {
       lastTyping.current = Date.now();
@@ -339,14 +330,12 @@ function Composer({
   };
   const complete = (m: ChatMember) => {
     const el = ref.current;
-    const caret = el?.selectionStart ?? body.length;
-    const before = body.slice(0, caret).replace(/@([^\s@]{0,24})$/, `@${m.name} `);
-    const next = before + body.slice(caret);
-    setBody(next);
+    const next = completeMention(body, el?.selectionStart ?? body.length, m.name);
+    setBody(next.value);
     setQuery(null);
     requestAnimationFrame(() => {
       el?.focus();
-      el?.setSelectionRange(before.length, before.length);
+      el?.setSelectionRange(next.caret, next.caret);
     });
   };
   const submit = () => {
