@@ -4,7 +4,25 @@ FROM python:3.12-slim
 # The current Claude Code: older versions do not know claude-opus-5-5. The build
 # fails below the version verified with it (CLAUDE_MIN).
 ARG CLAUDE_MIN=2.1.282
-RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm git ca-certificates \
+# Node.js 22 LTS from the official tarball (checked against nodejs.org's SHASUMS256): Debian's
+# nodejs is v20, and the apps the agents build and test (e.g. /work/kniha/app, node:sqlite)
+# need >= 22.5. npm and npx come with it. The build fails below NODE_MIN.
+ARG NODE_MAJOR=22
+ARG NODE_MIN=22.5.0
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl xz-utils \
+    && case "$(dpkg --print-architecture)" in amd64) arch=x64;; arm64) arch=arm64;; *) echo "unsupported arch"; exit 1;; esac \
+    && base="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x" \
+    && curl -fsSL "$base/SHASUMS256.txt" -o /tmp/SHASUMS256.txt \
+    && file="$(grep -o "node-v[0-9.]*-linux-${arch}\.tar\.xz" /tmp/SHASUMS256.txt | head -1)" \
+    && curl -fsSL "$base/$file" -o "/tmp/$file" \
+    && (cd /tmp && grep " $file\$" SHASUMS256.txt | sha256sum -c -) \
+    && tar -xJf "/tmp/$file" -C /usr/local --strip-components=1 --no-same-owner \
+        --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE' \
+    && rm -f "/tmp/$file" /tmp/SHASUMS256.txt \
+    && nv="$(node --version | tr -d v)" \
+    && [ "$(printf '%s\n%s\n' "$NODE_MIN" "$nv" | sort -V | head -1)" = "$NODE_MIN" ] \
+    || { echo "Node.js $nv is older than $NODE_MIN"; exit 1; }
+RUN node -e "require('node:sqlite')" && npm --version && npx --version \
     && npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest \
     && rm -rf /var/lib/apt/lists/* \
     && v="$(claude --version | cut -d' ' -f1)" \
