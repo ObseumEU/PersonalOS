@@ -1,9 +1,10 @@
-import { Camera, CheckCircle2, Copy, FileText, ListPlus, MessageSquare, Paperclip, Send, X } from "lucide-react";
+import { Camera, Check, CheckCircle2, Copy, FileText, Flag, ListPlus, MessageSquare, Paperclip, Pencil, Send, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { type Channel, type ChatMessage, chatApi } from "../chatApi";
+import { type Channel, type ChatMember, type ChatMessage, type Priority, chatApi } from "../chatApi";
 import Messenger, { type FileAtt, useSender, visibleBody } from "../chat/Messenger";
+import { completeMention, mentionCandidates, mentionQuery } from "../chat/mentions";
 import { applyReply, upsert } from "../chat/timeline";
 import { toast } from "../components/overlay";
 import { AttachChips, MicButton, useAttachments } from "../components/compose";
@@ -16,17 +17,44 @@ import { ActionSheet, Avatar, LoadError, SheetButton, TopBar } from "./ui";
 
 const APPROVAL_REF = /schválení #(\d+)/i;
 
-/** The composer, pinned to the bottom (above the keyboard, safe-area aware). Sending is optimistic: the parent shows the bubble at once. */
-function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel; replyTo: number | null; placeholder: string; onSend: (body: string, files: FileAtt[]) => void }) {
+const PRIORITIES: Priority[] = ["fyi", "change_plan", "stop"];
+
+/** The composer, pinned to the bottom (above the keyboard, safe-area aware). Sending is optimistic: the parent shows the bubble at once.
+ * It suggests @mentions while typing, can mark a message for the agents (Pro info / Změň směr / Zastav hned),
+ * and edits one of the owner's own messages (`editing`). */
+function Composer({
+  channel,
+  replyTo,
+  placeholder,
+  members,
+  onSend,
+  editing,
+  onEdit,
+  onCancelEdit,
+}: {
+  channel: Channel;
+  replyTo: number | null;
+  placeholder: string;
+  members: ChatMember[];
+  onSend: (body: string, files: FileAtt[], priority: Priority | null) => void;
+  editing: ChatMessage | null;
+  onEdit: (m: ChatMessage, body: string) => void;
+  onCancelEdit: () => void;
+}) {
   const [body, setBody] = useState("");
   const att = useAttachments();
   const { files, uploading } = att;
   const [picker, setPicker] = useState(false);
+  const [priority, setPriority] = useState<Priority | null>(null);
+  const [priorityPicker, setPriorityPicker] = useState(false);
+  const [query, setQuery] = useState<string | null>(null);
   const photo = useRef<HTMLInputElement>(null);
   const any = useRef<HTMLInputElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
   const lastTyping = useRef(0);
   const desktop = useMemo(() => window.matchMedia("(pointer: fine)").matches, []);
+  const hasAgents = channel.members.some((m) => m.kind !== "human");
+  const candidates = useMemo(() => mentionCandidates(query, members.filter((m) => !m.archived), channel, 8), [query, members, channel]);
 
   const grow = () => {
     const el = area.current;
@@ -34,13 +62,33 @@ function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   };
+  // Editing: the message's text in the box (back to empty when done or cancelled).
+  useEffect(() => {
+    setBody(editing ? editing.body : "");
+    setQuery(null);
+    requestAnimationFrame(() => {
+      grow();
+      if (editing) area.current?.focus();
+    });
+  }, [editing]);
   const change = (v: string) => {
     setBody(v);
     grow();
-    if (Date.now() - lastTyping.current > 3000) {
+    setQuery(mentionQuery(v, area.current?.selectionStart ?? v.length));
+    if (!editing && Date.now() - lastTyping.current > 3000) {
       lastTyping.current = Date.now();
       chatApi.typing(channel.id, replyTo).catch(() => undefined);
     }
+  };
+  const mention = (m: ChatMember) => {
+    const next = completeMention(body, area.current?.selectionStart ?? body.length, m.name);
+    setBody(next.value);
+    setQuery(null);
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(next.caret, next.caret);
+      grow();
+    });
   };
   const upload = (list: FileList | null) => {
     setPicker(false);
@@ -53,48 +101,104 @@ function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel;
   };
   const submit = () => {
     const text = body.trim();
+    if (editing) {
+      if (text && text !== editing.body) onEdit(editing, text);
+      else onCancelEdit();
+      return;
+    }
     if ((!text && !files.length) || uploading) return;
-    onSend(text, files);
+    onSend(text, files, priority);
     setBody("");
+    setPriority(null);
+    setQuery(null);
     att.clear();
     requestAnimationFrame(grow);
     area.current?.focus(); // the keyboard stays open, like a messenger
   };
   const key = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Escape" && editing) onCancelEdit();
     if (desktop && e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      if (candidates.length) mention(candidates[0]);
+      else submit();
     }
   };
+  const keep = (e: { preventDefault: () => void }) => e.preventDefault(); // a tap does not close the keyboard
+  const tone = (p: Priority | null) => (p === "stop" ? "text-red-400" : p ? "text-amber-300" : "text-ink-2");
 
   return (
     <div className="shrink-0 border-t border-line bg-bg px-2 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]">
-      <AttachChips files={files} uploading={uploading} onRemove={att.remove} className="px-1 pb-2" />
+      {candidates.length > 0 && (
+        <div role="listbox" aria-label={t("m.chat.mention")} className="flex gap-1.5 overflow-x-auto px-1 pb-2 [scrollbar-width:none]">
+          {candidates.map((m) => (
+            <button
+              key={m.id}
+              role="option"
+              aria-selected={false}
+              onPointerDown={keep}
+              onClick={() => mention(m)}
+              className="flex h-9 shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[14px] active:bg-raised"
+            >
+              <Avatar name={m.name} size={20} human={m.kind === "human"} />
+              {m.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {editing && (
+        <div className="flex items-center gap-2 px-2 pb-2 text-[13px] text-accent">
+          <Pencil size={14} /> <span className="flex-1">{t("m.chat.editing")}</span>
+          <button onClick={onCancelEdit} aria-label={t("m.chat.edit_cancel")} className="grid h-8 w-8 place-items-center rounded-full text-ink-2 active:bg-raised">
+            <X size={16} />
+          </button>
+        </div>
+      )}
+      {!editing && priority && (
+        <div className={`flex items-center gap-2 px-2 pb-2 text-[13px] ${tone(priority)}`}>
+          <Flag size={14} /> <span className="flex-1">{t(`priority.${priority}`)}</span>
+          <button onClick={() => setPriority(null)} aria-label={t("priority.none")} className="grid h-8 w-8 place-items-center rounded-full text-ink-2 active:bg-raised">
+            <X size={16} />
+          </button>
+        </div>
+      )}
+      {!editing && <AttachChips files={files} uploading={uploading} onRemove={att.remove} className="px-1 pb-2" />}
       <div className="flex items-end gap-1.5">
-        <button aria-label={t("m.chat.attach")} onClick={() => setPicker(true)} className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-ink-2 active:bg-raised">
-          <Paperclip size={20} />
-        </button>
+        {!editing && (
+          <button aria-label={t("m.chat.attach")} onClick={() => setPicker(true)} className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-ink-2 active:bg-raised">
+            <Paperclip size={20} />
+          </button>
+        )}
         <textarea
           ref={area}
           rows={1}
           value={body}
           onChange={(e) => change(e.target.value)}
-          onPaste={att.onPaste}
+          onPaste={editing ? undefined : att.onPaste}
           onKeyDown={key}
           placeholder={placeholder}
-          aria-label={t("chat.message")}
+          aria-label={editing ? t("chat.edit") : t("chat.message")}
           enterKeyHint={desktop ? "send" : "enter"}
           className="max-h-[140px] min-h-11 min-w-0 flex-1 resize-none rounded-3xl border border-line bg-surface px-4 py-2.5 text-[16px] leading-snug outline-none focus:border-accent"
         />
-        <MicButton value={body} onChange={dictate} className="h-11 w-11" size={20} />
+        {!editing && hasAgents && (
+          <button
+            aria-label={t("m.chat.priority")}
+            onPointerDown={keep}
+            onClick={() => setPriorityPicker(true)}
+            className={`grid h-11 w-11 shrink-0 place-items-center rounded-full active:bg-raised ${tone(priority)}`}
+          >
+            <Flag size={19} />
+          </button>
+        )}
+        {!editing && <MicButton value={body} onChange={dictate} className="h-11 w-11" size={20} />}
         <button
-          aria-label={t("m.chat.send")}
-          onPointerDown={(e) => e.preventDefault() /* keeps the textarea focused: the keyboard does not close */}
+          aria-label={editing ? t("act.save") : t("m.chat.send")}
+          onPointerDown={keep}
           onClick={submit}
-          disabled={!!uploading || (!body.trim() && !files.length)}
+          disabled={editing ? !body.trim() : !!uploading || (!body.trim() && !files.length)}
           className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-accent text-bg disabled:opacity-40"
         >
-          <Send size={18} />
+          {editing ? <Check size={18} /> : <Send size={18} />}
         </button>
       </div>
       <input ref={photo} type="file" accept="image/*" multiple hidden onChange={(e) => { upload(e.target.files); e.target.value = ""; }} />
@@ -103,6 +207,20 @@ function Composer({ channel, replyTo, placeholder, onSend }: { channel: Channel;
         <ActionSheet title={t("m.chat.attach")} onClose={() => setPicker(false)}>
           <SheetButton icon={<Camera size={20} />} onClick={() => photo.current?.click()}>{t("m.chat.photo")}</SheetButton>
           <SheetButton icon={<FileText size={20} />} onClick={() => any.current?.click()}>{t("m.chat.file")}</SheetButton>
+        </ActionSheet>
+      )}
+      {priorityPicker && (
+        <ActionSheet title={t("m.chat.priority")} onClose={() => setPriorityPicker(false)}>
+          <p className="px-3 pb-1 text-[13px] leading-snug text-ink-2">{t("m.chat.priority_hint")}</p>
+          <SheetButton icon={<X size={20} />} onClick={() => { setPriority(null); setPriorityPicker(false); }}>
+            {t("priority.none")}
+          </SheetButton>
+          {PRIORITIES.map((p) => (
+            <SheetButton key={p} icon={<Flag size={20} className={tone(p)} />} danger={p === "stop"} onClick={() => { setPriority(p); setPriorityPicker(false); }}>
+              {t(`priority.${p}`)}
+              {p === priority && <Check size={16} className="ml-auto text-accent" />}
+            </SheetButton>
+          ))}
         </ActionSheet>
       )}
     </div>
@@ -120,6 +238,7 @@ export default function Conversation() {
   const [hasMore, setHasMore] = useState(false);
   const [threadMsgs, setThreadMsgs] = useState<ChatMessage[]>([]);
   const [acting, setActing] = useState<ChatMessage | null>(null);
+  const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const members = useMembers();
   const presence = usePresence();
@@ -291,7 +410,14 @@ export default function Conversation() {
           channel={channel}
           replyTo={thread}
           placeholder={thread ? t("m.chat.reply_placeholder") : t("m.chat.placeholder", { name: title })}
-          onSend={(body, files) => send(body, files, thread)}
+          members={members}
+          onSend={(body, files, priority) => send(body, files, thread, priority)}
+          editing={editing}
+          onCancelEdit={() => setEditing(null)}
+          onEdit={(m, body) => {
+            setEditing(null);
+            chatApi.edit(m.id, body).then(received, (e) => toast(e instanceof Error ? e.message : String(e), { error: true }));
+          }}
         />
       )}
       {acting && (
@@ -314,6 +440,11 @@ export default function Conversation() {
           <SheetButton icon={<span className="text-[18px]">👍</span>} onClick={() => act(() => chatApi.react(acting.id, "👍"), "👍")}>
             {t("chat.react")}
           </SheetButton>
+          {acting.author_id === me && canWrite && (
+            <SheetButton icon={<Pencil size={20} />} onClick={() => { setEditing(acting); setActing(null); }}>
+              {t("chat.edit")}
+            </SheetButton>
+          )}
           <SheetButton icon={<Copy size={20} />} onClick={() => act(() => navigator.clipboard.writeText(visibleBody(acting)), t("m.chat.copied"))}>
             {t("m.chat.act.copy")}
           </SheetButton>
