@@ -1,12 +1,19 @@
-import { Plus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Plus, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "../components/overlay";
 import { t } from "../i18n/core";
 import { type Task, type View, dueLabel, tasksApi } from "../tasksApi";
 import { LoadError, TopBar, errText } from "./ui";
 
-const VIEWS: View[] = ["today", "next", "agents", "waiting", "review"];
+// The same views as the full app's task list (GET /api/tasks?view=…); "review" is its to_review.
+const VIEWS: View[] = ["inbox", "today", "upcoming", "next", "agents", "waiting", "review", "done"];
+
+/** Does a task match what was typed in the search box (its ref, title, notes, assignee)? */
+function matches(task: Pick<Task, "ref" | "title" | "notes" | "assignee_name">, q: string): boolean {
+  const needle = q.trim().toLowerCase();
+  return !needle || `${task.ref} ${task.title} ${task.notes ?? ""} ${task.assignee_name ?? ""}`.toLowerCase().includes(needle);
+}
 
 function Row({ task, view }: { task: Task; view: View }) {
   const due = dueLabel(task);
@@ -31,6 +38,8 @@ export default function Tasks() {
   const view = (params.get("view") as View) || "today";
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [text, setText] = useState("");
+  const [q, setQ] = useState(() => params.get("q") ?? "");
+  const shown = useMemo(() => tasks?.filter((x) => matches(x, q)) ?? null, [tasks, q]);
   const [failed, setFailed] = useState<string | null>(null);
   const load = useCallback(() => {
     setTasks(null);
@@ -68,13 +77,29 @@ export default function Tasks() {
             key={v}
             role="tab"
             aria-selected={v === view}
-            onClick={() => setParams({ view: v })}
+            onClick={() => setParams(q ? { view: v, q } : { view: v })}
             className={`h-9 shrink-0 rounded-full border px-3.5 text-[14px] ${v === view ? "border-accent bg-accent/10 text-accent" : "border-line text-ink-2"}`}
           >
             {t(`m.tasks.view.${v}`)}
           </button>
         ))}
       </div>
+      <label className="flex h-11 items-center gap-2 border-b border-line px-4">
+        <Search size={16} className="shrink-0 text-ink-2" />
+        <input
+          type="search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={t("m.tasks.search")}
+          aria-label={t("m.tasks.search")}
+          className="h-10 min-w-0 flex-1 bg-transparent text-[16px] outline-none"
+        />
+        {q && (
+          <button type="button" onClick={() => setQ("")} aria-label={t("m.tasks.search_clear")} className="grid h-10 w-10 place-items-center text-ink-2">
+            <X size={16} />
+          </button>
+        )}
+      </label>
       <form
         className="flex gap-2 border-b border-line px-3 py-2"
         onSubmit={(e) => {
@@ -94,8 +119,8 @@ export default function Tasks() {
         </button>
       </form>
       {tasks === null && (failed ? <LoadError error={failed} onRetry={load} /> : <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>)}
-      {tasks?.length === 0 && <p className="px-4 py-8 text-center text-sm text-ink-2">{t("m.tasks.empty")}</p>}
-      {tasks?.map((x) => <Row key={x.id} task={x} view={view} />)}
+      {shown?.length === 0 && <p className="px-4 py-8 text-center text-sm text-ink-2">{tasks?.length && q.trim() ? t("m.tasks.no_match", { q: q.trim() }) : t("m.tasks.empty")}</p>}
+      {shown?.map((x) => <Row key={x.id} task={x} view={view} />)}
     </div>
   );
 }
