@@ -98,6 +98,8 @@ class ClaudeSession:
     max_budget_usd: float | None = None  # per-run cap (--max-budget-usd)
     env: dict[str, str] | None = None
     thread_id: str | None = None  # the Claude session id, for --resume
+    # Folders outside the work folder the file tools may read (--add-dir): the run's attached images.
+    add_dirs: list[str] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
     proc: subprocess.Popen | None = None
     last_message: str = ""
@@ -148,9 +150,21 @@ class ClaudeSession:
             args += ["--allowedTools", *self.allowed_tools]
         if self.disallowed_tools:
             args += ["--disallowedTools", *self.disallowed_tools]
+        if self.add_dirs:
+            args += ["--add-dir", *self.add_dirs]
         if self.thread_id:
             args += ["--resume", self.thread_id]
         return args
+
+    def attach_images(self, folder, paths) -> None:
+        """Images the model is to look at (pos_worker.images): their folder becomes readable and
+        the Read tool exists, also for an agent whose profile names other built-ins."""
+        if str(folder) not in self.add_dirs:
+            self.add_dirs.append(str(folder))
+        if self.builtin_tools is not None and "Read" not in self.builtin_tools:
+            self.builtin_tools = [*self.builtin_tools, "Read"]
+        if self.allowed_tools and "Read" not in self.allowed_tools:
+            self.allowed_tools = [*self.allowed_tools, "Read"]
 
     def cli_env(self) -> dict[str, str]:
         """Environment for the CLI that keeps the fixed prompt small: tool search as decided, and no

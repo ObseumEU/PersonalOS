@@ -65,10 +65,25 @@ class CaptureIn(BaseModel):
 
 class NoteIn(BaseModel):
     note: str | None = None
+    # Files uploaded first (POST /api/files): a screenshot pasted into the answer (at most 10).
+    attachments: list[int] = []
 
 
 class CommentIn(BaseModel):
-    body: str
+    body: str = ""
+    attachments: list[int] = []
+
+
+def with_files(conn, ctx, text: str | None, ids: list[int]) -> str:
+    """The text with a "📎 name (soubor #id)" line per attached file, like a chat message: the
+    agent's worker finds the images by these lines and hands them to the model (pos_worker.images).
+    Only files the sender may read."""
+    from . import files
+
+    if not ids:
+        return (text or "").strip()
+    _, lines = files.chat_attachments(conn, ctx, ids)
+    return "\n".join(x for x in [(text or "").strip(), *lines] if x)
 
 
 class ReviewIn(BaseModel):
@@ -172,7 +187,7 @@ def add_step(task_id: str, body: TaskIn, conn=Depends(get_db), ctx=Depends(get_c
 
 @router.post("/tasks/{task_id}/complete")
 def complete(task_id: str, body: NoteIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
-    t = tasks.complete(conn, ctx, tasks.parse_id(task_id), body.note)
+    t = tasks.complete(conn, ctx, tasks.parse_id(task_id), with_files(conn, ctx, body.note, body.attachments) or None)
     conn.commit()
     return t
 
@@ -425,7 +440,7 @@ def task_comments(task_id: str, limit: int = 100, conn=Depends(get_db), ctx=Depe
 def add_task_comment(task_id: str, body: CommentIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     from . import comments
 
-    c = comments.add(conn, ctx, tasks.parse_id(task_id), body.body)
+    c = comments.add(conn, ctx, tasks.parse_id(task_id), with_files(conn, ctx, body.body, body.attachments))
     conn.commit()
     return c
 

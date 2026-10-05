@@ -1116,6 +1116,12 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             f = files.get(conn, c, file_id, with_text=True)
             # Uploaded documents are outside content (constitution U2).
             f["text_extract"] = wrap_external("file", f["text_extract"][:100_000], ref=f"file:{file_id}")
+            if (f.get("mime") or "") in files.INLINE_IMAGES:
+                # The picture itself never comes through MCP: the worker puts it into the run's folder
+                # when the task or a message names it (pos_worker.images).
+                f["image_note"] = (f"An image. You see it when your task or a message names it as "
+                                   f"'(soubor #{file_id})': the run then lists its path to Read. Delegating "
+                                   f"work about it, write '(soubor #{file_id})' into the task.")
             return f
 
     @mcp.tool(description="Share a document with the team as a file: a name (with its extension, e.g. "

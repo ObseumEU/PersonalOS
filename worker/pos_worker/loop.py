@@ -22,6 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .client import Blocked, PosClient
+from . import images as run_images
 from . import pseudo_tools
 from .prompt import build_task_prompt, injection, stable_prompt
 from .tools import fetch as fetch_tools
@@ -144,8 +145,14 @@ class Worker:
     def __init__(self, client: PosClient, new_session: Callable[[str, str | None, dict], object], *, poll_wait: int = 60,
                  max_resumes: int = 12, max_steps: int = 0, sleep: Callable[[float], None] = time.sleep,
                  tools_dir: str | None = None, triage: Callable[[dict, dict], dict | None] | None = None,
-                 exit_idle_s: float = 0, clock: Callable[[], float] = time.monotonic):
+                 exit_idle_s: float = 0, clock: Callable[[], float] = time.monotonic,
+                 images_dir: str | None = None):
         self.client = client
+        # Where a run's attached images go (pos_worker.images), a folder per run, removed after it.
+        import tempfile
+
+        self.images_dir = Path(images_dir) if images_dir else Path(tempfile.gettempdir()) / "pos-run-images"
+        self.images: run_images.RunImages | None = None
         # The agent pool starts a worker when its agent has a task; it ends itself after
         # this long without one (0 = never), so an idle agent costs no process at all.
         self.exit_idle_s = exit_idle_s
@@ -327,8 +334,31 @@ class Worker:
         # across runs); Codex gets both at the top of the prompt.
         prompt = build_task_prompt(me, task, self.context, include_guardrails=not claude, include_stable=not claude)
         self.context = []
-        outcome = self._session_loop(session, prompt, run_id, ref)  # inside handle_task's alive tick
+        self.images = run_images.RunImages(self.client, self.images_dir / f"run-{run_id}")
+        try:
+            outcome = self._session_loop(session, prompt, run_id, ref)  # inside handle_task's alive tick
+        finally:
+            self.images.cleanup()
+            self.images = None
         return self._after_run(ref, run_id, engine, session, check, outcome)
+
+    def _with_images(self, session, prompt: str) -> str:
+        """The prompt plus where the images it refers to are (downloaded now), and the session
+        allowed to read them (pos_worker.images). Unchanged when it refers to none."""
+        if self.images is None:
+            return prompt
+        try:
+            got = self.images.fetch(prompt)
+        except Exception:  # noqa: BLE001 - pictures are context: the run goes on without them
+            log.exception("could not fetch the attached images")
+            return prompt
+        if not got:
+            return prompt
+        attach = getattr(session, "attach_images", None)
+        if attach:
+            attach(self.images.folder, [p for _, p in got])
+        log.info("%d attached image(s) handed to the model", len(got))
+        return f"{prompt}\n\n{run_images.note(got)}"
 
     def _session_loop(self, session, prompt: str, run_id: int, ref: str) -> str:
         pending_fyi: list[dict] = []
@@ -344,6 +374,7 @@ class Worker:
         wrapping_up = False
         while True:
             interrupted = None
+            prompt = self._with_images(session, prompt)
             for ev in session.run(prompt):
                 if ev.get("type") == "agent_message":
                     last_tool = tool_of(ev) or last_tool

@@ -9,6 +9,7 @@ import json
 import logging
 import sqlite3
 import time
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -620,6 +621,25 @@ def inbox(run_id: int | None = None, conn=Depends(get_db), ctx: Ctx = Depends(wo
     out = agents.check_inbox(conn, ctx.actor_id, run_id=run_id)
     conn.commit()
     return out
+
+
+@router.get("/files/{file_id}/image")
+def file_image(file_id: int, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
+               settings: Settings = Depends(get_settings)):
+    """An image someone attached (a screenshot in chat, a photo in an answer), for the worker to put
+    into the run's folder: the model reads it with its Read tool (the MCP tools only give a file's
+    text, so a screenshot stayed invisible). Only images the agent itself may read (visibility);
+    anything else is 415."""
+    from fastapi.responses import FileResponse
+
+    from . import files
+
+    path, meta = files.content(conn, ctx, settings.files_dir, file_id)
+    if (meta.get("mime") or "") not in files.INLINE_IMAGES:
+        raise HTTPException(415, f"file {file_id} is not an image")
+    return FileResponse(path, media_type=meta["mime"],
+                        headers={"X-File-Name": quote(meta["name"] or f"file-{file_id}", safe=""),
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/tools")

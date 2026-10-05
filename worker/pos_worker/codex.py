@@ -32,6 +32,7 @@ class CodexSession:
     config: list[str] = field(default_factory=list)  # extra -c key=value overrides
     env: dict[str, str] | None = None
     thread_id: str | None = None
+    images: list[str] = field(default_factory=list)  # attached images for the next start (--image)
     lines: list[str] = field(default_factory=list)  # every --json line, for token accounting
     proc: subprocess.Popen | None = None
     last_message: str = ""
@@ -43,7 +44,14 @@ class CodexSession:
             args += ["-c", c]
         if resume and self.thread_id:
             args += ["resume", self.thread_id]
+        else:
+            args += [f"--image={p}" for p in self.images]
         return [*args, "-"]  # the prompt comes on stdin
+
+    def attach_images(self, folder, paths) -> None:
+        """Images the model is to look at (pos_worker.images): given with --image on a fresh start;
+        on a resume the prompt names their paths."""
+        self.images += [str(p) for p in paths if str(p) not in self.images]
 
     def run(self, prompt: str) -> Iterator[dict]:
         """Start (or resume) the session and yield its events as they arrive."""
