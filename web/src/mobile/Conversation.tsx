@@ -1,7 +1,6 @@
 import { Camera, CheckCircle2, Copy, FileText, ListPlus, MessageSquare, Paperclip, Send, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { agentsApi } from "../agentsApi";
 import { api } from "../api";
 import { type Channel, type ChatMessage, chatApi } from "../chatApi";
 import Messenger, { type FileAtt, useSender, visibleBody } from "../chat/Messenger";
@@ -240,11 +239,17 @@ export default function Conversation() {
       });
       toast(t("m.chat.task_created", { ref: task.ref }));
     }, "");
-  const approve = (m: ChatMessage) => {
-    const ref = APPROVAL_REF.exec(m.body);
-    if (ref) return act(() => agentsApi.decide(Number(ref[1]), true), t("m.chat.approved"));
+  // A message that names an approval ("schválení #12") opens the real one (the panel: what, to whom,
+  // Schválit / Zamítnout through the approvals API). Any other message has no approve action:
+  // a chat reply "Schvaluji" approves nothing.
+  const approvalOf = (m: ChatMessage) => Number(APPROVAL_REF.exec(m.body)?.[1]) || null;
+  const openApproval = (id: number) => {
     setActing(null);
-    send(t("m.chat.act.approve_reply"), [], isDm ? m.id : m.reply_to ?? m.id);
+    setParams((p) => {
+      const next = new URLSearchParams(p);
+      next.set("approval", String(id));
+      return next;
+    });
   };
 
   const openThread = (root: number) => setParams({ thread: String(root) });
@@ -299,7 +304,11 @@ export default function Conversation() {
           {acting.author_id !== me && (
             <>
               <SheetButton icon={<ListPlus size={20} />} onClick={() => createTask(acting)}>{t("m.chat.act.task")}</SheetButton>
-              <SheetButton icon={<CheckCircle2 size={20} />} onClick={() => approve(acting)}>{t("m.chat.act.approve")}</SheetButton>
+              {approvalOf(acting) && (
+                <SheetButton icon={<CheckCircle2 size={20} />} onClick={() => openApproval(approvalOf(acting)!)}>
+                  {t("m.chat.act.approval", { id: approvalOf(acting)! })}
+                </SheetButton>
+              )}
             </>
           )}
           <SheetButton icon={<span className="text-[18px]">👍</span>} onClick={() => act(() => chatApi.react(acting.id, "👍"), "👍")}>
