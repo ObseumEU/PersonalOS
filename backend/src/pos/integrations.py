@@ -161,6 +161,9 @@ def register_mcp_tools(mcp, session) -> None:
     from .support import service as support
 
     support.register_mcp(mcp, session)  # customer issues: reply drafts in Gmail, issue tasks (Customer Success)
+    from . import outbound_drafts
+
+    outbound_drafts.register_mcp(mcp, session)  # gmail_update_draft, gmail_delete_draft: only drafts PersonalOS made
     from . import taint
 
     taint.register_mcp(mcp, session)  # security_confirm: the Security Engineer's verdict on a tainted run's action

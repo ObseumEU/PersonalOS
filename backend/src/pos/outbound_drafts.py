@@ -208,3 +208,161 @@ def draft_trust(conn: sqlite3.Connection, days: int = 30) -> dict:
             "advice": ("Koncepty posíláš skoro beze změn: automatické odesílání je bezpečné zapnout." if ready else
                        f"Zatím {resolved} vyřízených konceptů; automatické odesílání doporučím od 20 s ≥ 90 % "
                        "beze změny.")}
+
+
+# ------------------------------------------------------------------ agents fix or withdraw their own drafts
+
+def find(conn: sqlite3.Connection, draft_id: str) -> dict:
+    """A Gmail draft PersonalOS created and nobody sent yet: {kind: outbound|support, row, result, account,
+    thread_id}. Any other draft id is refused (never a draft someone wrote in the mailbox himself)."""
+    from .support import service as support
+
+    draft_id = str(draft_id or "").strip()
+    if not draft_id:
+        raise tasks.Invalid("draft_id is empty (from gmail_create_draft's or request_outbound's result)")
+    ledger.ensure_schema(conn)
+    for r in conn.execute("""SELECT * FROM outbound_sends WHERE action = 'email.send' AND status = 'drafted'
+                             AND result LIKE ? ORDER BY id DESC""", (f'%"draft_id": "{draft_id}"%',)):
+        res = json.loads(r["result"] or "{}")
+        if res.get("draft_id") == draft_id:
+            return {"kind": "outbound", "row": r, "result": res, "account": res.get("account") or r["account"],
+                    "thread_id": res.get("thread_id") or r["thread_id"]}
+    support.ensure_schema(conn)
+    r = conn.execute("SELECT * FROM support_threads WHERE draft_id = ? ORDER BY id DESC LIMIT 1", (draft_id,)).fetchone()
+    if r is not None:
+        return {"kind": "support", "row": r, "result": {}, "account": r["account"], "thread_id": r["thread_id"]}
+    raise NotFound(f"draft {draft_id} is not one PersonalOS created that still waits (sent or deleted drafts, "
+                   "and drafts nobody here made, are not touched)")
+
+
+def _may_touch(conn: sqlite3.Connection, ctx: Ctx, d: dict) -> None:
+    from . import mcp_server
+
+    if actors.get(conn, ctx.actor_id)["is_owner"]:
+        return
+    if d["kind"] == "outbound" and d["row"]["actor_id"] == ctx.actor_id:
+        return
+    if d["kind"] == "support" and mcp_server.may_use(conn, ctx.actor_id, "gmail_create_draft"):
+        return
+    raise Forbidden("only the agent that wrote the draft (or Customer Success, for reply drafts) changes it")
+
+
+def update_draft(conn: sqlite3.Connection, ctx: Ctx, draft_id: str, body: str, *, subject: str | None = None,
+                 to: str | None = None, cc: str | None = None, gmail_factory=None) -> dict:
+    """Replace the text of a draft PersonalOS created (the same draft, no duplicate); the ledger and the
+    owner's item follow."""
+    from . import outbound_gmail
+    from .invoices import gapi
+    from .support import gmail as gm
+    from .support import service as support
+
+    factory = gmail_factory or gapi.Gmail
+    d = find(conn, draft_id)
+    _may_touch(conn, ctx, d)
+    body = (body or "").strip()
+    if len(body) < 20:
+        raise tasks.Invalid("the body is too short: the whole new text of the e-mail, without a signature")
+    account, row = d["account"], d["row"]
+    conn.commit()  # no write lock while Gmail answers
+    if d["kind"] == "outbound":
+        res = d["result"]
+        reply = bool(res.get("in_reply_to")) and bool(d["thread_id"])
+        payload = {"account": account, "body": body, "to": to or res.get("to"),
+                   "cc": cc if cc is not None else res.get("cc"), "subject": subject or res.get("subject"),
+                   **({"thread_id": d["thread_id"]} if reply else {})}
+        p = outbound_gmail.prepare(payload, conn=conn, task_id=row["task_id"], gmail_factory=factory)
+        made = gm.update_draft(account, draft_id, p["msg"], d["thread_id"])
+        message_id = (made.get("message") or {}).get("id") or res.get("message_id") or ""
+        res.update({"to": p["msg"]["To"], "cc": p["msg"]["Cc"], "subject": p["msg"]["Subject"],
+                    "message_id": message_id, "link": gm.draft_link(account, message_id),
+                    "draft_sha256": outbound_gmail._sha(p["text"]), "draft_text": p["text"][:6000],
+                    "agent_updates": int(res.get("agent_updates") or 0) + 1, "updated_at": now_iso()})
+        conn.execute("UPDATE outbound_sends SET result = ?, body_sha256 = ? WHERE id = ?",
+                     (json.dumps(res, ensure_ascii=False, default=str), ledger.body_hash({"body": body}), row["id"]))
+        owner_item(conn, row["id"])
+        out = {"to": res["to"], "subject": res["subject"], "link": res["link"]}
+    else:
+        msgs = gm.thread_headers(account, row["thread_id"], factory)
+        text = support._with_signature(body, support.signature(account, row["language"], row["project_slug"]))
+        msg = gm.build_reply(msgs, account, text)
+        made = gm.update_draft(account, draft_id, msg, row["thread_id"])
+        message_id = (made.get("message") or {}).get("id") or row["draft_message_id"] or ""
+        support._set(conn, row["id"], draft_message_id=message_id, draft_link=gm.draft_link(account, message_id))
+        out = {"to": msg["To"], "subject": msg["Subject"], "link": gm.draft_link(account, message_id)}
+    audit.log(conn, ctx, "gmail_update_draft", "outbound_send" if d["kind"] == "outbound" else "support_thread",
+              row["id"], account=account, draft_id=draft_id, to=out["to"], subject=out["subject"])
+    conn.commit()
+    return {"draft_id": draft_id, **out, "updated": True, "sent": False}
+
+
+def delete_draft(conn: sqlite3.Connection, ctx: Ctx, draft_id: str, reason: str = "") -> dict:
+    """Withdraw a wrong or duplicate draft PersonalOS created: Gmail deletes only that draft, the ledger
+    marks it discarded by the agent, the owner's item follows."""
+    from .support import gmail as gm
+    from .support import service as support
+
+    d = find(conn, draft_id)
+    _may_touch(conn, ctx, d)
+    account, row = d["account"], d["row"]
+    conn.commit()
+    gm.delete_draft(account, draft_id)
+    if d["kind"] == "outbound":
+        res = {**d["result"], "resolved_by": "agent", "discarded_at": now_iso(), "discard_reason": reason[:300]}
+        conn.execute("UPDATE outbound_sends SET status = 'discarded', result = ? WHERE id = ?",
+                     (json.dumps(res, ensure_ascii=False, default=str), row["id"]))
+        owner_item(conn, row["id"])
+    else:
+        support._set(conn, row["id"], draft_id=None, draft_message_id=None, draft_link=None)
+        ledger.log_attempt(conn, actor_id=ctx.actor_id, action="email.draft_delete", kind="ordinary",
+                           payload={"thread_id": row["thread_id"], "body": f"draft {draft_id}"},
+                           result={"status": "draft_deleted", "account": account, "draft_id": draft_id,
+                                   "thread_id": row["thread_id"], "reason": reason[:300]})
+        if row["needs_task_id"]:  # the owner's "Koncept odpovědi" item: nothing to send until a new draft
+            from . import comments
+
+            comments.log(conn, _ctx(conn), row["needs_task_id"],
+                         f"Koncept smazal agent{': ' + reason if reason else ''}. Čeká se na nový koncept.",
+                         "progress")
+    audit.log(conn, ctx, "gmail_delete_draft", "outbound_send" if d["kind"] == "outbound" else "support_thread",
+              row["id"], account=account, draft_id=draft_id, reason=reason[:300] or None)
+    conn.commit()
+    return {"draft_id": draft_id, "deleted": True, "sent": False}
+
+
+def register_mcp(mcp, session) -> None:
+    from mcp.server.mcpserver import Context
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from . import mcp_server
+    from .invoices import gapi
+    from .outbound_gmail import Refused
+    from .support import gmail as gm
+
+    # Whoever may draft e-mail (request_outbound) may fix its own drafts; whose draft it is is checked inside.
+    mcp_server.TOOL_PERMISSIONS.setdefault("gmail_update_draft", "approvals:request")
+    mcp_server.TOOL_PERMISSIONS.setdefault("gmail_delete_draft", "approvals:request")
+
+    @mcp.tool(description="Fix a Gmail draft PersonalOS created (by gmail_create_draft or request_outbound "
+                          "email.send) instead of creating a second one: the same draft gets the new text. "
+                          "draft_id: from that call's result. body: the whole new text without a signature "
+                          "(it is added). subject/to/cc only for a new e-mail, not a reply. Never sends.")
+    def gmail_update_draft(ctx: Context, draft_id: str, body: str, subject: str | None = None,
+                           to: str | None = None, cc: str | None = None) -> dict:
+        with session(ctx, "gmail_update_draft", draft_id=draft_id) as (conn, c):
+            try:
+                return update_draft(conn, Ctx(c.actor_id, via="mcp", run_id=c.run_id), draft_id, body,
+                                    subject=subject, to=to, cc=cc)
+            except (Refused, gm.Refused, gapi.GoogleError) as e:
+                conn.rollback()
+                raise ToolError(f"gmail_update_draft: {e}") from e
+
+    @mcp.tool(description="Delete a wrong or duplicate Gmail draft PersonalOS created (only such drafts; never "
+                          "a sent e-mail or a draft someone wrote himself). reason: one sentence. Recorded in "
+                          "the outbound ledger; the owner's item follows. Never sends.")
+    def gmail_delete_draft(ctx: Context, draft_id: str, reason: str = "") -> dict:
+        with session(ctx, "gmail_delete_draft", draft_id=draft_id) as (conn, c):
+            try:
+                return delete_draft(conn, Ctx(c.actor_id, via="mcp", run_id=c.run_id), draft_id, reason)
+            except (gm.Refused, gapi.GoogleError) as e:
+                conn.rollback()
+                raise ToolError(f"gmail_delete_draft: {e}") from e

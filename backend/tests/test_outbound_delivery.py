@@ -66,6 +66,13 @@ class Gmail:
             return httpx.Response(200, json={"id": n, "message": {"id": f"msg{n}", "threadId": thread}})
         if request.method == "GET" and path.startswith("drafts/"):
             return httpx.Response(200, json={"id": path[7:]}) if path[7:] in self.drafts else httpx.Response(404)
+        if request.method == "PUT" and path.startswith("drafts/") and path[7:] in self.drafts:
+            body = json.loads(request.content)
+            self.drafts[path[7:]]["raw"] = body["message"]["raw"]
+            return httpx.Response(200, json={"id": path[7:], "message": {"id": f"msg{path[7:]}v2"}})
+        if request.method == "DELETE" and path.startswith("drafts/") and path[7:] in self.drafts:
+            del self.drafts[path[7:]]
+            return httpx.Response(204)
         if request.method == "POST" and path == "messages/send":
             body = json.loads(request.content)
             self.sent.append(body)
@@ -412,3 +419,50 @@ def test_kickstart_requeues_and_migrates_approved_linkedin_posts(conn, google):
     assert not google.drafts and not google.sent  # nothing is sent by the kick-start
     again = outbound_kickstart.apply(conn)
     assert again["created"] == [] and again["linkedin_done"] == []
+
+
+# ------------------------------------------------------------------ agents fix their own drafts (2026-10 audit)
+
+def test_an_agent_fixes_and_withdraws_its_own_draft_and_nobody_elses(conn, google):
+    out = outbound.request(conn, agent(conn), "email.send",
+                           {"thread_id": "t1", "body": "Dobrý den, posílám podklady k poptávce."})
+    did = out["draft_id"]
+    assert "gmail_update_draft" in out["note"]
+    fixed = outbound_drafts.update_draft(conn, agent(conn), did, "Dobrý den, posílám opravené podklady k poptávce.")
+    assert fixed["updated"] and fixed["sent"] is False and len(google.drafts) == 1  # the same draft, no duplicate
+    text = next(p for p in google.raw(did).walk() if p.get_content_type() == "text/plain")
+    assert "opravené podklady" in text.get_payload(decode=True).decode()
+    assert google.raw(did)["In-Reply-To"] == "<m1@mail.cz>"  # still the reply in the thread
+    row = conn.execute("SELECT * FROM outbound_sends WHERE id = (SELECT MAX(id) FROM outbound_sends)").fetchone()
+    assert "opravené" in json.loads(row["result"])["draft_text"] and row["status"] == "drafted"
+    # Someone else's draft, or a draft PersonalOS did not make, is not touched.
+    with pytest.raises(Forbidden):
+        outbound_drafts.update_draft(conn, agent(conn, "Kniha Growth & Sales"), did, "Jiný text, který by přepsal.")
+    from pos.core import NotFound
+
+    with pytest.raises(NotFound):
+        outbound_drafts.delete_draft(conn, agent(conn), "r-someone-elses")
+    gone = outbound_drafts.delete_draft(conn, agent(conn), did, "duplicitní koncept")
+    assert gone["deleted"] and did not in google.drafts and not google.sent
+    row = conn.execute("SELECT * FROM outbound_sends WHERE id = ?", (row["id"],)).fetchone()
+    res = json.loads(row["result"])
+    assert row["status"] == "discarded" and res["resolved_by"] == "agent" and res["discard_reason"] == "duplicitní koncept"
+    assert owner_items(conn)[0]["status"] == "done"  # nothing left for the owner to send
+    with pytest.raises(NotFound):  # once deleted, it is no longer ours to change
+        outbound_drafts.update_draft(conn, agent(conn), did, "Dobrý den, ještě jednou opravené podklady.")
+    actions = {r["action"] for r in conn.execute("SELECT action FROM audit_log WHERE action LIKE 'gmail_%_draft'")}
+    assert actions == {"gmail_update_draft", "gmail_delete_draft"}
+
+
+def test_the_compose_client_never_puts_or_deletes_a_draft_without_the_ours_check(google):
+    with pytest.raises(gm.Refused):
+        gm._request(WORK, "PUT", "drafts/d1", json={})
+    with pytest.raises(gm.Refused):
+        gm._request(WORK, "DELETE", "drafts/d1")
+
+
+def test_a_long_draft_still_leaves_a_ledger_row_that_parses(conn):
+    rid = outbound_ledger.claim(conn, actor_id=None, action="email.send", kind="ordinary", payload={"body": "x"})
+    outbound_ledger.record(conn, rid, {"status": "drafted", "draft_id": "d9", "draft_text": "řádek\n" * 1500})
+    res = json.loads(conn.execute("SELECT result FROM outbound_sends WHERE id = ?", (rid,)).fetchone()["result"])
+    assert res["draft_id"] == "d9" and res["draft_text"].startswith("řádek")

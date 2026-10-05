@@ -137,6 +137,10 @@ def claim(conn: sqlite3.Connection, *, actor_id: int | None, action: str, kind: 
 
 def record(conn: sqlite3.Connection, row_id: int, result: dict) -> None:
     status = result.get("status") or "failed"
+    text = json.dumps(result, ensure_ascii=False, default=str)
+    if len(text) > 4000 and result.get("draft_text"):  # cut the draft's copy, never the JSON (it must parse)
+        keep = max(0, len(result["draft_text"]) - (len(text) - 4000) - 50)
+        result = {**result, "draft_text": result["draft_text"][:keep]}
     conn.execute("""UPDATE outbound_sends SET status = ?, result = ?, sent_at = ?, account = COALESCE(?, account),
                     thread_id = COALESCE(?, thread_id) WHERE id = ?""",
                  (status, json.dumps(result, ensure_ascii=False, default=str)[:4000],

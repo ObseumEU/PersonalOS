@@ -299,6 +299,10 @@ def google(monkeypatch):
         if request.method == "DELETE" and "/drafts/" in path:
             drafts.pop(path.rsplit("/", 1)[1])
             return httpx.Response(204)
+        if request.method == "PUT" and "/drafts/" in path:
+            n = path.rsplit("/", 1)[1]
+            drafts[n] = json.loads(request.content)
+            return httpx.Response(200, json={"id": n, "message": {"id": f"msg{n}b"}})
         return httpx.Response(404, json={"error": "unexpected"})
 
     monkeypatch.setattr(gapi, "_transport", httpx.MockTransport(handler))
@@ -336,6 +340,27 @@ def test_draft_replies_in_the_thread_with_the_right_headers(conn, google):
     assert [m for m, u in google["seen"] if "gmail" in u] == ["POST"]
     audit = conn.execute("SELECT detail FROM audit_log WHERE action = 'gmail_create_draft'").fetchone()
     assert json.loads(audit["detail"])["in_reply_to"] == "<c3@mail.cz>"
+
+
+def test_customer_success_fixes_its_reply_draft_in_place_and_can_delete_it(conn, google):
+    from pos import outbound_drafts
+
+    service.handle(conn, BUG_CS, model=model_says(ISSUE), kb=lambda m: "")
+    cs = Ctx(actors.find_by_name(conn, "Head of Customer Success")["id"], via="mcp")
+    service.create_draft(conn, cs, THREAD, OBSEUM, "Dobrý den, chybu jsme opravili, zkuste to prosím znovu.",
+                         gmail_factory=FakeReader)
+    out = outbound_drafts.update_draft(conn, cs, "r1", "Dobrý den, chybu jsme opravili a nasadili, zkuste to znovu.",
+                                       gmail_factory=FakeReader)
+    assert out["draft_id"] == "r1" and set(google["drafts"]) == {"r1"}  # the same draft, no second one
+    msg = _raw(google)
+    assert msg["In-Reply-To"] == "<c3@mail.cz>" and google["drafts"]["r1"]["message"]["threadId"] == THREAD
+    assert "nasadili" in next(p for p in msg.walk() if p.get_content_type() == "text/plain").get_payload(decode=True).decode()
+    assert outbound_drafts.delete_draft(conn, cs, "r1", "špatný koncept")["deleted"] and not google["drafts"]
+    row = conn.execute("SELECT draft_id FROM support_threads WHERE thread_id = ?", (THREAD,)).fetchone()
+    assert row["draft_id"] is None
+    ledger = conn.execute("SELECT status FROM outbound_sends WHERE action = 'email.draft_delete'").fetchone()
+    assert ledger["status"] == "draft_deleted"
+    assert all("/send" not in url for _, url in google["seen"])
 
 
 def test_the_client_refuses_anything_but_drafts(google):

@@ -186,7 +186,8 @@ def _dispatch(conn: sqlite3.Connection, ctx: Ctx, action: str, payload: dict, *,
         if item:
             result["owner_item"] = item["ref"]
         result["note"] = ("a Gmail draft for the owner (the owner's rule for e-mail): he sends it from his "
-                          "'Čeká na tebe' item; do not send it again, it counts as done for your task")
+                          "'Čeká na tebe' item; do not send it again, it counts as done for your task. To change "
+                          "it: gmail_update_draft(draft_id, body), never a second draft")
     return done(result, row_id)
 
 

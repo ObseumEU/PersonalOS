@@ -6,7 +6,8 @@
   draft), stored in the api's environment and never shown to an agent.
 
 `gmail.compose` could also send; this client cannot: every request goes through `_request`, which allows
-only POST .../drafts (create), GET .../drafts/<id> (read back) and, for a draft whose subject starts with
+only POST .../drafts (create), GET .../drafts/<id> (read back), PUT/DELETE .../drafts/<id> for a draft
+PersonalOS created itself (checked against its records first: pos.outbound_drafts) and, for a draft whose subject starts with
 "[TEST]", DELETE .../drafts/<id> (the operator's clean-up after a dry run). Anything with "send" in the path
 is refused before a token is even fetched.
 """
@@ -47,8 +48,10 @@ def _request(address: str, method: str, path: str, **kw):
     """The only way to Gmail with the compose token: drafts only, never a send."""
     if "send" in path.lower():
         raise Refused("sending is never done by PersonalOS (drafts only)")
+    test_only, ours = kw.pop("_test_only", False), kw.pop("_ours", False)
     allowed = (method == "POST" and path == "drafts") or (method == "GET" and _DRAFT_ID.match(path)) or \
-              (method == "DELETE" and _DRAFT_ID.match(path) and kw.pop("_test_only", False))
+              (method == "DELETE" and _DRAFT_ID.match(path) and (test_only or ours)) or \
+              (method == "PUT" and _DRAFT_ID.match(path) and ours)
     if not allowed:
         raise Refused(f"{method} {path} is not allowed (drafts only)")
     env = compose_env(address)
@@ -161,6 +164,20 @@ def delete_test_draft(address: str, draft_id: str) -> dict:
         raise Refused("only a [TEST] draft can be deleted")
     _request(address, "DELETE", f"drafts/{draft_id}", _test_only=True)
     return {"deleted": draft_id, "subject": heads.get("subject")}
+
+
+def update_draft(address: str, draft_id: str, msg: EmailMessage, thread_id: str | None = None) -> dict:
+    """Replace a draft PersonalOS created (the caller checked it is ours): same draft id, new message."""
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+    return _request(address, "PUT", f"drafts/{draft_id}", json={"id": draft_id, "message": message},
+                    _ours=True).json()
+
+
+def delete_draft(address: str, draft_id: str) -> dict:
+    """Delete a draft PersonalOS created (the caller checked it is ours): only the draft, nothing is sent."""
+    _request(address, "DELETE", f"drafts/{draft_id}", _ours=True)
+    return {"deleted": draft_id}
 
 
 def draft_link(address: str, message_id: str) -> str:

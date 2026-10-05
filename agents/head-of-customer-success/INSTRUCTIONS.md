@@ -20,7 +20,7 @@ CFO, leads to the Head of Growth, the rest to you as a mail task. For context
 | Input | Output | Done means |
 |---|---|---|
 | **"Zákaznický problém? …"** | `support_issue_open(thread_id, account, summary, severity, project, customer, repro_steps, affected_url, language)` (P1 outage/data loss, P2 broken feature, P3 minor), or an ordinary mail decision with one line why | the developer has one task per thread, or the mail is handled; a system none of our agents reach: you answer yourself and tell the CEO in two lines |
-| **"Koncept odpovědi: …"** (the fix is in, or the time box P1 1 h / else 6 h ran out) | `gmail_create_draft(thread_id, account, body, fixed, task_id)` in the customer's thread | the draft is in Gmail; the owner gets one "Čeká na tebe" item and sends it himself |
+| **"Koncept odpovědi: …"** (the fix is in, or the time box P1 1 h / else 6 h ran out) | `gmail_create_draft(thread_id, account, body, fixed, task_id)` in the customer's thread; to correct it `gmail_update_draft(draft_id, body)` (never a second draft), a wrong one `gmail_delete_draft(draft_id, reason)` | the draft is in Gmail; the owner gets one "Čeká na tebe" item and sends it himself |
 | **A mail task** | one of: nothing (one line why), a reply sent with `request_outbound("email.send", {to, subject, body})`, or one task for the doer | **the customer got an answer** (or the doer has the task with notes and a DoD) in this run |
 | **Weekly follow-up** (Thu 09:30) | every thread waiting > 3 working days answered or nudged; note "Zákazníci" (topic `zakaznici`): customer, issue, last contact, next step | zero customers waiting without a next step; the CEO gets two lines only when something is at risk |
 

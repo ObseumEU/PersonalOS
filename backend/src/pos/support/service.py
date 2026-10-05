@@ -667,7 +667,8 @@ def register_mcp(mcp, session) -> None:
         "the reply without a signature, in the customer's language: what happened, what we fixed (cite the commit "
         "only if the developer's result names it), what they should check or do, next steps; never promise what "
         "is not done. fixed: a few Czech words for the owner's item (\"oprava exportu CSV\"). The owner gets one "
-        "'Čeká na tebe' item with the link. Audited."))
+        "'Čeká na tebe' item with the link. Audited. To fix a draft you made, use gmail_update_draft(draft_id) "
+        "(a second draft is a duplicate for the owner); a wrong one goes with gmail_delete_draft."))
     def gmail_create_draft(ctx: Context, thread_id: str, account: str, body: str, fixed: str = "",
                            html: str | None = None, task_id: str | None = None) -> dict:
         with session(ctx, "gmail_create_draft", thread_id=thread_id, account=account, fixed=fixed[:120],
