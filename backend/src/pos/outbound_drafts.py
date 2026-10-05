@@ -236,13 +236,17 @@ def find(conn: sqlite3.Connection, draft_id: str) -> dict:
 
 
 def _may_touch(conn: sqlite3.Connection, ctx: Ctx, d: dict) -> None:
-    from . import mcp_server
+    from . import agents
+    from .support import service as support
 
-    if actors.get(conn, ctx.actor_id)["is_owner"]:
+    me = actors.get(conn, ctx.actor_id)
+    if me["is_owner"]:
         return
     if d["kind"] == "outbound" and d["row"]["actor_id"] == ctx.actor_id:
         return
-    if d["kind"] == "support" and mcp_server.may_use(conn, ctx.actor_id, "gmail_create_draft"):
+    if d["kind"] == "support" and ((me["role"] or "") == "customer_success"
+                                   or agents.has_permission(conn, ctx.actor_id, "tool:gmail_create_draft")
+                                   or agents.has_permission(conn, ctx.actor_id, support.PERMISSION)):
         return
     raise Forbidden("only the agent that wrote the draft (or Customer Success, for reply drafts) changes it")
 

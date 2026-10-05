@@ -706,8 +706,6 @@ def _settle_in_code(conn: sqlite3.Connection, agent_id: int, metric: str, rid: i
     loop, so a loop (its task held now) is denied in code; so is a hit like one the Access manager denied
     within SETTLED_LOOKBACK_D while the signals still say loop (prod 2026-10-02/03: 176 LLM runs denied the
     same T-516 loop one by one)."""
-    from ..tasks import display_id
-
     if held:
         return (f"Smyčka: úkol {held['task']} běžel opakovaně a je podržen do {held['until']}; navýšení limitu by "
                 "ji jen živilo. Rozhodnuto v kódu, bez běhu Správce přístupů.")

@@ -172,6 +172,7 @@ def test_only_the_kniha_team_and_the_ceo_get_the_reservations_tool():
 
     from pos.access import service as access
 
+    assert "kniha_reservations_summary" in mcp_server.tool_names()  # builds the server: its tools registered
     assert "tool:kniha_reservations_summary" not in access.autonomy_caps()  # not for everyone by default
     assert "kniha:reservations" not in access.autonomy_caps()
     assert access.restricted("tool:kniha_reservations_summary")

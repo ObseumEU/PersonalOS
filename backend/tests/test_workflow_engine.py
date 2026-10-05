@@ -207,8 +207,13 @@ def test_a_looping_task_is_held_and_the_queue_is_reopened_once_a_day(conn, owner
     for _ in range(6):
         conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', 'ok', ?)",
                      (ks.actor_id, t["id"], now_iso()))
-    access.limit_hit(conn, ks.actor_id, "runs_day", 40, 40, task_id=t["id"])
+    rid = access.limit_hit(conn, ks.actor_id, "runs_day", 40, 40, task_id=t["id"])
     assert conn.execute("SELECT retry_after FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] > now_iso()
+    # a loop is settled in code (its task held): no Access manager run for it
+    assert conn.execute("SELECT status FROM access_requests WHERE id = ?", (rid,)).fetchone()[0] == "denied"
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'access' AND assignee_id = ?",
+                            (am.actor_id,)).fetchone()
+    access._wake_manager(conn, "first", subject="Kniha Growth & Sales · limit runs_day")
     # the queue task: decided and closed, then the same kind again: reopened once, then only counted
     q = conn.execute("SELECT id FROM tasks WHERE source = 'access' AND assignee_id = ?", (am.actor_id,)).fetchone()
     for _ in range(4):
