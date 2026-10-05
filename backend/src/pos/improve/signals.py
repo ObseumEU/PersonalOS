@@ -46,7 +46,6 @@ LOOP_CLAIMS = 5  # claims of one task in the window that make a loop
 # How much one occurrence of a category hurts (the owner's pain first); 0 = information only.
 WEIGHTS = {"owner": 5.0, "deploy": 3.0, "run_error": 3.0, "loop": 3.0, "ux": 3.0, "tool_error": 2.0,
            "cost_cap": 2.0, "guard": 1.0, "stuck": 1.0, "agent_fail": 0.0, "spend": 0.0}
-SNAPSHOT_CATEGORIES = ("stuck",)  # states now, not events in a window
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS improve_signals (
     day        TEXT NOT NULL,
