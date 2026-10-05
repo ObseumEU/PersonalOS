@@ -280,6 +280,32 @@ def test_the_dedup_needs_a_shared_source_and_skips_scheduled_and_own_tasks(conn,
     assert again["deduplicated"] and again["id"] == alert["id"]
 
 
+def test_one_incident_is_one_fix_task(conn, owner, co, tmp_path):
+    """T-451..T-457: six sentinel incidents of one failure (one container after one commit, a different
+    fingerprint each) became six fix tasks for the Software Engineer within three minutes."""
+    watch = _agent(conn, owner, tmp_path, "Hlídač", "monitor", co["cto"], team="engineering")
+
+    def fix(fp, extra=""):
+        return tasks.create(conn, watch, {
+            "title": f"Fix: personalos: sandbox exec padá ({fp})", "assignee": "Software Engineer",
+            "notes": f"### Proč\nIncident sentinelu `10caf9-{fp}` (new_error). Nová chyba v `personalos-sandbox-1` "
+                     f"hned po nasazení commitu `c5e09bf`.\n- **Fingerprint:** `{fp}a58f23969379`{extra}"})
+
+    first = fix("60")
+    dupes = [fix(fp) for fp in ("61", "62", "63")]
+    assert all(d.get("deduplicated") and d["id"] == first["id"] for d in dupes)
+    assert conn.execute("SELECT COUNT(*) FROM tasks WHERE title LIKE 'Fix: personalos%'").fetchone()[0] == 1
+    assert len(conn.execute("SELECT 1 FROM audit_log WHERE action = 'escalation_dedup' AND entity_id = ?",
+                            (first["id"],)).fetchall()) == 3
+    # another container and another commit: another incident, its own task
+    other = tasks.create(conn, watch, {"title": "Fix: knowlage api 500", "assignee": "Software Engineer",
+                                       "notes": "Incident sentinelu: chyba v `knowlage-api-1` po commitu `abc1234`."})
+    assert not other.get("deduplicated")
+    # once the first is done, the same container is a new incident
+    conn.execute("UPDATE tasks SET status = 'done' WHERE id = ?", (first["id"],))
+    assert not fix("64").get("deduplicated")
+
+
 # ------------------------------------------------------------------ 8. the owner's comments wake work
 
 def test_the_owners_comment_wakes_the_assignee_or_the_ceo(conn, owner, co):

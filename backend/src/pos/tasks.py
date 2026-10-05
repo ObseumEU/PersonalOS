@@ -359,6 +359,8 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     from . import business
 
     dup = business.find_duplicate_escalation(conn, ctx, values)
+    if dup is None:
+        dup = business.find_duplicate_incident(conn, ctx, values)  # one incident, one fix task
     if dup is not None:
         # The same item escalated again (one invoice, three tasks): link it to the open escalation.
         business.link_duplicate(conn, ctx, dup, values)

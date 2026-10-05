@@ -471,6 +471,50 @@ def find_duplicate_escalation(conn: sqlite3.Connection, ctx: Ctx, values: dict) 
     return None
 
 
+# One incident, one fix task. Prod 2026-10-01 20:35-20:38: Hlídač turned six sentinel incidents of one
+# failure (personalos-sandbox-1 after commit c5e09bf, a different log fingerprint each) into six fix
+# tasks for the Software Engineer (T-451..T-457). A task about an incident (a sentinel incident, a
+# fingerprint, an error spike) is the same as an open one for the same assignee from the last
+# INCIDENT_DEDUP_HOURS when both name the same container or the same commit.
+INCIDENT_DEDUP_HOURS = 12
+_INCIDENT_RE = re.compile(r"incident|fingerprint|sentinel|error spike|new error|nová chyba|výpad", re.IGNORECASE)
+_CONTAINER_RE = re.compile(r"\b[a-z][a-z0-9]*(?:[-_][a-z][a-z0-9]*)+[-_]\d{1,3}\b")
+_COMMIT_RE = re.compile(r"\bcommit\w*\s+[`*\"']*([0-9a-f]{7,40})\b", re.IGNORECASE)
+
+
+def _incident_keys(text: str) -> set[str]:
+    if not _INCIDENT_RE.search(text or ""):
+        return set()
+    keys = {f"container:{c}" for c in _CONTAINER_RE.findall(text)}
+    keys |= {f"commit:{c[:7].lower()}" for c in _COMMIT_RE.findall(text)}
+    return keys
+
+
+def find_duplicate_incident(conn: sqlite3.Connection, ctx: Ctx, values: dict) -> int | None:
+    """An open task of the same assignee about the same incident (same container or commit), created
+    by an agent in the last INCIDENT_DEDUP_HOURS; None otherwise. Only agents' tasks are merged."""
+    me = conn.execute("SELECT kind FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
+    assignee = values.get("assignee_id")
+    if not me or me["kind"] not in ("ai", "agent") or values.get("parent_id") or not assignee:
+        return None
+    if _not_an_escalation(values.get("source"), ctx.actor_id, assignee):
+        return None
+    keys = _incident_keys(f"{values.get('title') or ''}\n{values.get('notes') or ''}")
+    if not keys:
+        return None
+    since = (datetime.now(timezone.utc) - timedelta(hours=INCIDENT_DEDUP_HOURS)).isoformat(timespec="seconds")
+    for c in conn.execute(
+            """SELECT * FROM tasks WHERE archived_at IS NULL AND status NOT IN ('done', 'someday') AND created_at >= ?
+               AND parent_id IS NULL AND assignee_id = ?
+               AND created_by IN (SELECT id FROM actors WHERE kind IN ('ai', 'agent')) ORDER BY id""",
+            (since, assignee)).fetchall():
+        if _not_an_escalation(c["source"], c["created_by"], c["assignee_id"]):
+            continue
+        if _incident_keys(_text(c)) & keys:
+            return c["id"]
+    return None
+
+
 def link_duplicate(conn: sqlite3.Connection, ctx: Ctx, existing: int, values: dict) -> None:
     """The same item escalated again: a comment on the open escalation. When the one escalating it
     holds that task, the task itself moves on to the new assignee (a handoff: reassign + comment),
