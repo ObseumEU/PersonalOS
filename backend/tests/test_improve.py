@@ -446,3 +446,67 @@ def test_smoke_findings_enter_the_digest(conn):
                                   "examples": ["/m"], "sample": "HTTP 502 for /m"}}
     signals.daily(conn, NOW, extra=items)
     assert signals.value(conn, "ux:http_error:/m", signals.day_of(NOW)) == 1
+
+
+# ------------------------------------------------------------------ the real sources: transcripts, command denials
+
+def _transcript(conn, run_id, calls, at):
+    from pos import transcripts
+
+    transcripts.ensure_schema(conn)
+    conn.execute("INSERT INTO run_transcripts (run_id, engine, session_id, tool_calls, errors, summary, created_at) "
+                 "VALUES (?, 'claude', 's', ?, ?, ?, ?)",
+                 (run_id, len(calls), sum(1 for c in calls if c.get("error")),
+                  json.dumps({"calls": calls, "counts": {}}), iso(at)))
+
+
+def test_transcript_tool_errors_count_once_per_failed_call_with_a_stable_cause(conn, owner, company):
+    se = company["Software Engineer"]
+    at = NOW - timedelta(hours=2)
+    runs = [_run(conn, se, "ok", at=at) for _ in range(3)]
+    err = lambda tool, text: {"tool": tool, "input": "{}", "error": True, "result": text}  # noqa: E731
+    for i, rid in enumerate(runs):
+        _transcript(conn, rid, [
+            {"tool": "mcp__pos__get_task", "input": "{}", "error": False},
+            # the same cause in other words (a channel number, a quoted value) is one key
+            err("mcp__pos__chat_send", f"Error executing tool chat_send: you are not in #{30 + i}: agents read "
+                                       "the channels they belong to"),
+            err("Bash", f"Exit code {i + 1}\nModuleNotFoundError: No module named 'x{i}'"),
+            # a command the hook denied: a guard signal from the API's audit, not a tool error
+            err("Bash", "Tento příkaz není na tvém allow-listu … zavolej request_command_approval(…)"),
+            *([err("mcp__pos__update_task", "Error executing tool update_task: follow_up must be YYYY-MM-DD "
+                                            "(T-556)")] if i == 0 else []),
+        ], at)
+    # The refusal the API logged with its reason: the transcript's error of that call is not counted again,
+    # and neither are the tool_usage rows of calls the transcript or the audit already counted.
+    _audit(conn, se, "mcp:update_task:refused", at, {"reason": "follow_up must be YYYY-MM-DD"}, run_id=runs[0])
+    for rid, tool in ((runs[0], "update_task"), (runs[1], "chat_send"), (runs[2], "create_task")):
+        conn.execute("INSERT INTO tool_usage (actor_id, run_id, tool, ok, at) VALUES (?, ?, ?, 0, ?)",
+                     (se, rid, tool, iso(at)))
+    conn.commit()
+    rows = {x["key"]: x for x in signals.compute(conn, NOW)}
+    assert rows["tool_error:update_task.follow_up"]["count_7d"] == 1
+    assert rows["tool_error:chat_send.not_agents_read_channels"]["count_7d"] == 3
+    assert rows["tool_error:chat_send.not_agents_read_channels"]["examples"] == [f"run:{r}" for r in reversed(runs)]
+    assert rows["tool_error:bash.exit.modulenotfounderror_no_module"]["count_7d"] == 3
+    assert "tool_error:chat_send.failed" not in rows and "tool_error:update_task.failed" not in rows
+    assert rows["tool_error:create_task.failed"]["count_7d"] == 1  # no better source for that one
+    assert not any(k.startswith("tool_error:bash.") and "allow" in k for k in rows)
+    assert not any("t_556" in k or "556" in k for k in rows)
+    assert signals.tool_name("pos:update_task") == "update_task"
+    assert signals.tool_name("mcp__browser__click") == "browser_click"
+    assert signals.error_cause("Exit code 1") == "exit"
+
+
+def test_command_denials_from_the_api_audit_are_guard_signals(conn, owner, company):
+    se = company["Software Engineer"]
+    at = NOW - timedelta(hours=1)
+    for outcome, rule, program in (("cli_denied", None, "docker"), ("cli_denied", None, "docker"),
+                                   ("needs_cto", "cto", "git"), ("deny", "U3", "rm")):
+        _audit(conn, se, "command_denied", at, {"outcome": outcome, "rule": rule, "program": program,
+                                                "command": f"{program} x"}, entity="actor", entity_id=se)
+    conn.commit()
+    rows = {x["key"]: x for x in signals.compute(conn, NOW)}
+    assert rows["guard:command_cli_denied.docker"]["count_24h"] == 2
+    assert rows["guard:command_needs_cto.cto"]["count_7d"] == 1
+    assert rows["guard:command_deny.u3"]["category"] == "guard"

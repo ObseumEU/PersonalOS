@@ -11,6 +11,9 @@ constitution U1/U3/U4) before it runs.
     deny         -> denied
     guard down   -> denied (fail closed)
 
+Every denial is in PersonalOS's audit log (`command_denied`, written by the API: the request carries
+`cli_allowed`, so a command the CLI's allow-list would refuse is recorded there too).
+
 Configured by ClaudeSession (`--settings`); reads the hook event on stdin and
 POS_URL / POS_AGENT_KEY from the environment.
 """
@@ -31,10 +34,13 @@ def decide(event: dict, post=None) -> dict | None:
     command = str((event.get("tool_input") or {}).get("command") or "")
     if not command.strip():
         return None
+    allowed = _allowed_patterns()
+    cli_ok = None if allowed is None else cli_allows(command, allowed)
     try:
         if post is None:
+            # cli_allowed: the API records a command the CLI would refuse as a denial (audit command_denied)
             body = {"command": command, "cwd": event.get("cwd") or os.getcwd(),
-                    "workdir": os.environ.get("POS_AGENT_WORKDIR") or None,
+                    "workdir": os.environ.get("POS_AGENT_WORKDIR") or None, "cli_allowed": cli_ok,
                     "run_id": int(os.environ["POS_RUN_ID"]) if os.environ.get("POS_RUN_ID", "").isdigit() else None}
             r = httpx.post(os.environ["POS_URL"].rstrip("/") + "/api/worker/check-command", json=body,
                            headers={"Authorization": f"Bearer {os.environ['POS_AGENT_KEY']}"}, timeout=30)
@@ -48,8 +54,7 @@ def decide(event: dict, post=None) -> dict | None:
     if outcome == "allow":
         if out.get("auto"):
             return _allow(out.get("reason") or "allowed")
-        allowed = _allowed_patterns()
-        if allowed is not None and not cli_allows(command, allowed):
+        if cli_ok is False:
             # The CLI would refuse it with a bare "requires approval" (2026-10: no agent ever asked the CTO).
             return _deny(APPROVAL_HINT)
         return None

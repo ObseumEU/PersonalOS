@@ -75,6 +75,7 @@ class CommandIn(BaseModel):
     run_id: int | None = None
     cwd: str | None = None      # where the shell runs (the CLI's hook event)
     workdir: str | None = None  # the agent's own worktree (the worker's POS_AGENT_WORKDIR)
+    cli_allowed: bool | None = None  # would the CLI's allow-list run it (the hook knows; None: no list)
 
 
 def _state(conn: sqlite3.Connection, actor_id: int, run_id: int | None = None) -> dict:
@@ -721,6 +722,7 @@ def check_command(body: CommandIn, conn=Depends(get_db), ctx: Ctx = Depends(work
     if d.outcome.value == "allow" and not actors.get(conn, ctx.actor_id)["is_owner"]:
         rctx = Ctx(ctx.actor_id, via="worker", run_id=body.run_id)
         out = {**out, **command_policy.check(conn, rctx, body.command, body.cwd, body.workdir)}
+        _record_denial(conn, ctx, body, out)
         conn.commit()
         return out
     if d.outcome.value == "needs_owner":
@@ -734,8 +736,35 @@ def check_command(body: CommandIn, conn=Depends(get_db), ctx: Ctx = Depends(work
             "priority": 1, "assignee": "me", "status": "next",
         })
         out["owner_task"] = t["ref"]
+    _record_denial(conn, ctx, body, out)
     conn.commit()
     return out
+
+
+def _program(command: str) -> str:
+    """The program a shell command runs (its first word after VAR=value prefixes, without the path)."""
+    for word in command.split():
+        if "=" not in word.split("/")[0]:
+            return word.rsplit("/", 1)[-1][:40]
+    return ""
+
+
+def _record_denial(conn, ctx: Ctx, body: CommandIn, out: dict) -> None:
+    """A shell command the agent may not run, in the audit log (`command_denied`: the self-improvement
+    digest counts them, pos.improve.signals): the guard's deny, a task for the owner or the CTO, or a
+    command the guard allows but the CLI's allow-list would refuse (the hook denies it then, with the
+    hint to ask the CTO)."""
+    from . import audit
+    from .observability import redact
+
+    outcome = out.get("outcome")
+    if outcome == "allow":
+        if out.get("auto") or body.cli_allowed is not False:
+            return
+        outcome = "cli_denied"
+    audit.log(conn, Ctx(ctx.actor_id, via="worker", run_id=body.run_id), "command_denied", "actor", ctx.actor_id,
+              outcome=outcome, rule=out.get("rule"), program=_program(body.command),
+              command=redact(body.command, 200), task=out.get("owner_task") or out.get("cto_task"))
 
 
 @router.post("/wrap")

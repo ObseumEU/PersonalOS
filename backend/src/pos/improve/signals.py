@@ -9,11 +9,14 @@ causes are normalized (numbers, quotes, URLs and ids dropped; known causes mappe
 Sources (all in the DB):
 
 - **run_error:<kind>.<cause>**: failed runs (`runs.status = 'error'`), the cause from `runs.detail`;
-- **tool_error:<tool>.<reason>**: refused tool calls (`audit_log` `mcp:<tool>:refused`, the reason
-  normalized) and failed ones (`tool_usage.ok = 0`); per-run transcript summaries add theirs when a
-  table `run_tool_errors` exists (filled by the worker's transcript summary);
-- **guard:<what>**: the command guard and its kin: refused command approvals, commands sent to the
-  owner, taint blocks, refused credentials, audit actions `guard_*` / `command_*deny*`;
+- **tool_error:<tool>.<cause>**: refused tool calls (`audit_log` `mcp:<tool>:refused`, the reason
+  normalized), the failed calls in the per-run transcript summaries (`run_transcripts`, pos.transcripts:
+  the tool and its error message normalized; a shell's "Exit code N" as `exit.<cause>`) and failed
+  `tool_usage` rows (`<tool>.failed`); one failed call counts once, by the source with the best cause;
+- **guard:<what>**: the command guard and its kin: shell commands it refused (audit `command_denied`
+  from /api/worker/check-command: `guard:command_<deny|needs_owner|needs_cto>.<rule>`, and
+  `guard:command_cli_denied.<program>` for one the CLI's allow-list would refuse), refused command
+  approvals, taint blocks, refused credentials, audit actions `guard_*`;
 - **cost_cap:<which>**: blocked runs (company cap, the agent's day budget, an engine usage limit)
   and runs stopped at their per-run cap (`error_max_budget_usd`);
 - **loop:claim_repeat** (tasks claimed ≥ 5× in the window), **loop:chat** (loop holds);
@@ -189,7 +192,39 @@ def _runs(conn, acc: _Acc, s: str, u: str) -> None:
                     f"failed {r['kind']} runs", rid, detail)
 
 
+# A Bash call the command hook denied: counted under guard:command_* (the API's audit), not as a tool error.
+_HOOK_DENIAL = re.compile(r"request_command_approval|command guard is not reachable|has a task for it|"
+                          r"refused by the constitution|není na tvém allow-listu", re.I)
+_EXIT = re.compile(r"^\s*exit code\s+\d+\s*", re.I)
+_WRAPPER = re.compile(r"^\s*(<tool_use_error>|error executing tool \S+:|error:)\s*", re.I)
+_MCP_PREFIX = re.compile(r"^(?:mcp__pos__|pos:)")
+
+
+def tool_name(name: str) -> str:
+    """A transcript's tool name as a key part: PersonalOS's MCP tools by their own name (mcp__pos__update_task,
+    pos:update_task -> update_task), others folded to [a-z0-9_] (Bash -> bash, mcp__browser__click ->
+    browser_click)."""
+    n = _MCP_PREFIX.sub("", str(name or "?")).removeprefix("mcp__")
+    return re.sub(r"[^a-z0-9]+", "_", n.lower()).strip("_")[:40] or "unknown"
+
+
+def error_cause(text: str) -> str:
+    """A tool error's stable cause: MCP's "Error executing tool x:" wrapper dropped, a shell's
+    "Exit code N" as exit.<what it printed>, then the slug."""
+    t = _WRAPPER.sub("", text or "")
+    m = _EXIT.match(t)
+    if m:
+        rest = slug(t[m.end():], 3)
+        return "exit" if rest == "unknown" else f"exit.{rest}"
+    return slug(t)
+
+
 def _tools(conn, acc: _Acc, s: str, u: str) -> None:
+    """Refusals (audit, with their reason), the transcript summaries' failed calls (pos.transcripts, with
+    their message) and failed tool_usage rows (no message): one failed call counts once, by the best
+    source; a (run, tool) failure already counted by a better source is not counted again."""
+    counted: dict[tuple, int] = defaultdict(int)  # (run_id, tool) -> failed calls counted (audit, transcript)
+    refused: dict[tuple, int] = defaultdict(int)  # (run_id, tool) -> refusals the transcript has not matched yet
     for r in conn.execute("""SELECT id, action, detail, run_id FROM audit_log WHERE action LIKE 'mcp:%:refused'
                              AND at >= ? AND at < ? ORDER BY id DESC""", (s, u)):
         tool = r["action"][4:-len(":refused")]
@@ -197,32 +232,61 @@ def _tools(conn, acc: _Acc, s: str, u: str) -> None:
             reason = (json.loads(r["detail"] or "{}") or {}).get("reason") or ""
         except (TypeError, ValueError):
             reason = ""
+        if r["run_id"]:
+            counted[(r["run_id"], tool)] += 1
+            refused[(r["run_id"], tool)] += 1
         acc.add(f"tool_error:{tool}.{slug(reason)}", "tool_error", f"{tool} refused",
                 f"run:{r['run_id']}" if r["run_id"] else f"audit:{r['id']}", reason)
+    if _has(conn, "run_transcripts"):
+        for r in conn.execute("""SELECT run_id, summary FROM run_transcripts WHERE errors > 0 AND created_at >= ?
+                                 AND created_at < ? ORDER BY run_id DESC""", (s, u)):
+            try:
+                calls = (json.loads(r["summary"] or "{}") or {}).get("calls") or []
+            except (TypeError, ValueError):
+                continue
+            for c in calls:
+                if not isinstance(c, dict) or not c.get("error"):
+                    continue
+                tool, text = tool_name(c.get("tool")), str(c.get("result") or "")
+                if tool in ("bash", "shell") and _HOOK_DENIAL.search(text):
+                    continue  # the command guard's denial: guard:command_* from the API's audit
+                if refused[(r["run_id"], tool)] > 0:  # the refusal above, already with its reason
+                    refused[(r["run_id"], tool)] -= 1
+                    continue
+                counted[(r["run_id"], tool)] += 1
+                acc.add(f"tool_error:{tool}.{error_cause(text) if text else 'failed'}", "tool_error",
+                        f"{tool} error", f"run:{r['run_id']}", text)
     if _has(conn, "tool_usage"):
         for r in conn.execute("""SELECT tool, run_id, id FROM tool_usage WHERE ok = 0 AND at >= ? AND at < ?
                                  ORDER BY id DESC""", (s, u)):
+            k = (r["run_id"], r["tool"])
+            if r["run_id"] and counted[k] > 0:  # already counted with its reason or message
+                counted[k] -= 1
+                continue
             acc.add(f"tool_error:{r['tool']}.failed", "tool_error", f"{r['tool']} failed",
                     f"run:{r['run_id']}" if r["run_id"] else f"usage:{r['id']}")
-    if _has(conn, "run_tool_errors"):  # the per-run transcript summary's tool errors, when the worker records them
-        cols = {c[1] for c in conn.execute("PRAGMA table_info(run_tool_errors)")}
-        if {"tool", "run_id"} <= cols:
-            msg = "message" if "message" in cols else ("error" if "error" in cols else None)
-            at = "at" if "at" in cols else ("created_at" if "created_at" in cols else None)
-            if at:
-                for r in conn.execute(f"""SELECT tool, run_id{', ' + msg + ' AS msg' if msg else ''} FROM run_tool_errors
-                                          WHERE {at} >= ? AND {at} < ?""", (s, u)):
-                    text = r["msg"] if msg else ""
-                    acc.add(f"tool_error:{r['tool']}.{slug(text) if text else 'failed'}", "tool_error",
-                            f"{r['tool']} error", f"run:{r['run_id']}", text)
+
+
+COMMAND_DENIED = "command_denied"  # the API's audit action for a shell command the guard or the CLI refused
 
 
 def _guard(conn, acc: _Acc, s: str, u: str) -> None:
     for r in conn.execute("""SELECT id, action, entity_id, detail FROM audit_log WHERE at >= ? AND at < ? AND (
-                                 action IN ('taint_block', 'cred_refused') OR action LIKE 'guard%'
-                                 OR action LIKE 'command%deny%' OR action LIKE 'command%refus%'
-                                 OR action LIKE 'command%block%' OR action LIKE '%:denied')
-                             ORDER BY id DESC""", (s, u)):
+                                 action IN ('taint_block', 'cred_refused', ?) OR action LIKE 'guard%'
+                                 OR action LIKE '%:denied')
+                             ORDER BY id DESC""", (s, u, COMMAND_DENIED)):
+        if r["action"] == COMMAND_DENIED:
+            try:
+                d = json.loads(r["detail"] or "{}") or {}
+            except (TypeError, ValueError):
+                d = {}
+            outcome = slug(str(d.get("outcome") or "deny"), 1, cut=False)
+            # the CLI's allow-list: by program (what to allow or teach); the guard: by its rule
+            what = d.get("program") if outcome == "cli_denied" else d.get("rule")
+            what = re.sub(r"[^a-z0-9]+", "_", str(what or "").lower()).strip("_")[:30] or "unknown"  # U3 -> u3
+            acc.add(f"guard:command_{outcome}.{what}", "guard",
+                    f"shell command {outcome.replace('_', ' ')}", f"audit:{r['id']}", d.get("command") or "")
+            continue
         acc.add(f"guard:{slug(r['action'].replace(':', '_'), 3, cut=False)}", "guard", r["action"],
                 f"audit:{r['id']}", r["detail"])
     if _has(conn, "command_approvals"):
@@ -230,9 +294,7 @@ def _guard(conn, acc: _Acc, s: str, u: str) -> None:
                                  AND COALESCE(decided_at, created_at) >= ? AND COALESCE(decided_at, created_at) < ?""",
                               (s, u)):
             acc.add("guard:command_refused", "guard", "command approval refused", f"approval:{r['id']}", r["command"])
-    for r in conn.execute("""SELECT id, title FROM tasks WHERE title LIKE 'Approve or run:%' AND created_at >= ?
-                             AND created_at < ?""", (s, u)):
-        acc.add("guard:command_needs_owner", "guard", "command sent to the owner", _t(r["id"]), r["title"])
+    # (a command sent to the owner: guard:command_needs_owner.<rule> from the audit above)
 
 
 def _loops(conn, acc: _Acc, s: str, u: str) -> None:

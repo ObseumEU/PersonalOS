@@ -517,6 +517,16 @@ def test_claude_bash_goes_through_the_command_guard(setup, tmp_path):
     denied = command_hook.decide(bash("git push --force origin main"), post)
     assert denied and denied["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert command_hook.decide({"tool_name": "Read", "tool_input": {}}, post) is None
+    # Every denial is in the audit log for the self-improvement digest; a command the guard allows but
+    # the CLI's allow-list refuses (the hook says cli_allowed: false) too, by its program.
+    client.post("/api/worker/check-command", json={"command": "FOO=1 /usr/bin/docker ps", "cli_allowed": False},
+                headers=auth)
+    client.post("/api/worker/check-command", json={"command": "git status", "cli_allowed": True}, headers=auth)
+    denied_rows = [_json.loads(r[0]) for r in conn.execute(
+        "SELECT detail FROM audit_log WHERE action = 'command_denied' ORDER BY id")]
+    assert [d["outcome"] for d in denied_rows][-1] == "cli_denied" and denied_rows[-1]["program"] == "docker"
+    assert any(d["outcome"] != "cli_denied" and d["program"] == "git" for d in denied_rows)  # the force push
+    assert len(denied_rows) == 2
 
     def down(command):
         raise ConnectionError("no route")
