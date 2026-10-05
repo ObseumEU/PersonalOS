@@ -128,18 +128,49 @@ self.addEventListener("push", (event) => {
         badge: "/icons/badge-96.png",
         timestamp: p.ts ? Date.parse(p.ts) : Date.now(),
         requireInteraction: p.kind === "urgent",
-        data: { url },
+        // An approval: "Schválit" / "Zamítnout" with this device's one-time token (pos.push).
+        actions: p.action_token && Array.isArray(p.actions) ? p.actions.slice(0, 2) : undefined,
+        data: { url, approval_id: p.approval_id, token: p.action_token },
       });
       if (navigator.setAppBadge) navigator.setAppBadge().catch(() => undefined);
     })(),
   );
 });
 
+/** "Schválit" / "Zamítnout" on an approval notification: the server checks the token, this device's
+ * subscription and session. True when decided; anything else opens the app at the approval. */
+async function decideFromNotification(data, decision) {
+  try {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (!sub || !data.token || !data.approval_id) return false;
+    const res = await fetch("/api/push/action", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approval_id: data.approval_id, token: data.token, endpoint: sub.endpoint, decision }),
+    });
+    if (!res.ok) return false;
+    await self.registration.showNotification(decision === "approve" ? "Schváleno" : "Zamítnuto", {
+      body: "Rozhodnuto z oznámení.",
+      tag: `needs-approval:${data.approval_id}`,
+      silent: true,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/badge-96.png",
+      data: { url: data.url },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || "/m";
+  const data = event.notification.data || {};
+  const url = data.url || "/m";
   event.waitUntil(
     (async () => {
+      if ((event.action === "approve" || event.action === "reject") && (await decideFromNotification(data, event.action))) return;
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const app = wins.find((w) => new URL(w.url).pathname.startsWith("/m"));
       if (app) {

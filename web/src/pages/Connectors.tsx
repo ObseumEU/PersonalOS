@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { TaskLink } from "../taskSheet";
 import { api } from "../api";
 import { confirmDialog, toast } from "../components/overlay";
+import LinkedInConnect from "../components/outbound/LinkedInConnect";
 import { PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
 import { envWords, ruleName } from "../settingsWords";
@@ -232,6 +233,7 @@ export default function Connectors() {
             ))}
           {status && (
             <>
+              <LinkedInConnect className="border-b border-line px-4 py-2.5" />
               <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
                 <span className={`h-1.5 w-1.5 rounded-full ${status.github_webhook ? "bg-accent" : "bg-dim"}`} />
                 {t("conn.gh_webhook")} <span className="font-mono text-xs text-ink-2">/api/hooks/github</span>

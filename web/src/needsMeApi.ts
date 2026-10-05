@@ -4,7 +4,7 @@ import type { ApprovalView } from "./components/ApprovalBody";
 
 /** One thing that waits for the owner (GET /api/needs-me). */
 export type NeedsItem = {
-  kind: "approval" | "ask" | "review" | "mention";
+  kind: "approval" | "access" | "publish" | "draft" | "ask" | "review" | "mention";
   key: string;
   id: number;
   ref: string | null;
@@ -29,6 +29,39 @@ export type NeedsItem = {
   options?: string[];
   recommendation?: string | null;
   default_at?: string | null;
+  /** access: the endpoint that grants or denies the request (owner only). */
+  decide_url?: string;
+  task_ref?: string | null;
+  /** publish: an approved LinkedIn post not published yet. */
+  publish_url?: string;
+  connect_url?: string;
+  connected?: boolean;
+  text?: string;
+  error?: string | null;
+  /** draft: one waiting Gmail draft; an ask of a draft campaign lists its drafts. */
+  draft?: WaitingDraft;
+  drafts?: WaitingDraft[];
+};
+
+export type WaitingDraft = {
+  id: number;
+  to: string | null;
+  subject: string;
+  why: string;
+  link: string | null;
+  agent: string | null;
+  mark_url: string;
+};
+
+/** The one-click owner actions on access, publish and draft items (endpoints come with the item). */
+export const ownerActions = {
+  decideAccess: (url: string, grant: boolean) =>
+    api(url, {
+      method: "POST",
+      body: JSON.stringify({ decision: grant ? "grant" : "deny", note: grant ? "Schváleno majitelem." : "Zamítnuto majitelem." }),
+    }),
+  publish: (url: string) => api<{ status: string; url?: string }>(url, { method: "POST", body: "{}" }),
+  markDraft: (url: string, state: "sent" | "discarded") => api(url, { method: "POST", body: JSON.stringify({ state }) }),
 };
 
 /** The owner pressed an option on a decision card. */
@@ -63,7 +96,7 @@ export function refreshNeedsMe(): Promise<void> {
 export function dropNeedsItem(key: string) {
   if (!state) return;
   const items = state.items.filter((i) => i.key !== key);
-  const counts = { approval: 0, ask: 0, review: 0, mention: 0 };
+  const counts = { approval: 0, access: 0, publish: 0, draft: 0, ask: 0, review: 0, mention: 0 };
   items.forEach((i) => (counts[i.kind] += 1));
   state = { count: items.length, counts, items };
   subs.forEach((f) => f(state!));

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { t } from "../../i18n";
 import { type EmailPolicy, outboundApi } from "../../outboundApi";
 import { confirmDialog, toast } from "../overlay";
+import LinkedInConnect from "./LinkedInConnect";
 
 /** Nastavení: how agents' e-mail goes out. Draft (the owner sends it) by default; auto after a warning. */
 export default function EmailModeCard() {
@@ -44,6 +45,7 @@ export default function EmailModeCard() {
         <input type="checkbox" role="switch" checked={auto} onChange={toggle} className="h-4 w-4 accent-amber-400" />
         {t(auto ? "outbound.on" : "outbound.off")}
       </label>
+      {p.linkedin && <LinkedInConnect status={p.linkedin} className="w-full border-t border-line pt-3" />}
     </div>
   );
 }

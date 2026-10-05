@@ -9,6 +9,7 @@ import { approvalHref, setSheetOrder, taskHref } from "../taskSheet";
 import { tasksApi } from "../tasksApi";
 import ApprovalBody, { approveLabel } from "./ApprovalBody";
 import DecisionOptions from "./DecisionOptions";
+import OwnerActions, { OWNER_KINDS } from "./OwnerActions";
 import { AttachChips, MicButton, useAttachments } from "./compose";
 import { toast } from "./overlay";
 import { Panel } from "./ui";
@@ -18,6 +19,7 @@ const KIND = {
   ask: { Icon: HelpCircle, key: "needs.kind.ask", cls: "text-amber-300" },
   review: { Icon: CheckCheck, key: "needs.kind.review", cls: "text-accent" },
   mention: { Icon: AtSign, key: "needs.kind.mention", cls: "text-accent" },
+  ...OWNER_KINDS,
 } as const;
 
 type Mode = null | "reply" | "reject" | "return";
@@ -102,6 +104,7 @@ function Item({ it }: { it: NeedsItem }) {
         </div>
       ) : null}
       <div className="flex flex-wrap items-center gap-2 pl-[30px]">
+        <OwnerActions it={it} busy={busy} run={run} cls={{ primary: "btn-accent", plain: "btn", size: 14 }} />
         {it.kind === "approval" && (
           <>
             <button className="btn-accent" disabled={busy} onClick={() => run(() => agentsApi.decide(it.id, true), t("needs.done.approved"))}>
@@ -212,6 +215,9 @@ export default function NeedsInbox() {
                   c!.ask && `${c!.ask} ${plural(c!.ask, t("needs.count.ask.one"), t("needs.count.ask.few"), t("needs.count.ask.many"))}`,
                   c!.review && `${c!.review} ${plural(c!.review, t("needs.count.review.one"), t("needs.count.review.few"), t("needs.count.review.many"))}`,
                   c!.mention && `${c!.mention} ${plural(c!.mention, t("needs.count.mention.one"), t("needs.count.mention.few"), t("needs.count.mention.many"))}`,
+                  c!.access && `${t("needs.kind.access")} ${c!.access}`,
+                  c!.publish && `${t("needs.kind.publish")} ${c!.publish}`,
+                  c!.draft && `${t("needs.kind.draft")} ${c!.draft}`,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

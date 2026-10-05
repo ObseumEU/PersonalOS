@@ -4,8 +4,11 @@ export type EmailPolicy = {
   mode: "draft" | "auto";
   auto_domains: string[];
   configured: Record<string, { draft: boolean; send: boolean }>;
-  linkedin?: { app: boolean; connected: boolean; name?: string | null; redirect_uri: string };
+  linkedin?: LinkedInStatus;
 };
+
+/** GET /api/integrations/linkedin/status (also inside the outbound policy). */
+export type LinkedInStatus = { app: boolean; connected: boolean; name?: string | null; expires_at?: number | null; redirect_uri: string };
 
 export type DraftTrust = {
   drafted: number;

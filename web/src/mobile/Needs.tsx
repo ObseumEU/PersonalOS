@@ -7,6 +7,7 @@ import { toast } from "../components/overlay";
 import { ago, label, t } from "../i18n/core";
 import ApprovalBody, { approveLabel } from "../components/ApprovalBody";
 import DecisionOptions from "../components/DecisionOptions";
+import OwnerActions, { OWNER_KINDS } from "../components/OwnerActions";
 import { Detail } from "../components/NeedsInbox";
 import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { tasksApi } from "../tasksApi";
@@ -18,6 +19,7 @@ const KIND = {
   ask: { Icon: HelpCircle, key: "needs.kind.ask", cls: "text-amber-300" },
   review: { Icon: CheckCheck, key: "needs.kind.review", cls: "text-accent" },
   mention: { Icon: AtSign, key: "needs.kind.mention", cls: "text-accent" },
+  ...OWNER_KINDS,
 } as const;
 
 type Mode = null | "reply" | "reject" | "return";
@@ -27,6 +29,7 @@ function openHref(it: NeedsItem): string {
   if (it.kind === "mention" && it.channel_id) return `/m/chat/${it.channel_id}${it.thread && it.thread !== it.id ? `?thread=${it.thread}` : ""}`;
   if (it.ref) return `/m/needs?task=${it.ref}&focus=needs`;
   if (it.kind === "approval") return `/m/needs?approval=${it.id}`;
+  if (it.kind === "access" || it.kind === "publish" || it.kind === "draft") return `/m/needs?item=${it.key}`;
   return it.link;
 }
 
@@ -91,6 +94,7 @@ function Item({ it, highlight }: { it: NeedsItem; highlight: boolean }) {
         </div>
       </div>
       <div className="flex flex-wrap gap-2 pl-8">
+        <OwnerActions it={it} busy={busy} run={run} cls={{ primary, plain, size: 16 }} />
         {it.kind === "approval" && (
           <>
             <button className={primary} disabled={busy} onClick={() => run(() => agentsApi.decide(it.id, true), t("needs.done.approved"))}>
