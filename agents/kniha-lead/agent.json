@@ -8,7 +8,9 @@
     "approvals:request",
     "messages:send",
     "tasks:claim",
-    "tasks:read"
+    "tasks:read",
+    "tasks:review",
+    "tasks:write"
   ],
   "budget_class": "low",
   "lifetime": "long_lived",

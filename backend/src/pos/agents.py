@@ -38,6 +38,8 @@ PERMISSIONS = {
     "browser:use": "drive a web browser (paying, signing, deleting, account settings and the owner's personal channels "
                   "still need approval)",
     "access:manage": "decide other agents' grants and budgets (the Access manager; only the owner grants it)",
+    "access:read": "read agents' spend and the access audit (access_usage, access_audit), read-only: the CFO's cost "
+                   "report, the Security Engineer's access review; not an autonomy default",
     "ops:monitor": "read the sentinel's incident logs and close incidents (the Monitor agent)",
     "ops:observe": "query Loki logs (<=1 h, <=200 lines, redacted) and a Prometheus metrics snapshot (the Monitor agent)",
     "ops:runbook": "run the fixed, audited svr03 runbook (pos.ops_runbook: diagnostics, compose up, restart, backup; "

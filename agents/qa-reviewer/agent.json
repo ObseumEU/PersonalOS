@@ -10,7 +10,8 @@
     "messages:send",
     "tasks:claim",
     "tasks:read",
-    "tasks:review"
+    "tasks:review",
+    "tasks:write"
   ],
   "budget_class": "normal",
   "lifetime": "long_lived",
@@ -21,12 +22,15 @@
   "effort": "medium",
   "profile": {
     "workdir": "/work/PersonalOS",
-    "pos_tools": "get_task list_tasks deploy_review review_task task_comment create_task report_progress complete_task",
+    "pos_tools": "get_task list_tasks deploy_review review_task task_comment create_task report_progress complete_task knowledge",
     "claude_builtin": "Bash,Read,Glob,Grep",
     "claude_disallowed": "Write Edit WebSearch WebFetch",
     "claude_tools": "Read|Glob|Grep|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git fetch:*)",
     "max_steps": 40
   },
+  "grants": [
+    "tool:knowledge"
+  ],
   "budget": {
     "usd_day": 6.0,
     "usd_month": 80,

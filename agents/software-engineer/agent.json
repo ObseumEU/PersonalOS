@@ -28,6 +28,9 @@
     "max_steps": 120,
     "max_steps_owner": 200
   },
+  "grants": [
+    "tool:knowledge"
+  ],
   "budget": {
     "usd_day": 15.0,
     "usd_month": 200.0,

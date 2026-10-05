@@ -427,6 +427,62 @@ def test_agent_files_grant_single_tools_once(conn, owner, tmp_path):
         assert "tool:knowledge" in (listed[name] or []), name
 
 
+def test_cfo_and_security_read_spend_and_audit_with_access_read_not_access_manage(conn, owner, tmp_path):
+    """The CFO's instructions use access_usage and the Security Engineer's access_audit, but both
+    needed access:manage (the grant tools): a read-only access:read now, granted from agent.json."""
+    cfo = _agent(conn, owner, tmp_path, "CFO", "cfo")
+    am = _agent(conn, owner, tmp_path, "Správce přístupů", "access_manager")
+    access.seed(conn)
+    row = actors.get(conn, cfo.actor_id)
+    assert not mcp_server.may_use(conn, cfo.actor_id, "access_usage")
+    made = agents_code._grants_from_file(conn, Ctx(owner.actor_id), row, {"name": "CFO", "grants": ["access:read"]})
+    assert made == ["access:read"]
+    for tool in ("access_usage", "access_audit"):
+        assert mcp_server.may_use(conn, cfo.actor_id, tool)
+    for tool in ("access_grant", "access_decide", "access_set_budget", "access_revoke"):
+        assert not mcp_server.may_use(conn, cfo.actor_id, tool)
+    # the Access manager reads what it decides on; access:read is no autonomy default for everyone
+    access._insert_grant(conn, am.actor_id, "access:manage", owner.actor_id, "owner", "test")
+    access.refresh_cache(conn, am.actor_id)
+    assert mcp_server.may_use(conn, am.actor_id, "access_usage")
+    assert "access:read" not in access.autonomy_caps()
+    listed = {s["name"]: s.get("grants") or [] for s in agents_code.specs()}
+    assert "access:read" in listed["CFO"] and "access:read" in listed["Security Engineer"]
+
+
+def test_agents_never_see_the_freeze_tool_people_do(conn, owner, company):
+    """`freeze` refuses every agent (owner and people only): it is not in an agent's tool list."""
+    assert "freeze" not in mcp_server.allowed_tools(conn, company["cto"].actor_id)
+    assert "freeze" in mcp_server.allowed_tools(conn, owner.actor_id)
+
+
+def test_agent_files_give_every_agent_knowledge_and_reviewers_the_review_permissions():
+    """prompt.py tells every agent to use `knowledge`; 12 role files lacked the grant. The Kniha Lead
+    and the Kniha Marketing Lead review (review_task in their tools) without tasks:review/tasks:write."""
+    from pos_worker.tools import expand, tool_list
+
+    for s in agents_code.specs():
+        assert "tool:knowledge" in (s.get("grants") or []), s["name"]
+        narrow = (s.get("profile") or {}).get("pos_tools")
+        if narrow:
+            shown = set(expand(tool_list(narrow)))
+            assert "knowledge" in shown, s["name"]  # a narrowed tool list does not hide it
+            # every tool the file names itself (not a preset's) is one its permissions or grants allow
+            # (review_task: tasks:review, task_reassign: tasks:write, access_usage: access:read)
+            have = set(s.get("permissions") or []) | set(s.get("grants") or [])
+            if "access_grant" in tool_list(narrow):
+                have.add("access:manage")  # the Access manager's own group (pos.access, never from a file)
+            for tool in tool_list(narrow):
+                perm = mcp_server.TOOL_PERMISSIONS.get(tool)
+                if perm in agents.PERMISSIONS:
+                    assert perm in have or f"tool:{tool}" in have or (
+                        perm == "access:read" and "access:manage" in have), (s["name"], tool, perm)
+            assert "freeze" not in shown, s["name"]
+    leads = {s["name"]: set(s.get("permissions") or []) for s in agents_code.specs()}
+    for name in ("Kniha Lead", "Kniha Marketing Lead"):
+        assert {"tasks:review", "tasks:write"} <= leads[name], name
+
+
 # ------------------------------------------------------------------ business routing
 
 def test_leads_go_to_growth_and_company_github_to_the_cto(conn, owner, company):

@@ -1,7 +1,8 @@
 """Access tools on the `pos` MCP server.
 
 `request_access` and `my_access` are for every agent. The `access_*` tools need
-`access:manage` (pos.mcp_server.TOOL_PERMISSIONS), and the service checks the
+`access:manage` (pos.mcp_server.TOOL_PERMISSIONS), except the read-only `access_usage` and
+`access_audit` (access:read: the CFO, the Security Engineer), and the service checks the
 hard limits again whoever calls it.
 """
 

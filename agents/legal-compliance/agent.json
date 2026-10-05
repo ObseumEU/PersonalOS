@@ -25,5 +25,8 @@
     "runs_day": 4
   },
   "dormant": true,
-  "note": "Dormant by default: no schedule and no routing rule, so it costs nothing until someone gives it a task. Not legal advice: it flags risks and drafts questions for a lawyer."
+  "note": "Dormant by default: no schedule and no routing rule, so it costs nothing until someone gives it a task. Not legal advice: it flags risks and drafts questions for a lawyer.",
+  "grants": [
+    "tool:knowledge"
+  ]
 }

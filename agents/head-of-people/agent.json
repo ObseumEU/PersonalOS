@@ -22,12 +22,15 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "profile": {
-    "pos_tools": "hr_overview hr_review hr_admit_agent hr_weekly_report hire_agent hire_request hire_list hire_decide schedule_create schedule_list propose_instructions org_chart get_agent_status list_tasks get_task create_task update_task task_comment handoff_task send_message report_progress complete_task",
+    "pos_tools": "hr_overview hr_review hr_admit_agent hr_weekly_report hire_agent hire_request hire_list hire_decide schedule_create schedule_list propose_instructions org_chart get_agent_status list_tasks get_task create_task update_task task_comment handoff_task send_message report_progress complete_task knowledge",
     "claude_tools": " ",
     "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
     "max_usd_run": 1.8,
     "max_steps": 20
   },
+  "grants": [
+    "tool:knowledge"
+  ],
   "budget": {
     "usd_day": 6.0,
     "usd_month": 90,

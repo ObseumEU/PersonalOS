@@ -52,10 +52,8 @@ def agent_me(slug: str, all_tools: list[str], memory: str = "") -> dict:
     if slug == "access-manager":  # granted by pos.access to the platform agent, never by its file
         caps.add(access.PERM)
 
-    def may(tool: str) -> bool:
-        perm = mcp_server.TOOL_PERMISSIONS.get(tool)
-        return (perm is None or perm in caps or tool in ALWAYS_ANSWER
-                or (not tool.startswith("access_") and f"tool:{tool}" in caps))
+    def may(tool: str) -> bool:  # as pos.mcp_server.allowed_tools shows them to an agent
+        return (mcp_server.permits(caps, tool) or tool in ALWAYS_ANSWER) and tool not in mcp_server.PEOPLE_ONLY_TOOLS
 
     return {"id": 0, "name": spec["name"], "kind": "agent", "permissions": sorted(caps),
             "pos_tools": [t for t in all_tools if may(t)], "all_pos_tools": all_tools,

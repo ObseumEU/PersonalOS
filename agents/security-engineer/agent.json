@@ -38,5 +38,9 @@
       "estimate_min": 15,
       "topic": "bezpecnost"
     }
+  ],
+  "grants": [
+    "tool:knowledge",
+    "access:read"
   ]
 }

@@ -171,9 +171,11 @@ def _budget_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s:
     audit.log(conn, owner, "access_budget", "actor", row["id"], budget="agent.json", **set_)
 
 
-# What agent.json "grants" may hand out: single pos tools only (tool:<name>), never an owner-only
-# capability (credentials, access, the guard), never a permission group or outbound.
+# What agent.json "grants" may hand out: single pos tools only (tool:<name>), and the read-only
+# FILE_GRANT_PERMISSIONS; never an owner-only capability (credentials, access:manage, the guard),
+# never another permission group or outbound.
 FILE_GRANT_KINDS = ("tool",)
+FILE_GRANT_PERMISSIONS = ("access:read",)  # the CFO's spend report, the Security Engineer's access review
 
 
 def _grants_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s: dict) -> list[str]:
@@ -191,7 +193,7 @@ def _grants_from_file(conn: sqlite3.Connection, owner: Ctx, row: sqlite3.Row, s:
             log.warning("%s: agent.json grant %s is never given from a file; ignored", s["name"], cap)
             continue
         try:
-            if access.kind_of(cap) not in FILE_GRANT_KINDS:
+            if access.kind_of(cap) not in FILE_GRANT_KINDS and cap not in FILE_GRANT_PERMISSIONS:
                 log.warning("%s: agent.json grant %s is not a tool grant; ignored", s["name"], cap)
                 continue
         except access.AccessError as e:

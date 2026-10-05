@@ -26,5 +26,8 @@
     "runs_day": 40
   },
   "answers_chat": true,
-  "note": "The built-in assistant (actor id 2, the platform's system identity) renamed in place: its history, DMs and the 'ai' alias stay. Runs in the agent pool."
+  "note": "The built-in assistant (actor id 2, the platform's system identity) renamed in place: its history, DMs and the 'ai' alias stay. Runs in the agent pool.",
+  "grants": [
+    "tool:knowledge"
+  ]
 }

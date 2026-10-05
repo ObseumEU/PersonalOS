@@ -27,5 +27,8 @@
     "usd_run": 2.0,
     "runs_day": 20
   },
-  "note": "Takes over the Project manager's code role (pos.org PM_NAME): unrouted team work, the standup, the default lead of hired agents and the fallback for messages to services."
+  "note": "Takes over the Project manager's code role (pos.org PM_NAME): unrouted team work, the standup, the default lead of hired agents and the fallback for messages to services.",
+  "grants": [
+    "tool:knowledge"
+  ]
 }

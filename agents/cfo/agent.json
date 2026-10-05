@@ -42,6 +42,7 @@
     "tool:knowledge",
     "tool:invoice_candidates",
     "tool:invoice_file",
-    "tool:invoice_filings"
+    "tool:invoice_filings",
+    "access:read"
   ]
 }

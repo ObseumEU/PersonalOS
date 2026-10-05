@@ -19,11 +19,14 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "profile": {
-    "pos_tools": "access_review_requests access_decide access_grant access_revoke access_set_budget access_usage access_audit access_resume_agent access_report my_access org_chart ask_owner send_message report_progress complete_task",
+    "pos_tools": "access_review_requests access_decide access_grant access_revoke access_set_budget access_usage access_audit access_resume_agent access_report my_access org_chart ask_owner send_message report_progress complete_task knowledge",
     "claude_tools": " ",
     "claude_disallowed": "Read Glob Grep Write Edit Bash WebSearch WebFetch",
     "max_usd_run": 0.75,
     "max_steps": 30
   },
+  "grants": [
+    "tool:knowledge"
+  ],
   "note": "A platform agent created by pos.access (like the HR agent); access:manage and its own budget come from there, never from this file. Owner only: its tools, its budget, the company cap. Kept in place in the 2026-09 reorganisation (docs/REORG.md): its id carries the hard limits; its lead is now the CEO and it runs in the agent pool with the same narrow tool list its container had (numbers only, no content tools)."
 }

@@ -7,6 +7,7 @@
   "permissions": [
     "approvals:request",
     "messages:send",
+    "ops:observe",
     "tasks:claim",
     "tasks:read"
   ],

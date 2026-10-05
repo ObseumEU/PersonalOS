@@ -57,8 +57,10 @@ GATED = ("usd_day", "usd_month", "tokens_day", "tokens_month", "runs_day")
 OWNER_ONLY_PREFIXES = ("guard", "constitution", "secrets", "credentials")
 CRED_PREFIX = "cred"
 # Permission groups that are not autonomy defaults and that only the owner grants on request:
-# ops:runbook runs commands on svr03 (pos.ops_runbook; the SRE has it from pos.ops_runbook.ensure).
-RESTRICTED = frozenset({"ops:runbook", "kniha:reservations"})
+# ops:runbook runs commands on svr03 (pos.ops_runbook; the SRE has it from pos.ops_runbook.ensure);
+# access:read shows every agent's spend and access history (the CFO and the Security Engineer have it
+# from their agent.json).
+RESTRICTED = frozenset({"ops:runbook", "kniha:reservations", "access:read"})
 SCOPES = ("repo", "connector")
 
 SETTINGS_KEY = "access.settings"

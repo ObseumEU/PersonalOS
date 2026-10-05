@@ -27,8 +27,9 @@ SERVICES_LEAD = roles.CTO  # the Deployer, knowlage and Nexus are services; engi
 HR_LIMIT = 26  # active non-system agents during the switch (old + new) with room for a few hires
 # Grants only the owner gives, part of the new roles (docs/REORG.md "Grants").
 OWNER_GRANTS = [
-    (roles.CFO, "tool:access_usage", "CFO: čtení útrat agentů pro report nákladů (jen čtení)"),
-    ("Security Engineer", "tool:access_audit", "Security Engineer: měsíční revize přístupů (jen čtení)"),
+    # access:read (not tool:access_*: a tool grant for an access_ tool never counted, pos.mcp_server.may_use)
+    (roles.CFO, "access:read", "CFO: čtení útrat agentů pro report nákladů (jen čtení)"),
+    ("Security Engineer", "access:read", "Security Engineer: měsíční revize přístupů (jen čtení)"),
 ]
 OWNER_REVOKES = [
     ("Executive Assistant", "agents:create", "Nábor patří HR (Head of People), ne asistentovi"),

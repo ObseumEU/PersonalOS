@@ -169,9 +169,13 @@ TOOL_PERMISSIONS = {
     "ops_runbook": "ops:runbook", "ops_runbook_list": "ops:runbook",  # the SRE's svr03 runbook (pos.ops_runbook)
     # Access (pos.access): request_access and my_access are for everyone; deciding is the Access manager's.
     **{t: "access:manage" for t in ("access_review_requests", "access_decide", "access_grant", "access_revoke",
-                                     "access_set_budget", "access_usage", "access_audit", "access_resume_agent",
-                                     "access_report")},
+                                     "access_set_budget", "access_resume_agent", "access_report")},
+    # Reading spend and the access audit: access:read (the CFO, the Security Engineer; access:manage implies it).
+    "access_usage": "access:read", "access_audit": "access:read",
 }
+# Tools no agent can use: the kill switch refuses every agent (pos.killswitch: owner and people only),
+# so they are not in an agent's tool list (allowed_tools).
+PEOPLE_ONLY_TOOLS = ("freeze",)
 # Tools an agent may still use while the kill switch is on.
 FROZEN_OK = {"list_tasks", "get_task", "heartbeat", "freeze", "check_inbox", "get_agent_status",
              "list_active_runs", "org_chart", "chat_read", "chat_list_channels"}
@@ -191,8 +195,19 @@ def tool_names() -> list[str]:
 
 def allowed_tools(conn: sqlite3.Connection, actor_id: int) -> list[str]:
     """The pos tools this member may call, by its permissions (the worker shows
-    its model only these; its compose settings may narrow them further)."""
-    return [t for t in tool_names() if may_use(conn, actor_id, t)]
+    its model only these; its compose settings may narrow them further). An agent never gets
+    PEOPLE_ONLY_TOOLS (`freeze` always refused it)."""
+    agent = actors.get(conn, actor_id)["kind"] != "human"
+    return [t for t in tool_names() if may_use(conn, actor_id, t) and not (agent and t in PEOPLE_ONLY_TOOLS)]
+
+
+def permits(caps: set[str], tool: str) -> bool:
+    """Whether a set of capabilities (permission groups and tool:<name> grants) allows `tool`: its group,
+    a grant for that one tool (never for an access_ tool), or access:manage for the access:read tools."""
+    perm = TOOL_PERMISSIONS.get(tool)
+    return (perm is None or "*" in caps or perm in caps
+            or (not tool.startswith("access_") and f"tool:{tool}" in caps)
+            or (perm == "access:read" and "access:manage" in caps))
 
 
 def may_use(conn: sqlite3.Connection, actor_id: int, tool: str) -> bool:
@@ -203,6 +218,8 @@ def may_use(conn: sqlite3.Connection, actor_id: int, tool: str) -> bool:
     if perm is None or agents.has_permission(conn, actor_id, perm) or (
             not tool.startswith("access_") and agents.has_permission(conn, actor_id, f"tool:{tool}")):
         return True
+    if perm == "access:read" and agents.has_permission(conn, actor_id, "access:manage"):
+        return True  # the Access manager reads what it decides on
     if tool in ("chat_send", "chat_react", "file_share", "sandbox_share"):  # every agent answers the person waiting for it (chat.may_answer)
         from . import chat
 

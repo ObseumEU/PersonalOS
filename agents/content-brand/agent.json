@@ -35,5 +35,8 @@
       "estimate_min": 20,
       "topic": "obsah"
     }
+  ],
+  "grants": [
+    "tool:knowledge"
   ]
 }

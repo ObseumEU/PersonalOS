@@ -26,5 +26,8 @@
     "runs_day": 15
   },
   "dormant": true,
-  "note": "Dormant until a Discord MCP server is connected (REVIZE-FUNKCI #33): no schedule, so it costs nothing; Discord mentions are routed to it. Replaces the Community agent."
+  "note": "Dormant until a Discord MCP server is connected (REVIZE-FUNKCI #33): no schedule, so it costs nothing; Discord mentions are routed to it. Replaces the Community agent.",
+  "grants": [
+    "tool:knowledge"
+  ]
 }
