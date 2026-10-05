@@ -515,7 +515,28 @@ def platform_retro(conn: sqlite3.Connection) -> dict:
     return platform_loop.retro(conn)
 
 
+def improve_daily(conn: sqlite3.Connection) -> dict:
+    from .improve import loop
+
+    return loop.daily(conn)
+
+
+def improve_triage(conn: sqlite3.Connection) -> dict:
+    from .improve import loop
+
+    return loop.weekly_triage(conn)
+
+
+def improve_coach(conn: sqlite3.Connection) -> dict:
+    from .improve import loop
+
+    return loop.weekly_coach(conn)
+
+
 ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
+    "improve_daily": improve_daily,
+    "improve_triage": improve_triage,
+    "improve_coach": improve_coach,
     "scorecard_daily": scorecard_daily,
     "platform_meeting": platform_meeting,
     "platform_retro": platform_retro,
@@ -637,6 +658,12 @@ DEFAULT_JOBS = [
     # The agent company improves itself (pos.platform_loop): the CTO's meeting in #platform, the Friday retro.
     ("Platforma: zlepšení týdne (CTO, #platform)", "weekly mon 10:00", "platform_meeting"),
     ("Platforma: páteční retro s čísly (#platform, do týdenního reportu)", "weekly fri 12:00", "platform_retro"),
+    # The closed self-improvement loop (pos.improve): the daily signal digest, web smoke and verification
+    # of fix targets (code); one weekly triage task for the CTO and one instruction-tuning task for the
+    # Performance Coach (two runs a week, under $1).
+    ("Samozlepšení: denní signály, smoke webu, ověření oprav", "daily 05:40", "improve_daily"),
+    ("Samozlepšení: týdenní triáž (CTO)", "weekly mon 08:30", "improve_triage"),
+    ("Samozlepšení: ladění instrukcí (Performance Coach)", "weekly mon 08:40", "improve_coach"),
 ]
 
 # The platform's own loops: they cannot be switched off (the owner switched off jobs 1-9 on

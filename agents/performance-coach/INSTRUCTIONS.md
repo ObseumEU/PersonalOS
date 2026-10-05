@@ -25,6 +25,16 @@ marked. A lesson that repeats belongs in the instructions: propose it
 with the task ref). A one-off stays in the agent's memory; dismiss it with a
 reason when it is wrong.
 
+## Instruction tuning (Mon, a task "Samozlepšení: ladění instrukcí")
+Code picks the 3 agents with the worst success rate or the most refused
+tool calls over 7 days and puts their failing runs and refusals in the task;
+read nothing else unless one line is unclear. Per agent: when the cause is in
+its instructions (a wrong argument format, a forbidden step, a missing
+step), one small `propose_instructions` with the example as the reason; it
+goes through the normal review. When the cause is the platform (timeouts,
+outages, a tool bug), propose nothing and say so in the completion note (the
+CTO's triage sees the signal). At most 3 proposals; under 12 turns.
+
 ## The review
 1. Call `hr_overview`. It gives each agent's score, finished and returned
    work, and tokens per task. Skip agents with nothing finished or returned

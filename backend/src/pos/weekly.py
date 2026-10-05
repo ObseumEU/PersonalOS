@@ -381,12 +381,16 @@ def publish(conn: sqlite3.Connection, ctx: Ctx, *, week: str | None = None, narr
     if not (narrative or "").strip():
         raise Invalid("the report needs its narrative (Markdown): what happened, wins, problems, where we head")
     qs = _questions(questions)
-    packet_for(conn, week)  # the numbers the narrative was written from are stored with it
+    packet = packet_for(conn, week)  # the numbers the narrative was written from are stored with it
     row = _require(conn, week)
     if row["status"] in ("closed", "no_reply"):
         raise Invalid(f"the report for {week} is already closed ({row['status']})")
     if task_id is None and row["task_id"]:
         task_id = row["task_id"]
+    from .improve import loop as improve_loop
+
+    # "Samo se zlepšilo tento týden": verified fixes with before → after, added by code (pos.improve).
+    narrative = improve_loop.with_section(narrative.strip(), packet.get("self_improved"))
     fields = dict(narrative=narrative.strip(), questions=qs, author_id=ctx.actor_id,
                   published_at=row["published_at"] or now_iso(), task_id=task_id)
     if decisions is not None:
@@ -826,7 +830,9 @@ def auto_narrative(packet: dict) -> tuple[str, str]:
     if goals:
         lines += ["", "## Kam míříme"] + [f"- {g['title']}: {g.get('progress') or 0} %" for g in goals[:6]]
     headline = f"Týden {packet.get('week')}: " + summary_or_blank(packet)
-    return headline[:300], "\n".join(lines)
+    from .improve import loop as improve_loop
+
+    return headline[:300], improve_loop.with_section("\n".join(lines), packet.get("self_improved"))
 
 
 def summary_or_blank(packet: dict) -> str:

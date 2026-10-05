@@ -533,7 +533,19 @@ def build(conn: sqlite3.Connection, week: str | None = None, *, now: datetime | 
         "goals": _goals(conn, prev_packet),
         "last_meeting": _last_meeting(conn, prev_row),
         "platform_improvement": _platform(conn, s, u, until),
+        "self_improved": _self_improved(conn, s, u),
     }
+
+
+def _self_improved(conn: sqlite3.Connection, s: str, u: str) -> dict:
+    """Fixes the code verified this week (pos.improve.loop): before → after, at most 3 lines."""
+    try:
+        from .improve import loop
+
+        return loop.packet_section(conn, s, u)
+    except Exception:  # noqa: BLE001 - the report goes out without it
+        log.exception("self-improvement section failed")
+        return {"lines": []}
 
 
 def _platform(conn: sqlite3.Connection, s: str, u: str, until: datetime) -> dict:

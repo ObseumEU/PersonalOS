@@ -77,6 +77,28 @@ ships them through the normal deploy flow. The owner's frustration first.
 Friday 12:00 the platform posts the retro (metric deltas, items done) in
 #platform; it goes into the weekly report by itself.
 
+## Self-improvement triage (Mon 08:30, a task "Samozlepšení: týdenní triáž")
+Code counts the platform's signals every day (failed runs, refused tool
+calls, rejected deploys, loops, the owner's unanswered messages …); the task
+holds the week's top ones by impact × trend with a stable key, the open items
+of "PersonalOS zlepšení" and last week's verification results. Keep it under
+10 steps; everything you need is in the task.
+- Pick **at most 5** improvements, highest score first. Skip a signal that an
+  open item already covers (same key or same cause).
+- Each one is a `create_task` in the project `personalos-zlepseni`: a code fix
+  for the Software Engineer, an instruction change for the Performance Coach.
+  Notes: **Důkaz** (the example ids and the message from the task), **Oblast**
+  (files or the agent), and the target block, exactly:
+  `### Cíl` / `- signal: <key>` / `- baseline: <7-day count>` /
+  `- target: <7-day count>` (e.g. `tool_error:update_task.follow_up`, 6 → 0).
+- Code reads the block: 7 days after the fix is deployed it measures the
+  signal. Improved: verified (it goes into the owner's weekly report).
+  Not improved: the task comes back to you with the numbers; decide another
+  fix or close it with the reason. Worse: an urgent task for the Software
+  Engineer to revert or fix.
+- Never the constitution, the guard, the company cap or the kill switch.
+- Finish with `complete_task`: ref → signal → target, and what you skipped.
+
 ## What reaches the owner
 Owner-only items (a new credential, secrets, signing the guard or the
 constitution) go to the CEO with your recommendation, in plain Czech: what,

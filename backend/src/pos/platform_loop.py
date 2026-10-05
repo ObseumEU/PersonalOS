@@ -122,6 +122,24 @@ def frustrations(conn: sqlite3.Connection, now: datetime | None = None) -> list[
             for f in frustration.flagged(conn, s, u)[-5:]]
 
 
+def _signal_lines(conn: sqlite3.Connection, limit: int = 5) -> list[str]:
+    """The top signals of the daily digest (pos.improve.signals); the CTO's 08:30 triage already made
+    tasks from them, so the meeting does not duplicate those."""
+    try:
+        from .improve import signals
+
+        day, rows = signals.latest(conn)
+        top = signals.ranked(rows, limit)
+    except Exception:  # noqa: BLE001 - the meeting goes on without them
+        log.exception("signal digest unavailable")
+        return []
+    if not top:
+        return []
+    return ["**Signály (denní digest, už v pondělní triáži CTO; neduplikuj):**",
+            *[f"- `{r['key']}` {signals._num(r['count_7d'])}/7 d (předtím {signals._num(r.get('prev_7d'))})"
+              for r in top]]
+
+
 def agenda(conn: sqlite3.Connection, now: datetime | None = None) -> str:
     """The meeting's agenda: the input in numbers and what the meeting must produce."""
     from . import scorecard
@@ -136,6 +154,7 @@ def agenda(conn: sqlite3.Connection, now: datetime | None = None) -> str:
         "**Vstup (čísla z kódu, 7 dní):**", scorecard.render_platform(card),
         "**Selhání a incidenty:**", *[f"- {x}" for x in fails],
         "**Frustrace majitele:**", *[f"- {x}" for x in frus],
+        *_signal_lines(conn),
         f"**Výstup:** {items} položky backlogu v projektu „{PROJECT}“ (meeting_decide tasks). Každá: název; v notes "
         "**Důkaz** (číslo nebo zpráva odsud), **Metrika** (co se zlepší a o kolik do pátku), **Oblast** (soubory "
         "a moduly); assignee vlastník (implementace Software Engineer přes normální deploy); definition_of_done "
