@@ -513,6 +513,10 @@ def budget_gate(conn: sqlite3.Connection, req) -> None:
             _cap_alert(conn, metric, u, cap, now, full=True)
             raise RunBlocked(f"company cap {METRICS[metric]} reached ({_fmt(metric, u)} of {_fmt(metric, cap)}); "
                              "only the owner raises it")
+    fast = hold_fast_loop(conn, req.actor_id, getattr(req, "task_id", None), now)
+    if fast:
+        raise RunBlocked(f"task {fast['task']} was started {fast['runs']} times in the last hour (a loop): it is "
+                         f"held until {fast['until']}; a comment or a new assignment lifts the hold")
     for metric in GATED:
         lim = limit(conn, req.actor_id, metric, now)
         if lim is None:
@@ -598,14 +602,49 @@ def signals(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None
 LIMIT_HIT_DEDUP_H = 24  # one limit-hit request per (agent, limit) in this window
 LOOP_RUNS = 5  # runs of one task in 24 h that make a limit hit a loop (signals.looks_like_loop)
 LOOP_HOLD_H = 24
+CLAIMS_PER_HOUR = 4  # one task started more often than this within an hour is a fast loop: held at once
+SETTLED_LOOKBACK_D = 7  # a limit hit like one the Access manager denied within this long is settled in code
+
+
+def _hold(conn: sqlite3.Connection, agent_id: int, task_id: int, runs: int, until: str, why: str) -> dict:
+    from .. import comments, tasks
+
+    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (until, task_id))
+    ctx = Ctx(agent_id, via="system")
+    comments.log(conn, ctx, task_id, f"Held until {until}: {why}. Its lead or a person looks at it; a comment or "
+                 "a new assignment lifts the hold.", "system")
+    audit.log(conn, ctx, "access_loop_hold", "task", task_id, runs=runs, until=until)
+    return {"task": tasks.display_id(task_id), "runs": runs, "until": until}
+
+
+def hold_fast_loop(conn: sqlite3.Connection, agent_id: int, task_id: int | None,
+                   now: datetime | None = None) -> dict | None:
+    """The same task started more than CLAIMS_PER_HOUR times by one agent within an hour (the run being
+    started counts): held for LOOP_HOLD_H in code, before any limit or the Access manager is involved.
+    Refused and cancelled starts do not count. Returns {task, runs, until} or None."""
+    if not task_id:
+        return None
+    now = now or utcnow()
+    n = conn.execute("""SELECT COUNT(*) FROM runs WHERE actor_id = ? AND task_id = ? AND started_at >= ?
+                        AND status NOT IN ('blocked', 'cancelled')""",
+                     (agent_id, task_id, _iso(now - timedelta(hours=1)))).fetchone()[0]
+    if n <= CLAIMS_PER_HOUR:
+        return None
+    t = conn.execute("SELECT retry_after, status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if t is None or t["status"] in ("done", "review"):
+        return None
+    if (t["retry_after"] or "") > _iso(now):  # held already: refuse again, no second comment
+        from .. import tasks
+
+        return {"task": tasks.display_id(task_id), "runs": n, "until": t["retry_after"]}
+    return _hold(conn, agent_id, task_id, n, _iso(now + timedelta(hours=LOOP_HOLD_H)),
+                 f"started {n} times within an hour (a loop)")
 
 
 def hold_looping_task(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None) -> dict | None:
     """A limit hit caused by a loop (one task run LOOP_RUNS+ times in 24 h): that task is held
     (retry_after LOOP_HOLD_H, a comment, an audit line) so raising the limit does not feed the loop.
     A person assigning it again, or a comment, lifts the hold. Returns {task, until} or None."""
-    from .. import comments, tasks
-
     now = now or utcnow()
     r = conn.execute(
         """SELECT task_id, COUNT(*) AS n FROM runs WHERE actor_id = ? AND started_at >= ? AND task_id IS NOT NULL
@@ -617,13 +656,8 @@ def hold_looping_task(conn: sqlite3.Connection, agent_id: int, now: datetime | N
     t = conn.execute("SELECT retry_after, status FROM tasks WHERE id = ?", (r["task_id"],)).fetchone()
     if t is None or t["status"] in ("done", "review") or (t["retry_after"] or "") >= _iso(now + timedelta(hours=1)):
         return None
-    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (until, r["task_id"]))
-    ctx = Ctx(agent_id, via="system")
-    comments.log(conn, ctx, r["task_id"], f"Held until {until}: {r['n']} runs in 24 h hit the agent's limit "
-                 "(a loop). Its lead or a person looks at it; a comment or a new assignment lifts the hold.",
-                 "system")
-    audit.log(conn, ctx, "access_loop_hold", "task", r["task_id"], runs=r["n"], until=until)
-    return {"task": tasks.display_id(r["task_id"]), "until": until}
+    held = _hold(conn, agent_id, r["task_id"], r["n"], until, f"{r['n']} runs in 24 h hit the agent's limit (a loop)")
+    return {"task": held["task"], "until": until}
 
 
 def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float, lim: float,
@@ -651,15 +685,52 @@ def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float
                      (json.dumps(detail, ensure_ascii=False, default=str), row["id"]))
         return row["id"]
     name = actors.get(conn, agent_id)["name"]
+    sig = signals(conn, agent_id)
     rid = _insert_request(conn, agent_id=agent_id, requested_by=None, trigger="limit_hit", what="budget",
                           metric=metric, amount=None, hours=None, task_id=task_id,
                           why=f"{name} narazil na limit {METRICS[metric]}: {_fmt(metric, used_)} z {_fmt(metric, lim)}.",
-                          detail={"used": used_, "limit": lim, "signals": signals(conn, agent_id),
-                                  **({"held": held} if held else {})})
+                          detail={"used": used_, "limit": lim, "signals": sig, **({"held": held} if held else {})})
     audit.log(conn, Ctx(agent_id, via="system"), "access_limit_hit", "actor", agent_id, metric=metric,
               used=used_, limit=lim, request=rid)
+    note = _settle_in_code(conn, agent_id, metric, rid, held, sig, now)
+    if note:
+        _settle(conn, agent_id, rid, metric, note)
+        return rid
     _wake_manager(conn, f"#{rid}: {name} narazil na limit {METRICS[metric]}", subject=f"{name} · limit {metric}")
     return rid
+
+
+def _settle_in_code(conn: sqlite3.Connection, agent_id: int, metric: str, rid: int, held: dict | None,
+                    sig: dict, now: datetime) -> str | None:
+    """Why this limit hit needs no Access manager run (a note), or None. Raising a limit never helps a
+    loop, so a loop (its task held now) is denied in code; so is a hit like one the Access manager denied
+    within SETTLED_LOOKBACK_D while the signals still say loop (prod 2026-10-02/03: 176 LLM runs denied the
+    same T-516 loop one by one)."""
+    from ..tasks import display_id
+
+    if held:
+        return (f"Smyčka: úkol {held['task']} běžel opakovaně a je podržen do {held['until']}; navýšení limitu by "
+                "ji jen živilo. Rozhodnuto v kódu, bez běhu Správce přístupů.")
+    prev = conn.execute(
+        """SELECT id, decision_note FROM access_requests WHERE agent_id = ? AND metric = ? AND trigger = 'limit_hit'
+           AND status = 'denied' AND id != ? AND decided_at >= ? ORDER BY id DESC LIMIT 1""",
+        (agent_id, metric, rid, _iso(now - timedelta(days=SETTLED_LOOKBACK_D)))).fetchone()
+    if prev is not None and sig.get("looks_like_loop"):
+        top = (sig.get("runs_per_task_24h") or [{}])[0]
+        return (f"Stejně jako #{prev['id']} (zamítnuto: {(prev['decision_note'] or '')[:160]}): pořád to vypadá "
+                f"na smyčku ({top.get('task') or '?'}: {top.get('runs') or '?'} běhů za 24 h). Rozhodnuto v kódu, "
+                "bez běhu Správce přístupů.")
+    return None
+
+
+def _settle(conn: sqlite3.Connection, agent_id: int, rid: int, metric: str, note: str) -> None:
+    """Deny a limit-hit request in code: recorded like a decision (by the system), the agent hears it."""
+    am = manager_id(conn)
+    ctx = Ctx(am or actors.owner_id(conn), via="system")
+    conn.execute("""UPDATE access_requests SET status = 'denied', decided_by = NULL, decided_at = ?,
+                    decision_note = ? WHERE id = ?""", (now_iso(), note[:1000], rid))
+    audit.log(conn, ctx, "access_deny_auto", "actor", agent_id, request=rid, metric=metric, note=note[:300])
+    _tell(conn, ctx, agent_id, f"Žádost #{rid} (limit {METRICS[metric]}) zamítnuta v kódu: {note}")
 
 
 # ------------------------------------------------------------------ requests (every agent)

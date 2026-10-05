@@ -198,6 +198,62 @@ def test_repeated_limit_hits_within_a_day_make_one_request_and_never_reopen_the_
     assert access.limit_hit(conn, agent, "runs_day", 3, 3) != first
 
 
+def test_the_same_task_started_more_than_n_times_an_hour_is_held_in_code(app):
+    from pos import runner
+
+    conn, agent, owner = app["conn"], app["agent"], app["owner"]
+    t = tasks.create(conn, owner, {"title": "Smyčka", "assignee": {"type": "agent", "id": agent}, "status": "next"})
+    conn.commit()
+    req = runner.RunRequest(agent, "task", "x", task_id=t["id"])
+    for _ in range(access.CLAIMS_PER_HOUR):
+        assert runner.start_external(conn, req).status == "running"
+    blocked = runner.start_external(conn, req)  # one more within the hour: a fast loop
+    assert blocked.status == "blocked" and "held until" in blocked.error
+    row = conn.execute("SELECT retry_after FROM tasks WHERE id = ?", (t["id"],)).fetchone()
+    assert row["retry_after"] > datetime.now(timezone.utc).isoformat(timespec="seconds")
+    again = runner.start_external(conn, req)  # still held: refused again, one comment only
+    assert again.status == "blocked"
+    holds = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'access_loop_hold' AND entity_id = ?",
+                         (t["id"],)).fetchone()[0]
+    assert holds == 1
+    # No Access manager run for it: nothing in its queue.
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'access'").fetchone()
+    # Another task of the same agent still runs.
+    other = tasks.create(conn, owner, {"title": "Jiný", "assignee": {"type": "agent", "id": agent}, "status": "next"})
+    assert runner.start_external(conn, runner.RunRequest(agent, "task", "x", task_id=other["id"])).status == "running"
+
+
+def test_a_limit_hit_like_one_already_denied_is_settled_in_code_without_waking_the_manager(app):
+    conn, agent, am, owner = app["conn"], app["agent"], app["am"], app["owner"]
+    first = access.limit_hit(conn, agent, "runs_day", 3, 3)
+    access.decide(conn, am, first, "deny", "Smyčka na jednom úkolu")
+    conn.execute("UPDATE tasks SET status = 'done' WHERE assignee_id = ? AND source = 'access'", (am.actor_id,))
+    old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(timespec="seconds")
+    conn.execute("UPDATE access_requests SET created_at = ? WHERE id = ?", (old, first))
+    # The loop goes on: one task run 6 times in 24 h, already held (so it is not held again).
+    t = tasks.create(conn, owner, {"title": "T-516", "assignee": {"type": "agent", "id": agent}, "status": "next"})
+    later = (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat(timespec="seconds")
+    conn.execute("UPDATE tasks SET retry_after = ? WHERE id = ?", (later, t["id"]))
+    for h in range(6):
+        conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', 'ok', ?)",
+                     (agent, t["id"], (datetime.now(timezone.utc) - timedelta(hours=2 + h)).isoformat(timespec="seconds")))
+    conn.commit()
+    second = access.limit_hit(conn, agent, "runs_day", 3, 3)
+    r = conn.execute("SELECT * FROM access_requests WHERE id = ?", (second,)).fetchone()
+    assert second != first and r["status"] == "denied" and r["decided_by"] is None
+    assert f"#{first}" in r["decision_note"] and "v kódu" in r["decision_note"]
+    queue = conn.execute("SELECT status FROM tasks WHERE assignee_id = ? AND source = 'access'",
+                         (am.actor_id,)).fetchall()
+    assert [q["status"] for q in queue] == ["done"]  # the Access manager was not woken
+    assert any("zamítnuta v kódu" in b for b in _dms(conn, agent))
+    # A loop caught now (its task not held yet) is settled in code at once too.
+    conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (t["id"],))
+    conn.execute("UPDATE access_requests SET created_at = ? WHERE id = ?", (old, second))
+    third = access.limit_hit(conn, agent, "usd_day", 5, 5)
+    r = conn.execute("SELECT * FROM access_requests WHERE id = ?", (third,)).fetchone()
+    assert r["status"] == "denied" and "podržen" in r["decision_note"]
+
+
 def test_company_cap_blocks_everyone_and_only_the_owner_sets_it(app):
     client, conn, agent, key = app["client"], app["conn"], app["agent"], app["key"]
     with pytest.raises(Forbidden):
