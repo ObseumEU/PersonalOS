@@ -1,5 +1,5 @@
 # The fast checks on every push and pull request to main: the backend tests in parallel
-# (pytest-xdist), ruff, and the web typecheck + build. The deployer runs the same tests
+# (pytest-xdist), ruff, and the web typecheck, build, PWA check and tests. The deployer runs the same tests
 # before it promotes a branch (pos.selfdeploy DEFAULT_TEST, DEPLOY_TEST_CMD in the compose files).
 name: tests
 on:
@@ -54,3 +54,7 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npx vite build
+      - name: PWA check (sw.js, manifest, /m gzip budget)
+        run: npm run check:pwa
+      - name: Tests
+        run: npm test
