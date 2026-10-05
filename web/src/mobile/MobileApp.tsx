@@ -7,6 +7,7 @@ import { useCurrentRef } from "../refStore";
 import { t } from "../i18n/core";
 import { useNeedsMe } from "../needsMeApi";
 import ChatList from "./ChatList";
+import { FreezeRow, FrozenBanner } from "./Freeze";
 import { applyUpdate, isStandalone, setBadge, useUpdateReady } from "./pwa";
 import { TopBar } from "./ui";
 
@@ -137,6 +138,7 @@ function More({ onLogout }: { onLogout?: () => void }) {
   return (
     <div className="flex flex-col">
       <TopBar title={t("m.more.title")} />
+      <FreezeRow />
       <Link to="/m/company" className={row}>
         <Gauge size={20} className="text-ink-2" />
         <span className="flex flex-col">
@@ -231,6 +233,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
   return (
     <div className="min-h-dvh bg-bg">
       <main className={inConversation ? "" : "pb-[calc(64px+env(safe-area-inset-bottom))]"}>
+        {!inConversation && <FrozenBanner />}
         <Suspense fallback={<p className="p-4 text-sm text-ink-2">{t("act.loading")}</p>}>
         <Routes>
           <Route path="/m" element={<ChatList />} />

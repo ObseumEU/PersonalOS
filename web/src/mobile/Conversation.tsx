@@ -11,6 +11,7 @@ import { AttachChips, MicButton, useAttachments } from "../components/compose";
 import { t } from "../i18n/core";
 import { type Task } from "../tasksApi";
 import { useMembers, workLabel } from "./ChatList";
+import { FrozenBanner } from "./Freeze";
 import { isMessageEvent, onChatEvent, usePresence } from "./live";
 import { ActionSheet, Avatar, LoadError, SheetButton, TopBar } from "./ui";
 
@@ -256,6 +257,7 @@ export default function Conversation() {
         sub={thread ? (channel ? t("m.chat.thread_in", { name: channel.name ?? "" }) : "") : sub ? <span className={other && sub ? "text-accent" : ""}>{sub}</span> : undefined}
         back={() => (thread ? setParams({}) : navigate("/m"))}
       />
+      <FrozenBanner />
       {error && !channel && <LoadError error={error} onRetry={load} />}
       {error && channel && <p className="px-4 py-2 text-sm text-red-400">{error}</p>}
       {channel && (

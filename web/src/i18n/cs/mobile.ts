@@ -21,6 +21,11 @@ export default {
   "m.error.retry": "Zkusit znovu",
   "m.chat.older_failed": "Starší zprávy se nenačetly.",
 
+  "m.freeze.unfreeze_confirm": "Rozmrazit všechny agenty?",
+  "m.freeze.unfreeze_body": "Agenti se znovu rozběhnou a fronty se pustí.",
+  "m.freeze.frozen": "Všichni agenti jsou zmrazení",
+  "m.freeze.unfrozen": "Agenti zase pracují",
+
   "m.login.app": "Zůstaneš přihlášený na tomto zařízení; odhlásit ho jde v Nastavení → Zařízení.",
 
   "m.chat.title": "Chat",
