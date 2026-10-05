@@ -7,7 +7,7 @@ import { useSubsystems } from "../knowledgeApi";
 import { useLive } from "../liveStream";
 import { useNeedsMe } from "../needsMeApi";
 import { KNOWLEDGE_TABS, SECTIONS, SETTINGS, SETTINGS_ROOT, type SubSection, sectionOf } from "../sections";
-import { OverlayHost } from "./overlay";
+import { OverlayHost, toast } from "./overlay";
 import { RefPreviewHost } from "./RefPreview";
 
 // The task panel (and the Markdown it renders) loads the first time a task or approval is opened.
@@ -60,7 +60,12 @@ function FrozenBanner() {
       <span className="text-xs text-ink-2">{freeze.reason || t("freeze.frozen_sub")}</span>
       <button
         className="btn-accent ml-auto"
-        onClick={() => agentsApi.unfreeze().then(() => window.dispatchEvent(new Event("pos:freeze")))}
+        onClick={() =>
+          agentsApi.unfreeze().then(
+            () => window.dispatchEvent(new Event("pos:freeze")),
+            (e) => toast(e instanceof Error ? e.message : String(e), { error: true }),
+          )
+        }
       >
         {t("freeze.unfreeze")}
       </button>
