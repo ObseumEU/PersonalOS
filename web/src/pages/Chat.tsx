@@ -14,6 +14,8 @@ import { type Attached, AttachChips, MicButton, useAttachments } from "../compon
 import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
 import { LOCALE, t } from "../i18n";
+import { systemCs } from "../chat/systemText";
+import { markdownSnippet } from "../markdownText";
 
 const EMOJI = ["👍", "✅", "👀", "🎉", "❤️", "🙏"];
 const PRIORITY_CLS: Record<Priority, string> = {
@@ -277,11 +279,11 @@ function NoticeGroups({ messages, names }: { messages: ChatMessage[]; names: str
             {expanded ? (
               <div className="mt-1 flex flex-col gap-1.5">
                 {g.map((m) => (
-                  <Body key={m.id} text={m.body} names={names} />
+                  <Body key={m.id} text={systemCs(m.body)} names={names} />
                 ))}
               </div>
             ) : (
-              <p className="mt-0.5 truncate text-[13px] text-ink-2">{last.body}</p>
+              <p className="mt-0.5 truncate text-[13px] text-ink-2">{markdownSnippet(systemCs(last.body), 200)}</p>
             )}
           </div>
         );

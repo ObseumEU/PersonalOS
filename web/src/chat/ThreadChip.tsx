@@ -1,3 +1,5 @@
+import { systemCs } from "./systemText";
+import { markdownSnippet } from "../markdownText";
 // The thread chip under a channel message (who answered, how many, the last reply). Its own module so
 // the chat list (/m's start screen, chat/ThreadList) does not pull the whole Messenger into the entry.
 import { ChevronRight } from "lucide-react";
@@ -41,7 +43,7 @@ export function ThreadChip({ count, thread, onOpen }: { count: number; thread?: 
         </span>
         {last && (
           <span className="truncate text-[12.5px] text-ink-2">
-            <span className="text-ink">{last.author_name}:</span> {last.body}
+            <span className="text-ink">{last.author_name}:</span> {markdownSnippet(systemCs(last.body), 160)}
           </span>
         )}
       </span>

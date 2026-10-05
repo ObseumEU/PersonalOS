@@ -4,7 +4,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { type Channel, type ChatMember, chatApi } from "../chatApi";
 import { t } from "../i18n/core";
 import ThreadList, { useThreads } from "../chat/ThreadList";
-import { stripToolMarkup } from "../toolMarkup";
+import { systemCs } from "../chat/systemText";
+import { markdownSnippet } from "../markdownText";
 import { isMessageEvent, onChatEvent, usePresence } from "./live";
 import { ActionSheet, Avatar, Dots, SheetButton, TopBar, when } from "./ui";
 
@@ -40,7 +41,7 @@ function Row({ c, me, members, typing, working, pinned }: { c: Channel; me: numb
   const busy = !!other && (working.has(other.id) || !!who?.working_on);
   const state = typing ? t("m.chat.typing") : other && other.kind !== "human" ? workLabel(who, busy) : null;
   const title = c.kind === "group" ? `#${c.name}` : c.title;
-  const last = c.last ? `${c.last.author_name === (members.get(me)?.name ?? "") ? "Ty: " : c.kind === "group" ? `${c.last.author_name}: ` : ""}${stripToolMarkup(c.last.body).replace(/\s+/g, " ")}` : "";
+  const last = c.last ? `${c.last.author_name === (members.get(me)?.name ?? "") ? "Ty: " : c.kind === "group" ? `${c.last.author_name}: ` : ""}${markdownSnippet(systemCs(c.last.body), 200)}` : "";
   return (
     <Link to={`/m/chat/${c.id}`} className="flex min-h-[68px] items-center gap-3 px-4 py-2 active:bg-raised">
       <span className="relative">

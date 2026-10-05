@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { t } from "../i18n/core";
 import type { findRefs as FindRefs, RefKind } from "../refs";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
+import { systemCs } from "./systemText";
 
 /*
  * Markdown for a chat bubble, compact: paragraphs, lists, headings (as bold lines), quotes,
@@ -197,7 +198,7 @@ export const isLong = (text: string) => text.length > 700 || text.split("\n").le
 export function Rich({ text, names, tone = "theirs", collapsible = true }: { text: string; names: string[]; tone?: Tone; collapsible?: boolean }) {
   useRefFinder(text); // re-renders once the reference patterns are loaded
   const inline = useInline(names, tone);
-  const clean = useMemo(() => stripToolMarkup(text), [text]);
+  const clean = useMemo(() => stripToolMarkup(systemCs(text)), [text]); // the platform's English notices in Czech
   const blocks = useMemo(() => parseBlocks(clean), [clean]);
   const long = collapsible && isLong(clean);
   const [open, setOpen] = useState(false);
