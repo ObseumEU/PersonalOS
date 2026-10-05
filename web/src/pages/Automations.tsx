@@ -9,6 +9,7 @@ import { PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
 import { markdownSnippet } from "../markdownText";
 import { useLiveReload } from "../liveStream";
+import { jobName, scheduleCs } from "../settingsWords";
 
 type Job = {
   id: number;
@@ -24,6 +25,8 @@ type Routine = {
   key: string;
   name: string;
   sub: string;
+  /** The routine's key (morning_brief): only in the tooltip. */
+  tech?: string;
   owner: string;
   ownerId: number | null;
   schedule: string;
@@ -64,7 +67,7 @@ export default function Automations() {
   // One list: the platform's jobs (owner: System) and every member's schedules.
   const routines: Routine[] = [
     ...jobs.map((j) => ({
-      key: `job-${j.id}`, name: j.name, sub: j.action, owner: t("auto.system"), ownerId: null, schedule: j.schedule,
+      key: `job-${j.id}`, name: jobName(j.action, j.name), sub: "", tech: j.action, owner: t("auto.system"), ownerId: null, schedule: j.schedule,
       active: j.enabled, next: j.next_run_at, last: j.last_run_at, lastText: resultText(j.last_result),
       lastRef: null, error: Boolean(j.last_result?.error),
       fire: () => post(`/api/jobs/${j.id}/run`), toggle: () => patch(`/api/jobs/${j.id}`, { enabled: !j.enabled }),
@@ -211,7 +214,9 @@ function RoutineRow({
     <div className={`grid grid-cols-1 gap-1.5 border-b border-line px-4 py-2.5 text-sm ${COLS} md:items-center md:gap-3`}>
       <span className="flex min-w-0 flex-col">
         <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate">{r.name}</span>
+          <span className="truncate" title={r.tech}>
+            {r.name}
+          </span>
           {!r.active && <PausedBadge />}
         </span>
         {r.sub && <span className="truncate text-xs text-ink-2">{r.sub}</span>}
@@ -247,7 +252,9 @@ function RoutineRow({
           </button>
         </span>
       ) : (
-        <span className="min-w-0 truncate font-mono text-xs">{r.schedule}</span>
+        <span className="min-w-0 truncate text-xs" title={r.schedule}>
+          {scheduleCs(r.schedule)}
+        </span>
       )}
       <span className="text-xs text-ink-2">{r.active ? until(r.next) : <PausedBadge />}</span>
       <span

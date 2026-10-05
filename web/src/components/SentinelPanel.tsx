@@ -35,6 +35,55 @@ type SentinelStatus = {
 
 const SEV: Record<string, string> = { critical: "text-red-400", high: "text-amber-300", medium: "text-ink-2", low: "text-ink-2" };
 
+/** The Monitor's classification in words (raw keys stay in the tooltip). */
+const CLASS_CS: Record<string, string> = {
+  resolved: "vyřešeno",
+  capacity: "kapacita serveru",
+  config: "nastavení",
+  external_quota: "limit externí služby",
+  code_bug: "chyba v kódu",
+  flaky: "nestabilní",
+  noise: "šum",
+};
+
+const isDone = (i: Incident) => i.status === "resolved" || i.classification === "resolved" || i.task_status === "done";
+
+/** One row per service and kind (the newest), with how many times it came; resolved groups fold away. */
+function groups(items: Incident[]): { head: Incident; n: number; done: boolean }[] {
+  const by = new Map<string, Incident[]>();
+  for (const i of items) {
+    const k = `${i.service}|${i.kind}`;
+    by.set(k, [...(by.get(k) ?? []), i]);
+  }
+  return [...by.values()].map((xs) => {
+    const sorted = [...xs].sort((a, b) => b.opened_at.localeCompare(a.opened_at));
+    return { head: sorted[0], n: xs.length, done: isDone(sorted[0]) };
+  });
+}
+
+function Row({ i, n }: { i: Incident; n: number }) {
+  return (
+    <div className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-x-3 gap-y-1 border-b border-line px-4 py-2 text-[13px] md:grid-cols-[80px_minmax(0,1fr)_150px_80px_120px]">
+      <span className={`text-xs ${SEV[i.severity] ?? "text-ink-2"}`}>{label("obs.sev", i.severity)}</span>
+      <span className="truncate" title={i.title}>
+        {i.service} · {i.kind}: {i.title}
+        {n > 1 && <span className="ml-1.5 text-xs text-ink-2">×{n}</span>}
+      </span>
+      <span className="col-start-2 truncate text-xs text-ink-2 md:col-start-auto" title={i.classification ?? undefined}>
+        {i.classification ? (CLASS_CS[i.classification] ?? i.classification) : i.llm_skipped ? t("sentinel.to_owner") : label("sentinel.status", i.status)}
+      </span>
+      <span className="col-start-2 md:col-start-auto">
+        {i.task_ref && (
+          <TaskLink taskRef={i.task_ref} className="font-mono text-xs text-accent">
+            {i.task_ref}
+          </TaskLink>
+        )}
+      </span>
+      <span className="col-start-2 text-xs text-ink-2 md:col-start-auto md:text-right">{fmtDateTime(i.opened_at)}</span>
+    </div>
+  );
+}
+
 /** The sentinel's heartbeat (pos.monitor): its checks, open incidents and what the Monitor agent did. */
 export default function SentinelPanel() {
   const [st, setSt] = useState<SentinelStatus | null>(null);
@@ -84,28 +133,23 @@ export default function SentinelPanel() {
         </div>
       )}
       {st.incidents.length === 0 && <p className="px-4 py-3 text-xs text-ink-2">{t("sentinel.no_incidents")}</p>}
-      {st.incidents.map((i) => (
-        <div
-          key={i.incident_id}
-          className="grid grid-cols-[70px_minmax(0,1fr)] items-center gap-x-3 gap-y-1 border-b border-line px-4 py-2 text-[13px] md:grid-cols-[80px_minmax(0,1fr)_150px_80px_120px]"
-        >
-          <span className={`text-xs ${SEV[i.severity] ?? "text-ink-2"}`}>{label("obs.sev", i.severity)}</span>
-          <span className="truncate" title={i.title}>
-            {i.service} · {i.kind}: {i.title}
-          </span>
-          <span className="col-start-2 truncate text-xs text-ink-2 md:col-start-auto">
-            {i.classification ?? (i.llm_skipped ? t("sentinel.to_owner") : label("sentinel.status", i.status))}
-          </span>
-          <span className="col-start-2 md:col-start-auto">
-            {i.task_ref && (
-              <TaskLink taskRef={i.task_ref} className="font-mono text-xs text-accent">
-                {i.task_ref}
-              </TaskLink>
-            )}
-          </span>
-          <span className="col-start-2 text-xs text-ink-2 md:col-start-auto md:text-right">{fmtDateTime(i.opened_at)}</span>
-        </div>
-      ))}
+      {groups(st.incidents)
+        .filter((g) => !g.done)
+        .map((g) => (
+          <Row key={g.head.incident_id} i={g.head} n={g.n} />
+        ))}
+      {groups(st.incidents).some((g) => g.done) && (
+        <details className="border-b border-line">
+          <summary className="cursor-pointer px-4 py-2 text-xs text-ink-2">
+            {t("sentinel.resolved_folded", { n: groups(st.incidents).filter((g) => g.done).length })}
+          </summary>
+          {groups(st.incidents)
+            .filter((g) => g.done)
+            .map((g) => (
+              <Row key={g.head.incident_id} i={g.head} n={g.n} />
+            ))}
+        </details>
+      )}
     </Panel>
   );
 }

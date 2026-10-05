@@ -90,11 +90,19 @@ export default function ObservabilityPanel() {
       {st.resolved.length > 0 && (
         <p className="px-4 py-2 text-xs break-words text-ink-2">
           {t("obs.resolved")}{" "}
-          {st.resolved.map((a, i) => (
+          {/* The same alert resolved again and again is one entry with its count and the last time. */}
+          {Object.values(
+            st.resolved.reduce<Record<string, { a: (typeof st.resolved)[number]; n: number }>>((acc, a) => {
+              const k = `${a.alertname}|${a.target ?? ""}`;
+              acc[k] = acc[k] ? { a: acc[k].a, n: acc[k].n + 1 } : { a, n: 1 };
+              return acc;
+            }, {}),
+          ).map(({ a, n }, i) => (
             <span key={a.incident_id}>
               {i > 0 && " · "}
               {a.alertname}
-              {a.target ? ` (${a.target})` : ""} {when(a.resolved_at)}
+              {a.target ? ` (${a.target})` : ""}
+              {n > 1 ? ` ×${n}, naposledy` : ""} {when(a.resolved_at)}
             </span>
           ))}
         </p>

@@ -39,8 +39,10 @@ type Tool = {
 };
 type Library = { tools: Tool[]; publications: Publication[] };
 
-const GRID = "grid grid-cols-[minmax(0,1.6fr)_80px_minmax(0,0.9fr)_70px_100px_minmax(0,1fr)] items-center gap-3";
-const PUB_GRID = "grid grid-cols-[50px_minmax(0,1fr)_minmax(0,0.8fr)_70px_110px_minmax(0,1.2fr)_190px] gap-3";
+// On a phone a row is the name and the review result (no sideways scrolling); the rest from md up.
+const GRID = "grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1.6fr)_80px_minmax(0,0.9fr)_70px_100px_minmax(0,1fr)] items-center gap-3";
+const PUB_GRID = "grid grid-cols-1 md:grid-cols-[50px_minmax(0,1fr)_minmax(0,0.8fr)_70px_110px_minmax(0,1.2fr)_190px] gap-x-3 gap-y-1";
+const wide = "hidden md:inline";
 
 const where = (f: Finding) => `${f.file}${f.line ? `:${f.line}` : ""}`;
 const findings = (n: number) => `${n} ${plural(n, "nález", "nálezy", "nálezů")}`;
@@ -66,14 +68,14 @@ function Meta({ k, children }: { k: string; children: ReactNode }) {
 
 function ToolRows({ items, open, setOpen }: { items: Tool[]; open: string | null; setOpen: (id: string | null) => void }) {
   return (
-    <div className="overflow-x-auto">
-      <div className="min-w-[640px]">
+    <div>
+      <div>
         <div className={`${GRID} border-b border-line px-4 py-2 text-xs text-ink-2`}>
           <span>{t("tools.h.tool")}</span>
-          <span>{t("tools.h.kind")}</span>
-          <span>{t("tools.h.owner")}</span>
-          <span>{t("tools.h.version")}</span>
-          <span>{t("tools.h.uses")}</span>
+          <span className={wide}>{t("tools.h.kind")}</span>
+          <span className={wide}>{t("tools.h.owner")}</span>
+          <span className={wide}>{t("tools.h.version")}</span>
+          <span className={wide}>{t("tools.h.uses")}</span>
           <span>{t("tools.h.review")}</span>
         </div>
         {items.length === 0 && <p className="p-4 text-xs text-ink-2">{t("tools.none")}</p>}
@@ -91,10 +93,10 @@ function ToolRows({ items, open, setOpen }: { items: Tool[]; open: string | null
                 </span>
                 <span className="truncate text-xs text-ink-2">{tool.description}</span>
               </span>
-              <span className="text-xs text-ink-2">{tool.kind ? label("tools.kind", tool.kind) : "?"}</span>
-              <span className="truncate">{tool.owner}</span>
-              <span className="font-mono text-xs">{tool.version}</span>
-              <span className="text-xs text-ink-2" title={tool.usage.last_at ? t("tools.last_used", { when: ago(tool.usage.last_at) }) : t("tools.never_used")}>
+              <span className={`${wide} text-xs text-ink-2`}>{tool.kind ? label("tools.kind", tool.kind) : "?"}</span>
+              <span className={`${wide} truncate`}>{tool.owner}</span>
+              <span className={`${wide} font-mono text-xs`}>{tool.version}</span>
+              <span className={`${wide} text-xs text-ink-2`} title={tool.usage.last_at ? t("tools.last_used", { when: ago(tool.usage.last_at) }) : t("tools.never_used")}>
                 {tool.usage.uses}
                 {tool.usage.failed ? t("tools.failed", { n: tool.usage.failed }) : ""}
               </span>
@@ -171,9 +173,9 @@ export default function Tools() {
       <Panel title={t("tools.queue")} right={pending ? t("tools.queue_waiting", { n: pending }) : t("tools.queue_empty_right")}>
         {lib?.publications.length === 0 && <p className="p-4 text-xs text-ink-2">{t("tools.queue_empty")}</p>}
         {!!lib?.publications.length && (
-          <div className="overflow-x-auto">
-            <div className="min-w-[760px]">
-              <div className={`${PUB_GRID} border-b border-line px-4 py-2 text-xs text-ink-2`}>
+          <div>
+            <div>
+              <div className={`${PUB_GRID.replace(/^grid /, "")} hidden border-b border-line px-4 py-2 text-xs text-ink-2 md:grid`}>
                 <span>#</span>
                 <span>{t("tools.h.tool")}</span>
                 <span>{t("tools.h.from")}</span>

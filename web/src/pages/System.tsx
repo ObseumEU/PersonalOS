@@ -96,6 +96,43 @@ export default function System() {
           </Panel>
         ))}
       </div>
+      <Panel title={t("sys.deploys")} right={t("sys.deploys_right")}>
+        {deploys.length === 0 && (
+          <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">
+            {t("sys.deploys_empty")} <span className="font-mono break-all">docker compose --profile deploy up -d</span> {t("sys.deploys_empty_key")}
+          </p>
+        )}
+        {deploys.map((d) => (
+          <div
+            key={d.id}
+            className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-line px-4 py-2 text-[13px] md:grid-cols-[150px_120px_minmax(0,1fr)_110px_120px]"
+          >
+            <span className="font-mono text-xs">
+              {d.old_sha.slice(0, 7)}..{d.new_sha.slice(0, 7)}
+            </span>
+            <span className={`text-xs ${DEPLOY_COLOR[d.status]} text-right md:text-left`}>
+              {label("sys.deploy", d.status)}
+              {d.stage ? ` · ${d.stage}` : ""}
+            </span>
+            <span className="col-span-2 min-w-0 truncate text-ink-2 md:col-span-1" title={d.log}>
+              {t("sys.deploy_line", {
+                n: d.commits,
+                commits: plural(d.commits, "commit", "commity", "commitů"),
+                author: d.author || t("sys.unknown"),
+              })}
+              {d.reverted_sha ? t("sys.deploy_reverted", { sha: d.reverted_sha.slice(0, 7) }) : ""}
+            </span>
+            <span className="min-w-0">
+              {d.task_ref && (
+                <TaskLink taskRef={d.task_ref} className="font-mono text-xs text-accent">
+                  {d.task_ref}
+                </TaskLink>
+              )}
+            </span>
+            <span className="text-right text-xs text-ink-2">{fmtDateTime(d.created_at)}</span>
+          </div>
+        ))}
+      </Panel>
       {engines && (
         <Panel title={t("sys.runtimes")} right={t("sys.runtimes_right", { engine: label("engine", engines.default) })}>
           <div className="grid grid-cols-1 md:grid-cols-2">
@@ -142,43 +179,6 @@ export default function System() {
       <ObservabilityPanel />
       <SentinelPanel />
       <BudgetPanel />
-      <Panel title={t("sys.deploys")} right={t("sys.deploys_right")}>
-        {deploys.length === 0 && (
-          <p className="px-4 py-3 text-xs leading-relaxed text-ink-2">
-            {t("sys.deploys_empty")} <span className="font-mono break-all">docker compose --profile deploy up -d</span> {t("sys.deploys_empty_key")}
-          </p>
-        )}
-        {deploys.map((d) => (
-          <div
-            key={d.id}
-            className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-b border-line px-4 py-2 text-[13px] md:grid-cols-[150px_120px_minmax(0,1fr)_110px_120px]"
-          >
-            <span className="font-mono text-xs">
-              {d.old_sha.slice(0, 7)}..{d.new_sha.slice(0, 7)}
-            </span>
-            <span className={`text-xs ${DEPLOY_COLOR[d.status]} text-right md:text-left`}>
-              {label("sys.deploy", d.status)}
-              {d.stage ? ` · ${d.stage}` : ""}
-            </span>
-            <span className="col-span-2 min-w-0 truncate text-ink-2 md:col-span-1" title={d.log}>
-              {t("sys.deploy_line", {
-                n: d.commits,
-                commits: plural(d.commits, "commit", "commity", "commitů"),
-                author: d.author || t("sys.unknown"),
-              })}
-              {d.reverted_sha ? t("sys.deploy_reverted", { sha: d.reverted_sha.slice(0, 7) }) : ""}
-            </span>
-            <span className="min-w-0">
-              {d.task_ref && (
-                <TaskLink taskRef={d.task_ref} className="font-mono text-xs text-accent">
-                  {d.task_ref}
-                </TaskLink>
-              )}
-            </span>
-            <span className="text-right text-xs text-ink-2">{fmtDateTime(d.created_at)}</span>
-          </div>
-        ))}
-      </Panel>
     </div>
   );
 }

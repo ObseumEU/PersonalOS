@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { LOCALE, ago, fmtTime, t } from "../i18n";
 import { markdownSnippet } from "../markdownText";
+import { RESULT_KEYS } from "../settingsWords";
 import { confirmDialog, toast } from "./overlay";
 import { Panel } from "./ui";
 import { useLiveReload } from "../liveStream";
@@ -50,7 +51,7 @@ export function resultText(r: Record<string, unknown> | null) {
   return (
     Object.entries(r)
       .filter(([, v]) => v !== null && !(Array.isArray(v) && v.length === 0) && typeof v !== "object")
-      .map(([k, v]) => `${k}: ${v}`)
+      .map(([k, v]) => `${RESULT_KEYS[k] ?? k.replace(/_/g, " ")}: ${v === true ? "ano" : v === false ? "ne" : (RESULT_KEYS[String(v)] ?? v)}`)
       .join(" · ") || t("sched.ok")
   );
 }

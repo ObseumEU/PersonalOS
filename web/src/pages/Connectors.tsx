@@ -4,6 +4,7 @@ import { api } from "../api";
 import { confirmDialog, toast } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
+import { envWords, ruleName } from "../settingsWords";
 
 type Rule = {
   id: number;
@@ -51,8 +52,17 @@ const SETUP: Record<string, string> = {
 };
 const NEVER_AUTO = new Set(["payment", "web.post"]);
 
-const RULE_GRID = "grid grid-cols-[minmax(0,1.4fr)_80px_minmax(0,1fr)_130px_56px_56px_200px] gap-2";
-const EVENT_GRID = "grid grid-cols-[80px_minmax(0,1fr)_minmax(0,0.9fr)_150px_90px] gap-2";
+/** The intake's suspicion signals in words ("duplicate of grafana-…" -> "duplikát"). */
+const signalsCs = (s: string) =>
+  s
+    .split(/,\s*/)
+    .map((x) => (x.startsWith("duplicate of") ? "duplikát" : x === "resolved" ? "vyřešené" : x.replace(/^support:triage$/, "zákaznický požadavek")))
+    .join(", ");
+
+// Name and match wrap instead of truncating to "GitHub issue l…"; the actions wrap too (1440 px fits).
+// One column on a phone (each cell on its line, no sideways scrolling), the table from md up.
+const RULE_GRID = "grid grid-cols-1 md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,0.9fr)_40px_48px_minmax(0,auto)] gap-x-3 gap-y-1";
+const EVENT_GRID = "grid grid-cols-1 md:grid-cols-[80px_minmax(0,1fr)_minmax(0,0.9fr)_150px_90px] gap-x-2 gap-y-0.5";
 
 function MatchOptions() {
   return (
@@ -208,12 +218,14 @@ export default function Connectors() {
               <div key={k} className="flex min-w-0 flex-col gap-1 border-b border-line px-4 py-2.5">
                 <span className="flex min-w-0 items-center gap-2 text-[13px]">
                   <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${on ? "bg-accent" : "bg-dim"}`} />
-                  <span className="min-w-0 truncate">{label("conn.out", k)}</span>
+                  <span className="min-w-0 truncate" title={k}>
+                    {label("conn.out", k)}
+                  </span>
                   <span className={`ml-auto shrink-0 text-xs ${on ? "text-accent" : "text-ink-2"}`}>{on ? t("conn.on") : t("conn.off_by_hand")}</span>
                 </span>
                 {!on && (
-                  <span className="text-xs break-words text-ink-2">
-                    {NEVER_AUTO.has(k) ? t("conn.never_auto") : t("conn.set_env", { env: SETUP[k] ?? "" })}
+                  <span className="text-xs break-words text-ink-2" title={SETUP[k]}>
+                    {NEVER_AUTO.has(k) ? t("conn.never_auto") : SETUP[k] ? t("conn.set_env", { env: envWords(SETUP[k]) }) : t(k === "linkedin.post" ? "conn.linkedin_connect" : "conn.set_server")}
                   </span>
                 )}
               </div>
@@ -223,13 +235,15 @@ export default function Connectors() {
               <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
                 <span className={`h-1.5 w-1.5 rounded-full ${status.github_webhook ? "bg-accent" : "bg-dim"}`} />
                 {t("conn.gh_webhook")} <span className="font-mono text-xs text-ink-2">/api/hooks/github</span>
-                <span className="ml-auto text-xs break-all text-ink-2">{status.github_webhook ? t("conn.on") : t("conn.off_env", { env: "POS_GITHUB_WEBHOOK_SECRET" })}</span>
+                <span className="ml-auto text-xs text-ink-2" title="POS_GITHUB_WEBHOOK_SECRET">
+                  {status.github_webhook ? t("conn.on") : t("conn.off_env", { env: envWords("POS_GITHUB_WEBHOOK_SECRET") })}
+                </span>
               </div>
               <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5 text-[13px]">
                 <span className={`h-1.5 w-1.5 rounded-full ${status.event_senders?.length ? "bg-accent" : "bg-dim"}`} />
                 {t("conn.machine_events")} <span className="font-mono text-xs text-ink-2">/api/events</span>
-                <span className="ml-auto text-xs break-all text-ink-2">
-                  {status.event_senders?.length ? status.event_senders.join(", ") : t("conn.off_env", { env: "POS_EVENTS_TOKENS" })}
+                <span className="ml-auto text-xs text-ink-2" title="POS_EVENTS_TOKENS">
+                  {status.event_senders?.length ? status.event_senders.join(", ") : t("conn.off_env", { env: envWords("POS_EVENTS_TOKENS") })}
                 </span>
               </div>
               {status.mail_prefilter && (
@@ -255,12 +269,13 @@ export default function Connectors() {
         </Panel>
 
         <Panel title={t("conn.rules")} right={t("conn.rules_right")} className="min-w-0 lg:col-span-8">
-          <div className="overflow-x-auto">
-            <div className="min-w-[760px]">
-              <div className={`${RULE_GRID} border-b border-line px-4 py-2 text-xs text-ink-2`}>
+          <div>
+            <div>
+              <div className={`${RULE_GRID.replace(/^grid /, "")} hidden border-b border-line px-4 py-2 text-xs text-ink-2 md:grid`}>
                 <span>{t("conn.h.rule")}</span>
-                <span>{t("conn.source")}</span>
-                <span>{t("conn.match")}</span>
+                <span>
+                  {t("conn.source")} · {t("conn.match").toLowerCase()}
+                </span>
                 <span>{t("conn.h.assignee")}</span>
                 <span>{t("conn.h.prio")}</span>
                 <span>{t("conn.h.hits")}</span>
@@ -283,16 +298,22 @@ export default function Connectors() {
                   />
                 ) : (
                   <div key={r.id} className={`${RULE_GRID} items-center border-b border-line px-4 py-2 text-[13px]`}>
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate">{r.name}</span>
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="min-w-0 break-words" title={r.name}>
+                        {ruleName(r.name)}
+                      </span>
                       {!r.enabled && <span className="shrink-0 rounded border border-amber-400/60 px-1.5 text-xs text-amber-300">{t("status.paused_badge")}</span>}
                     </span>
-                    <span className="text-xs">{label("conn.src", r.source)}</span>
-                    <span className="truncate text-xs text-ink-2">{matchText(r.match)}</span>
+                    <span className="flex min-w-0 flex-col text-xs">
+                      <span>{label("conn.src", r.source)}</span>
+                      <span className="truncate text-ink-2" title={matchText(r.match)}>
+                        {matchText(r.match)}
+                      </span>
+                    </span>
                     <span className="truncate text-accent">{r.assignee ?? t("conn.inbox")}</span>
                     <span className="text-xs text-ink-2">{r.priority ? `P${r.priority}` : "—"}</span>
                     <span className="font-mono text-xs">{r.hits}</span>
-                    <span className="flex justify-end gap-3 text-xs">
+                    <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs md:justify-end">
                       <button className="text-ink-2 hover:text-accent" onClick={() => toggle(r)}>
                         {r.enabled ? t("act.pause") : t("act.resume")}
                       </button>
@@ -334,16 +355,20 @@ export default function Connectors() {
         <Panel title={t("conn.events")} right={t("conn.events_right")} className="min-w-0 lg:col-span-8">
           {events.length === 0 && <p className="p-4 text-xs text-ink-2">{t("conn.events_empty")}</p>}
           {events.length > 0 && (
-            <div className="overflow-x-auto">
-              <div className="min-w-[640px]">
+            <div>
+              <div>
                 {events.map((e) => (
                   <div key={e.id} className={`${EVENT_GRID} items-center border-b border-line px-4 py-2 text-[13px]`}>
                     <span className="text-xs">{label("conn.src", e.source)}</span>
                     <span className="truncate">
                       {e.title}
-                      {e.signals && <span className="ml-2 text-xs text-amber-300">{t("conn.suspicious", { signals: e.signals })}</span>}
+                      {e.signals && (
+                        <span className="ml-2 text-xs text-amber-300" title={e.signals}>
+                          {t("conn.suspicious", { signals: signalsCs(e.signals) })}
+                        </span>
+                      )}
                     </span>
-                    <span className="truncate text-xs text-ink-2">{e.rule_name ?? t("conn.no_rule")}</span>
+                    <span className="truncate text-xs text-ink-2">{e.rule_name ? ruleName(e.rule_name) : t("conn.no_rule")}</span>
                     <span className="truncate">
                       {e.task_ref && (
                         <TaskLink taskRef={e.task_ref} className="text-accent hover:underline">
@@ -352,7 +377,7 @@ export default function Connectors() {
                       )}{" "}
                       <span className="text-ink-2">{e.assignee_name ?? t("conn.inbox")}</span>
                     </span>
-                    <span className="text-right text-xs text-ink-2">{ago(e.received_at)}</span>
+                    <span className="text-xs text-ink-2 md:text-right">{ago(e.received_at)}</span>
                   </div>
                 ))}
               </div>
