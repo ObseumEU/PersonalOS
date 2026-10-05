@@ -6,6 +6,7 @@ API (people), the MCP server (agents, Codex, Claude) and the runner.
 """
 
 import json
+import re
 import sqlite3
 from datetime import date, timedelta
 
@@ -25,6 +26,8 @@ EDITABLE = {
 }
 
 VIEWS = ("inbox", "today", "upcoming", "next", "agents", "waiting", "review", "to_review", "someday", "done")
+VIEW_ALIASES = {"in_progress": "working", "doing": "working", "active": "working", "blocked": "waiting",
+                "completed": "done", "finished": "done", "todo": "next", "open": "board", "all": "board"}
 
 
 class Invalid(ValueError):
@@ -206,7 +209,11 @@ def _view_sql(view: str, actor_id: int | None = None) -> tuple[str, list, str]:
     if view == "board":  # the task board: every open task, and what finished in the last seven days
         since = (today() - timedelta(days=7)).isoformat()
         return ("(status != 'done' OR completed_at >= ?)", [since], "updated_at DESC, id DESC")
-    raise Invalid(f"view must be one of {VIEWS}")
+    if view in VIEW_ALIASES:  # names agents reach for (2026-10: list_tasks view="working")
+        return _view_sql(VIEW_ALIASES[view], actor_id)
+    if view == "working":  # in progress right now
+        return "status = 'working'", [], "updated_at DESC, id DESC"
+    raise Invalid(f"view must be one of {(*VIEWS, 'working')} (not {view!r})")
 
 
 def _scope_sql(conn: sqlite3.Connection, ctx: Ctx, scope: str) -> tuple[str, list]:
@@ -447,13 +454,20 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         extra["project_id"] = resolve_project(conn, ctx, value) if value not in (None, "") else None
     if "reviewer" in changes:
         value = changes.pop("reviewer")
-        extra["reviewer_id"] = resolve_reviewer(conn, ctx, value) if value not in (None, "") else None
+        extra["reviewer_id"] = resolve_reviewer(conn, ctx, value, row["project_id"]) if value not in (None, "") else None
     if "assignee" in changes:
         extra.update(resolve_assignee(conn, ctx, changes.pop("assignee")))
         refuse_owner_assignee(conn, ctx, extra.get("assignee_id"), row["source"])
+    if "notes_append" in changes:  # agents add a finding without rewriting the description
+        add = str(changes.pop("notes_append") or "").strip()
+        if add:
+            base = changes.get("notes", row["notes"]) or ""
+            changes["notes"] = f"{base.rstrip()}\n\n{add}" if base.strip() else add
+    if isinstance(changes.get("follow_up"), str):
+        _split_follow_up(changes)
     unknown = set(changes) - EDITABLE
     if unknown:
-        raise Invalid(f"unknown fields: {sorted(unknown)}")
+        raise Invalid(f"unknown fields: {sorted(unknown)}; editable: {sorted(EDITABLE | {'notes_append'})}")
     _validate(changes)
     if "value_kind" in changes:
         from . import business
@@ -656,14 +670,63 @@ def list_project(conn: sqlite3.Connection, ctx: Ctx, project_id: int) -> list[di
     return [to_dict(r) for r in rows]
 
 
-def resolve_reviewer(conn: sqlite3.Connection, ctx: Ctx, value) -> int:
-    """A member (id, name, 'me' or 'ai') who reviews the result; never someone outside."""
+def _split_follow_up(changes: dict) -> None:
+    """follow_up is a date (when to check again). Agents wrote the reason into it (2026-10): a date with
+    a reason after it keeps the date and moves the reason to progress_note; no date at all is refused."""
+    raw = changes["follow_up"].strip()
+    m = re.match(r"(\d{4}-\d{2}-\d{2})\b[\s:;,.()\-–]*(.*)$", raw, re.DOTALL)
+    if raw == "" or (m and not m[2].strip()):
+        changes["follow_up"] = m[1] if m else None
+        return
+    if m:
+        changes["follow_up"] = m[1]
+        if not changes.get("progress_note"):
+            changes["progress_note"] = m[2].strip().rstrip(")")[:500]
+        return
+    raise Invalid("follow_up must be a date YYYY-MM-DD (when to check again); put the reason in progress_note")
+
+
+def resolve_reviewer(conn: sqlite3.Connection, ctx: Ctx, value, project_id: int | None = None) -> int:
+    """A member (id, name, role, 'me' or 'ai') who reviews the result; never someone outside. A name that
+    is no member's exactly ("Marketing Lead", "qa") is matched by role and by part of a name, preferring
+    the task's project members; an unclear one is refused with the candidates."""
     if isinstance(value, int) or (isinstance(value, str) and value.isdigit()):
         value = {"type": "human", "id": int(value)}  # the actor's real kind comes from its row
     cols = resolve_assignee(conn, ctx, value)
+    if cols["assignee_type"] == "external" and isinstance(value, str):
+        rid = _member_by_alias(conn, value, project_id)
+        if rid:
+            return rid
     if cols["assignee_type"] in (None, "external"):
-        raise Invalid(f"reviewer must be a member of PersonalOS, not {value!r}")
+        raise Invalid(f"reviewer must be a member of PersonalOS (a name or role, e.g. 'QA Reviewer', 'cto'), "
+                      f"not {value!r}")
     return cols["assignee_id"]
+
+
+def _member_by_alias(conn: sqlite3.Connection, value: str, project_id: int | None) -> int | None:
+    v = " ".join(value.strip().lstrip("@").lower().replace("_", " ").replace("-", " ").split())
+    if not v:
+        return None
+    rows = conn.execute("SELECT id, name, role FROM actors WHERE archived_at IS NULL AND is_owner = 0").fetchall()
+
+    def norm(s) -> str:
+        return " ".join(str(s or "").lower().replace("_", " ").replace("-", " ").split())
+
+    exact = [r for r in rows if norm(r["name"]) == v]
+    by_role = [r for r in rows if norm(r["role"]) == v]
+    partial = [r for r in rows if re.search(rf"(^|\s){re.escape(v)}($|\s)", norm(r["name"]))]
+    in_project = set()
+    if project_id:
+        in_project = {r["actor_id"] for r in conn.execute(
+            "SELECT actor_id FROM project_members WHERE project_id = ?", (project_id,))}
+    for found in (exact, by_role, partial):
+        if len(found) > 1 and in_project:
+            found = [r for r in found if r["id"] in in_project] or found
+        if len(found) == 1:
+            return found[0]["id"]
+        if len(found) > 1:
+            raise Invalid(f"reviewer {value!r} is ambiguous: one of {sorted(r['name'] for r in found)}")
+    return None
 
 
 def _can_review_as_agent(conn: sqlite3.Connection, actor_id: int) -> bool:
@@ -739,7 +802,7 @@ def may_finish(conn: sqlite3.Connection, ctx: Ctx, row) -> bool:
 def request_review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, reviewer, note: str = "") -> dict:
     """Hand the result in to a chosen colleague for review."""
     row = _row(conn, ctx, task_id)
-    rid = resolve_reviewer(conn, ctx, reviewer)
+    rid = resolve_reviewer(conn, ctx, reviewer, row["project_id"])
     if rid == row["assignee_id"]:
         raise Invalid("nobody reviews their own work: pick someone else")
     if row["status"] == "done":

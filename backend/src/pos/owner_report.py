@@ -206,9 +206,9 @@ def _sentences(text: str) -> int:
     return len([s for s in re.split(r"(?<=[.!?])\s+", text.strip()) if s.strip()])
 
 
-def lint(report: dict) -> list[str]:
+def lint(report: dict, content_required: bool = True) -> list[str]:
     """What makes a report not self-contained for the owner (empty list: fine). In English: the
-    agent reads it."""
+    agent reads it. content_required False: a routine or notify-only hand-in, the takeaway is it."""
     problems = []
     tk = report["takeaway"]
     if not tk:
@@ -230,10 +230,10 @@ def lint(report: dict) -> list[str]:
         if d["recommendation"] and d["options"] and d["recommendation"] not in d["options"]:
             problems.append(f"decision {i}: recommendation must be one of its options, word for word")
     content = report["content"]
-    if not content:
+    if not content and content_required:
         problems.append("content is missing: put the deliverable itself here, inline (the plan, the table), "
                         "not a pointer to a note or a message")
-    elif len(content) < 400 and (_POINTER.search(content) or any(r["kind"] in _RAW_ID for r in refs.extract(content))):
+    elif content and len(content) < 400 and (_POINTER.search(content) or any(r["kind"] in _RAW_ID for r in refs.extract(content))):
         problems.append("content only points elsewhere (a note, a message): inline the actual text")
     for i, s in enumerate(report["sources"], 1):
         if refs._CHUNK.fullmatch(s["title"].strip("` ")):
@@ -247,10 +247,27 @@ def lint(report: dict) -> list[str]:
     return problems
 
 
-def validate(raw) -> dict:
+def content_required(conn: sqlite3.Connection, task_id: int | None, raw) -> bool:
+    """Does this hand-in need the deliverable inline? Not for a routine (a scheduled check), a triaged
+    item, or a notify-only report (no decisions) on a task that is not a plan: there the takeaway is the
+    result (2026-10: such hand-ins were refused with "content is missing")."""
+    if not task_id:
+        return True
+    from . import review_policy
+
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        return True
+    if review_policy.is_routine(conn, row) or review_policy.is_triage(row):
+        return False
+    decisions = raw.get("decisions") if isinstance(raw, dict) else None
+    return bool(decisions) or review_policy.is_plan(row)
+
+
+def validate(raw, content_required: bool = True) -> dict:
     """normalize + lint; raises Invalid with every problem, so the agent fixes them in one go."""
     rep = normalize(raw)
-    problems = lint(rep)
+    problems = lint(rep, content_required)
     if problems:
         raise Invalid("report is not ready for the owner: " + "; ".join(problems))
     return rep

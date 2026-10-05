@@ -82,10 +82,11 @@ task on (handoff_task), not by creating a new one."""
 
 REPORT_DESC = (
     "report (optional; required in your instructions when the owner reads it): an object for the "
-    "owner, self-contained: takeaway (1-3 plain Czech sentences, bottom line first, no jargon or raw "
-    "ids), decisions (at most 3, each {question, options[2-4], recommendation (one of the options), "
+    "owner, self-contained: takeaway (≤3 věty / 600 znaků: plain Czech, bottom line first, no jargon "
+    "or raw ids), decisions (at most 3, each {question, options[2-4], recommendation (one of the options), "
     "why} that the owner decides), next (one line: what happens after), content (the deliverable "
-    "itself inline in Markdown: the full plan, the table; never \"see note 23\"), summary (<=3 "
+    "itself inline in Markdown: the full plan, the table; never \"see note 23\"; optional for a "
+    "routine check or a notify-only report without decisions), summary (<=3 "
     "bullets), changes, verification, sources ({title, quote, link}). Refused with a list of what to "
     "fix when it only points elsewhere."
 )
@@ -288,11 +289,15 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
     # ------------------------------------------------------------- read
 
-    @mcp.tool(description="List tasks in a view: inbox, today, upcoming, next, agents, waiting, review, to_review "
-                          "(results waiting for you as their reviewer), someday, done; scope mine | team | all. "
-                          "Optionally filter by topic or assignee name ('me' for yourself).")
+    @mcp.tool(description="List tasks in a view: inbox, today, upcoming, next, agents, working (in progress), "
+                          "waiting, review, to_review (results waiting for you as their reviewer), someday, done, "
+                          "board (all open); scope mine | team | all. Optionally filter by topic or assignee name "
+                          "('me' for yourself).")
     def list_tasks(ctx: Context, view: str = "today", topic: str | None = None,
                    assignee: str | None = None, scope: str = "all") -> list[dict]:
+        view = (view or "today").strip().lower()
+        if view == "mine":  # a scope given as a view
+            view, scope = "board", "mine"
         with session(ctx, "list_tasks", view=view, topic=topic, assignee=assignee) as (conn, c):
             assignee_id = None
             if assignee:
@@ -335,8 +340,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         from . import owner_report
 
         with session(ctx, "request_review", task_id=task_id, reviewer=reviewer) as (conn, c):
-            rep = owner_report.validate(report) if report else None
             tid = tasks.parse_id(task_id)
+            rep = owner_report.validate(report, owner_report.content_required(conn, tid, report)) if report else None
             out = brief(tasks.request_review(conn, c, tid, reviewer, note or (rep and rep["takeaway"]) or ""))
             if rep:
                 out["report"] = owner_report.submit(conn, c, tid, rep)
@@ -515,9 +520,12 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     @mcp.tool(description="Comment on a task (its activity). @Name reaches that member's inbox. "
                           "Use it for questions, findings and feedback on the work, not for status "
                           "(report_progress) or handing over (handoff_task).")
-    def task_comment(ctx: Context, task_id: str, body: str) -> dict:
+    def task_comment(ctx: Context, task_id: str, body: str = "", text: str = "") -> dict:
         from . import comments
 
+        body = body or text  # `text` is what agents reach for (2026-10)
+        if not body.strip():
+            raise ToolError("body (the comment text) is empty")
         with session(ctx, "task_comment", task_id=task_id) as (conn, c):
             return comments.add(conn, c, tasks.parse_id(task_id), body)
 
@@ -552,8 +560,10 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "create_task", title=title) as (conn, c):
             return brief(tasks.create(conn, c, fields))
 
-    @mcp.tool(description="Change fields of a task: title, notes, status, priority, do_date, deadline, "
-                          "estimate_min, energy, topic, definition_of_done, visibility, follow_up.")
+    @mcp.tool(description="Change fields of a task: title, notes, notes_append (text added at the end of notes), "
+                          "status, priority, do_date, deadline, estimate_min, energy, topic, definition_of_done, "
+                          "visibility, follow_up (only a date YYYY-MM-DD: when to check again), progress_note "
+                          "(one line: the state or the reason, e.g. why it waits). Dates are YYYY-MM-DD.")
     def update_task(ctx: Context, task_id: str, fields: dict[str, Any]) -> dict:
         with session(ctx, "update_task", task_id=task_id, fields=sorted(fields)) as (conn, c):
             return brief(tasks.update(conn, c, tasks.parse_id(task_id), fields))
@@ -564,7 +574,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         from . import owner_report
 
         with session(ctx, "complete_task", task_id=task_id, result_ref=result_ref) as (conn, c):
-            rep = owner_report.validate(report) if report else None
+            rep = owner_report.validate(
+                report, owner_report.content_required(conn, tasks.parse_id(task_id), report)) if report else None
             text = " ".join(x for x in (note or (rep and rep["takeaway"]),
                                         f"Result: {result_ref}" if result_ref else None) if x) or None
             tid = tasks.parse_id(task_id)
