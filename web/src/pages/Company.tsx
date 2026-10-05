@@ -253,7 +253,12 @@ export default function Company() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <Panel
           title={t("co.goals")}
-          right={mobile ? undefined : <Link to="/reports" className="hover:text-accent">{t("co.goals_link")}</Link>}
+          right={
+            <span className="flex gap-3">
+              <Link to={mobile ? "/m/goals" : "/goals"} className="hover:text-accent">{t("co.goals_manage")}</Link>
+              {!mobile && <Link to="/reports" className="hover:text-accent">{t("co.goals_link")}</Link>}
+            </span>
+          }
           className="min-w-0 lg:col-span-7"
         >
           {card.goals.length ? card.goals.map((g) => <GoalRow key={g.id} g={g} />) : <p className="px-4 py-5 text-sm text-ink-2">{t("co.no_goals")}</p>}

@@ -43,7 +43,7 @@ export type SubSection = { path: string; key: string; icon: LucideIcon };
 // folded under Nastavení.
 export const SECTIONS: Section[] = [
   { path: "/today", key: "nav.home", icon: Home, match: ["today", "approvals", "weekly-review", "assistant"], mobile: true },
-  { path: "/company", key: "nav.company", icon: Gauge, match: ["company"] },
+  { path: "/company", key: "nav.company", icon: Gauge, match: ["company", "goals"] },
   { path: "/chat", key: "nav.chat", icon: MessagesSquare, match: ["chat"], mobile: true },
   { path: "/tasks", key: "nav.work", icon: Briefcase, match: ["tasks", "projects", "calendar", "work"], mobile: true },
   { path: "/knowledge", key: "nav.knowledge", icon: BookOpen, match: ["knowledge", "files", "notes", "topics"] },

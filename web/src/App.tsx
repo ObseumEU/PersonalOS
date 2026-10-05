@@ -18,6 +18,7 @@ const Company = lazy(() => import("./pages/Company"));
 const Connectors = lazy(() => import("./pages/Connectors"));
 const Credentials = lazy(() => import("./pages/Credentials"));
 const Files = lazy(() => import("./pages/Files"));
+const Goals = lazy(() => import("./pages/Goals"));
 const InboxClarify = lazy(() => import("./pages/InboxClarify"));
 const Invite = lazy(() => import("./pages/Invite"));
 const Knowledge = lazy(() => import("./pages/Knowledge"));
@@ -87,6 +88,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/today" replace />} />
           <Route path="/today" element={<Today />} />
           <Route path="/company" element={<Company />} />
+          <Route path="/goals" element={<Goals />} />
           {/* Práce: Úkoly · Projekty · Kalendář */}
           <Route path="/work" element={<Navigate to="/tasks" replace />} />
           <Route path="/tasks" element={<Work><Tasks /></Work>} />

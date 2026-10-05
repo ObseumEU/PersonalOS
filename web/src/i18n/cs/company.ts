@@ -22,6 +22,7 @@ export default {
   "co.flat": "beze změny",
   "co.goals": "Cíle",
   "co.goals_link": "Reporty →",
+  "co.goals_manage": "Spravovat →",
   "co.no_goals": "Firma zatím nemá cíle.",
   "co.goal.proposed": "čeká na tvé schválení",
   "co.goal.active": "schváleno",
