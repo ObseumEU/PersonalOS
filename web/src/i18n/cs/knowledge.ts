@@ -17,6 +17,7 @@ export default {
   "knowledge.kind.topic": "Téma",
   "kg.title": "Graf znalostí",
   "kg.loading": "načítám graf…",
+  "kg.show": "Zobrazit graf znalostí",
   "kg.stats": "{docs} dokumentů · {cols} kolekcí · znalostní báze{cached} ↗",
   "kg.cached": " (z mezipaměti)",
   "kg.down": "Znalostní báze (knowlage) neodpovídá",

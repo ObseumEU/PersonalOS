@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { t } from "../i18n";
 import { type KGraph, useKnowledgeGraph } from "../knowledgeApi";
 import KnowledgeGraph from "./LazyGraph";
@@ -20,6 +21,8 @@ export default function KnowledgePanel({
 }) {
   const loaded = useKnowledgeGraph();
   const graph = given ?? loaded;
+  // On a phone the 3D graph is folded until asked for (heavy, and a finger scrolls the page instead).
+  const [open, setOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 640);
   const right = !graph ? (
     t("act.loading")
   ) : graph.available ? (
@@ -34,14 +37,19 @@ export default function KnowledgePanel({
     t("kg.down")
   );
   return (
-    <Panel title={title} right={right} className={className} bodyClassName="measure-grid relative">
-      {graph?.available && graph.nodes.length > 0 && <KnowledgeGraph data={graph} highlight={highlight} period={period} />}
+    <Panel title={title} right={right} className={open ? className : ""} bodyClassName={open ? "measure-grid relative" : ""}>
+      {!open && (
+        <button type="button" className="w-full px-4 py-3 text-left text-sm text-accent hover:underline" onClick={() => setOpen(true)}>
+          {t("kg.show")}
+        </button>
+      )}
+      {open && graph?.available && graph.nodes.length > 0 && <KnowledgeGraph data={graph} highlight={highlight} period={period} />}
       {graph && !graph.available && (
         <div className="absolute inset-0 grid place-items-center p-6 text-center">
           <p className="max-w-sm text-sm leading-relaxed text-ink-2">{t("kg.down_long", { url: graph.url || "knowlage", error: graph.error })}</p>
         </div>
       )}
-      {graph?.available && (
+      {open && graph?.available && (
         <>
           <div className="pointer-events-none absolute bottom-3 left-4">
             <Legend

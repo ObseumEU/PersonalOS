@@ -181,6 +181,15 @@ def graph(*, docs_per_collection: int = 3, max_collections: int = 40, refresh: b
                            docs_per_collection=docs_per_collection, max_collections=max_collections,
                            sizes=sizes if isinstance(sizes, dict) else None)
         out = {"available": True, "url": public_url(), "fetched_at": time.time(), **data}
+        # One document count everywhere: knowlage's own total (/api/stats, the number Systém shows), not
+        # the sum of the grouped collections (19 766 here vs 33 690 there).
+        try:
+            st = _get("/api/stats")
+            if isinstance(st, dict) and st.get("documents") is not None:
+                out["stats"] = {**out["stats"], "documents": int(st["documents"]),
+                                "documents_grouped": out["stats"].get("documents")}
+        except (httpx.HTTPError, ValueError, TypeError):
+            pass
     except (httpx.HTTPError, ValueError, KeyError) as e:
         if hit:  # stale is better than nothing
             return {**hit[1], "stale": True, "error": str(e)[:200]}

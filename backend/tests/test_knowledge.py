@@ -34,6 +34,17 @@ def test_graph_degrades_when_knowlage_is_unreachable(monkeypatch):
     assert g["available"] is False and g["nodes"] == [] and g["error"]
 
 
+def test_graph_reports_knowlages_own_document_total(monkeypatch):
+    """One document count everywhere: the graph says what Systém says (knowlage /api/stats)."""
+    answers = {"/api/sizes": None, "/api/workspaces": WS, "/api/sources": SRC, "/api/documents": DOCS,
+               "/api/stats": {"documents": 33690, "chunks": 128268}}
+    monkeypatch.setattr(knowledge, "_get", lambda path, timeout=20: answers[path])
+    knowledge._cache.clear()
+    g = knowledge.graph(refresh=True)
+    assert g["stats"]["documents"] == 33690 and g["stats"]["documents_grouped"] == 3
+    knowledge._cache.clear()
+
+
 def test_sizes_from_knowlage_count_every_collection_even_the_ones_not_shown():
     sizes = {"groups": [{"workspace": "default", "origin": "file", "channel": "AlexHormozi", "documents": 492,
                          "chars": 9000},

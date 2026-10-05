@@ -429,6 +429,10 @@ export function createGraphScene(o: SceneOptions): SceneHandle | null {
       .map((x) => x.id),
   );
   const labels: [number, CSS2DObject][] = [];
+  // Which labels show at which zoom: workspaces, sources and cited nodes always; collections by size, more
+  // of them the closer the camera (zoomed out on a phone they were an unreadable pile).
+  const collectionRank = new Map([...bigCollections].map((id, r) => [id, r]));
+  const labelRank: number[] = [];
   data.nodes.forEach((node, i) => {
     if (!(node.type === "workspace" || node.type === "source" || bigCollections.has(node.id) || isHi[i])) return;
     // CSS2DRenderer owns the outer element's transform, so offset the text inside it.
@@ -444,7 +448,16 @@ export function createGraphScene(o: SceneOptions): SceneHandle | null {
     obj.position.set(P[i * 3], P[i * 3 + 1], P[i * 3 + 2]);
     group.add(obj);
     labels.push([i, obj]);
+    labelRank.push(node.type === "collection" && !isHi[i] ? 1 + (collectionRank.get(node.id) ?? 99) : 0);
   });
+  const cullLabels = () => {
+    const zoom = distance / Math.max(0.01, camera.position.distanceTo(controls.target));
+    const narrow = stage.clientWidth < 520;
+    const shown = (zoom < 1.15 ? 2 : zoom < 1.7 ? 5 : 99) - (narrow ? 2 : 0);
+    labels.forEach(([, obj], k) => {
+      obj.visible = labelRank[k] === 0 || labelRank[k] <= shown;
+    });
+  };
 
   // ---- controls -------------------------------------------------------------------------------
   const controls = new OrbitControls(camera, canvas);
@@ -1075,6 +1088,7 @@ export function createGraphScene(o: SceneOptions): SceneHandle | null {
     const live = camMoved || animating || particles.visible || rippling || awake > 0 || fly.active || fireworks > 0 || !reduced || needsRender;
     if (live) {
       renderer.render(scene, camera);
+      cullLabels();
       labelRenderer.render(scene, camera);
       needsRender = false;
     }
