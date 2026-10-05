@@ -6,8 +6,9 @@ What notifies a member who subscribed a device (the owner, in practice):
   message that @mentions them or answers their thread. Never #system (the
   automated notices), never what they have read already, never a chat ping
   that only announces an ask or an approval (the "needs" item covers it);
-- needs: a new "Čeká na tebe" item (pos.needs_me: an approval, an ask, a
-  result to review, a customer reply draft ready) that was not there before;
+- needs: a new "Čeká na tebe" item (pos.needs_me: an approval, an access
+  request only the owner decides, an approved LinkedIn post to publish, a
+  Gmail draft, an ask, a result to review) that was not there before;
 - urgent: an agent's message with priority stop or change_plan (the CEO's
   urgent messages), and a blocking ask. Urgent ignores the quiet hours.
 
@@ -22,14 +23,25 @@ payload carries a title, a short redacted preview and the /m address to open;
 the app loads the content itself on click. A subscription the push service
 reports as gone (404/410) is deleted.
 
+Approval notifications carry "Schválit" / "Zamítnout" buttons. Each device's
+copy carries its own action token (random, stored only as a hash): bound to
+the approval, the subscription and the device (its session id), valid for
+TTL_S, usable once. POST /api/push/action decides the approval only when the
+token, the approval id, the subscription endpoint the service worker sends and
+the signed-in session of that same device all match (`use_action`); anything
+else is refused and the service worker opens the app at the approval instead.
+
 Sending runs in a background loop in the api (`loop`), every TICK_S seconds.
 Tables are created on first use (no numbered migration).
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import re
+import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -67,6 +79,18 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     last_ok_at TEXT,
     last_error TEXT,
     failures INTEGER NOT NULL DEFAULT 0
+);
+-- One-time "Schválit"/"Zamítnout" tokens of approval notifications, per device (only the hash is kept).
+CREATE TABLE IF NOT EXISTS push_actions (
+    id INTEGER PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    sub_id INTEGER NOT NULL,
+    actor_id INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    approval_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
 );
 CREATE INDEX IF NOT EXISTS push_subscriptions_actor ON push_subscriptions(actor_id);
 CREATE TABLE IF NOT EXISTS push_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -237,9 +261,10 @@ TRANSPORT = _webpush  # tests replace this (no real push service)
 
 
 def send(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, urgent: bool = False,
-         device_id: str | None = None) -> int:
+         device_id: str | None = None, approval_id: int | None = None) -> int:
     """Send to every device of the member (or one device); returns how many accepted it.
-    Gone subscriptions (404/410) are deleted. The caller commits."""
+    Gone subscriptions (404/410) are deleted. With `approval_id`, each device's copy carries
+    the approve/reject buttons and that device's own action token. The caller commits."""
     ensure_schema(conn)
     if not configured(settings):
         return 0
@@ -249,8 +274,13 @@ def send(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, ur
         subs = [s for s in subs if s["device_id"] == device_id]
     ok = 0
     for s in subs:
+        body = data
+        if approval_id is not None and s["device_id"]:
+            body = json.dumps({**payload, "approval_id": approval_id, "action_token": action_token(conn, s, approval_id),
+                               "actions": [{"action": "approve", "title": "Schválit"},
+                                           {"action": "reject", "title": "Zamítnout"}]}, ensure_ascii=False)
         try:
-            status = TRANSPORT(s, data, urgency="high" if urgent else "normal", ttl=TTL_S, settings=settings)
+            status = TRANSPORT(s, body, urgency="high" if urgent else "normal", ttl=TTL_S, settings=settings)
         except Exception as e:  # noqa: BLE001 - one bad device never stops the others
             conn.execute("UPDATE push_subscriptions SET failures = failures + 1, last_error = ? WHERE id = ?",
                          (str(e)[:200], s["id"]))
@@ -267,6 +297,51 @@ def send(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, ur
             # A subscription that keeps failing for days is dead too.
             conn.execute("DELETE FROM push_subscriptions WHERE id = ? AND failures >= 50", (s["id"],))
     return ok
+
+
+# ------------------------------------------------------------------ actions on a notification
+
+def _hash(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def action_token(conn: sqlite3.Connection, sub: sqlite3.Row, approval_id: int, now: datetime | None = None) -> str:
+    """A fresh one-time token for this device's approve/reject buttons on this approval (the caller commits)."""
+    ensure_schema(conn)
+    now = now or datetime.now(timezone.utc)
+    token = secrets.token_urlsafe(32)
+    conn.execute("""INSERT INTO push_actions (token_hash, sub_id, actor_id, device_id, approval_id, created_at, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                 (_hash(token), sub["id"], sub["actor_id"], sub["device_id"], approval_id,
+                  now.isoformat(timespec="seconds"), (now + timedelta(seconds=TTL_S)).isoformat(timespec="seconds")))
+    conn.execute("DELETE FROM push_actions WHERE expires_at < ?", ((now - timedelta(days=2)).isoformat(timespec="seconds"),))
+    return token
+
+
+def use_action(conn: sqlite3.Connection, *, token: str, approval_id: int, endpoint: str, actor_id: int,
+               device_id: str | None, now: datetime | None = None) -> None:
+    """Spend a notification action token, or raise PushError. It must be unused and unexpired, for this
+    approval, issued to this member's subscription with this endpoint, and that subscription's device must
+    be the session's device. A token shown to a wrong check is spent too (no second try with it).
+    The caller commits."""
+    ensure_schema(conn)
+    now = now or datetime.now(timezone.utc)
+    row = conn.execute("SELECT * FROM push_actions WHERE token_hash = ?", (_hash(token or ""),)).fetchone()
+    if row is None:
+        raise PushError("unknown action token")
+    spent = conn.execute("UPDATE push_actions SET used_at = ? WHERE id = ? AND used_at IS NULL",
+                         (now.isoformat(timespec="seconds"), row["id"])).rowcount
+    if spent != 1:
+        raise PushError("the action token was used already")
+    if row["expires_at"] <= now.isoformat(timespec="seconds"):
+        raise PushError("the action token expired")
+    sub = conn.execute("SELECT * FROM push_subscriptions WHERE id = ?", (row["sub_id"],)).fetchone()
+    ok = (row["approval_id"] == approval_id and row["actor_id"] == actor_id and sub is not None
+          and sub["actor_id"] == actor_id and bool(device_id) and sub["device_id"] == row["device_id"]
+          and hmac.compare_digest(str(sub["device_id"]), str(device_id))
+          and hmac.compare_digest(str(sub["endpoint"]).encode(), str(endpoint or "").encode()))
+    if not ok:
+        raise PushError("the action token is not for this approval or device")
 
 
 # ------------------------------------------------------------------ what notifies
@@ -287,7 +362,7 @@ def _ask_pings(conn: sqlite3.Connection) -> set[int]:
     return {r[0] for r in conn.execute("SELECT message_id FROM owner_asks WHERE message_id IS NOT NULL")}
 
 
-_APPROVAL_PING = re.compile(r"schválení #\d+")
+_APPROVAL_PING = re.compile(r"schválení #\d+|[Žž]ádost o přístup #\d+")  # the needs item notifies instead
 
 
 def classify(conn: sqlite3.Connection, m: sqlite3.Row, actor_id: int, *, skip: set[int] | None = None) -> str | None:
@@ -336,7 +411,8 @@ def _chat_payload(conn: sqlite3.Connection, m: sqlite3.Row, actor_id: int, p: di
             "url": url, "kind": category}
 
 
-_NEEDS_TITLE = {"approval": "Ke schválení", "ask": "Otázka pro tebe", "review": "K revizi"}
+_NEEDS_TITLE = {"approval": "Ke schválení", "access": "Žádost o přístup", "publish": "K publikaci na LinkedIn",
+               "draft": "Koncept e-mailu", "ask": "Otázka pro tebe", "review": "K revizi"}
 
 
 def _needs_payload(item: dict, p: dict) -> dict:
@@ -373,9 +449,14 @@ def _mark(conn: sqlite3.Connection, actor_id: int, key: str) -> None:
                     ON CONFLICT(actor_id, key) DO UPDATE SET sent_at = excluded.sent_at""", (actor_id, key, now_iso()))
 
 
-def _deliver(conn, settings, actor_id: int, payload: dict, now: datetime) -> int:
+def _is_owner(conn: sqlite3.Connection, actor_id: int) -> bool:
+    row = conn.execute("SELECT is_owner FROM actors WHERE id = ?", (actor_id,)).fetchone()
+    return bool(row and row["is_owner"])
+
+
+def _deliver(conn, settings, actor_id: int, payload: dict, now: datetime, approval_id: int | None = None) -> int:
     payload = {**payload, "silent": _recently(conn, actor_id, payload["tag"], now), "ts": now_iso()}
-    n = send(conn, settings, actor_id, payload, urgent=payload.get("kind") == "urgent")
+    n = send(conn, settings, actor_id, payload, urgent=payload.get("kind") == "urgent", approval_id=approval_id)
     _mark(conn, actor_id, f"tag:{payload['tag']}")
     conn.commit()  # the next delivery is a network call: never hold the write lock across it
     return n
@@ -443,8 +524,10 @@ def _needs_pass(conn, settings, aid: int, p: dict, now: datetime) -> list[dict]:
         _deliver(conn, settings, aid, payload, now)
         out.append({"actor": aid, "payload": payload})
     else:
-        for _, payload in due:
-            _deliver(conn, settings, aid, payload, now)
+        for it, payload in due:
+            # An approval for the owner: "Schválit" / "Zamítnout" right on the notification.
+            ap = it["id"] if it["kind"] == "approval" and _is_owner(conn, aid) else None
+            _deliver(conn, settings, aid, payload, now, approval_id=ap)
             out.append({"actor": aid, "payload": payload})
     for it, _ in due:
         _mark(conn, aid, it["key"])

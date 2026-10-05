@@ -13,6 +13,17 @@ number is the same everywhere. Four kinds, newest first within each:
 - mention: an unread chat message that @mentions them. Pings that only
   announce an ask or an approval above are left out (the item is already
   in the list).
+
+For the owner also:
+
+- access: an access request only the owner decides (pos.access: owner-only
+  capabilities, or one the Access manager escalated; most are approved at
+  once and never wait), with the endpoint that grants or denies it;
+- publish: an approved LinkedIn post that is not on LinkedIn yet (it waited
+  for the connection, or publishing failed): one click publishes it;
+- draft: a Gmail draft an agent made that waits for him (pos.outbound_drafts).
+  Drafts whose campaign item is already an ask are listed on that ask
+  (`drafts`) instead of twice.
 """
 
 import json
@@ -22,8 +33,9 @@ import sqlite3
 from . import actors, asks, tasks
 from .core import Ctx
 
-KINDS = ("approval", "ask", "review", "mention")
-_APPROVAL_PING = re.compile(r"schválení #\d+")
+KINDS = ("approval", "access", "publish", "draft", "ask", "review", "mention")
+# Chat pings that only announce an item listed here (an approval, an owner-only access request).
+_APPROVAL_PING = re.compile(r"schválení #\d+|[Žž]ádost o přístup #\d+")
 MENTION_LIMIT = 30
 
 
@@ -46,6 +58,121 @@ def _approvals(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
             "from_name": r["requested_by_name"], "from_kind": r["requested_by_kind"], "at": r["created_at"],
             "ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
             "link": f"/approvals#a{r['id']}",
+        })
+    return out
+
+
+def _access(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    """Access requests waiting on the owner: owner-only ones, and the ones the Access manager escalated."""
+    if not viewer["is_owner"] or not _has_table(conn, "access_requests"):
+        return []
+    from .access import service as access
+
+    rows = conn.execute(
+        """SELECT r.*, a.name AS agent_name, a.kind AS agent_kind FROM access_requests r
+           JOIN actors a ON a.id = r.agent_id
+           WHERE r.status IN ('pending', 'escalated') AND (r.needs_owner = 1 OR r.status = 'escalated')
+           ORDER BY r.id DESC""").fetchall()
+    out = []
+    for r in rows:
+        cred = (r["capability"] or "").startswith(access.CRED_PREFIX + ":")
+        if r["capability"]:
+            what = r["capability"]
+        elif r["metric"]:
+            what = f"{access.METRICS.get(r['metric'], r['metric'])} {access._fmt(r['metric'], r['amount'])}"
+        else:
+            what = "kontrola po skoku ve spotřebě"
+        out.append({
+            "kind": "access", "key": f"access:{r['id']}", "id": r["id"], "ref": None,
+            "title": f"Žádost o přístup: {what}"[:200], "detail": (r["why"] or "")[:240],
+            "capability": r["capability"], "metric": r["metric"], "amount": r["amount"], "hours": r["hours"],
+            "agent_id": r["agent_id"], "from_name": r["agent_name"], "from_kind": r["agent_kind"],
+            "at": r["created_at"], "blocking": bool(r["blocking"]),
+            "task_ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
+            # Credentials register and grant in one step (pos.credentials), the rest through pos.access.
+            "decide_url": (f"/api/credentials/requests/{r['id']}/decide" if cred
+                           else f"/api/access/requests/{r['id']}/decide"),
+            "link": f"/credentials?request={r['id']}" if cred else f"/agents/{r['agent_id']}",
+        })
+    return out
+
+
+def _linkedin_connected() -> bool:
+    try:
+        from . import outbound_linkedin
+
+        return outbound_linkedin.connected() is not None
+    except Exception:  # noqa: BLE001 - no token file, no key: not connected
+        return False
+
+
+def _publish(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    """Approved LinkedIn posts that are not published yet (ready_to_publish)."""
+    if not viewer["is_owner"]:
+        return []
+    rows = conn.execute(
+        """SELECT a.id, a.details, a.result, a.decided_at, a.created_at, r.name AS from_name, r.kind AS from_kind
+           FROM approvals a LEFT JOIN actors r ON r.id = a.requested_by
+           WHERE a.action = 'linkedin.post' AND a.status = 'approved' ORDER BY a.id DESC""").fetchall()
+    out = []
+    connected = None
+    for r in rows:
+        res = json.loads(r["result"] or "{}")
+        if res.get("status") != "ready_to_publish":
+            continue
+        if connected is None:
+            connected = _linkedin_connected()
+        payload = json.loads(r["details"] or "{}").get("payload") or {}
+        text = str(payload.get("text") or res.get("text") or "")
+        first = " ".join(text.split())[:70]
+        out.append({
+            "kind": "publish", "key": f"publish:{r['id']}", "id": r["id"], "ref": None,
+            "title": f"LinkedIn: {first}" if first else "LinkedIn: schválený příspěvek",
+            "detail": " ".join(text.split())[:240], "text": text, "error": res.get("error"),
+            "connected": connected, "connect_url": "/api/integrations/linkedin/start",
+            "publish_url": f"/api/integrations/linkedin/publish/{r['id']}",
+            "from_name": r["from_name"], "from_kind": r["from_kind"], "at": r["decided_at"] or r["created_at"],
+            "link": f"/approvals#a{r['id']}",
+        })
+    return out
+
+
+_GMAIL = "https://mail.google.com/"
+
+
+def _waiting_drafts(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    if not viewer["is_owner"] or not _has_table(conn, "outbound_sends"):
+        return []
+    rows = conn.execute(
+        """SELECT s.id, s.result, s.recipient, s.created_at, s.owner_task_id, a.name AS actor_name,
+                  a.kind AS actor_kind FROM outbound_sends s LEFT JOIN actors a ON a.id = s.actor_id
+           WHERE s.action = 'email.send' AND s.status = 'drafted' ORDER BY s.id""").fetchall()
+    out = []
+    for r in rows:
+        res = json.loads(r["result"] or "{}")
+        link = str(res.get("link") or "")
+        out.append({"id": r["id"], "to": res.get("to") or r["recipient"], "subject": res.get("subject") or "",
+                    "why": str(res.get("why") or "")[:240], "link": link if link.startswith(_GMAIL) else None,
+                    "agent": r["actor_name"], "agent_kind": r["actor_kind"], "at": r["created_at"],
+                    "owner_task_id": r["owner_task_id"], "mark_url": f"/api/outbound/drafts/{r['id']}"})
+    return out
+
+
+def _drafts(drafts: list[dict], asks_: list[dict]) -> list[dict]:
+    """Drafts on their campaign's ask (`drafts`), the rest one item each."""
+    by_task = {a["id"]: a for a in asks_}
+    out = []
+    for d in drafts:
+        ask = by_task.get(d["owner_task_id"])
+        if ask is not None:
+            ask.setdefault("drafts", []).append(d)
+            continue
+        out.append({
+            "kind": "draft", "key": f"draft:{d['id']}", "id": d["id"], "ref": None,
+            "title": f"Koncept e-mailu pro {d['to'] or '?'}: {d['subject']}"[:200], "detail": d["why"],
+            "draft": d, "links": [{"label": "Otevřít v Gmailu", "href": d["link"]}] if d["link"] else [],
+            "from_name": d["agent"], "from_kind": d["agent_kind"], "at": d["at"],
+            "link": "/company",  # the draft trust panel; Gmail is in `links`
         })
     return out
 
@@ -185,6 +312,8 @@ def collect(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     if _has_table(conn, "owner_asks"):
         skip = {r["message_id"] for r in conn.execute(
             "SELECT message_id FROM owner_asks WHERE message_id IS NOT NULL")}
-    items = [*_approvals(conn, viewer), *asks_, *reviews, *_mentions(conn, viewer, skip)]
+    drafts = _drafts(_waiting_drafts(conn, viewer), asks_)
+    items = [*_approvals(conn, viewer), *_access(conn, viewer), *_publish(conn, viewer), *drafts, *asks_, *reviews,
+             *_mentions(conn, viewer, skip)]
     counts = {k: sum(1 for i in items if i["kind"] == k) for k in KINDS}
     return {"count": len(items), "counts": counts, "items": items}
