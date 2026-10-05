@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node scripts/check-pwa.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --no-warnings --test tests/timeline.test.ts tests/i18n.test.ts tests/refs.test.ts tests/mentry.test.ts tests/compose.test.ts tests/systemtext.test.ts",
+    "test": "node --experimental-strip-types --no-warnings --test tests/timeline.test.ts tests/i18n.test.ts tests/refs.test.ts tests/mentry.test.ts tests/compose.test.ts tests/systemtext.test.ts tests/notes.test.ts",
     "preview": "vite preview",
     "check:pwa": "node scripts/check-pwa.mjs"
   },

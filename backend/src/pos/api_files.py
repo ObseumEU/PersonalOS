@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from starlette.datastructures import UploadFile
 
 from . import files, kb_files, notes, topics, versioning
-from .api_tasks import RestoreIn, get_ctx, get_db
+from .api_tasks import get_ctx, get_db
 from .auth import require_user
 from .config import Settings, get_settings
 from .core import Ctx
@@ -287,11 +287,18 @@ def archive_note(note_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return out
 
 
+class NoteRestoreIn(BaseModel):
+    version: int | None = None
+
+
 @router.post("/notes/{note_id}/restore")
-def restore_note(note_id: int, body: RestoreIn | None = None, conn=Depends(get_db), ctx=Depends(get_ctx)):
-    """Without a body: bring an archived note back. With {version}: put the
-    note back to that version."""
-    out = notes.restore(conn, ctx, note_id, body.version) if body else notes.unarchive(conn, ctx, note_id)
+def restore_note(note_id: int, body: NoteRestoreIn | None = None, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Without a version (no body, or {}): bring an archived note back. With
+    {version}: put the note back to that version."""
+    if body is not None and body.version is not None:
+        out = notes.restore(conn, ctx, note_id, body.version)
+    else:
+        out = notes.unarchive(conn, ctx, note_id)
     conn.commit()
     return out
 

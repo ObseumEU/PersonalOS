@@ -112,7 +112,8 @@ export const notesApi = {
   create: (fields: { title: string; body?: string; topic?: string | null; tags?: string[] }) => post<Note>("/api/notes", fields),
   update: (id: number, changes: Partial<Pick<Note, "title" | "body" | "topic" | "tags" | "visibility">>) => patch<Note>(`/api/notes/${id}`, changes),
   archive: (id: number) => post<Note>(`/api/notes/${id}/archive`),
-  unarchive: (id: number) => post<Note>(`/api/notes/${id}/restore`),
+  // No body: the backend unarchives only when the request has none ({} would be a version restore).
+  unarchive: (id: number) => api<Note>(`/api/notes/${id}/restore`, { method: "POST" }),
   restore: (id: number, version: number) => post<Note>(`/api/notes/${id}/restore`, { version }),
   history: (id: number) => api<Version[]>(`/api/notes/${id}/history`),
 };

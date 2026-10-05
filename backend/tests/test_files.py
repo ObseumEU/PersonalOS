@@ -393,6 +393,12 @@ def test_files_api(client, kb):
     n = client.post("/api/notes", json={"title": "Paint", "body": "white", "topic": "house"}).json()
     client.patch(f"/api/notes/{n['id']}", json={"body": "grey"})
     assert client.post(f"/api/notes/{n['id']}/restore", json={"version": 1}).json()["body"] == "white"
+    # Unarchiving: the web posts no body; an empty {} means the same, not a 422.
+    assert client.post(f"/api/notes/{n['id']}/archive").json()["archived_at"]
+    assert client.post(f"/api/notes/{n['id']}/restore").json()["archived_at"] is None
+    client.post(f"/api/notes/{n['id']}/archive")
+    r = client.post(f"/api/notes/{n['id']}/restore", json={})
+    assert r.status_code == 200 and r.json()["archived_at"] is None and r.json()["body"] == "white"
     assert client.post("/api/topics", json={"name": "House", "color": "#aabbcc"}).status_code == 201
     t = client.get("/api/topics/house").json()
     assert t["name"] == "House" and len(t["files"]) == 1 and len(t["notes"]) == 1
