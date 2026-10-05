@@ -5,13 +5,14 @@ import { api } from "../api";
 import { AssigneeChip, StatePill } from "../components/tasks/bits";
 import { PageHeader, Panel } from "../components/ui";
 import { t } from "../i18n";
-import type { Task } from "../tasksApi";
+import type { ReviewQueue, Task } from "../tasksApi";
 
 type Review = {
   inbox: Task[];
   waiting: Task[];
   someday: Task[];
   to_review: Task[];
+  review_queue?: ReviewQueue;
   projects_without_next: { id: number; slug: string; name: string; lead_name: string | null }[];
 };
 
@@ -83,6 +84,7 @@ export default function WeeklyReview() {
             ))}
           </Panel>
           <Panel title={t("work.weekly.review")} right={t("work.weekly.review_right")}>
+            {r.review_queue && <p className="border-b border-line px-4 py-2 text-[13px] text-ink-2">{r.review_queue.text}</p>}
             <TaskList items={r.to_review} empty={t("work.weekly.review_empty")} view="review" />
           </Panel>
           <Panel title={t("work.weekly.someday")} right={t("work.weekly.someday_right")} className="lg:col-span-2">

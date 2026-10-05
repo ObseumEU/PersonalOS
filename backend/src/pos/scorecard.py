@@ -109,16 +109,14 @@ def _goals(conn: sqlite3.Connection) -> list[dict]:
                         "metric": g.get("metric"), "baseline": g.get("baseline"), "current": g.get("current"),
                         "target_value": g.get("target_value"), "target": g.get("target"), "due": g.get("due"),
                         "progress": g["progress_effective"], "current_at": g.get("current_at"),
-                        "lower_is_better": _lower_is_better(g)})
+                        "lower_is_better": goals_mod.lower_is_better(g), "met": goals_mod.met(g)})
     return out
 
 
 def _lower_is_better(g: dict) -> bool:
-    """A goal whose target is below its baseline (hours to answer): less is progress."""
-    b, t = g.get("baseline"), g.get("target_value")
-    if b is not None and t is not None:
-        return t < b
-    return "hodin" in fold(g.get("metric") or "") or "medián" in (g.get("metric") or "")
+    from . import goals as goals_mod
+
+    return goals_mod.lower_is_better(g)
 
 
 # ------------------------------------------------------------------ what reached the world
@@ -238,15 +236,16 @@ def spend(conn: sqlite3.Connection, now: datetime | None = None, days: int = 7) 
 # ------------------------------------------------------------------ agent health
 
 def agents_health(conn: sqlite3.Connection, now: datetime | None = None, days: int = 7) -> dict:
-    from . import frustration, review_policy
+    from . import frustration
 
     now = _now(now)
     s, u = _iso(now - timedelta(days=days)), _iso(now)
     runs = {r["status"]: r["n"] for r in conn.execute(
         "SELECT status, COUNT(*) AS n FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY status", (s, u))}
     finished = sum(int(runs.get(k, 0)) for k in ("ok", "error"))
-    oldest = conn.execute("SELECT MIN(updated_at) FROM tasks WHERE status = 'review' AND archived_at IS NULL").fetchone()[0]
-    sla = _iso(now - timedelta(hours=review_policy.SLA_HOURS))
+    from . import review_queue
+
+    rq = review_queue.queue(conn, now)
     loops = _one(conn, f"SELECT COUNT(*) FROM audit_log WHERE action IN ({','.join('?' * len(LOOP_ACTIONS))}) "
                        "AND at >= ? AND at < ?", *LOOP_ACTIONS, s, u)
     incidents = _one(conn, "SELECT COUNT(*) FROM sentinel_incidents WHERE opened_at >= ? AND opened_at < ?", s, u) \
@@ -255,10 +254,10 @@ def agents_health(conn: sqlite3.Connection, now: datetime | None = None, days: i
         "runs_ok": int(runs.get("ok", 0)), "runs_failed": int(runs.get("error", 0)),
         "runs_blocked": int(runs.get("blocked", 0)), "runs_cancelled": int(runs.get("cancelled", 0)),
         "fail_rate": round(int(runs.get("error", 0)) / finished, 3) if finished else None,
-        "review_queue": _one(conn, "SELECT COUNT(*) FROM tasks WHERE status = 'review' AND archived_at IS NULL"),
-        "review_over_sla": _one(conn, "SELECT COUNT(*) FROM tasks WHERE status = 'review' AND archived_at IS NULL "
-                                      "AND updated_at < ?", sla),
-        "review_oldest_hours": round(_hours(oldest, _iso(now)) or 0) if oldest else None,
+        # One definition of the queue (pos.review_queue), said with whose it is.
+        "review_queue": rq["total"], "review_over_sla": rq["over_sla"], "review_oldest_hours": rq["oldest_hours"],
+        "review_for_owner": rq["for_owner"], "review_for_leads": rq["for_leads"], "review_text": rq["text"],
+        "approvals_pending": rq["approvals"],
         "loops": loops, "incidents": incidents,
         **frustration.stats(conn, now, days),
     }
@@ -277,7 +276,7 @@ def problems(card: dict, limit: int = 3) -> list[dict]:
     q = a.get("review_queue") or 0
     if q > REVIEW_QUEUE_LIMIT:
         old = a.get("review_oldest_hours")
-        found.append({"text": f"Revize: ve frontě {q}" + (f", nejstarší {round(old / 24)} d" if old and old >= 48 else ""),
+        found.append({"text": f"Revize: {a.get('review_text') or q}" + (f", nejstarší {round(old / 24)} d" if old and old >= 48 else ""),
                       "link": "/tasks?view=review", "score": 50 + min(q, 100) / 2,
                       "why": f"{a.get('review_over_sla', 0)} čeká přes SLA; hotová práce leží a nedojde k zákazníkům."})
     share = sp.get("business_share")
@@ -519,7 +518,7 @@ def render(card: dict) -> str:
               f"na byznysový výsledek ${sp.get('usd_per_business_outcome') or '—'}",
               "", "### Zdraví agentů (7 dní)",
               f"- běhy ok {a['runs_ok']}, selhalo {a['runs_failed']} ({_pct(a.get('fail_rate'))}), blokováno {a['runs_blocked']}",
-              f"- revize ve frontě **{a['review_queue']}** (přes SLA {a['review_over_sla']}, nejstarší "
+              f"- revize: **{a.get('review_text') or a['review_queue']}** (přes SLA {a['review_over_sla']}, nejstarší "
               f"{'—' if a.get('review_oldest_hours') is None else str(a['review_oldest_hours']) + ' h'})",
               f"- smyčky {a['loops']}, incidenty {a['incidents']}, frustrace majitele {a['frustrations']}, dvojí odpovědi "
               f"{a['double_answers']}, bez odpovědi {a['unanswered']}",
@@ -535,7 +534,7 @@ def render_platform(card: dict) -> str:
     return "\n".join([
         f"- běhy: ok {a['runs_ok']}, selhalo {a['runs_failed']} ({_pct(a.get('fail_rate'))}){_delta_txt(k.get('runs_failed'))}, "
         f"blokováno {a['runs_blocked']}",
-        f"- revize: fronta {a['review_queue']}{_delta_txt(k.get('review_queue'))}, přes SLA {a['review_over_sla']}, "
+        f"- revize: {a.get('review_text') or a['review_queue']}{_delta_txt(k.get('review_queue'))}, přes SLA {a['review_over_sla']}, "
         f"nejstarší {a.get('review_oldest_hours') or '—'} h",
         f"- smyčky {a['loops']}, incidenty {a['incidents']}, odmítnuté deploye {card['world']['deploys_failed']}",
         f"- majitel: frustrace {a['frustrations']}, dvojí odpovědi {a['double_answers']}, bez odpovědi {a['unanswered']}",

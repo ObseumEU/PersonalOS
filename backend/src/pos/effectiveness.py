@@ -45,14 +45,14 @@ def platform_spenders(conn: sqlite3.Connection, s: str, u: str, limit: int = 5) 
 
 
 def snapshot(conn: sqlite3.Connection, now: datetime | None = None, days: int = 7) -> dict:
-    from . import business, knowledge_first, review_policy, taint
+    from . import business, knowledge_first, taint
 
     now = now or datetime.now(timezone.utc)
     s, u = _iso(now - timedelta(days=days)), _iso(now)
-    sla = _iso(now - timedelta(hours=review_policy.SLA_HOURS))
-    waiting = conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'review' AND archived_at IS NULL").fetchone()[0]
-    over = conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'review' AND archived_at IS NULL "
-                        "AND updated_at < ?", (sla,)).fetchone()[0]
+    from . import review_queue
+
+    rq = review_queue.queue(conn, now)  # one definition of the queue
+    waiting, over = rq["total"], rq["over_sla"]
 
     def count(action: str) -> int:
         return conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = ? AND at >= ? AND at < ?",

@@ -93,7 +93,8 @@ function fmtDelta(d: number, fmt?: (v: number) => string) {
 
 function KpiTile({ label: name, kpi, good, fmt }: { label: string; kpi: Kpi; good: "up" | "down" | "none"; fmt?: (v: number) => string }) {
   const v = kpi.value;
-  const d = kpi.delta;
+  // A change only against a real earlier week: "+123 vs 0" (no history yet) says nothing.
+  const d = kpi.delta !== null && kpi.prev !== null && kpi.prev !== 0 ? kpi.delta : null;
   const better = d === null || d === 0 || good === "none" ? null : (d > 0) === (good === "up");
   const tone = better === null ? "var(--color-ink-2)" : better ? "var(--viz-good)" : "var(--viz-bad)";
   const Icon = d === null || d === 0 ? Minus : d > 0 ? ArrowUpRight : ArrowDownRight;
@@ -101,11 +102,13 @@ function KpiTile({ label: name, kpi, good, fmt }: { label: string; kpi: Kpi; goo
     <div className="panel flex min-w-0 flex-col gap-1.5 px-4 py-3">
       <span className="truncate text-xs text-ink-2">{name}</span>
       <span className="font-mono text-[26px] leading-none font-light">{v === null ? "—" : fmt ? fmt(v) : v}</span>
-      <span className="flex flex-wrap items-center gap-1 text-xs" style={{ color: tone }}>
-        <Icon size={13} aria-hidden />
-        {d === null ? <span className="text-ink-2">{t("reports.no_compare")}</span> : d === 0 ? t("reports.no_change") : fmtDelta(d, fmt)}
-        {d !== null && kpi.prev !== null && <span className="ml-1 text-ink-2">{t("reports.vs", { prev: fmt ? fmt(kpi.prev) : kpi.prev })}</span>}
-      </span>
+      {d !== null && (
+        <span className="flex flex-wrap items-center gap-1 text-xs" style={{ color: tone }}>
+          <Icon size={13} aria-hidden />
+          {d === 0 ? t("reports.no_change") : fmtDelta(d, fmt)}
+          {kpi.prev !== null && <span className="ml-1 text-ink-2">{t("reports.vs", { prev: fmt ? fmt(kpi.prev) : kpi.prev })}</span>}
+        </span>
+      )}
     </div>
   );
 }

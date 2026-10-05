@@ -130,7 +130,7 @@ def test_scorecard_numbers_on_a_fixture_db(conn, owner, company):
     assert "0 odeslaných zpráv za 7 dní" in texts
     assert any(t.startswith("Byznys jen 25 %") for t in texts)
     md = scorecard.render(card)
-    assert "Top problémy" in md and "revize ve frontě **25**" in md
+    assert "Top problémy" in md and "revize: **0 čeká na kontrolu vedoucích, 25 na tebe**" in md
 
 
 def test_outbound_comes_from_package_a_when_it_exists(conn, owner, company, monkeypatch):

@@ -12,30 +12,31 @@ import { taskHref } from "../taskSheet";
 register(company);
 
 const pct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v * 100)} %`);
-const usd = (v: number | null | undefined) => (v == null ? "—" : `$${v.toFixed(v >= 100 ? 0 : 2)}`);
+/** One currency format everywhere on the page (and in the problems the API writes): $166.37. */
+const usd = (v: number | null | undefined) => (v == null ? "—" : `$${v.toFixed(2)}`);
 const num = (v: number | null | undefined) => (v == null ? "—" : Number.isInteger(v) ? String(v) : v.toFixed(1));
 
 /** One headline number with last week's value; green when the change is good, red when bad. */
-function Tile({ label, kpi, fmt = num, href }: { label: string; kpi?: ScoreKpi; fmt?: (v: number) => string; href: string }) {
+function Tile({ label, kpi, fmt = num, href, sub, tone: forced }: { label: string; kpi?: ScoreKpi; fmt?: (v: number) => string; href: string; sub?: string; tone?: "bad" }) {
   const v = kpi?.value ?? null;
-  const d = kpi?.delta ?? null;
+  // A change is shown only against a real earlier value: none before history exists, none against 0.
+  const d = kpi?.delta != null && kpi.prev != null && kpi.prev !== 0 ? kpi.delta : null;
   const tone = kpi?.good == null ? "var(--color-ink-2)" : kpi.good ? "var(--viz-good)" : "var(--viz-bad)";
   const Icon = !d ? Minus : d > 0 ? ArrowUpRight : ArrowDownRight;
   return (
     <Link to={href} className="panel flex min-w-0 flex-col gap-1.5 px-4 py-3 hover:border-accent/60">
       <span className="truncate text-xs text-ink-2">{label}</span>
-      <span className="font-mono text-[26px] leading-none font-light">{v == null ? "—" : fmt(v)}</span>
-      <span className="flex flex-wrap items-center gap-1 text-xs" style={{ color: tone }}>
-        <Icon size={13} aria-hidden />
-        {d == null ? (
-          <span className="text-ink-2">{t("co.no_compare")}</span>
-        ) : d === 0 ? (
-          t("co.flat")
-        ) : (
-          `${d > 0 ? "+" : "−"}${fmt(Math.abs(d))}`
-        )}
-        {d != null && kpi?.prev != null && <span className="ml-1 text-ink-2">{t("co.vs", { prev: fmt(kpi.prev) })}</span>}
+      <span className="font-mono text-[26px] leading-none font-light" style={forced ? { color: "var(--viz-bad)" } : undefined}>
+        {v == null ? "—" : fmt(v)}
       </span>
+      {sub && <span className="text-xs text-ink-2">{sub}</span>}
+      {d != null && (
+        <span className="flex flex-wrap items-center gap-1 text-xs" style={{ color: tone }}>
+          <Icon size={13} aria-hidden />
+          {d === 0 ? t("co.flat") : `${d > 0 ? "+" : "−"}${fmt(Math.abs(d))}`}
+          {kpi?.prev != null && <span className="ml-1 text-ink-2">{t("co.vs", { prev: fmt(kpi.prev) })}</span>}
+        </span>
+      )}
     </Link>
   );
 }
@@ -94,17 +95,23 @@ function GoalRow({ g }: { g: ScoreGoal }) {
     <div className="flex min-w-0 flex-col gap-1.5 border-b border-line px-4 py-3 last:border-0">
       <div className="flex items-baseline gap-2">
         <span className="min-w-0 flex-1 truncate text-sm">{g.title}</span>
-        {g.status === "proposed" && <span className="rounded border border-line px-1.5 text-[11px] text-ink-2">{t("co.goal.proposed")}</span>}
-        <span className="font-mono text-sm">{g.progress} %</span>
+        <span className={`rounded border px-1.5 text-[11px] ${g.status === "proposed" ? "border-amber-400/50 text-amber-200" : "border-line text-ink-2"}`}>
+          {g.status === "proposed" ? t("co.goal.proposed") : t("co.goal.active")}
+        </span>
+        <span className="font-mono text-sm" style={{ color: g.met ? "var(--viz-good)" : undefined }}>
+          {g.progress} %
+        </span>
       </div>
       <div className="flex items-center gap-3">
         <div className="h-2 flex-1 overflow-hidden rounded-full bg-raised" role="progressbar" aria-valuenow={g.progress} aria-valuemin={0} aria-valuemax={100} aria-label={g.title}>
-          <div className="h-full rounded-full" style={{ width: `${Math.max(g.progress, 1)}%`, background: "var(--viz-series-3)" }} />
+          <div className="h-full rounded-full" style={{ width: `${Math.max(g.progress, 1)}%`, background: g.met ? "var(--viz-good)" : "var(--viz-series-3)" }} />
         </div>
         <Spark points={g.trend.map((p) => p[1])} lowerIsBetter={g.lower_is_better} />
       </div>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-xs text-ink-2">
-        <span className="font-mono text-ink">{t("co.goal.numbers", { baseline: num(g.baseline), current: num(g.current), target: num(g.target_value) })}</span>
+        <span className="font-mono text-ink">
+          {t(g.lower_is_better ? "co.goal.numbers_lower" : "co.goal.numbers", { baseline: num(g.baseline), current: num(g.current), target: num(g.target_value) })}
+        </span>
         {g.metric && <span className="truncate">{g.metric}</span>}
         <span>{g.owner ?? t("co.goal.no_owner")}</span>
         {g.due && <span>{t("co.goal.due", { due: g.due })}</span>}
@@ -231,9 +238,16 @@ export default function Company() {
         <Tile label={t("co.kpi.outbound_sent")} kpi={k.outbound_sent} href="#world" />
         <Tile label={t("co.kpi.owner_delivered_pct")} kpi={k.owner_delivered_pct} fmt={(v) => `${Math.round(v)} %`} href="#owner" />
         <Tile label={t("co.kpi.business_share")} kpi={k.business_share} fmt={(v) => `${Math.round(v * 100)} %`} href="#spend" />
-        <Tile label={t("co.kpi.usd_per_delivered")} kpi={k.usd_per_delivered} fmt={(v) => `$${v.toFixed(2)}`} href="#spend" />
-        <Tile label={t("co.kpi.review_queue")} kpi={k.review_queue} href={reviews} />
-        <Tile label={t("co.kpi.frustrations")} kpi={k.frustrations} href="#agents" />
+        <Tile label={t("co.kpi.usd_per_delivered")} kpi={k.usd_per_delivered} fmt={(v) => usd(v)} href="#spend" />
+        <Tile label={t("co.kpi.review_queue")} kpi={k.review_queue} href={reviews} sub={a.review_for_owner != null ? t("co.kpi.review_for_you", { n: a.review_for_owner }) : undefined} />
+        {/* The owner's unanswered messages are the signal; "frustrace 0" next to 15 unanswered said nothing. */}
+        <Tile
+          label={t("co.kpi.unanswered")}
+          kpi={{ value: a.unanswered, prev: null, delta: null, good: null }}
+          href="#agents"
+          tone={a.unanswered > 0 ? "bad" : undefined}
+          sub={a.frustrations ? t("co.kpi.frustrations_sub", { n: a.frustrations }) : undefined}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
@@ -306,11 +320,11 @@ export default function Company() {
               <Stat label={t("co.agents.runs_ok")} value={a.runs_ok} />
               <Stat label={t("co.agents.runs_failed")} value={a.runs_failed} tone={(a.fail_rate ?? 0) > 0.1 ? "bad" : undefined} sub={`${pct(a.fail_rate)} · ${t("co.agents.runs_blocked")} ${a.runs_blocked}`} />
               <Link to={reviews} className="hover:bg-raised">
-                <Stat label={t("co.agents.review")} value={a.review_queue} tone={a.review_queue > 20 ? "bad" : undefined} sub={t("co.agents.review_old", { h: a.review_oldest_hours ?? "—", n: a.review_over_sla })} />
+                <Stat label={a.review_text ?? t("co.agents.review")} value={a.review_queue} tone={a.review_queue > 20 ? "bad" : undefined} sub={t("co.agents.review_old", { h: a.review_oldest_hours ?? "—", n: a.review_over_sla })} />
               </Link>
               <Stat label={t("co.agents.loops")} value={a.loops} tone={a.loops ? "warn" : undefined} />
               <Stat label={t("co.agents.incidents")} value={a.incidents} />
-              <Stat label={t("co.agents.frustrations")} value={a.frustrations} tone={a.frustrations ? "bad" : undefined} sub={`${t("co.agents.double")} ${a.double_answers} · ${t("co.agents.unanswered")} ${a.unanswered}`} />
+              <Stat label={t("co.agents.unanswered")} value={a.unanswered} tone={a.unanswered ? "bad" : undefined} sub={`${t("co.agents.frustrations")} ${a.frustrations} · ${t("co.agents.double")} ${a.double_answers}`} />
             </div>
           </Panel>
         </section>

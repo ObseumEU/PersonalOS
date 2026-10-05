@@ -17,6 +17,8 @@ export type ScoreGoal = {
   progress: number;
   current_at: string | null;
   lower_is_better: boolean;
+  /** The target is reached (null without numbers). */
+  met?: boolean | null;
   trend: [string, number | null, number | null][];
   delta: number | null;
   progress_delta: number | null;
@@ -68,6 +70,9 @@ export type Scorecard = {
     review_queue: number;
     review_over_sla: number;
     review_oldest_hours: number | null;
+    /** One definition of the queue (pos.review_queue): "70 čeká na kontrolu vedoucích, 0 na tebe". */
+    review_for_owner?: number;
+    review_text?: string;
     loops: number;
     incidents: number;
     frustrations: number;

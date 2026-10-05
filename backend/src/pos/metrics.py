@@ -135,7 +135,9 @@ def _business(db_path: Path) -> list[str]:
                 continue
             out.append(f"pos_runs_total{_labels(status=r['status'], kind=r['kind'])} {r['n']}")
         out += ["# TYPE pos_runs_running gauge", f"pos_runs_running {running}"]
-        n = conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'review'").fetchone()[0]
+        from . import review_queue
+
+        n = review_queue.queue(conn)["total"]
         out += ["# HELP pos_review_queue Tasks waiting in review.", "# TYPE pos_review_queue gauge",
                 f"pos_review_queue {n}"]
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")

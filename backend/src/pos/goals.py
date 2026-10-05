@@ -26,6 +26,7 @@ is a status, archiving sets archived_at.
 """
 
 import sqlite3
+import unicodedata
 from datetime import date
 
 from . import actors, audit
@@ -168,11 +169,38 @@ def to_dict(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     return d
 
 
+def lower_is_better(d: dict) -> bool:
+    """A goal whose target is below its baseline (hours to answer), or whose metric is a time or a
+    median: less is progress."""
+    b, t = d.get("baseline"), d.get("target_value")
+    if b is not None and t is not None and b != t:
+        return t < b
+    metric = unicodedata.normalize("NFKD", (d.get("metric") or "").lower())
+    metric = "".join(c for c in metric if not unicodedata.combining(c))
+    return any(w in metric for w in ("hodin", "median", "minut", "dni do", "doba", "cas do", "zpozdeni"))
+
+
+def met(d: dict) -> bool | None:
+    """Is the target reached (None without numbers)?"""
+    c, t = d.get("current"), d.get("target_value")
+    if c is None or t is None:
+        return None
+    return c <= t if lower_is_better(d) else c >= t
+
+
 def _measured(d: dict) -> int | None:
-    """Progress from the numbers: how far current got from baseline towards target_value."""
+    """Progress from the numbers: how far current got from baseline towards target_value. A goal where
+    less is better (median 28.2 h against 24 h) is 100 % only when it is at or under the target; without
+    a baseline it is target / current (24 / 28.2 = 85 %), never "over 100 %"."""
     b, c, t = d.get("baseline"), d.get("current"), d.get("target_value")
     if c is None or t is None:
         return None
+    if lower_is_better(d):
+        if c <= t:
+            return 100
+        if b is None or b <= t:
+            return max(0, min(99, round(100 * t / c))) if c > 0 else 0
+        return max(0, min(99, round(100 * (b - c) / (b - t))))
     b = 0.0 if b is None else b
     if t == b:
         return 100 if c == t else 0

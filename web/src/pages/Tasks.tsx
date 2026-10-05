@@ -8,7 +8,7 @@ import { MockDot, PageHeader } from "../components/ui";
 import { plural, t } from "../i18n";
 import { useNeedsMe } from "../needsMeApi";
 import { setSheetOrder, taskHref } from "../taskSheet";
-import { type Task, type View, dueLabel, tasksApi } from "../tasksApi";
+import { type ReviewQueue, type Task, type View, dueLabel, tasksApi } from "../tasksApi";
 import { agendaApi } from "./Calendar";
 
 export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
@@ -260,13 +260,18 @@ export default function Tasks() {
   }, [grouped, visible.join()]);
   useEffect(() => () => setSheetOrder([]), []);
 
+  const [queue, setQueue] = useState<ReviewQueue | null>(null);
+  useEffect(() => {
+    tasksApi.reviewQueue().then(setQueue, () => setQueue(null));
+  }, [tasks]);
   const hrefOf = (r: string) => taskHref(loc, r);
   const n = (g: Group) => grouped[g].length;
   const summaryLine = [
     n("you") && `${n("you")} ${plural(n("you"), t("tk.sub.you1"), t("tk.sub.you2"), t("tk.sub.you5"))}`,
     n("mine") && t("tk.sub.mine", { n: n("mine") }),
     n("progress") && t("tk.sub.progress", { n: n("progress") }),
-    n("review") && t("tk.sub.review", { n: n("review") }),
+    // The queue from one definition (pos.review_queue), with whose it is; not this list's own count.
+    queue ? queue.text : n("review") && t("tk.sub.review", { n: n("review") }),
   ]
     .filter(Boolean)
     .join(" · ");

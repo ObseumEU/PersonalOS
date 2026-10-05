@@ -124,11 +124,19 @@ def list_tasks(view: str = "today", topic: str | None = None, assignee_id: int |
     return out
 
 
+@router.get("/review-queue")
+def get_review_queue(conn=Depends(get_db)):
+    """The review queue, one definition for every page: {total, for_owner, for_leads, text, …}."""
+    from . import review_queue
+
+    return review_queue.queue(conn)
+
+
 @router.get("/weekly-review")
 def weekly_review(conn=Depends(get_db), ctx=Depends(get_ctx)):
     """The GTD weekly review for the signed-in member: inbox to zero, waiting for,
     someday, and projects without a next step."""
-    from . import projects
+    from . import projects, review_queue
 
     no_next = [p for p in projects.list_projects(conn, ctx, "active")
                if not conn.execute("""SELECT 1 FROM tasks WHERE project_id = ? AND archived_at IS NULL
@@ -139,6 +147,7 @@ def weekly_review(conn=Depends(get_db), ctx=Depends(get_ctx)):
         "someday": tasks.list_tasks(conn, ctx, "someday", scope="mine"),
         "projects_without_next": [{k: p[k] for k in ("id", "slug", "name", "lead_name", "counts")} for p in no_next],
         "to_review": tasks.list_tasks(conn, ctx, "to_review"),
+        "review_queue": review_queue.queue(conn),
     }
 
 
@@ -339,8 +348,11 @@ def task_related(task_id: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
             details = json.loads(r["details"] or "{}")
             why = str(details.get("why") or details.get("reason") or details.get("summary") or "")
             shown = {k: v for k, v in details.items() if k not in ("why", "reason", "summary", "screenshot")}
+            from . import approval_view
+
             approvals_.append({"id": r["id"], "action": r["action"], "why": why[:400], "at": r["created_at"],
-                               "requested_by_name": r["requested_by_name"], "details": shown})
+                               "requested_by_name": r["requested_by_name"], "details": shown,
+                               "view": approval_view.view(conn, r["action"], details)})
     text = " ".join(filter(None, [task.get("notes"), task.get("progress_note"), task.get("definition_of_done")]))
     seen = {tid, task.get("parent_id"), *(a["id"] for a in asks_open)}
     if ask_for and ask_for["task"]:
