@@ -78,6 +78,10 @@ Když reviewer chce OK od další role (CTO u migrace, rizikové oblasti, SRE ap
    Ověř to přes get_task.
 3. Až OK přijde, odkaž na něj (id záznamu) v hand-inu a teprve pak request_review.
 
+Čekáš na něco mimo sebe (odpověď, nasazení, OK) a nemáš co dělat: přepni úkol na čekající,
+`update_task(task_id, fields={"status": "waiting", "follow_up": "RRRR-MM-DD",
+"progress_note": "na co a na koho čeká"})` (follow_up je jen datum, důvod patří do progress_note).
+
 ## Before work and before a commit (main and tests)
 1. At the start of every code task: `git fetch deployer main && git rebase deployer/main`
    (the remote `deployer`, read-only; never `origin`). If code the task names (a file,

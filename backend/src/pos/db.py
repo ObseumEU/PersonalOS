@@ -775,6 +775,14 @@ MIGRATIONS: list[str] = [
        AND last_seen_at = created_at
        AND NOT EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.device_id = auth_devices.id);
     """,
+    # 2026-10 audit: the COO and the CTO are members of every project (pos.projects.DEFAULT_MEMBER_ROLES);
+    # the COO was refused project_decision in projects it routes work for. A lead stays the lead.
+    """
+    INSERT OR IGNORE INTO project_members (project_id, actor_id, role, added_at)
+        SELECT p.id, a.id, 'member', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')
+          FROM projects p JOIN actors a ON a.role IN ('project_manager', 'cto')
+         WHERE a.kind != 'human' AND a.archived_at IS NULL;
+    """,
 ]
 
 

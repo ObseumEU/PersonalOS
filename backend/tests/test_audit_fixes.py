@@ -182,6 +182,119 @@ def test_only_the_kniha_team_and_the_ceo_get_the_reservations_tool():
                        "kniha-content-creator"}
 
 
+@pytest.fixture
+def org(tmp_path):
+    """The CEO, COO, CTO, the Performance Coach, the Software Engineer and two agents talking privately."""
+    path = tmp_path / "org.db"
+    conn = connect(path)
+    migrate(conn)
+    ids = actors.ensure_builtin(conn)
+    agents.seed_builtin_permissions(conn)
+    owner = Ctx(actors.owner_id(conn))
+    perms = ["tasks:read", "tasks:claim", "tasks:write", "tasks:review", "messages:send", "approvals:request"]
+    for name, role in (("CEO", "ceo"), ("COO", "project_manager"), ("CTO", "cto"), ("Performance Coach", "coach"),
+                       ("Software Engineer", "developer"), ("Agent X", "content"), ("Agent Y", "growth")):
+        row = actors.find_by_name(conn, name)
+        if row is None:
+            row = agents.create_agent(conn, owner, name=name, purpose=name, lifetime="long_lived",
+                                      permissions=perms, data_dir=tmp_path)["agent"]
+        conn.execute("UPDATE actors SET role = ?, permissions = ? WHERE id = ?", (role, json.dumps(perms), row["id"]))
+        ids[name] = row["id"]
+    conn.commit()
+    conn.close()
+    return path, ids
+
+
+def test_the_ceo_reads_every_agent_channel_but_not_the_owners_dms(org):
+    from pos import chat
+
+    path, ids = org
+    conn = connect(path)
+    x = Ctx(ids["Agent X"])
+    group = chat.create_channel(conn, x, "tajny-plan", [ids["Agent Y"]], visibility="private")
+    chat.send(conn, x, group["id"], "Plán na příští týden")
+    dm = chat.send_dm(conn, x, ids["Agent Y"], "Jen mezi námi")
+    owner_dm = chat.send_dm(conn, Ctx(actors.owner_id(conn)), ids["Agent X"], "Osobní věc")
+    conn.commit()
+    conn.close()
+    server = mcp_server.build(path, default_actor=lambda c: ids["CEO"])
+
+    async def scenario():
+        async with Client(server) as c:
+            got = _call(await c.call_tool("chat_read", {"channel": "tajny-plan"}))
+            assert "Plán na příští týden" in " ".join(m["body"] for m in got["messages"])
+            got = _call(await c.call_tool("chat_read", {"channel": str(dm["channel_id"])}))
+            assert "Jen mezi námi" in " ".join(m["body"] for m in got["messages"])
+            refused = await c.call_tool("chat_read", {"channel": str(owner_dm["channel_id"])})
+            assert refused.is_error
+
+    anyio.run(scenario)
+    conn = connect(path)
+    assert not chat._is_member(conn, group["id"], ids["CEO"])  # it reads without joining
+    ch = chat._channel(conn, group["id"])
+    assert not chat.can_read(conn, ch, ids["COO"])  # only the CEO
+    conn.close()
+
+
+def test_the_coo_and_the_cto_are_in_every_project(org):
+    from pos import db as dbmod, projects
+
+    path, ids = org
+    conn = connect(path)
+    owner = Ctx(actors.owner_id(conn))
+    p = projects.create(conn, owner, name="Nový projekt", lead=ids["Agent X"], channel=False)
+    members = {m["actor_id"]: m["role"] for m in projects.members(conn, p["id"])}
+    assert members == {ids["Agent X"]: "lead", ids["COO"]: "member", ids["CTO"]: "member"}
+    led = projects.create(conn, owner, name="Projekt CTO", lead=ids["CTO"], channel=False)
+    assert {m["actor_id"]: m["role"] for m in projects.members(conn, led["id"])}[ids["CTO"]] == "lead"
+    # The migration adds them to projects that existed before; a lead stays the lead.
+    conn.execute("DELETE FROM project_members WHERE actor_id IN (?, ?) AND role = 'member'", (ids["COO"], ids["CTO"]))
+    conn.executescript(dbmod.MIGRATIONS[-1])
+    assert {m["actor_id"]: m["role"] for m in projects.members(conn, p["id"])} == members
+    assert {m["actor_id"]: m["role"] for m in projects.members(conn, led["id"])}[ids["CTO"]] == "lead"
+    conn.close()
+
+
+def test_the_coach_reads_instructions_before_proposing_and_others_do_not(org, monkeypatch, tmp_path):
+    from pos import agents as agents_mod
+
+    path, ids = org
+    conn = connect(path)
+    f = tmp_path / "x.md"
+    f.write_text("# Agent X\nDělej dobře svou práci.\n", encoding="utf-8")
+    monkeypatch.setattr(agents_mod, "repo_instructions", lambda name: f if name == "Agent X" else None)
+    got = agents_mod.get_instructions(conn, Ctx(ids["Performance Coach"]), ids["Agent X"])
+    assert got["text"].startswith("# Agent X") and got["path"].endswith("/INSTRUCTIONS.md")
+    assert agents_mod.get_instructions(conn, Ctx(ids["Agent X"]), ids["Agent X"])["text"]  # its own
+    with pytest.raises(Exception, match="reads its instructions"):
+        agents_mod.get_instructions(conn, Ctx(ids["Agent Y"]), ids["Agent X"])
+    conn.close()
+    assert "get_instructions" in mcp_server.tool_names()
+
+
+def test_the_software_engineer_can_set_its_task_to_waiting(org):
+    from pathlib import Path
+
+    path, ids = org
+    root = Path(__file__).resolve().parents[2] / "agents"
+    profile = json.loads((root / "software-engineer" / "agent.json").read_text("utf-8"))["profile"]
+    assert "update_task" in profile["pos_tools"].split()
+    conn = connect(path)
+    t = tasks.create(conn, Ctx(actors.owner_id(conn)), {"title": "Oprava", "status": "working",
+                                                        "assignee": {"type": "agent", "id": ids["Software Engineer"]}})
+    conn.commit()
+    conn.close()
+    server = mcp_server.build(path, default_actor=lambda c: ids["Software Engineer"])
+
+    async def scenario():
+        async with Client(server) as c:
+            got = _call(await c.call_tool("update_task", {"task_id": t["ref"], "fields": {
+                "status": "waiting", "follow_up": "2026-10-10", "progress_note": "čeká na nasazení"}}))
+            assert got["status"] == "waiting"
+
+    anyio.run(scenario)
+
+
 def test_a_routine_or_notify_only_report_needs_no_inline_content(db):
     path, ids = db
     plain = {"takeaway": "Kontrola proběhla, vše v pořádku.", "next": "Nic dalšího."}

@@ -32,7 +32,8 @@ def test_a_project_has_a_lead_members_a_channel_and_its_lead_reviews(co):
                         definition_of_done="All four published", lead="Designer", member_refs=["Writer"],
                         labels=["#Marketing"])
     assert p["slug"] == "podzimni-kampan" and p["lead_name"] == "Designer" and p["labels"] == ["marketing"]
-    assert {m["name"]: m["role"] for m in p["members"]} == {"Designer": "lead", "Writer": "member"}
+    # the COO is in every project too (pos.projects.DEFAULT_MEMBER_ROLES)
+    assert {m["name"]: m["role"] for m in p["members"]} == {"Designer": "lead", "Writer": "member", "COO": "member"}
     assert p["channel_id"] and chat.channel_view(c, p["channel_id"], me.actor_id)["name"] == "podzimni-kampan"
     t = tasks.create(c, me, {"title": "Post 1", "assignee": {"type": "agent", "id": ids["Writer"]},
                              "project": p["slug"]})
@@ -44,7 +45,7 @@ def test_a_project_has_a_lead_members_a_channel_and_its_lead_reviews(co):
     assert got["counts"]["done"] == 1 and got["tasks"][0]["ref"] == t["ref"]
     with pytest.raises(Forbidden):
         projects.add_member(c, Ctx(ids["Writer"]), p["slug"], "Executive Assistant")
-    assert len(projects.add_member(c, Ctx(ids["Designer"]), p["slug"], "Executive Assistant")["members"]) == 3
+    assert len(projects.add_member(c, Ctx(ids["Designer"]), p["slug"], "Executive Assistant")["members"]) == 4
 
 
 def test_tasks_with_steps_become_projects_once(co):

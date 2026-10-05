@@ -81,7 +81,7 @@ def test_details_decisions_files_and_activity(co, kb):
         projects.update(c, me, p["slug"], {"goal_progress": 140})
     # A new lead: the old one stays a member.
     got = projects.update(c, me, p["slug"], {"lead": "Writer"})
-    assert {m["name"]: m["role"] for m in got["members"]} == {"Writer": "lead", "Designer": "member"}
+    assert {m["name"]: m["role"] for m in got["members"]} == {"Writer": "lead", "Designer": "member", "COO": "member"}
     # Decisions: members log them.
     projects.may_log(c, Ctx(ids["Designer"]), projects._row(c, me, p["slug"]))
     d = project_info.add_log(c, Ctx(ids["Designer"]), p["id"], text="Card payments via Stripe", why="cheapest",

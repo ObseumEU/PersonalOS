@@ -119,7 +119,7 @@ TOOL_PERMISSIONS = {
     # Commenting on a task you may read: tasks:read (mentions reach inboxes as system DMs).
     "task_comment": "tasks:read",
     # Feedback: any member gives it; resolving is checked in pos.feedback.
-    "propose_instructions": "tasks:claim",
+    "propose_instructions": "tasks:claim", "get_instructions": "tasks:read",
     "file_list": "tasks:read", "file_upload": "tasks:write",
     # Agents' files and their own computer (pos.agent_files, pos.sandbox): every agent (tasks:claim);
     # file_share and sandbox_share also follow chat's rules (and work when someone waits for the answer).
@@ -358,6 +358,18 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "give_feedback", to=to, kind=kind) as (conn, c):
             tid = tasks.parse_id(task_id) if task_id else None
             return feedback.give(conn, c, to, body, kind, tid, rating)
+
+    @mcp.tool(description="Read an agent's current instructions (its INSTRUCTIONS.md, the whole text), e.g. "
+                          "before propose_instructions, which replaces the whole text: change only what needs "
+                          "changing. For yourself, the owner, the agent's lead, HR and the Performance Coach.")
+    def get_instructions(ctx: Context, agent: str) -> dict:
+        from . import agents
+
+        with session(ctx, "get_instructions", agent=agent) as (conn, c):
+            target = actors.find_by_name(conn, agent)
+            if target is None:
+                raise NotFound(f"no member called {agent}")
+            return agents.get_instructions(conn, c, target["id"])
 
     @mcp.tool(description="Propose a new version of an agent's instructions (the whole text). It becomes a task "
                           "for the Dev agent to commit agents/<slug>/INSTRUCTIONS.md; the deployer checks it. For the "
@@ -821,7 +833,7 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                     if ch is None:
                         return {"channel_id": None, "messages": [], "has_more": False}
                 me = actors.get(conn, c.actor_id)
-                if me["kind"] != "human" and not me["is_owner"] and not chat._is_member(conn, ch["id"], c.actor_id):
+                if me["kind"] != "human" and not me["is_owner"] and not chat._is_member(conn, ch["id"], c.actor_id)                         and not chat.ceo_reads(conn, ch, c.actor_id):
                     raise Forbidden(f"you are not in #{ch['name'] or ch['id']}: agents read the channels they "
                                     f"belong to (and their DMs); ask a member to invite you")
                 out = chat.messages(conn, c.actor_id, ch["id"], after=since_id, limit=max(1, min(limit, 50)),

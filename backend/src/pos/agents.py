@@ -432,6 +432,23 @@ def restore(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
     return {**detail(conn, agent_id), "api_key": key}
 
 
+def get_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int) -> dict:
+    """An agent's current instructions, for whoever may propose new ones (and the agent itself): a
+    proposal replaces the whole text, so it starts from this one."""
+    from .org import manages
+
+    row = _agent_row(conn, agent_id)
+    me = actors.get(conn, ctx.actor_id)
+    hr_may = me["name"] == roles.HR and row["name"] not in HR_HANDS_OFF and not row["is_owner"]
+    if not (me["is_owner"] or ctx.actor_id == agent_id or me["name"] == roles.COACH or hr_may
+            or manages(conn, ctx.actor_id, agent_id)):
+        raise _Forbidden(f"the agent itself, its lead, HR or the {roles.COACH} reads its instructions")
+    text = instructions_of(row)
+    path = f"agents/{_slug(row['name'])}/INSTRUCTIONS.md"
+    return {"agent": row["name"], "path": path, "text": text or "",
+            **({} if text else {"note": "this agent has no instructions file yet"})}
+
+
 def propose_instructions(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, text: str, reason: str = "") -> dict:
     """A new version of an agent's instructions goes the way every change does:
     a task for the Software Engineer to commit agents/<slug>/INSTRUCTIONS.md on agent/dev,

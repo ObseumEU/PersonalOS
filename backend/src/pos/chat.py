@@ -136,10 +136,24 @@ def member_ids(conn: sqlite3.Connection, channel_id: int) -> list[int]:
 
 def can_read(conn: sqlite3.Connection, ch: sqlite3.Row, actor_id: int) -> bool:
     """Members read; team and public groups are open to every member of
-    PersonalOS; the owner may read everything (oversight of agents' DMs)."""
+    PersonalOS; the owner may read everything (oversight of agents' DMs); the CEO
+    reads every agent channel (ceo_reads)."""
     if _is_member(conn, ch["id"], actor_id) or actors.get(conn, actor_id)["is_owner"]:
         return True
+    if ceo_reads(conn, ch, actor_id):
+        return True
     return ch["kind"] == "group" and ch["visibility"] != "private"
+
+
+def ceo_reads(conn: sqlite3.Connection, ch: sqlite3.Row, actor_id: int) -> bool:
+    """The CEO agent oversees the company: it reads every group channel and every DM between agents,
+    without joining (2026-10: it was refused #channels it was not in). Never the owner's DMs."""
+    me = actors.get(conn, actor_id)
+    if (me["role"] or "") != "ceo" or me["kind"] == "human" or me["archived_at"]:
+        return False
+    if ch["kind"] == "group":
+        return True
+    return actors.owner_id(conn) not in member_ids(conn, ch["id"])
 
 
 def _check_read(conn: sqlite3.Connection, ch: sqlite3.Row, actor_id: int) -> None:

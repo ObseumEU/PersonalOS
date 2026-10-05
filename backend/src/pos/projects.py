@@ -153,6 +153,9 @@ def create(conn: sqlite3.Connection, ctx: Ctx, *, name: str, goal: str = "", def
         mid = _member(conn, ref)["id"]
         if mid != lead_row["id"]:
             _add(conn, pid, mid, "member")
+    for mid in default_member_ids(conn):  # the COO and the CTO are in every project (decisions, routing)
+        if mid != lead_row["id"]:
+            _add(conn, pid, mid, "member")
     if channel:
         _open_channel(conn, ctx, pid)
     info = {k: v for k, v in (details or {}).items() if v not in (None, "", [], {})}
@@ -174,6 +177,18 @@ def _open_channel(conn: sqlite3.Connection, ctx: Ctx, project_id: int) -> None:
         conn.execute("UPDATE projects SET channel_id = ? WHERE id = ?", (ch["id"], project_id))
     except Exception as e:  # noqa: BLE001 - a name clash or no chat right never stops the project
         audit.log(conn, ctx, "project_channel_failed", ENTITY, project_id, error=str(e)[:200])
+
+
+# Roles in every project (2026-10: the COO was refused project_decision in projects it routes work for).
+DEFAULT_MEMBER_ROLES = ("project_manager", "cto")
+
+
+def default_member_ids(conn: sqlite3.Connection) -> list[int]:
+    """The COO and the CTO (active agents with those roles): members of every project."""
+    marks = ",".join("?" for _ in DEFAULT_MEMBER_ROLES)
+    return [r[0] for r in conn.execute(
+        f"SELECT id FROM actors WHERE role IN ({marks}) AND kind != 'human' AND archived_at IS NULL ORDER BY id",
+        DEFAULT_MEMBER_ROLES)]
 
 
 def _add(conn: sqlite3.Connection, project_id: int, actor_id: int, role: str) -> None:

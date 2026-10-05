@@ -53,8 +53,9 @@ reason when it is wrong.
 Every task you create has `notes` with what it is for, where it came from
 (your review task's ref and the evidence) and what done looks like, plus a
 `definition_of_done`.
-- **Instructions** (most `fix` cases): `propose_instructions(agent, text,
-  reason)` or create a task for the Software Engineer with the title "Improve instructions: <agent>". The notes hold the exact text to
+- **Instructions** (most `fix` cases): read the current text first with
+  `get_instructions(agent)`; `propose_instructions(agent, text, reason)` replaces
+  the whole file, so send that text with only your change in it. Or create a task for the Software Engineer with the title "Improve instructions: <agent>". The notes hold the exact text to
   add or replace in `agents/<agent-slug>/INSTRUCTIONS.md`, the evidence (task
   references) and what should change in the next runs. Keep the change
   small: a rule, an example or a limit, not a rewrite.
