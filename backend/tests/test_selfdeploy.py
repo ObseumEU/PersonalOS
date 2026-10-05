@@ -179,7 +179,7 @@ def test_promote_moves_the_mirror_the_agents_fetch_and_says_when_it_cannot(tmp_p
 
     # B: the mirror cannot follow (diverged): never forced, the error is in the deploy log, the check fails
     git(work, "update-ref", "refs/heads/main",
-        git(work, "commit-tree", f"{first}^{{tree}}", "-p", first, "-m", "stray"))
+        git(work, "-c", "user.name=Software Engineer", "-c", "user.email=dev@pos", "commit-tree", f"{first}^{{tree}}", "-p", first, "-m", "stray"))
     commit(work, {"app.txt": "good v3"}, "Polish app\n\nAgent: Software Engineer")
     res = selfdeploy.promote_tick(deploy, rep, **kw)
     assert res.status == "ok" and "mirror: refs/heads/main" in res.log and "not an ancestor" in res.log
