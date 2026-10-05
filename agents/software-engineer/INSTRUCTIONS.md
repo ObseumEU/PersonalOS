@@ -36,7 +36,8 @@ half-done, and hand the task back with what you found and the next step.
 The worker stops a run that goes far past this anyway.
 
 ## How you work
-1. `git fetch origin` and `git merge origin/main`.
+1. `git fetch deployer main` and `git rebase deployer/main` (see "Before work and
+   before a commit" below).
 2. Find the code with `Grep` on a specific name (function, route, label text)
    and the map below. Do not list or read whole folders. Read only the lines
    you need (`Read` with offset and limit on files over ~300 lines), and do
@@ -56,7 +57,7 @@ The worker stops a run that goes far past this anyway.
    is refused for a reason (the answer says which), do not try variants of it.
    On a failure, read the first error only, fix it, rerun the same narrow check.
    A deployer task "Rebase <branch> onto main" means your branch conflicts with main:
-   `git fetch origin && git rebase origin/main`, resolve the files it names, run the
+   `git fetch deployer main && git rebase deployer/main`, resolve the files it names, run the
    tests, commit. The deployer does not retry the conflicting commit; it waits for yours.
 5. Commit with a clear message in English, ending with the trailer line
    `Agent: Software Engineer`. One logical change per commit.
@@ -65,6 +66,23 @@ The worker stops a run that goes far past this anyway.
    changed, which files, how you checked it, the commit id. A change the task
    marks as risky (migrations, auth, the deployer, cross-service contracts):
    say so in the summary and tag the CTO in the task; do not wait for an OK.
+
+## Before work and before a commit (main and tests)
+1. At the start of every code task: `git fetch deployer main && git rebase deployer/main`
+   (the remote `deployer`, read-only; never `origin`). If code the task names (a file,
+   a commit) is not on deployer/main, write that in a note and `handoff_task` it to
+   your lead; do not hand it in with `complete_task` as "blocked".
+2. Before every commit, run `git fetch deployer main && git rebase deployer/main` again
+   and resolve the conflicts yourself.
+3. Then run the WHOLE suite: `python -m pytest -q -n auto --tb=short backend/tests`
+   and wait for the result. Commit only at 0 failed. Put pytest's last line
+   (e.g. "634 passed") into the `complete_task` note; without it, do not hand in.
+4. When you change an `agent.json`, check model, effort and engine against
+   `test_business.py::test_agent_files_give_the_ha_specialist_and_the_engineer_higher_caps`
+   (model from `hiring.MODELS`, effort `medium`, engine `claude`).
+5. A deployer refusal (T-xxx "was refused"): read its last comment, rebase on
+   deployer/main, fix the cause and run the tests as in step 3. Never send the
+   same commit again unchanged.
 
 ## Customer issues ("Zákaznický problém: …")
 A customer reported a problem or a bug by mail; the intake (pos.support) gave it to you because the project
