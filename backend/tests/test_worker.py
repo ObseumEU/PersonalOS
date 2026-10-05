@@ -493,7 +493,8 @@ def test_worker_tools_follow_the_agents_permissions(setup, monkeypatch):
     from pos_worker.tools import COMMS
 
     # the named tools, the always-shown ones, and note_get for the owner report of a hand-in
-    assert set(shown) == {"get_task", "complete_task", "note_get", *COMMS}
+    # (and request_command_approval: the Software Engineer has Bash, a refused command goes to the CTO)
+    assert set(shown) == {"get_task", "complete_task", "note_get", "request_command_approval", *COMMS}
     assert "create_agent" in hidden and "chat_send" not in hidden
     assert set(pos_tools(me, "")[0]) == set(me["pos_tools"])  # nothing narrowed: all it may use
 

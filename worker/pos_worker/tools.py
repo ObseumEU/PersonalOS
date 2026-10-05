@@ -67,6 +67,8 @@ def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]
     wanted = {t.removeprefix("mcp__pos__") for t in expand(tool_list(raw))}
     if wanted and wanted & set(HAND_IN):
         wanted |= set(REPORT_TOOLS)
+    if wanted and "Bash" in str((me.get("profile") or {}).get("claude_builtin") or ""):
+        wanted.add("request_command_approval")  # a refused command goes to the CTO (pos_worker.command_hook)
     shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]
     everything = set(me.get("all_pos_tools") or []) | set(permitted)
     return shown, sorted(everything - set(shown))

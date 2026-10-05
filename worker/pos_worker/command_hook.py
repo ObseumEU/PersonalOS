@@ -2,7 +2,8 @@
 run is checked by PersonalOS's command guard (/api/worker/check-command,
 constitution U1/U3/U4) before it runs.
 
-    allow        -> no decision here; Claude's allow-list still applies
+    allow        -> no decision here; Claude's allow-list still applies (a command it would refuse
+                    is denied here with the hint to ask the CTO: request_command_approval)
     allow + auto -> allowed (safe engineering work inside the agent's own worktree,
                     or a command the CTO approved: pos.command_policy)
     needs_owner  -> denied; PersonalOS made a task for the owner
@@ -14,8 +15,10 @@ Configured by ClaudeSession (`--settings`); reads the hook event on stdin and
 POS_URL / POS_AGENT_KEY from the environment.
 """
 
+import fnmatch
 import json
 import os
+import re
 import sys
 
 import httpx
@@ -43,7 +46,13 @@ def decide(event: dict, post=None) -> dict | None:
         return _deny(f"The command guard is not reachable ({type(e).__name__}); the command was not run.")
     outcome = out.get("outcome")
     if outcome == "allow":
-        return _allow(out.get("reason") or "allowed") if out.get("auto") else None
+        if out.get("auto"):
+            return _allow(out.get("reason") or "allowed")
+        allowed = _allowed_patterns()
+        if allowed is not None and not cli_allows(command, allowed):
+            # The CLI would refuse it with a bare "requires approval" (2026-10: no agent ever asked the CTO).
+            return _deny(APPROVAL_HINT)
+        return None
     if outcome == "needs_cto":
         return _deny(f"{out.get('reason') or 'Needs the CTO.'} The CTO has a task for it"
                      f"{' (' + out['cto_task'] + ')' if out.get('cto_task') else ''}; do something else meanwhile.")
@@ -51,6 +60,65 @@ def decide(event: dict, post=None) -> dict | None:
         return _deny(f"{out.get('reason') or 'Needs the owner.'} The owner has a task for it"
                      f"{' (' + out['owner_task'] + ')' if out.get('owner_task') else ''}; do something else meanwhile.")
     return _deny(out.get("reason") or f"Refused by the constitution ({out.get('rule') or 'guard'}).")
+
+
+APPROVAL_HINT = ("Tento příkaz není na tvém allow-listu ani mezi automaticky povolenými (git, ruff, pytest, npm "
+                 "build/test a úpravy souborů uvnitř tvého worktree). Potřebuješ-li ho, zavolej "
+                 "request_command_approval(command=<přesně tento příkaz>, why=<jedna věta k čemu>): CTO ho schválí "
+                 "a pak ti poběží 7 dní. Mezitím dělej něco jiného, neobcházej to jiným příkazem.")
+
+# Commands the CLI runs without an allow-list entry (read-only).
+CLI_READ_ONLY = {"ls", "pwd", "echo", "cat", "head", "tail", "grep", "rg", "wc", "sort", "uniq", "cut", "tr",
+                 "true", "false", "cd", "find", "file", "stat", "diff", "which", "date", "basename", "dirname",
+                 "realpath", "tree", "du", "df", "env"}
+_SEPARATORS = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
+
+
+def bash_patterns(allowed_tools: list[str]) -> list[str]:
+    """The Bash rules of an --allowedTools list: "*" for plain Bash, else each Bash(...) inner pattern."""
+    out = []
+    for t in allowed_tools or []:
+        t = t.strip()
+        if t == "Bash":
+            out.append("*")
+        elif t.startswith("Bash(") and t.endswith(")"):
+            out.append(t[5:-1])
+    return out
+
+
+def _allowed_patterns() -> list[str] | None:
+    raw = os.environ.get("POS_BASH_ALLOWED")
+    if raw is None:
+        return None
+    try:
+        got = json.loads(raw)
+    except ValueError:
+        return None
+    return [str(p) for p in got] if isinstance(got, list) else None
+
+
+def _matches(part: str, pattern: str) -> bool:
+    if pattern == "*":
+        return True
+    if pattern.endswith(":*"):
+        return part == pattern[:-2] or part.startswith(pattern[:-2])
+    if "*" in pattern:
+        return fnmatch.fnmatchcase(part, pattern)
+    return part == pattern
+
+
+def cli_allows(command: str, patterns: list[str]) -> bool:
+    """Would the CLI's allow-list run this command (every part of a compound command allowed)? An
+    approximation erring towards "yes": an unsure answer leaves the decision to the CLI."""
+    for part in (p.strip() for p in _SEPARATORS.split(command.strip())):
+        if not part:
+            continue
+        first = part.split()[0]
+        if "=" in first or first in CLI_READ_ONLY:
+            continue
+        if not any(_matches(part, p) for p in patterns):
+            return False
+    return True
 
 
 def _allow(reason: str) -> dict:

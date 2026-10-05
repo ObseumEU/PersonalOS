@@ -29,6 +29,10 @@ COPY pyproject.toml ./
 COPY pos_worker ./pos_worker
 RUN pip install --no-cache-dir .
 
+# Mounted checkouts belong to other uids: git trusts them all ("dubious ownership" stopped agents),
+# and ruff is on PATH for every repository, not only inside a project's venv.
+RUN git config --system --add safe.directory '*' && pip install --no-cache-dir ruff
+
 ENV CODEX_HOME=/codex WORKER_WORKDIR=/work
 VOLUME ["/codex", "/work"]
 CMD ["python", "-m", "pos_worker"]

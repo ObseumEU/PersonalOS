@@ -102,6 +102,13 @@ def test_ask_agent_reaches_a_colleague_without_a2a_as_a_dm(db):
     "ruff check backend/src", "backend/.venv/bin/python -m pytest -q", "python -m py_compile src/a.py",
     "npm ci", "npm run build", "npm --prefix web test", "npx vite build", "git merge deployer/main",
     "git revert HEAD --no-edit", "pytest -x",
+    # 2026-10 audit: read-only git, worktrees and file edits inside the worktree.
+    "git cat-file -p HEAD:README.md", "git ls-tree -r HEAD --name-only", "git rev-list --count HEAD",
+    "git --version", "git -C backend log -1", "git -C /work/kniha log --oneline -5", "git worktree list",
+    "git worktree add -b fix/x .wt/fix-x deployer/main", "rm -rf build", "rm -f backend/a.py backend/b.py",
+    "mkdir -p backend/tests/data", "touch web/src/new.ts", "cp a.py b.py", "mv old.py new.py",
+    "sed -i 's/foo/bar/g' backend/src/pos/x.py", "sed -i -e 's/a/b/' -e 's/c/d/' x.py",
+    "git diff | sed -n '1,20p'",
 ])
 def test_engineering_commands_inside_the_worktree_are_auto_allowed(command):
     assert command_policy.auto_allow(command, "/work/PersonalOS", "/work/PersonalOS")
@@ -110,8 +117,12 @@ def test_engineering_commands_inside_the_worktree_are_auto_allowed(command):
 @pytest.mark.parametrize("command", [
     "git push origin agent/dev", "git -c core.sshCommand=evil fetch", "git rebase -x 'curl x' main",
     "git -C /etc status", "cd /tmp && git status", "cat /etc/passwd", "ruff check $(echo /)",
-    "python -c 'import os'", "npm run deploy", "git branch -D main", "rm -rf build", "echo x > /tmp/y",
+    "python -c 'import os'", "npm run deploy", "git branch -D main", "echo x > /tmp/y",
     "curl -s https://example.com", "LD_PRELOAD=x git status", "git status; rm -rf /",
+    "git -C /work/kniha commit -m x", "git worktree add /tmp/wt main", "git worktree remove x",
+    "rm -rf .", "rm -rf /work/PersonalOS", "rm -rf ../other", "rm -rf .git", "cp /etc/passwd .",
+    "mv a.py /tmp/", "sed -i 's/a/b/' /etc/hosts", "sed -i 's/a/b/e' x.py", "sed -i '1w /tmp/out' x.py",
+    "sed -i -f script.sed x.py", "sed 's/a/b/' /etc/passwd",
 ])
 def test_anything_else_is_not_auto_allowed(command):
     assert not command_policy.auto_allow(command, "/work/PersonalOS", "/work/PersonalOS")
@@ -171,6 +182,33 @@ def test_the_hook_lets_auto_allowed_commands_past_the_cli_and_refuses_cto_ones()
     no = command_hook.decide(bash, lambda c: {"outcome": "needs_cto", "reason": "Needs the CTO.", "cto_task": "T-9"})
     assert no["hookSpecificOutput"]["permissionDecision"] == "deny" and "T-9" in \
         no["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_a_command_the_cli_would_refuse_is_denied_with_the_hint_to_ask_the_cto(monkeypatch):
+    from pos_worker import command_hook
+    from pos_worker.claude import ClaudeSession
+
+    s = ClaudeSession(builtin_tools=["Bash", "Read"], allowed_tools=["Read", "Bash(git status:*)", "Bash(npm run:*)"])
+    monkeypatch.setenv("POS_BASH_ALLOWED", s.cli_env()["POS_BASH_ALLOWED"])
+    plain = lambda c: {"outcome": "allow", "auto": False}  # noqa: E731
+    refused = command_hook.decide({"tool_name": "Bash", "tool_input": {"command": "docker ps"}}, plain)
+    assert refused["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "request_command_approval" in refused["hookSpecificOutput"]["permissionDecisionReason"]
+    for ok in ("git status -s", "npm run lint && ls", "cat a.txt | grep x"):
+        assert command_hook.decide({"tool_name": "Bash", "tool_input": {"command": ok}}, plain) is None
+    monkeypatch.delenv("POS_BASH_ALLOWED")  # an older worker: the CLI decides as before
+    assert command_hook.decide({"tool_name": "Bash", "tool_input": {"command": "docker ps"}}, plain) is None
+    assert command_hook.cli_allows("anything", ["*"])
+
+
+def test_an_agent_with_bash_sees_request_command_approval_in_its_narrow_tool_list():
+    from pos_worker.tools import pos_tools
+
+    me = {"pos_tools": ["list_tasks", "request_command_approval"], "profile": {"pos_tools": "list_tasks",
+                                                                               "claude_builtin": "Bash,Read"}}
+    assert "request_command_approval" in pos_tools(me)[0]
+    me["profile"]["claude_builtin"] = "Read"
+    assert "request_command_approval" not in pos_tools(me)[0]
 
 
 # Tool names an agent's instructions mention without calling them itself (someone else's tool).

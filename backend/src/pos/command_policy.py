@@ -8,8 +8,10 @@ U2-U4). Of what it allows:
 
 - **auto-allowed** (`auto_allow`): ordinary engineering work inside the agent's own worktree (the
   worker's POS_AGENT_WORKDIR): local git (fetch, rebase, merge, revert, commit, status, log, diff, ...),
-  ruff, pytest, py_compile, npm ci/install/test/run build, npx vite build / tsc, and read-only
-  filters in a pipeline. The worker's command hook then answers "allow", so the CLI's own allow-list
+  read-only git (cat-file, ls-tree, rev-list, --version; also `git -C` into another checkout under
+  /work), git worktree add/list inside the worktree, rm/cp/mv/mkdir/touch and `sed -i` when every
+  path is inside the worktree (never the worktree itself or .git), ruff, pytest, py_compile, npm
+  ci/install/test/run build, npx vite build / tsc, and read-only filters in a pipeline. The worker's command hook then answers "allow", so the CLI's own allow-list
   does not stop it. Anything that could run arbitrary code through git (`-c`, `--exec`, `rebase -x`,
   `--upload-pack`), command substitution, a path outside the worktree or a file redirect is not.
 - **needs the CTO** (`needs_cto`): a push and other network writes outside the deploy flow (the
@@ -38,7 +40,14 @@ _HARMLESS_REDIRECTS = {"2>&1", ">/dev/null", "2>/dev/null", "1>/dev/null", "&>/d
 
 SAFE_GIT = {"fetch", "rebase", "merge", "revert", "commit", "status", "log", "diff", "show", "add", "stash",
             "rev-parse", "switch", "checkout", "cherry-pick", "restore", "branch", "ls-files", "blame",
-            "merge-base", "describe", "shortlog"}
+            "merge-base", "describe", "shortlog", "cat-file", "ls-tree", "rev-list", "worktree"}
+# Read-only: also allowed with `git -C <path>` into another checkout under /work (a mounted repo).
+GIT_READ_ONLY = {"status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "merge-base", "describe",
+                 "shortlog", "cat-file", "ls-tree", "rev-list"}
+READ_ONLY_ROOTS = ("/work",)
+WORKTREE_SAFE = {"list", "add", "prune"}
+# File commands that only touch paths: allowed when every path is inside the worktree (never the root).
+FILE_CMDS = {"rm", "cp", "mv", "mkdir", "touch"}
 # git options that run programs or change where git works: never auto-allowed.
 GIT_UNSAFE_OPTS = ("-c", "--exec", "-x", "--upload-pack", "--receive-pack", "--git-dir", "--work-tree",
                    "--exec-path", "-i", "--interactive", "--config-env")
@@ -67,6 +76,66 @@ def _inside(path: str, cwd: str, workdir: str) -> bool:
     return full == root or full.startswith(root.rstrip("/") + "/")
 
 
+def _sed_script_safe(script: str) -> bool:
+    """No `e` (run a command), `w`/`W` (write a file) or `r`/`R` (read a file) commands or s///e|w flags."""
+    if re.search(r"(^|[;{}\n]|\s)[0-9$,/!]*\s*[eEwWrR](\s|$|;)", script):
+        return False
+    return re.search(r"s(.).*?\1.*?\1[gpiImM0-9]*[ew]", script) is None
+
+
+def _sed(args: list[str], cwd: str, workdir: str, first: bool) -> bool:
+    """sed (in place or as a filter): only plain scripts, only files inside the worktree."""
+    scripts, files, i, in_place = [], [], 0, False
+    while i < len(args):
+        a = args[i]
+        if a in ("-e", "--expression") and i + 1 < len(args):
+            scripts.append(args[i + 1])
+            i += 2
+            continue
+        if a.startswith("--expression="):
+            scripts.append(a.split("=", 1)[1])
+        elif a.startswith(("-i", "--in-place")):
+            in_place = True
+        elif a in ("-f", "--file") or a.startswith("--file="):
+            return False  # a script file: not read here
+        elif a.startswith("-") and a != "-":
+            if not re.fullmatch(r"-[nErsuz]+|--(quiet|silent|regexp-extended|separate|null-data|posix|debug)", a):
+                return False
+        elif not scripts:
+            scripts.append(a)
+        else:
+            files.append(a)
+        i += 1
+    if not scripts or not all(_sed_script_safe(x) for x in scripts):
+        return False
+    if not files:
+        return not first and not in_place
+    return all(_inside(f, cwd, workdir) for f in files)
+
+
+def _files_cmd(cmd: str, args: list[str], cwd: str, workdir: str) -> bool:
+    """rm/cp/mv/mkdir/touch with every path inside the worktree, and never the worktree itself or .git."""
+    paths, opts_done = [], False
+    for a in args:
+        if a == "--" and not opts_done:
+            opts_done = True
+        elif a.startswith("-") and not opts_done:
+            if a.startswith("--target-directory="):
+                paths.append(a.split("=", 1)[1])
+        else:
+            paths.append(a)
+    if not paths:
+        return False
+    root = posixpath.normpath(workdir)
+    for p in paths:
+        if not _inside(p, cwd, workdir):
+            return False
+        full = posixpath.normpath(posixpath.join(cwd, p))
+        if cmd in ("rm", "mv") and (full == root or posixpath.basename(full) == ".git"):
+            return False
+    return True
+
+
 def _python(tok: str) -> bool:
     base = posixpath.basename(tok)
     return base in ("python", "python3") or re.fullmatch(r"python3\.\d+", base) is not None
@@ -90,14 +159,14 @@ def _segment(words: list[str], cwd: str, workdir: str, first: bool) -> tuple[boo
         here = cwd
         while i < len(args) and args[i].startswith("-"):
             if args[i] == "-C" and i + 1 < len(args):
-                if not _inside(args[i + 1], cwd, workdir):
-                    return False, cwd
-                here = posixpath.normpath(posixpath.join(cwd, args[i + 1]))
+                here = posixpath.normpath(posixpath.join(here, args[i + 1]))
                 i += 2
                 continue
             if args[i] in ("--no-pager", "-P"):
                 i += 1
                 continue
+            if args[i] in ("--version", "--help") and i == len(args) - 1:
+                return True, cwd
             return False, cwd
         if i >= len(args) or args[i] not in SAFE_GIT:
             return False, cwd
@@ -106,7 +175,23 @@ def _segment(words: list[str], cwd: str, workdir: str, first: bool) -> tuple[boo
             return False, cwd
         if sub == "branch" and any(a in BRANCH_WRITE for a in rest):
             return False, cwd
-        return _inside(here, here, workdir), cwd
+        if sub == "worktree":
+            if not rest or rest[0] not in WORKTREE_SAFE:
+                return False, cwd
+            if rest[0] == "add":  # the new worktree goes inside the agent's own folder too
+                opts = rest[1:]
+                values = {opts[k + 1] for k, a in enumerate(opts[:-1]) if a in ("-b", "-B", "--reason")}
+                where = [a for a in opts if not a.startswith("-") and a not in values]
+                if not where or not _inside(where[0], here, workdir):
+                    return False, cwd
+        if _inside(here, here, workdir):
+            return True, cwd
+        # A read-only look into another checkout under /work (a mounted repo).
+        return sub in GIT_READ_ONLY and any(_inside(here, here, r) for r in READ_ONLY_ROOTS), cwd
+    if cmd in FILE_CMDS:
+        return _files_cmd(cmd, args, cwd, workdir), cwd
+    if cmd == "sed":
+        return _sed(args, cwd, workdir, first), cwd
     if cmd == "ruff":
         return bool(args) and args[0] in ("check", "format") and all(_inside(p, cwd, workdir) for p in paths[1:]), cwd
     if cmd in ("pytest", "py.test") or cmd.endswith(("/pytest", "/ruff")):

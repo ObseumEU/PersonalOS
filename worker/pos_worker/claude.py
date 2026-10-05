@@ -172,6 +172,12 @@ class ClaudeSession:
         out = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
         if self.tool_search is not None:
             out["ENABLE_TOOL_SEARCH"] = "true" if self.tool_search else "false"
+        if "Bash" in (self.builtin_tools or []):
+            # The command hook knows which commands the allow-list runs: a refused one gets the hint to ask
+            # the CTO (request_command_approval) instead of the CLI's bare "requires approval".
+            from .command_hook import bash_patterns
+
+            out["POS_BASH_ALLOWED"] = json.dumps(bash_patterns(self.allowed_tools))
         return out
 
     def _prompt_file(self) -> str | None:
