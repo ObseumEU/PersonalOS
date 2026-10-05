@@ -14,7 +14,8 @@ waiting for the CEO. Most of them did not need a person at all. Every hand-in no
     and nothing sent outside; or a small one by an experienced agent (≥ 10 results accepted in
     60 days, ≤ 15 % returned) whose tests passed.
 - **code**: a code change goes to the **QA Reviewer** (the default reviewer for code), unless it did
-  the work itself.
+  the work itself. Kniha work (project, team or topic kniha) goes to the **Kniha Lead** instead: QA
+  cannot see that repository (T-731); the Kniha Lead's own code goes to QA, never to itself.
 - **high**: customer replies, money, contracts, anything sent outside or waiting for an approval,
   the owner's own requests, and results that were returned before: never auto-accepted.
 - **normal**: the usual reviewer (pos.tasks.reviewer_of).
@@ -31,7 +32,8 @@ The small-task rules need the result's verification line (pos.verification). An 
 
 The backlog: `python -m pos.review_policy` (a dry run: what would happen to every result waiting
 for review) and `python -m pos.review_policy --apply`. The effect over past days:
-`python -m pos.review_policy --measure 2026-09-25 2026-10-02`.
+`python -m pos.review_policy --measure 2026-09-25 2026-10-02`. The Kniha results already waiting
+for QA, once: `python -m pos.review_policy --kniha --apply`.
 """
 
 import argparse
@@ -70,6 +72,7 @@ HIGH_RE = re.compile(r"\b(?:platb[auy]|zaplat|faktur|smlouv|contract|payment|inv
                      r"price quote|refund)\w*", re.IGNORECASE)
 CODE_TOPICS = {"code", "dev", "kniha-dev"}  # plans with topic engineering are not code
 CODE_ROLES = {"developer"}
+KNIHA = "kniha"  # the project slug, the team and the topic prefix (kniha-dev)
 # Strong evidence of a code change in the result (not words like "branch" or "repo" in a plan).
 CODE_RE = re.compile(r"\bcommit(?:ted|nut[oý]|)\s+`?[0-9a-f]{7,40}\b|\b[0-9a-f]{7,40}\.\.[0-9a-f]{7,40}\b|"
                      r"\bpull request\b|\bPR\s*#\d+|\bpytest\b|\bnpm (?:test|run)\b|\bgit push\b|\bagent/dev\b",
@@ -205,6 +208,38 @@ def qa_id(conn: sqlite3.Connection) -> int | None:
     return qa["id"] if qa is not None and not qa["archived_at"] and _can_review_as_agent(conn, qa["id"]) else None
 
 
+def is_kniha(conn: sqlite3.Connection, row) -> bool:
+    """Work of the Kniha project: its project, a kniha topic or an assignee from team kniha."""
+    if (row["topic"] or "").lower().startswith(KNIHA):
+        return True
+    if row["project_id"] and conn.execute("SELECT 1 FROM projects WHERE id = ? AND slug = ?",
+                                          (row["project_id"], KNIHA)).fetchone():
+        return True
+    return bool(row["assignee_id"] and conn.execute("SELECT 1 FROM actors WHERE id = ? AND lower(team) = ?",
+                                                    (row["assignee_id"], KNIHA)).fetchone())
+
+
+def kniha_lead_id(conn: sqlite3.Connection) -> int | None:
+    from .tasks import _can_review_as_agent
+
+    lead = actors.find_by_name(conn, roles.KNIHA_LEAD)
+    return lead["id"] if lead is not None and not lead["archived_at"] and _can_review_as_agent(conn, lead["id"]) \
+        else None
+
+
+def code_reviewer(conn: sqlite3.Connection, row) -> tuple[int | None, str]:
+    """Who reviews a code change: Kniha work its Kniha Lead (QA cannot see that repository, T-731),
+    the rest and the Kniha Lead's own work the QA Reviewer. Never the author."""
+    if is_kniha(conn, row):
+        lead = kniha_lead_id(conn)
+        if lead and lead != row["assignee_id"]:
+            return lead, "Kniha code goes to the Kniha Lead"
+    qa = qa_id(conn)
+    if qa and qa != row["assignee_id"]:
+        return qa, "code goes to the QA Reviewer"
+    return None, ""
+
+
 def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
     """The risk class of a result handed in with `note` (its result / progress note)."""
     from . import schedules, verification
@@ -235,9 +270,9 @@ def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
                 and experienced(conn, row["assignee_id"]):
             return Decision("low", "accept", reason="a small task by an experienced agent, tests passing")
     if code:
-        qa = qa_id(conn)
-        if qa and qa != row["assignee_id"]:
-            return Decision("code" if not high else "high", "route", qa, "code goes to the QA Reviewer")
+        reviewer, why = code_reviewer(conn, row)
+        if reviewer:
+            return Decision("code" if not high else "high", "route", reviewer, why)
     if not row["reviewer_id"]:
         other = ceo_offload_if_default(conn, row, note)
         if other:
@@ -424,6 +459,26 @@ def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = 
             "applied": apply}
 
 
+def redirect_kniha(conn: sqlite3.Connection, apply: bool = False) -> dict:
+    """Once (T-731): Kniha results waiting for the QA Reviewer go to the Kniha Lead, except its own."""
+    from . import business, tasks
+
+    qa, lead = qa_id(conn), kniha_lead_id(conn)
+    moved = []
+    if qa and lead:
+        for row in conn.execute("SELECT * FROM tasks WHERE status = 'review' AND archived_at IS NULL "
+                                "AND reviewer_id = ? ORDER BY updated_at", (qa,)).fetchall():
+            if row["assignee_id"] == lead or not is_kniha(conn, row):
+                continue
+            moved.append(f"{tasks.display_id(row['id'])}→{roles.KNIHA_LEAD}: {row['title'][:60]}")
+            if apply:
+                tasks.hand_review(conn, business.system_ctx(conn), row["id"], lead,
+                                  "Kniha results are reviewed by the Kniha Lead (T-731)")
+        if apply:
+            conn.commit()
+    return {"to_kniha_lead": moved, "applied": apply}
+
+
 def _from_owner(conn: sqlite3.Connection, task_id: int) -> bool:
     """The result reached its reviewer as the owner's stand-in (a review_triage line)."""
     return conn.execute("SELECT 1 FROM audit_log WHERE action = 'review_triage' AND entity = 'task' "
@@ -495,10 +550,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--db", default=None)
     p.add_argument("--measure", nargs=2, metavar=("SINCE", "UNTIL"),
                    help="no change: how many results reached the CEO between two dates, and after the policy")
+    p.add_argument("--kniha", action="store_true",
+                   help="only move the Kniha results waiting for the QA Reviewer to the Kniha Lead")
     a = p.parse_args(argv)
     conn = connect(Path(a.db) if a.db else get_settings().db_path)
     try:
-        result = measure(conn, *a.measure) if a.measure else sweep(conn, apply=a.apply)
+        result = measure(conn, *a.measure) if a.measure else \
+            redirect_kniha(conn, apply=a.apply) if a.kniha else sweep(conn, apply=a.apply)
         print(json.dumps(result, ensure_ascii=False, indent=1))
     finally:
         conn.close()
