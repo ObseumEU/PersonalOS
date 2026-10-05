@@ -250,7 +250,7 @@ def test_the_coo_and_the_cto_are_in_every_project(org):
     assert {m["actor_id"]: m["role"] for m in projects.members(conn, led["id"])}[ids["CTO"]] == "lead"
     # The migration adds them to projects that existed before; a lead stays the lead.
     conn.execute("DELETE FROM project_members WHERE actor_id IN (?, ?) AND role = 'member'", (ids["COO"], ids["CTO"]))
-    conn.executescript(dbmod.MIGRATIONS[-1])
+    conn.executescript(next(m for m in dbmod.MIGRATIONS if "a.role IN ('project_manager', 'cto')" in m))
     assert {m["actor_id"]: m["role"] for m in projects.members(conn, p["id"])} == members
     assert {m["actor_id"]: m["role"] for m in projects.members(conn, led["id"])}[ids["CTO"]] == "lead"
     conn.close()
