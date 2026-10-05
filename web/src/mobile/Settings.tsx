@@ -223,27 +223,64 @@ export function DevicesSection() {
       toast(e instanceof Error ? e.message : String(e), { error: true });
     }
   };
+  const revokeMany = async (label: string | null, n: number) => {
+    const ok = await confirmDialog({
+      title: label ? t("m.devices.revoke_group_confirm", { name: label, n }) : t("m.devices.revoke_others_confirm", { n }),
+      body: t("m.devices.revoke_body"),
+      confirm: t("m.devices.revoke"),
+      danger: true,
+    });
+    if (ok === null) return;
+    try {
+      const q = label ? `?label=${encodeURIComponent(label)}` : "";
+      const r = await api<{ revoked: number }>(`/api/auth/devices/revoke-others${q}`, { method: "POST" });
+      toast(t("m.devices.revoked_n", { n: r.revoked }));
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), { error: true });
+    }
+  };
+  // Devices with the same label that are not this one fold into one row ("Neznámé zařízení ×234").
+  const groups: { label: string; items: Device[] }[] = [];
+  for (const d of list ?? []) {
+    const g = !d.current && groups.find((x) => x.label === d.label && !x.items[0].current);
+    if (g) g.items.push(d);
+    else groups.push({ label: d.label, items: [d] });
+  }
+  const others = (list ?? []).filter((d) => !d.current).length;
   return (
     <Section title={t("m.devices.title")} icon={<Smartphone size={18} />}>
       {list?.length === 0 && <p className="text-sm text-ink-2">{t("m.devices.none")}</p>}
+      {others > 1 && (
+        <button className="btn h-10! self-start" onClick={() => revokeMany(null, others)}>
+          <LogOut size={14} /> {t("m.devices.revoke_others", { n: others })}
+        </button>
+      )}
       <ul className="flex flex-col divide-y divide-line">
-        {list?.map((d) => (
-          <li key={d.id} className="flex min-h-14 items-center gap-3 py-2">
-            {/Android|iPhone|iPad/.test(d.label) ? <Smartphone size={20} className="shrink-0 text-ink-2" /> : <Monitor size={20} className="shrink-0 text-ink-2" />}
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="text-[15px]">
-                {d.label}
-                {d.current && <span className="ml-2 text-[12px] text-accent">{t("m.devices.current")}</span>}
+        {groups.map(({ label: lbl, items }) => {
+          const d = items[0];
+          const many = items.length > 1;
+          return (
+            <li key={d.id} className="flex min-h-14 flex-wrap items-center gap-3 py-2">
+              {/Android|iPhone|iPad/.test(d.label) ? <Smartphone size={20} className="shrink-0 text-ink-2" /> : <Monitor size={20} className="shrink-0 text-ink-2" />}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="text-[15px] break-words">
+                  {lbl}
+                  {many && <span className="ml-1 text-ink-2">×{items.length}</span>}
+                  {d.current && <span className="ml-2 text-[12px] text-accent">{t("m.devices.current")}</span>}
+                </span>
+                <span className="text-[12px] text-ink-2">
+                  {[!many && d.app && t("m.devices.app"), items.some((x) => x.push) && t("m.devices.push"), t("m.devices.seen", { when: ago(d.last_seen_at) })]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
               </span>
-              <span className="text-[12px] text-ink-2">
-                {[d.app && t("m.devices.app"), d.push && t("m.devices.push"), t("m.devices.seen", { when: ago(d.last_seen_at) })].filter(Boolean).join(" · ")}
-              </span>
-            </span>
-            <button className="btn h-10!" onClick={() => revoke(d)}>
-              <LogOut size={14} /> {t("m.devices.revoke")}
-            </button>
-          </li>
-        ))}
+              <button className="btn h-10!" onClick={() => (many ? revokeMany(lbl, items.length) : revoke(d))}>
+                <LogOut size={14} /> {many ? t("m.devices.revoke_all", { n: items.length }) : t("m.devices.revoke")}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </Section>
   );

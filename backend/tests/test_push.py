@@ -311,6 +311,59 @@ def test_a_session_from_before_devices_becomes_one(tmp_path, keys):
         assert len(c.get("/api/auth/devices").json()) == 1
 
 
+def test_a_cookie_without_a_device_id_makes_one_device_however_often_it_is_sent(tmp_path, keys):
+    """5. 10. 19:45: a script kept sending one old cookie; every request made a new device (~245)."""
+    import base64
+
+    from itsdangerous import TimestampSigner
+
+    settings = _settings(tmp_path, keys, password="pw", session_secret="s")
+    with TestClient(create_app(settings)) as c:
+        old = TimestampSigner("s").sign(base64.b64encode(json.dumps({"user": "owner"}).encode())).decode()
+        for _ in range(5):
+            devices._cache.clear()
+            c.cookies.clear()
+            c.cookies.set("pos_session", old)  # never keeps the updated cookie
+            assert c.get("/api/system").status_code == 200
+        conn = connect(settings.db_path)
+        assert conn.execute("SELECT COUNT(*) FROM auth_devices").fetchone()[0] == 1
+        conn.close()
+
+
+def test_sign_out_all_other_devices(tmp_path, keys):
+    settings = _settings(tmp_path, keys, password="pw", session_secret="s")
+    with TestClient(create_app(settings)) as phone, TestClient(create_app(settings)) as pc:
+        phone.post("/api/auth/login", json={"password": "pw"})
+        pc.post("/api/auth/login", json={"password": "pw"})
+        assert pc.post("/api/auth/devices/revoke-others").json() == {"ok": True, "revoked": 1}
+        devices._cache.clear()
+        assert phone.get("/api/system").status_code == 401
+        assert pc.get("/api/system").status_code == 200
+        assert [d["current"] for d in pc.get("/api/auth/devices").json()] == [True]
+
+
+def test_migration_drops_the_audit_flood_devices(tmp_path):
+    from pos.db import MIGRATIONS
+
+    conn = connect(tmp_path / "f.db")
+    devices.ensure_schema(conn)
+    push.ensure_schema(conn)
+    rows = [("flood1", "2026-10-05T19:46:00+00:00", "2026-10-05T19:46:00+00:00"),
+            ("flood-used", "2026-10-05T19:47:00+00:00", "2026-10-05T20:30:00+00:00"),  # came back: kept
+            ("flood-push", "2026-10-05T19:48:00+00:00", "2026-10-05T19:48:00+00:00"),  # has push: kept
+            ("before", "2026-10-05T19:40:00+00:00", "2026-10-05T19:40:00+00:00")]
+    for sid, created, seen in rows:
+        conn.execute("""INSERT INTO auth_devices (id, actor_id, label, created_at, last_seen_at)
+                        VALUES (?, 1, 'Neznámé zařízení', ?, ?)""", (sid, created, seen))
+    conn.execute("""INSERT INTO push_subscriptions (actor_id, device_id, endpoint, p256dh, auth, created_at)
+                    VALUES (1, 'flood-push', 'https://push/x', 'k', 'a', '2026-10-05T19:48:00+00:00')""")
+    sql = next(m for m in MIGRATIONS if "2026-10-05T19:45:00" in m)
+    conn.executescript(sql)
+    left = {r[0] for r in conn.execute("SELECT id FROM auth_devices")}
+    assert left == {"flood-used", "flood-push", "before"}
+    conn.close()
+
+
 # ------------------------------------------------------------------ chat attachments
 
 def test_a_photo_from_the_phone_is_attached_to_the_message(tmp_path):

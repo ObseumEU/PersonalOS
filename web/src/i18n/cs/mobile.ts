@@ -154,4 +154,9 @@ export default {
   "m.devices.revoke_confirm": "Odhlásit zařízení {name}?",
   "m.devices.revoke_body": "Zařízení se musí znovu přihlásit a přestanou mu chodit oznámení.",
   "m.devices.revoked": "Zařízení odhlášeno",
+  "m.devices.revoked_n": "Odhlášeno zařízení: {n}",
+  "m.devices.revoke_all": "Odhlásit všech {n}",
+  "m.devices.revoke_others": "Odhlásit všechna ostatní ({n})",
+  "m.devices.revoke_others_confirm": "Odhlásit všechna ostatní zařízení ({n})?",
+  "m.devices.revoke_group_confirm": "Odhlásit všechna zařízení „{name}“ ({n})?",
 } as Record<string, string>;

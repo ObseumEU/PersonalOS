@@ -288,6 +288,23 @@ def device_list(request: Request, settings: Settings = Depends(get_settings)) ->
         conn.close()
 
 
+@router.post("/devices/revoke-others", dependencies=[Depends(require_user)])
+def device_revoke_others(request: Request, label: str | None = None,
+                         settings: Settings = Depends(get_settings)) -> dict:
+    """"Odhlásit všechna ostatní": every device of this member except the one asking (only those with
+    this label, for a group like "Neznámé zařízení ×234")."""
+    from . import devices
+    from .db import connect
+
+    conn = connect(settings.db_path)
+    try:
+        n = devices.revoke_others(conn, _me_id(request, settings), request.session.get("sid"), label=label)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "revoked": n}
+
+
 @router.post("/devices/{sid}/revoke", dependencies=[Depends(require_user)])
 def device_revoke(sid: str, request: Request, settings: Settings = Depends(get_settings)) -> dict:
     from . import devices

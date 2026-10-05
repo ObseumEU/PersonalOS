@@ -13,6 +13,7 @@ this table decides. Revoking a device also drops its push subscriptions.
 The table is created on first use (no numbered migration).
 """
 
+import hashlib
 import secrets
 import sqlite3
 import time
@@ -63,10 +64,10 @@ def label_for(user_agent: str) -> str:
 
 
 def create(conn: sqlite3.Connection, actor_id: int | None, *, owner_login: bool, user_agent: str,
-           app: bool = False) -> str:
+           app: bool = False, sid: str | None = None) -> str:
     """A new device row for a login; returns its id (the caller commits)."""
     ensure_schema(conn)
-    sid = secrets.token_urlsafe(24)
+    sid = sid or secrets.token_urlsafe(24)
     now = now_iso()
     conn.execute("""INSERT INTO auth_devices (id, actor_id, owner_login, app, label, user_agent, created_at,
                                               last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
@@ -107,6 +108,24 @@ def list_for(conn: sqlite3.Connection, actor_id: int, current: str | None) -> li
     return [{"id": r["id"], "label": r["label"], "app": bool(r["app"]), "created_at": r["created_at"],
              "last_seen_at": r["last_seen_at"], "current": r["id"] == current, "push": bool(r["push"])}
             for r in rows if not _expired(r, now)]
+
+
+def legacy_sid(cookie: str) -> str:
+    """The device id of a session cookie that carries no `sid`: the same cookie is the same device, so
+    a client that keeps sending it (a script, parallel requests before the new cookie lands) does not
+    register a new device on every request (5. 10.: ~245 "Neznámé zařízení" in six minutes)."""
+    return "c-" + hashlib.sha256(cookie.encode()).hexdigest()[:32]
+
+
+def revoke_others(conn: sqlite3.Connection, actor_id: int, current: str | None, *, label: str | None = None) -> int:
+    """Sign out every other device of this member (only those with `label` when given); returns how
+    many. The caller commits."""
+    ensure_schema(conn)
+    rows = conn.execute("""SELECT id FROM auth_devices WHERE actor_id = ? AND revoked_at IS NULL AND id != ?
+                           AND (? IS NULL OR label = ?)""", (actor_id, current or "", label, label)).fetchall()
+    for r in rows:
+        revoke(conn, actor_id, r["id"])
+    return len(rows)
 
 
 def revoke(conn: sqlite3.Connection, actor_id: int, sid: str) -> bool:
@@ -159,12 +178,24 @@ class DeviceSessions:
             return
         conn = connect(self.settings.db_path)
         try:
-            if not sid:  # a session from before devices existed: it becomes one
+            if not sid:  # a session from before devices existed: it becomes one, once per cookie
                 ua = next((v.decode(errors="replace") for k, v in scope["headers"] if k == b"user-agent"), "")
                 from . import actors
 
+                cookie = _session_cookie(scope)
+                sid = legacy_sid(cookie) if cookie else None
+                row = conn.execute("SELECT * FROM auth_devices WHERE id = ?", (sid,)).fetchone() if sid else None
+                if row is not None:
+                    ok = not row["revoked_at"] and not _expired(row, datetime.now(timezone.utc))
+                    _cache[sid] = (now, ok)
+                    if ok:
+                        session["sid"] = sid
+                    else:
+                        session.clear()
+                    return
                 aid = session.get("actor_id")
-                sid = create(conn, int(aid) if aid else actors.owner_id(conn), owner_login=not aid, user_agent=ua)
+                sid = create(conn, int(aid) if aid else actors.owner_id(conn), owner_login=not aid, user_agent=ua,
+                             sid=sid)
                 conn.commit()
                 session["sid"] = sid
                 _cache[sid] = (now, True)
@@ -181,3 +212,14 @@ class DeviceSessions:
                 _touched[sid] = now
         finally:
             conn.close()
+
+
+def _session_cookie(scope) -> str:
+    """The raw session cookie of the request ("" without one)."""
+    for k, v in scope.get("headers") or []:
+        if k == b"cookie":
+            for part in v.decode(errors="replace").split(";"):
+                name, _, value = part.strip().partition("=")
+                if name in ("pos_session", "session") and value:
+                    return value
+    return ""
