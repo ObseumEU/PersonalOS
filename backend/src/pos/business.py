@@ -475,7 +475,8 @@ def find_duplicate_escalation(conn: sqlite3.Connection, ctx: Ctx, values: dict) 
 # failure (personalos-sandbox-1 after commit c5e09bf, a different log fingerprint each) into six fix
 # tasks for the Software Engineer (T-451..T-457). A task about an incident (a sentinel incident, a
 # fingerprint, an error spike) is the same as an open one for the same assignee from the last
-# INCIDENT_DEDUP_HOURS when both name the same container or the same commit.
+# INCIDENT_DEDUP_HOURS when both name the same commit, or the same container while each names at most
+# two (a host-wide finding listing many containers, a swap or load report, is not one incident).
 INCIDENT_DEDUP_HOURS = 12
 _INCIDENT_RE = re.compile(r"incident|fingerprint|sentinel|error spike|new error|nová chyba|výpad", re.IGNORECASE)
 _CONTAINER_RE = re.compile(r"\b[a-z][a-z0-9]*(?:[-_][a-z][a-z0-9]*)+[-_]\d{1,3}\b")
@@ -488,6 +489,14 @@ def _incident_keys(text: str) -> set[str]:
     keys = {f"container:{c}" for c in _CONTAINER_RE.findall(text)}
     keys |= {f"commit:{c[:7].lower()}" for c in _COMMIT_RE.findall(text)}
     return keys
+
+
+def same_incident(a: set[str], b: set[str]) -> bool:
+    """Two incidents' keys (_incident_keys) name the same failure."""
+    if {k for k in a if k.startswith("commit:")} & b:
+        return True
+    ca, cb = ({k for k in x if k.startswith("container:")} for x in (a, b))
+    return bool(ca & cb) and len(ca) <= 2 and len(cb) <= 2
 
 
 def find_duplicate_incident(conn: sqlite3.Connection, ctx: Ctx, values: dict) -> int | None:
@@ -510,7 +519,7 @@ def find_duplicate_incident(conn: sqlite3.Connection, ctx: Ctx, values: dict) ->
             (since, assignee)).fetchall():
         if _not_an_escalation(c["source"], c["created_by"], c["assignee_id"]):
             continue
-        if _incident_keys(_text(c)) & keys:
+        if same_incident(_incident_keys(_text(c)), keys):
             return c["id"]
     return None
 
