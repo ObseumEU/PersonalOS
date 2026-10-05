@@ -8,6 +8,7 @@ import { type Channel, type ChatMember, type ChatMessage, type Presence, type Pr
 import Messenger, { type FileAtt, ThreadChip, replyCount, useSender, visibleBody } from "../chat/Messenger";
 import { FileCard } from "../files/FileCard";
 import ThreadList, { useThreads } from "../chat/ThreadList";
+import MeetingsBar, { MeetingDetail } from "../chat/Meetings";
 import { applyReply, upsert as upsertMsg } from "../chat/timeline";
 import { WorkingDot, WorkingOnText, workingOn } from "../components/agents/WorkingOn";
 import { type Attached, AttachChips, MicButton, useAttachments } from "../components/compose";
@@ -871,6 +872,8 @@ export default function Chat() {
                     {channel.members.length > 8 && <span className="text-xs text-ink-2">+{channel.members.length - 8}</span>}
                   </span>
                 </div>
+                {/* Porady: start one, the running one, past ones (chat/Meetings.tsx). */}
+                {channel.kind === "group" && !isSystem(channel) && !channel.archived_at && <MeetingsBar channel={channel} members={members} onOpen={(root) => setThread(root)} />}
                 {isDm ? (
                   <Messenger
                     mode="dm"
@@ -962,6 +965,7 @@ export default function Chat() {
               ) : (
               <>
               <div className="min-h-0 flex-1 overflow-y-auto py-2">
+                <MeetingDetail id={rootMsg.meeting.meeting} />
                 {item(rootMsg, true)}
                 <div className="mx-4 my-1 border-t border-line" />
                 {threadReplies.map((m, i) => (
