@@ -333,6 +333,8 @@ def clear_agent_browser_profile(agent_id: int, conn=Depends(get_db), ctx=Depends
 
 @router.get("/approvals")
 def list_approvals(status: str = "pending", conn=Depends(get_db)):
+    from . import approval_view
+
     if status == "pending":
         items = approvals.pending(conn)
     else:
@@ -344,6 +346,7 @@ def list_approvals(status: str = "pending", conn=Depends(get_db)):
         a["requested_by_name"] = names.get(a["requested_by"])
         a["requested_by_kind"] = kinds.get(a["requested_by"])
         a["task_ref"] = tasks.display_id(a["task_id"]) if a["task_id"] else None
+        a["view"] = approval_view.view(conn, a["action"], a["details"], status=a["status"])
     return items
 
 

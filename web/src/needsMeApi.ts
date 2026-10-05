@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import type { ApprovalView } from "./components/ApprovalBody";
 
 /** One thing that waits for the owner (GET /api/needs-me). */
 export type NeedsItem = {
@@ -15,6 +16,8 @@ export type NeedsItem = {
   link: string;
   /** An approval's action id (email_send…), shown in words. */
   action?: string;
+  /** An approval as the owner reads it. */
+  view?: ApprovalView;
   ask_kind?: string | null;
   blocking?: boolean;
   channel_id?: number;

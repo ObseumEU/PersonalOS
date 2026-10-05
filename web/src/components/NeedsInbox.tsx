@@ -7,6 +7,7 @@ import { ago, label, plural, t } from "../i18n";
 import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { approvalHref, setSheetOrder, taskHref } from "../taskSheet";
 import { tasksApi } from "../tasksApi";
+import ApprovalBody, { approveLabel } from "./ApprovalBody";
 import DecisionOptions from "./DecisionOptions";
 import { AttachChips, MicButton, useAttachments } from "./compose";
 import { toast } from "./overlay";
@@ -74,9 +75,9 @@ function Item({ it }: { it: NeedsItem }) {
             </span>
           </span>
           <Link to={open} className="text-sm break-words hover:text-accent">
-            {it.kind === "approval" && it.action ? label("approval", it.action) : it.title}
+            {it.kind === "approval" ? (it.view?.title ?? (it.action ? label("approval", it.action) : it.title)) : it.title}
           </Link>
-          {it.detail && <p className="line-clamp-2 text-[13px] break-words text-ink-2">{it.detail}</p>}
+          {it.view ? <ApprovalBody v={it.view} compact /> : it.detail && <p className="line-clamp-2 text-[13px] break-words text-ink-2">{it.detail}</p>}
         </div>
       </div>
       {it.kind === "ask" && it.options?.length ? (
@@ -88,7 +89,7 @@ function Item({ it }: { it: NeedsItem }) {
         {it.kind === "approval" && (
           <>
             <button className="btn-accent" disabled={busy} onClick={() => run(() => agentsApi.decide(it.id, true), t("needs.done.approved"))}>
-              <Check size={14} /> {t("act.approve")}
+              <Check size={14} /> {approveLabel(it.view)}
             </button>
             <button className="btn" disabled={busy} onClick={() => setMode(mode === "reject" ? null : "reject")}>
               <X size={14} /> {t("act.reject")}

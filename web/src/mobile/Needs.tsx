@@ -5,6 +5,7 @@ import { agentsApi } from "../agentsApi";
 import { chatApi } from "../chatApi";
 import { toast } from "../components/overlay";
 import { ago, label, t } from "../i18n/core";
+import ApprovalBody, { approveLabel } from "../components/ApprovalBody";
 import DecisionOptions from "../components/DecisionOptions";
 import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { tasksApi } from "../tasksApi";
@@ -83,16 +84,16 @@ function Item({ it, highlight }: { it: NeedsItem; highlight: boolean }) {
             </span>
           </span>
           <Link to={openHref(it)} className="text-[15px] leading-snug break-words">
-            {it.kind === "approval" && it.action ? label("approval", it.action) : it.title}
+            {it.kind === "approval" ? (it.view?.title ?? (it.action ? label("approval", it.action) : it.title)) : it.title}
           </Link>
-          {it.detail && <p className="line-clamp-3 text-[13px] break-words text-ink-2">{it.detail}</p>}
+          {it.view ? <ApprovalBody v={it.view} compact /> : it.detail && <p className="line-clamp-3 text-[13px] break-words text-ink-2">{it.detail}</p>}
         </div>
       </div>
       <div className="flex flex-wrap gap-2 pl-8">
         {it.kind === "approval" && (
           <>
             <button className={primary} disabled={busy} onClick={() => run(() => agentsApi.decide(it.id, true), t("needs.done.approved"))}>
-              <Check size={16} /> {t("act.approve")}
+              <Check size={16} /> {approveLabel(it.view)}
             </button>
             <button className={plain} disabled={busy} onClick={() => setMode(mode === "reject" ? null : "reject")}>
               <X size={16} /> {t("act.reject")}

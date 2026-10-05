@@ -40,8 +40,6 @@ export default {
   "rp.unresolved_hint": "Na tohle agent odkazuje, ale nepodařilo se to načíst:",
   "rp.original": "Původní text od agenta",
   "rp.dropped": "Vynechané (nebylo podložené podklady)",
-  "rp.by_agent": "Report napsal {who}.",
-  "rp.by_builder": "Report je složený z předaného textu a z toho, na co odkazuje. Nic nepřidává, jen přeskládává a cituje.",
   "rp.fallback_note": "Model nebyl k dispozici nebo jeho text nebyl podložený, proto je shrnutí jen rámcové.",
   "rp.stale": "Úkol se mezitím změnil.",
   "rp.print": "Tisk",

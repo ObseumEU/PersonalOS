@@ -12,6 +12,8 @@ export type Decision = {
   decided: { choice: string; note: string; by: string | null; at: string } | null;
 };
 
+export type OwnerAction = { text: string; href: string; label: string; kind: "ask" | "approval" | "promise" | "text" };
+
 export type Source = { title: string; quote: string; link: string; ref?: string };
 export type Related = { kind: RefKind; id: string | number; title: string; text?: string; link: string; status?: string; at?: string };
 
@@ -31,6 +33,8 @@ export type OwnerReport =
       takeaway_source: "agent" | "llm" | "fallback";
       decisions: Decision[];
       decisions_open: number;
+      /** What the owner still has to do (asks, approvals, sentences asking him to act), each with a link. */
+      actions?: OwnerAction[];
       decided_earlier: { id: string; question: string; choice: string; note: string; by: string | null; at: string }[];
       next: string;
       details: {

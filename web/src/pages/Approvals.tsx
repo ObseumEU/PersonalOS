@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type Approval, agentsApi } from "../agentsApi";
 import { outboundApi } from "../outboundApi";
 import { ActorChip } from "../components/agents/bits";
+import ApprovalBody, { approveLabel } from "../components/ApprovalBody";
 import { confirmDialog } from "../components/overlay";
 import { PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
@@ -11,7 +12,7 @@ import { useLiveReload } from "../liveStream";
 
 function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
-  const action = label("approval", a.action);
+  const action = a.view?.title || label("approval", a.action);
   async function decide(approve: boolean) {
     let comment: string | undefined;
     if (!approve) {
@@ -33,7 +34,7 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
   );
   const result = a.result;
   return (
-    <div className="panel fade-in flex min-w-0 flex-col gap-3 p-4">
+    <div id={`a${a.id}`} className="panel fade-in flex min-w-0 flex-col gap-3 p-4">
       <span className="flex flex-wrap items-center gap-2">
         <ActorChip a={{ kind: a.requested_by_kind, name: a.requested_by_name, is_owner: false }} />
         {a.status === "pending" ? (
@@ -46,7 +47,8 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
         </span>
       </span>
       <span className="text-base break-words">{action}</span>
-      {details.length > 0 && (
+      {a.view && <ApprovalBody v={a.view} />}
+      {!a.view && details.length > 0 && (
         <div className="grid grid-cols-1 gap-x-3 gap-y-1 rounded border border-line bg-bg p-3 text-xs sm:grid-cols-[110px_minmax(0,1fr)]">
           {details.map(([k, v]) => (
             <div key={k} className="contents">
@@ -69,7 +71,7 @@ function Item({ a, onDone }: { a: Approval; onDone: () => void }) {
       {a.status === "pending" && (
         <span className="flex flex-wrap gap-2">
           <button className="btn-accent" onClick={() => decide(true)}>
-            <Check size={14} /> {t("act.approve")}
+            <Check size={14} /> {approveLabel(a.view)}
           </button>
           <button className="btn" onClick={() => decide(false)}>
             <X size={14} /> {t("act.reject")}

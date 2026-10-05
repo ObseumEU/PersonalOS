@@ -180,6 +180,22 @@ function DecisionCard({ d, taskRef, onDone, autoFocus }: { d: Decision; taskRef:
   );
 }
 
+function ActionLink({ href, label }: { href: string; label: string }) {
+  const cls = "btn-accent h-9! shrink-0 self-start sm:self-auto print:hidden";
+  if (/^https?:/.test(href))
+    return (
+      <a href={href} target="_blank" rel="noreferrer noopener" className={cls}>
+        <ExternalLink size={13} aria-hidden /> {label}
+      </a>
+    );
+  const to = window.location.pathname.startsWith("/m") && href.startsWith("/tasks?task=") ? `/m${href}` : href;
+  return (
+    <Link to={to} className={cls}>
+      {label}
+    </Link>
+  );
+}
+
 /** Takeaway, decisions, next: the top of the report. */
 export function ReportTop({ r, onChange, autoFocus }: { r: Available; onChange: (r: OwnerReport) => void; autoFocus?: boolean }) {
   return (
@@ -199,11 +215,20 @@ export function ReportTop({ r, onChange, autoFocus }: { r: Available; onChange: 
             </span>
           )}
         </Head>
-        {r.decisions.length === 0 ? (
-          <p className="text-[15px] text-ink-2">{t("rp.needs_none")}</p>
-        ) : (
-          r.decisions.map((d, i) => <DecisionCard key={d.id} d={d} taskRef={r.task} onDone={onChange} autoFocus={autoFocus && i === 0} />)
+        {r.decisions.map((d, i) => (
+          <DecisionCard key={d.id} d={d} taskRef={r.task} onDone={onChange} autoFocus={autoFocus && i === 0} />
+        ))}
+        {(r.actions ?? []).length > 0 && (
+          <ul className="flex flex-col gap-2">
+            {(r.actions ?? []).map((a) => (
+              <li key={a.text} className="flex flex-col gap-2 rounded-lg border border-amber-400/40 bg-amber-400/[0.05] p-3 sm:flex-row sm:items-center">
+                <span className="min-w-0 flex-1 text-[15px] leading-snug break-words">{a.text}</span>
+                <ActionLink href={a.href} label={a.label} />
+              </li>
+            ))}
+          </ul>
         )}
+        {r.decisions.length === 0 && (r.actions ?? []).length === 0 && <p className="text-[15px] text-ink-2">{t("rp.needs_none")}</p>}
       </section>
       {r.next && (
         <section aria-labelledby="rp-next" className="flex flex-col gap-1.5">
@@ -311,11 +336,12 @@ export function ReportDetails({ r, full = false }: { r: Available; full?: boolea
           </div>
         </details>
       )}
-      <p className="text-xs text-ink-3">
-        {r.source === "agent" ? t("rp.by_agent", { who: r.author ?? "" }) : t("rp.by_builder")}
-        {r.takeaway_source === "fallback" ? ` ${t("rp.fallback_note")}` : ""}
-        {r.stale ? ` ${t("rp.stale")}` : ""}
-      </p>
+      {(r.takeaway_source === "fallback" || r.stale) && (
+        <p className="text-xs text-ink-3">
+          {r.takeaway_source === "fallback" ? t("rp.fallback_note") : ""}
+          {r.stale ? ` ${t("rp.stale")}` : ""}
+        </p>
+      )}
     </div>
   );
 }

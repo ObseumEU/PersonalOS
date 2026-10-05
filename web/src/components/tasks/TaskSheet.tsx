@@ -186,8 +186,18 @@ const SOURCE: Record<string, string> = {
   schedule: "tk.src.routine",
   routine: "tk.src.routine",
   chat: "tk.src.chat",
+  promise: "tk.src.promise",
+  routing: "tk.src.routing",
+  github: "tk.src.github",
+  feedback: "tk.src.feedback",
+  hiring: "tk.src.hiring",
+  weekly: "tk.src.weekly",
 };
-const sourceWord = (s: string) => (SOURCE[s] ? t(SOURCE[s]) : s.replace(/_/g, " "));
+/** Where a task came from, in words ("promise:2046" -> "kniha slibů"; never the raw id). */
+const sourceWord = (s: string) => {
+  const k = (s ?? "").split(":")[0];
+  return SOURCE[s] ? t(SOURCE[s]) : SOURCE[k] ? t(SOURCE[k]) : k.replace(/[_.]/g, " ");
+};
 /** An agent's role, when it says more than the name ("ceo" under "CEO" does not). */
 const roleOf = (live: TaskLive | null, name: string | null) => {
   const r = live?.assignee?.role?.replace(/_/g, " ");
@@ -850,7 +860,7 @@ function ApprovalPanel({ id, onClose }: { id: number; onClose: () => void }) {
             <>
               <header className="flex flex-col gap-3">
                 <h2 id="tk-title" tabIndex={-1} className="text-[24px] leading-tight font-normal outline-none">
-                  {label("approval", a.action)}
+                  {a.view?.title ?? label("approval", a.action)}
                 </h2>
                 <span className="flex flex-wrap items-center gap-3 text-[13px] text-ink-2">
                   <StatusChip tone={a.status === "pending" ? "you" : a.status === "approved" ? "done" : "someday"} size="md" />
@@ -873,7 +883,7 @@ function ApprovalPanel({ id, onClose }: { id: number; onClose: () => void }) {
                     {t("tk.needs.title")}
                   </h3>
                   <ApprovalCard
-                    a={{ id: a.id, action: a.action, why, at: a.created_at, requested_by_name: a.requested_by_name, details }}
+                    a={{ id: a.id, action: a.action, why, at: a.created_at, requested_by_name: a.requested_by_name, details, view: a.view }}
                     autoFocus
                     onDone={load}
                   />

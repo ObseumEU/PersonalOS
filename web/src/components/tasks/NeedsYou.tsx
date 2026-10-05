@@ -5,6 +5,7 @@ import { label, t } from "../../i18n";
 import { refreshNeedsMe } from "../../needsMeApi";
 import { taskChanged, TaskLink } from "../../taskSheet";
 import { type Related, type Task, tasksApi } from "../../tasksApi";
+import ApprovalBody, { approveLabel } from "../ApprovalBody";
 import { AttachChips, MicButton, useAttachments } from "../compose";
 import { toast } from "../overlay";
 import { type AskInfo, parseAsk } from "./text";
@@ -227,6 +228,7 @@ export function ApprovalCard({
   const [rejecting, setRejecting] = useState(false);
   const [text, setText] = useState("");
   const { busy, act } = useAct(onDone);
+  const v = a.view;
   const preview = typeof a.details?.text === "string";
   const image = typeof a.details?.image_url === "string" ? (a.details.image_url as string) : null;
   const details = Object.entries(a.details ?? {}).filter(
@@ -236,10 +238,11 @@ export function ApprovalCard({
     <div className="flex flex-col gap-3">
       <p className="text-[15px] leading-snug">
         <span className="text-ink-2">{t("tk.needs.approval", { who: a.requested_by_name ?? t("tk.someone") })} </span>
-        <span className="font-medium">{label("approval", a.action)}</span>
+        <span className="font-medium">{v?.title ?? label("approval", a.action)}</span>
       </p>
-      {a.why && <p className="text-[13px] text-ink-2">{a.why}</p>}
-      {details.length > 0 && (
+      {v && <ApprovalBody v={v} />}
+      {!v && a.why && <p className="text-[13px] text-ink-2">{a.why}</p>}
+      {!v && details.length > 0 && (
         <dl className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded-md border border-line bg-bg p-3 text-[13px] sm:grid-cols-[120px_minmax(0,1fr)]">
           {details.map(([k, v]) => (
             <div key={k} className="contents">
@@ -291,7 +294,7 @@ export function ApprovalCard({
             disabled={busy}
             onClick={() => act(() => agentsApi.decide(a.id, true), t("tk.needs.approved"))}
           >
-            <Check size={15} /> {t("act.approve")}
+            <Check size={15} /> {approveLabel(v)}
           </button>
           <button type="button" className="btn h-9!" disabled={busy} onClick={() => setRejecting(true)}>
             <X size={14} /> {t("act.reject")}

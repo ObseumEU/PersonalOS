@@ -70,6 +70,22 @@ const stamp = (iso: string) => new Date(iso).toLocaleString(LOCALE, { day: "nume
 
 /* ------------------------------------------------------------------ Přehled */
 
+/** A brief one agent wrote for another (or the platform for an agent: a promise, a routine): not the
+ * owner's text, so it folds under "Technické" and he reads a one-line summary instead. */
+export function isAgentBrief(task: Task): boolean {
+  const src = (task.source ?? "").split(":")[0];
+  if (src === "promise") return true;
+  return task.assignee_type === "agent" && !["ui", "api", "capture", "chat", "gmail", "email", "ask_owner"].includes(src);
+}
+
+/** "Slíbil jsi majiteli: „X“ — do **05. 10. 17:00**" -> "X (do 05. 10. 17:00)". */
+export function briefSummary(task: Task): string | null {
+  const notes = task.notes ?? "";
+  const m = notes.match(/„([^“]+)“\s*—\s*do\s*\**([^*\n]+)\**/);
+  if (m) return t("tk.brief.promise", { what: m[1].replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"), when: m[2].trim() });
+  return null;
+}
+
 function Description({ task, onSave }: { task: Task; onSave: (notes: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(task.notes ?? "");
@@ -113,6 +129,26 @@ function Description({ task, onSave }: { task: Task; onSave: (notes: string) => 
         </span>
       </form>
     );
+  if (!empty && isAgentBrief(task)) {
+    const summary = briefSummary(task);
+    return (
+      <section className="flex flex-col gap-2">
+        {summary && <p className="text-[15px] leading-relaxed">{summary}</p>}
+        <details className="rounded-lg border border-line px-3 py-2">
+          <summary className="cursor-pointer text-[13px] text-ink-2">{t("tk.brief.technical")}</summary>
+          <div className="flex flex-col gap-3 pt-2">
+            <span className="self-end">{edit}</span>
+            {parts.map((p, i) => (
+              <div key={i} className="flex min-w-0 flex-col gap-1">
+                {p.heading && <h5 className="text-[14px] font-medium text-ink-2">{p.heading}</h5>}
+                {p.body && <Markdown text={p.body} className="text-[13px]" />}
+              </div>
+            ))}
+          </div>
+        </details>
+      </section>
+    );
+  }
   return (
     <section className="flex flex-col">
       <SectionTitle right={edit}>{t("tk.desc.title")}</SectionTitle>

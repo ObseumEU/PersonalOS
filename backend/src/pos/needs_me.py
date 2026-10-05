@@ -28,6 +28,8 @@ MENTION_LIMIT = 30
 
 
 def _approvals(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    from . import approval_view
+
     if not viewer["is_owner"]:
         return []
     rows = conn.execute(
@@ -36,13 +38,14 @@ def _approvals(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
     out = []
     for r in rows:
         details = json.loads(r["details"] or "{}")
-        why = str(details.get("why") or details.get("reason") or details.get("summary") or "")
+        v = approval_view.view(conn, r["action"], details)
+        why = v["why"] or v["reason"]
         out.append({
             "kind": "approval", "key": f"approval:{r['id']}", "id": r["id"],
-            "title": str(r["action"]).replace("_", " "), "action": r["action"], "detail": why[:240],
+            "title": v["title"], "action": r["action"], "detail": why[:240], "view": v,
             "from_name": r["requested_by_name"], "from_kind": r["requested_by_kind"], "at": r["created_at"],
             "ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
-            "link": "/approvals",
+            "link": f"/approvals#a{r['id']}",
         })
     return out
 

@@ -745,6 +745,36 @@ MIGRATIONS: list[str] = [
     UPDATE actors SET engine = 'claude'
      WHERE kind = 'agent' AND engine IS NULL AND model LIKE 'claude-%';
     """,
+    # Promise tasks are said to the owner without internal terms: "Slib: …" (not "Slib Ownerovi: …"),
+    # no module name in the brief (pos.promises).
+    """
+    UPDATE tasks SET title = 'Slib: ' || substr(title, 16) WHERE title LIKE 'Slib Ownerovi: %';
+    UPDATE tasks SET notes = replace(replace(replace(notes,
+            ' (zachycená knihou slibů, pos.promises)', ' (zachycená knihou slibů)'),
+            'Slíbil jsi Ownerovi:', 'Slíbil jsi majiteli:'),
+            '[Tvoje zpráva Ownerovi]', '[Tvoje zpráva majiteli]')
+     WHERE source LIKE 'promise:%';
+    """,
+    # The audit flood of 2026-10-05 19:45–19:51 UTC: a script's cookie without a device id made a new
+    # device on every request (pos.devices.legacy_sid stops that). Drop the devices from that window that
+    # never registered push and never came back (last seen = created). Both tables are created on first
+    # use, so they are made here if missing (the same schema as pos.devices / pos.push).
+    """
+    CREATE TABLE IF NOT EXISTS auth_devices (
+        id TEXT PRIMARY KEY, actor_id INTEGER, owner_login INTEGER NOT NULL DEFAULT 0,
+        app INTEGER NOT NULL DEFAULT 0, label TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, revoked_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id INTEGER PRIMARY KEY, actor_id INTEGER NOT NULL, device_id TEXT, endpoint TEXT NOT NULL UNIQUE,
+        p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+        last_ok_at TEXT, last_error TEXT, failures INTEGER NOT NULL DEFAULT 0
+    );
+    DELETE FROM auth_devices
+     WHERE created_at >= '2026-10-05T19:45:00' AND created_at < '2026-10-05T19:52:00'
+       AND last_seen_at = created_at
+       AND NOT EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.device_id = auth_devices.id);
+    """,
 ]
 
 

@@ -7,7 +7,7 @@ Every message from the CEO that reaches the owner (pos.chat.send) is read for da
 
 1. cheap rules (`extract`): a time expression that lies ahead ("dnes v 16:00", "zítra", "v pátek",
    "do konce týdne", "5. 10.", "2026-10-05", "za 2 hodiny") in a sentence that is not a question
-   and not about the past. Each becomes a task for the CEO ("Slib Ownerovi: …") with that
+   and not about the past. Each becomes a task for the CEO ("Slib: …") with that
    deadline, the exact time kept in `owner_promises`;
 2. a sentence with a commitment ("pošlu", "připravím", "ozvu se" …) whose time the rules cannot
    read is left for the haiku fallback (`tick`, the scheduler job `promises_tick`), which answers
@@ -172,6 +172,9 @@ def unparsed(text: str, found: list[dict]) -> list[str]:
 
 # ------------------------------------------------------------------ the ledger
 
+_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+
+
 def _local(iso: str) -> str:
     return datetime.fromisoformat(iso).astimezone(TZ).strftime("%d. %m. %H:%M")
 
@@ -189,11 +192,11 @@ def _create(conn: sqlite3.Connection, ctx: Ctx, message_id: int, text: str, due_
     ch = conn.execute("SELECT channel_id FROM chat_messages WHERE id = ?", (message_id,)).fetchone()
     link = f"/chat?c={ch['channel_id']}&m={message_id}" if ch else ""
     t = tasks.create(conn, Ctx(ctx.actor_id, via="system"), {
-        "title": f"Slib Ownerovi: {text}"[:200],
+        "title": ("Slib: " + _MD_LINK.sub(lambda m: m.group(1), text))[:200],
         "assignee": {"type": "agent", "id": ctx.actor_id}, "status": "next", "priority": 1,
         "deadline": due_local.date().isoformat(), "reviewer": ctx.actor_id, "source": f"{SOURCE}{message_id}",
-        "notes": (f"### Proč\nSlíbil jsi Ownerovi: „{text}“ — do **{_local(due_at)}**.\n\n"
-                  f"### Odkud\n[Tvoje zpráva Ownerovi]({link}) (zachycená knihou slibů, pos.promises).\n\n"
+        "notes": (f"### Proč\nSlíbil jsi majiteli: „{text}“ — do **{_local(due_at)}**.\n\n"
+                  f"### Odkud\n[Tvoje zpráva majiteli]({link}) (zachycená knihou slibů).\n\n"
                   "### Hotovo znamená\nOwner to má (zpráva, soubor nebo odkaz) nejpozději v termínu. Když to "
                   "nestihneš, napiš mu PŘED termínem jednou větou nový termín a proč."),
         "definition_of_done": f"Owner dostal slíbené do {_local(due_at)}, nebo včas nový termín.",

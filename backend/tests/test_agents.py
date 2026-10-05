@@ -56,9 +56,10 @@ def test_migration_puts_claude_model_agents_without_engine_on_claude(tmp_path):
     from pos.db import MIGRATIONS
 
     c = connect(tmp_path / "m.db")
-    for sql in MIGRATIONS[:-1]:
+    at = next(i for i, m in enumerate(MIGRATIONS) if "SET engine = 'claude'" in m)
+    for sql in MIGRATIONS[:at]:
         c.executescript(sql)
-    c.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+    c.execute(f"PRAGMA user_version = {at}")
     now = "2026-10-01T00:00:00+00:00"
     for name, engine, model in [("Nabu", None, "claude-opus-5-5"), ("Mine", "codex", "claude-opus-5-5"),
                                 ("Plain", None, None)]:

@@ -188,6 +188,14 @@ export default {
   "tk.src.email": "e-mail",
   "tk.src.routine": "pravidelná rutina",
   "tk.src.chat": "chat",
+  "tk.src.promise": "kniha slibů (zpráva od CEO)",
+  "tk.src.routing": "pravidlo pro příchozí věci",
+  "tk.src.github": "GitHub",
+  "tk.src.feedback": "zpětná vazba",
+  "tk.src.hiring": "nábor",
+  "tk.src.weekly": "týdenní přehled",
+  "tk.brief.promise": "CEO ti slíbil: {what} (do {when}).",
+  "tk.brief.technical": "Technické · zadání pro agenta",
 
   // Approval panel
   "tk.approval_ref": "Schválení #{id}",

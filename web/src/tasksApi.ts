@@ -1,3 +1,4 @@
+import type { ApprovalView } from "./components/ApprovalBody";
 import { api } from "./api";
 import { LOCALE, t } from "./i18n/core";
 import { markdownSnippet } from "./markdownText";
@@ -88,7 +89,7 @@ export type TaskBrief = { id: number; ref: string; title: string; status: Status
 export type Related = {
   asks_open: (TaskBrief & { notes: string; asker_name: string; blocking: boolean; kind: string })[];
   ask_for: { asker_name: string; blocking: boolean; kind: string; status: string; task: TaskBrief | null } | null;
-  approvals: { id: number; action: string; why: string; at: string; requested_by_name: string | null; details: Record<string, unknown> }[];
+  approvals: { id: number; action: string; why: string; at: string; requested_by_name: string | null; details: Record<string, unknown>; view?: ApprovalView }[];
   mentioned: TaskBrief[];
 };
 
@@ -191,7 +192,20 @@ export type TaskLive = {
 
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
+/** The review queue, one definition for every page (GET /api/review-queue, pos.review_queue). */
+export type ReviewQueue = {
+  total: number;
+  for_owner: number;
+  for_leads: number;
+  over_sla: number;
+  oldest_hours: number | null;
+  approvals: number;
+  /** "70 čeká na kontrolu vedoucích, 0 na tebe" */
+  text: string;
+};
+
 export const tasksApi = {
+  reviewQueue: () => api<ReviewQueue>("/api/review-queue"),
   list: (view: View | "to_review", topic?: string, scope: Scope = "all") =>
     api<Task[]>(`/api/tasks?view=${view}&scope=${scope}${topic ? `&topic=${encodeURIComponent(topic)}` : ""}`),
   counts: () => api<Counts>("/api/tasks/counts"),

@@ -1,3 +1,4 @@
+import type { ApprovalView } from "./components/ApprovalBody";
 import { api } from "./api";
 import type { Network } from "./components/agents/AgentNetwork";
 import type { Task } from "./tasksApi";
@@ -113,6 +114,8 @@ export type Approval = {
   decided_at: string | null;
   comment: string | null;
   result?: { status: string; owner_task?: string; error?: string } | null;
+  /** The approval as the owner reads it (Komu / Předmět / Text, Czech kind and reason, the button's words). */
+  view?: ApprovalView;
 };
 
 export type Engines = {

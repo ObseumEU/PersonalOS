@@ -205,7 +205,7 @@ def test_the_ceos_promise_becomes_its_task_and_the_1600_run_starts_with_the_miss
     row = conn.execute("SELECT * FROM owner_promises WHERE message_id = ? AND task_id IS NOT NULL",
                        (sent["id"],)).fetchone()
     t = tasks.get(conn, me, row["task_id"])
-    assert t["assignee_id"] == ceo and t["title"].startswith("Slib Ownerovi") and t["deadline"]
+    assert t["assignee_id"] == ceo and t["title"].startswith("Slib: ") and t["deadline"]
     pending = conn.execute("SELECT * FROM owner_promises WHERE status = 'pending'").fetchall()
     assert [p["text"] for p in pending] == ["Také pošlu souhrn brzy."]  # left for the haiku fallback
     later = datetime.now(timezone.utc) + timedelta(days=2)

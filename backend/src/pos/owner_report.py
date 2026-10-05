@@ -240,6 +240,10 @@ def lint(report: dict) -> list[str]:
             problems.append(f"source {i}: the title is a raw chunk id; give the document's title and the quote")
     if len(report["next"]) > 300:
         problems.append("next is one line: what happens after the owner answers")
+    if tk and content and result_takeaway(tk, content):
+        problems.append("takeaway only says when it was delivered: state the result against the target "
+                        "(e.g. '37 % vs the ≥ 50 % target, 72 approvals waiting'), the delivery time goes to "
+                        "verification")
     return problems
 
 
@@ -355,23 +359,242 @@ def _view(conn: sqlite3.Connection, task: dict, row: sqlite3.Row, *, stale: bool
     decisions = [{**d, "decided": made.get(d["id"])} for d in rep["decisions"]]
     earlier = [{"id": k, **v} for k, v in made.items() if k not in {d["id"] for d in rep["decisions"]}]
     author = actors.get(conn, row["author_id"])["name"] if row["author_id"] else task.get("assignee_name")
+    content = clean_fragment(rep["content"])
+    content_title = meta.get("content_title")
+    if (task.get("source") or "") == "ask_owner" and content and len(content) < 400 and not content_title:
+        content_title = "Tvoje odpověď"
+    takeaway = result_takeaway(rep["takeaway"], content) or rep["takeaway"]
+    open_decisions = [d for d in decisions if not d["decided"]]
+    actions = owner_actions(conn, task, {**rep, "content": content, "takeaway": takeaway},
+                            skip_text=bool(open_decisions))
     return {
-        "available": True, "task": task["ref"], "title": task["title"], "status": task["status"],
+        "available": True, "task": task["ref"], "title": owner_title(task["title"]), "status": task["status"],
         "assignee": task.get("assignee_name"), "source": row["source"], "author": author,
         "stale": stale, "built_at": row["created_at"],
-        "takeaway": rep["takeaway"] or "Nevím: z předaného textu se nedá říct, co si z toho odnést.",
+        "takeaway": takeaway or "Nevím: z předaného textu se nedá říct, co si z toho odnést.",
         "takeaway_source": meta.get("takeaway_source", "agent" if row["source"] == "agent" else "llm"),
-        "decisions": decisions, "decisions_open": sum(1 for d in decisions if not d["decided"]),
+        "decisions": decisions, "decisions_open": len(open_decisions),
         "decided_earlier": earlier,
+        "actions": actions,
         "next": rep["next"],
         "details": {
-            "summary": rep["summary"], "content": rep["content"], "content_title": meta.get("content_title"),
+            "summary": rep["summary"], "content": content, "content_title": content_title,
             "changes": rep["changes"], "verification": rep["verification"], "sources": rep["sources"],
             "related": meta.get("related", []), "unresolved": meta.get("unresolved", []),
-            "original": task.get("progress_note") or "", "dropped": meta.get("dropped", []),
+            "original": clean_fragment(task.get("progress_note") or ""), "dropped": meta.get("dropped", []),
         },
         "report_url": f"/report/{task['ref']}",
     }
+
+
+# ------------------------------------------------------------------ what the owner has to do, the result
+
+# A report must never say "Nic, jen pro informaci" while its text asks the owner to act (T-737: "Provedeš
+# posun kódu na svr03", T-693: "chybí jen kód povelu…, až budeš mít chvilku"). The phrases below are
+# matched on folded text (no diacritics, lower case).
+_ACTION_PATTERNS = [
+    r"\b(potrebuj[ie]|potrebujeme|chci|cekam|cekame)\b[^.]{0,40}\bod tebe\b",
+    r"\bod tebe\b[^.]{0,20}\b(potrebuj|cekam|chci)",
+    r"\bceka(ji)?\b[^.]{0,30}\bna (tebe|tvoj|tvou|tvuj|tve|tvem)\b",
+    r"\bmusi\b[^.]{0,30}\b(owner|majitel|david)\b",
+    r"\b(owner|majitel|david)\b[^.]{0,10}\bmusi\b",
+    r"\baz budes mit\b",
+    r"\bkoncept\w*\b[^.|]{0,60}\bu tebe\b",
+    r"\bu tebe\b[^.|]{0,30}\bkoncept\w*\b",
+    r"\bje (na|u) tobe\b",
+    # Second person, future ("Provedeš posun…", "Založíš klíč…"): something only he does.
+    r"(^|[.!?:]\s+|\n)(ty\s+)?(provedes|posles|zalozis|schvalis|doplnis|potvrdis|zkontrolujes|odesles|rozhodnes|"
+    r"publikujes|pripojis|nahrajes|podepises|zaplatis|vyplnis|nastavis|spustis|overis|odpovis|vyberes|posoudis|"
+    r"projdes|zavolas|napises|predas|udelas)\b",
+    # Imperative at the start of a sentence ("Schval cíle…", "Pošli fotku štítku…").
+    r"(^|[.!?]\s+|\n)(schval|posli|zaloz|dopln|potvrd|zkontroluj|odesli|rozhodni|publikuj|pripoj|nahraj|podepis|"
+    r"zaplat|vypln|spust|over|odpovez|vyber|posud|projdi|zavolej|napis|predej)\b",
+]
+_ACTION_RE = [re.compile(p) for p in _ACTION_PATTERNS]
+_OWN_PROMISE = re.compile(r"^(ja\s+)?(to\s+)?(provedu|poslu|zalozim|udelam|doplnim|nahraju|podepisu|zaplatim|"
+                          r"zkontroluju|spustim|overim|napisu|zavolam|vyrizim|posunu|nastavim|pripojim|dodam)\b")
+GMAIL_DRAFTS = "https://mail.google.com/mail/u/0/#drafts"
+
+
+def _fold_keep(text: str) -> str:
+    """Folded (lower case, no diacritics) but with punctuation and line breaks kept."""
+    t = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def _split_sentences(text: str) -> list[str]:
+    out = []
+    for line in (text or "").split("\n"):
+        line = line.strip()
+        if not line or re.fullmatch(r"\|?[-:| ]+\|?", line):
+            continue
+        if line.startswith("|"):  # a table row: "label: value"
+            cells = [c.strip(" *") for c in line.strip("|").split("|") if c.strip(" *")]
+            if cells:
+                out.append(": ".join(cells))
+            continue
+        out += [s.strip() for s in re.split(r"(?<=[.!?])\s+(?=[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])", line) if s.strip()]
+    return out
+
+
+def _action_link(text: str, task: dict) -> tuple[str, str]:
+    f = _fold_keep(text)
+    if re.search(r"koncept|draft|gmail", f):
+        return GMAIL_DRAFTS, "Otevřít koncepty v Gmailu"
+    if re.search(r"schvalen|ke schvaleni|approval", f):
+        return "/approvals", "Otevřít schvalování"
+    if re.search(r"\bklic|trezor|pristup|token|heslo", f):
+        return "/credentials", "Otevřít trezor"
+    if re.search(r"linkedin|publik", f):
+        return "/connectors", "Otevřít konektory"
+    return f"/tasks?task={task['ref']}", "Otevřít úkol"
+
+
+def owner_actions(conn: sqlite3.Connection, task: dict, rep: dict, *, skip_text: bool = False) -> list[dict]:
+    """What the owner still has to do for this task, each with a link to where he does it:
+    [{text, href, label, kind}]. Open asks raised from the task and pending approvals tied to it come
+    first (they are real items); then every sentence of the report that asks him to act (unless open
+    decisions already ask him). At most three."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(text: str, href: str, label: str, kind: str) -> None:
+        key = _fold(text)[:80]
+        if key and key not in seen and len(out) < MAX_DECISIONS:
+            seen.add(key)
+            out.append({"text": text, "href": href, "label": label, "kind": kind})
+
+    tid = task["id"]
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'owner_asks'").fetchone():
+        for r in conn.execute("""SELECT t.id, t.title FROM owner_asks o JOIN tasks t ON t.id = o.ticket_id
+                                 WHERE o.source_task_id = ? AND o.status = 'open' AND t.status != 'done'
+                                 ORDER BY t.id""", (tid,)):
+            from .tasks import display_id
+            add(f"Odpověz na dotaz: {r['title']}", f"/tasks?task={display_id(r['id'])}", "Odpovědět", "ask")
+    for r in conn.execute("SELECT id, action, details FROM approvals WHERE task_id = ? AND status = 'pending'",
+                          (tid,)):
+        from . import approval_view
+        add(f"Schval: {approval_view.title(r['action'], r['details'])}", f"/approvals#a{r['id']}",
+            "Otevřít schválení", "approval")
+    if skip_text:
+        return out
+    if (task.get("source") or "") == "ask_owner":
+        # His own answer that commits him ("Provedu to dnes mimo špičku"): still his to do.
+        for s in _split_sentences(clean_fragment(task.get("progress_note") or "")):
+            if _OWN_PROMISE.search(_fold_keep(s)):
+                add(f"Slíbil jsi: {_plain_sentence(s)}", *_action_link(s, task), "promise")
+    texts = [rep.get("takeaway") or "", rep.get("next") or "", *(rep.get("summary") or []),
+             rep.get("content") or "", *(rep.get("changes") or []), *(rep.get("verification") or [])]
+    for text in texts:
+        for s in _split_sentences(text):
+            f = _fold_keep(s)
+            if any(rx.search(f) for rx in _ACTION_RE):
+                href, label = _action_link(s, task)
+                add(_plain_sentence(s), href, label, "text")
+    return out
+
+
+def _plain_sentence(s: str) -> str:
+    s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
+    s = re.sub(r"[*_`]+", "", s).strip()
+    return s[:300]
+
+
+_TARGET = re.compile(r"(?i)\bc[ií]l\w*\s*(≥|>=|≤|<=|>|<|=)?\s*(\d+(?:[.,]\d+)?)\s*(%|h|kč|k)?")
+_DELIVERY = re.compile(r"(?i)\b(dostal|odešl|doručen|předán|před termínem|v termínu|splněn|poslal jsem|"
+                       r"odeslán)\w*")
+
+
+def _num(s: str) -> float | None:
+    m = re.search(r"-?\d+(?:[.,]\d+)?", s or "")
+    return float(m.group(0).replace(",", ".")) if m else None
+
+
+def result_rows(content: str) -> list[tuple[str, str]]:
+    """The (label, value) rows of the first Markdown table in the content."""
+    rows = []
+    for line in (content or "").split("\n"):
+        line = line.strip()
+        if not line.startswith("|") or re.fullmatch(r"\|?[-:| ]+\|?", line):
+            if rows and not line.startswith("|"):
+                break
+            continue
+        cells = [c.strip(" *") for c in line.strip("|").split("|")]
+        if len(cells) >= 2 and cells[0] and cells[1]:
+            rows.append((cells[0], cells[1]))
+    if rows and _num(rows[0][1]) is None:  # the header row
+        rows = rows[1:]
+    return rows
+
+
+def _against(label: str, value: str) -> str | None:
+    """'Podíl byznysu na nákladech', '37 % (cíl ≥ 50 %)' -> 'podíl byznysu na nákladech je 37 % proti cíli ≥ 50 %
+    (pod cílem)'."""
+    m = _TARGET.search(value)
+    got = _num(_TARGET.sub("", value))
+    if not m or got is None:
+        return None
+    op, target = m.group(1) or "≥", float(m.group(2).replace(",", "."))
+    lower_better = op in ("≤", "<=", "<")
+    ok = got <= target if lower_better else got >= target
+    shown = re.sub(r"\s*\(\s*\)\s*", "", _TARGET.sub("", value)).strip(" ,;()")
+    unit = m.group(3) or ""
+    tgt = f"{op} {m.group(2)}{(' ' + unit) if unit else ''}".strip()
+    return f"{label[:1].lower() + label[1:]} je {shown} proti cíli {tgt} ({'splněno' if ok else 'pod cílem'})"
+
+
+def result_takeaway(takeaway: str, content: str) -> str | None:
+    """A takeaway that only says when something was delivered (T-751: "dostal jsi ve 14:02, před termínem
+    17:00") while the content carries numbers against a target: the result first, against the target,
+    then the other figures. None when the takeaway is fine."""
+    rows = result_rows(content)
+    if not rows:
+        return None
+    nums_in_takeaway = _numbers(takeaway or "")
+    row_nums = {n for _, v in rows for n in _numbers(v)}
+    if takeaway and not _DELIVERY.search(takeaway) and nums_in_takeaway & row_nums:
+        return None
+    if takeaway and not _DELIVERY.search(takeaway) and not any(_TARGET.search(v) for _, v in rows):
+        return None
+    targets = [x for x in (_against(lbl, v) for lbl, v in rows) if x]
+    others = [f"{lbl[:1].lower() + lbl[1:]}: {v}" for lbl, v in rows if not _TARGET.search(v)
+              and (_num(v) or 0) > 0][:3]
+    if not targets and not others:
+        return None
+    parts = []
+    if targets:
+        first = "; ".join(targets)
+        parts.append(first[:1].upper() + first[1:] + ".")
+    if others:
+        tail = ", ".join(others)
+        parts.append(("Dál: " if targets else "") + (tail[:1].upper() + tail[1:] if not targets else tail) + ".")
+    return " ".join(parts)[:MAX_TAKEAWAY]
+
+
+_ENGLISH_TAIL = re.compile(r"\s+[—–-]\s+(?:[A-Za-z']+\s*){1,4}$")
+_CZECH = re.compile(r"[áčďéěíňóřšťúůýž]", re.I)
+
+
+def clean_fragment(text: str) -> str:
+    """Drop a truncated English tail ("Provedu to dnes mimo špičku — I'm") from Czech text."""
+    t = (text or "").rstrip()
+    m = _ENGLISH_TAIL.search(t)
+    if m and _CZECH.search(t[:m.start()]) and not _CZECH.search(m.group(0)):
+        words = re.findall(r"[A-Za-z']+", m.group(0))
+        if any(w.lower() in _EN_WORDS for w in words):
+            return t[:m.start()].rstrip()
+    return text or ""
+
+
+_EN_WORDS = {"i'm", "im", "i", "the", "will", "it", "on", "a", "we", "ok", "okay", "is", "and", "to", "do",
+             "doing", "it's", "let", "me", "you", "i'll", "going", "yes", "no", "done", "this", "that"}
+
+
+def owner_title(title: str) -> str:
+    """Titles made by the platform, said to the owner ("Slib Ownerovi: Denní přehled…" -> "Slib: Denní přehled…")."""
+    t = re.sub(r"^\s*Slib (Ownerovi|Davidovi|majiteli)\s*:\s*", "Slib: ", title or "")
+    t = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", t)
+    return t
 
 
 def takeaways_for(conn: sqlite3.Connection, ids: list[int], viewer_id: int) -> dict[int, str]:
