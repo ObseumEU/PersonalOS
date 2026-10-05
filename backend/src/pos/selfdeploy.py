@@ -441,14 +441,22 @@ def publish_main(wt: Path, target: str, sha: str) -> str:
 
 def mirror_check(wt: Path, remote: str, target: str, prod: str | None) -> tuple[bool, str]:
     """The deployer's health check: its <remote>/<target> = the mirror's <target> (what the
-    agents fetch as deployer/<target>) = production (the last good deploy)."""
+    agents fetch as deployer/<target>) and contains production (the last good deploy). The owner
+    may push to main and deploy by hand, outside the deployer, so main can be ahead of the last
+    deploy record; a mirror behind or beside production fails (T-784)."""
     def rev(name: str) -> str:
         return subprocess.run(["git", "rev-parse", "-q", "--verify", name], cwd=wt,
                               capture_output=True, text=True).stdout.strip()
 
     deployer, mirror = rev(f"{remote}/{target}" if remote else target), rev(f"refs/heads/{target}")
     line = f"deployer {deployer[:10] or '?'}, mirror {mirror[:10] or '?'}, prod {(prod or '?')[:10]}"
-    return bool(deployer) and deployer == mirror == (prod or deployer), line
+    if not deployer or deployer != mirror:
+        return False, line
+    if prod and prod != mirror:
+        if not _is_ancestor(wt, prod, mirror):
+            return False, line + " (prod is not in main)"
+        line += " (main ahead of prod)"
+    return True, line
 
 
 def conflicting_files(wt: Path, tip: str, base: str) -> list[str] | None:
@@ -736,6 +744,8 @@ def main() -> None:
         ok, line = mirror_check(Path(a.repo), kw["remote"], kw["branch"], reporter.last_good())
         print(f"mirror {'ok' if ok else 'MISMATCH'}: {line}", flush=True)
         raise SystemExit(0 if ok else 1)
+    # A tick with nothing to promote prints nothing: this line shows the process is up (T-784).
+    print(f"deployer started: {a.promote_from or kw['remote'] + '/' + kw['branch']} every {a.watch}s", flush=True)
     while True:
         if reporter.frozen():
             print("kill switch is on (or PersonalOS is unreachable): not deploying", flush=True)

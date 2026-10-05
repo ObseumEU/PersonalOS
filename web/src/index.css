@@ -70,6 +70,16 @@ body {
 .btn-accent { border-color: var(--color-accent); background: rgb(108 196 220 / 0.1); color: var(--color-accent); font-weight: 500; }
 .btn-accent:hover { background: rgb(108 196 220 / 0.2); }
 .btn:disabled, .btn-accent:disabled { opacity: 0.4; }
+/* A button with a long label (decision options): wraps, grows with its text, icon on the first line. */
+.btn-wrap {
+  height: auto;
+  padding: 6px 12px;
+  align-items: flex-start;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.btn-wrap > svg { flex-shrink: 0; margin-top: 3px; }
 
 .measure-grid {
   background-image:

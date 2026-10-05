@@ -235,6 +235,8 @@ def test_deployer_remote_lets_the_workdir_fetch_main(tmp_path, monkeypatch):
     main = importlib.import_module("pos_worker.__main__")
     monkeypatch.setenv("HOME", str(tmp_path))  # the global safe.directory goes to a throwaway config
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / ".gitconfig"))
+    # In the agent pool this lists the agents' real clones: the test must not repoint their remote (T-784).
+    monkeypatch.delenv("WORKER_DEPLOYER_CLONES", raising=False)
 
     def git(*args, cwd):
         return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
