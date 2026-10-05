@@ -10,6 +10,7 @@ import { useNeedsMe } from "../needsMeApi";
 import { setSheetOrder, taskHref } from "../taskSheet";
 import { type ReviewQueue, type Task, type View, dueLabel, tasksApi } from "../tasksApi";
 import { agendaApi } from "./Calendar";
+import ArchivedTasks from "../components/tasks/ArchivedTasks";
 
 export function Capture({ onCaptured }: { onCaptured: (t: Task) => void }) {
   const [text, setText] = useState("");
@@ -185,7 +186,13 @@ function GroupList({
   );
 }
 
-export default function Tasks() {
+/** Úkoly; ?view=archived shows the archive (restorable tasks) instead of the list. */
+export default function TasksPage() {
+  const [params] = useSearchParams();
+  return params.get("view") === "archived" ? <ArchivedTasks /> : <Tasks />;
+}
+
+function Tasks() {
   const [params, setParams] = useSearchParams();
   const loc = useLocation();
   const { ref: selectedRef } = useParams();
@@ -366,7 +373,10 @@ export default function Tasks() {
           <GroupList key={`${g}${view}`} g={g} items={grouped[g]} meId={meId} selected={selected} hrefOf={hrefOf} collapsed={g === "done" || g === "later"} needKinds={needKinds} />
         ))}
         {error && <p className="p-4 text-xs break-words text-red-400">{error}</p>}
-        <div className="flex justify-end px-4 py-3">
+        <div className="flex justify-end gap-4 px-4 py-3">
+          <Link to="/tasks?view=archived" className="text-xs text-ink-2 hover:text-accent">
+            {t("tk.archive.link")}
+          </Link>
           <Link to="/weekly-review" className="text-xs text-ink-2 hover:text-accent">
             {t("work.tasks.weekly")}
           </Link>

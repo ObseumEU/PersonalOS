@@ -698,7 +698,20 @@ function TaskPanel({
           icon: <Archive size={14} />,
           onClick: async () => {
             const ok = await confirmDialog({ title: t("tk.archive_ask", { title: task.title }), confirm: t("act.archive") });
-            if (ok !== null && (await run(tasksApi.archive(task.ref), t("work.detail.archived")))) onClose();
+            if (ok === null || !(await run(tasksApi.archive(task.ref)))) return;
+            // Undo for 8 s: the archive is one click back (POST unarchive), no trip to Úkoly → Archiv.
+            const ref = task.ref;
+            toast(t("work.detail.archived"), {
+              undo: () =>
+                tasksApi.unarchive(ref).then(
+                  () => {
+                    taskChanged();
+                    toast(t("tk.unarchived"));
+                  },
+                  (e) => toast(e instanceof Error ? e.message : String(e), { error: true }),
+                ),
+            });
+            onClose();
           },
         },
       ]}

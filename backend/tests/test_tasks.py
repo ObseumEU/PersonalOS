@@ -106,6 +106,22 @@ def test_history_restore_and_archive(conn, me):
     assert len(tasks.list_tasks(conn, me, "inbox")) == 1
 
 
+def test_archived_view_lists_only_archived_tasks_newest_first(conn, me, ai):
+    live = tasks.create(conn, me, {"title": "Live"})
+    a = tasks.create(conn, me, {"title": "Old"})
+    b = tasks.create(conn, me, {"title": "Newer"})
+    secret = tasks.create(conn, me, {"title": "Doctor", "visibility": "private"})
+    for t in (a, b, secret):
+        tasks.archive(conn, me, t["id"])
+    conn.execute("UPDATE tasks SET archived_at = '2026-01-01T00:00:00Z' WHERE id = ?", (a["id"],))
+    ids = [t["id"] for t in tasks.list_tasks(conn, me, "archived")]
+    assert ids[:2] in ([secret["id"], b["id"]], [b["id"], secret["id"]]) and ids[-1] == a["id"]
+    assert live["id"] not in ids
+    assert secret["id"] not in {t["id"] for t in tasks.list_tasks(conn, ai, "archived")}  # privacy still holds
+    tasks.unarchive(conn, me, a["id"])
+    assert a["id"] not in {t["id"] for t in tasks.list_tasks(conn, me, "archived")}
+
+
 def test_rollback_a_run(conn, me):
     from pos import agents
 

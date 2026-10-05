@@ -69,6 +69,8 @@ export type Task = {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  /** Set on an archived task (the Archiv view). */
+  archived_at?: string | null;
   steps_total?: number;
   steps_done?: number;
   steps?: Task[];
@@ -222,6 +224,9 @@ export const tasksApi = {
   review: (ref: string, accept: boolean, comment?: string) => post<Task>(`/api/tasks/${ref}/review`, { accept, comment }),
   intervene: (ref: string, note: string) => post<Task>(`/api/tasks/${ref}/intervene`, { note }),
   archive: (ref: string) => post<Task>(`/api/tasks/${ref}/archive`),
+  unarchive: (ref: string) => post<Task>(`/api/tasks/${ref}/unarchive`),
+  /** Archived tasks, newest first (Úkoly → Archiv). */
+  archived: () => api<Task[]>("/api/tasks?view=archived"),
   suggest: (ref: string) => post<Suggestion>(`/api/tasks/${ref}/suggest`),
   clarify: (ref: string, action: string, fields?: Record<string, unknown>) =>
     post<Task>(`/api/tasks/${ref}/clarify`, { action, fields }),

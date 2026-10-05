@@ -243,11 +243,15 @@ def _view_for(conn: sqlite3.Connection, ctx: Ctx, view: str) -> tuple[str, list,
 
 def list_tasks(conn: sqlite3.Connection, ctx: Ctx, view: str = "today", *, topic: str | None = None,
                assignee_id: int | None = None, limit: int = 200, scope: str = "all") -> list[dict]:
-    cond, params, order = _view_for(conn, ctx, view)
+    if view == "archived":  # the archive (Úkoly → Archiv): newest first, restorable with unarchive
+        cond, params, order, alive = "1", [], "archived_at DESC, id DESC", "archived_at IS NOT NULL"
+    else:
+        cond, params, order = _view_for(conn, ctx, view)
+        alive = "archived_at IS NULL"
     scond, sparams = _scope_sql(conn, ctx, scope)
     cond, params = f"{cond} AND {scond}", [*params, *sparams]
     vis, vparams = visible_sql(ENTITY, ctx.actor_id)
-    sql = f"SELECT * FROM tasks WHERE archived_at IS NULL AND {cond} AND {vis}"
+    sql = f"SELECT * FROM tasks WHERE {alive} AND {cond} AND {vis}"
     params = [*params, *vparams]
     if topic:
         sql += " AND topic = ?"
