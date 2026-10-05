@@ -188,6 +188,42 @@ def test_promote_moves_the_mirror_the_agents_fetch_and_says_when_it_cannot(tmp_p
     assert not ok and f"deployer {res.new[:10]}" in line
 
 
+def test_mirror_check_passes_when_the_owner_pushed_to_main_outside_the_deployer(tmp_path, reporter):
+    """T-784: the owner pushed two commits to main and deployed them by hand (recreating the deployer);
+    the last deploy record stayed on the deployer's merge, so the health check failed for good."""
+    rep, client, conn = reporter
+    origin = tmp_path / "origin.git"
+    git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    work = tmp_path / "work"
+    git(tmp_path, "clone", str(origin), str(work))
+    (work / "check.py").write_text(CHECK)
+    first = commit(work, {"app.txt": "good v1"}, "initial")
+    git(work, "push", "origin", "HEAD:main")
+    git(work, "checkout", "-q", "-b", "agent/dev")
+    deploy = tmp_path / "deploy"
+    git(work, "worktree", "add", "--detach", str(deploy), "main")
+    kw = dict(source="agent/dev", remote="origin", target="main", test_cmd=f'"{sys.executable}" check.py',
+              up_cmd="", health_url=None)
+    commit(work, {"app.txt": "good v2"}, "Improve app\n\nAgent: Software Engineer")
+    res = selfdeploy.promote_tick(deploy, rep, **kw)
+    assert res.status == "ok" and rep.last_good() == res.new
+
+    owner = tmp_path / "owner"
+    git(tmp_path, "clone", "-q", str(origin), str(owner))
+    pushed = commit(owner, {"web.txt": "paste screenshots"}, "Web: paste screenshots")
+    git(owner, "push", "-q", "origin", "HEAD:main")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).status == "nothing"  # moves the mirror to the push
+    assert git(work, "rev-parse", "refs/heads/main") == pushed
+    ok, line = selfdeploy.mirror_check(deploy, "origin", "main", rep.last_good())
+    assert ok and "main ahead of prod" in line, line
+
+    # production on a commit the mirror does not have (T-730: a mirror left behind) still fails
+    stray = git(work, "-c", "user.name=Software Engineer", "-c", "user.email=dev@pos", "commit-tree",
+                f"{first}^{{tree}}", "-p", first, "-m", "stray")
+    ok, line = selfdeploy.mirror_check(deploy, "origin", "main", stray)
+    assert not ok and "prod is not in main" in line
+
+
 def test_promote_rolls_production_back_when_health_fails_and_respects_the_kill_switch(tmp_path, reporter,
                                                                                          monkeypatch):
     from pos import killswitch
