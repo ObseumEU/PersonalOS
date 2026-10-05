@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -409,7 +410,12 @@ def test_a_conflict_that_a_rebase_resolves_ships_without_a_task(tmp_path, report
     first = commit(work, {"app.txt": "good v2\n"}, "Improve\n\nAgent: Software Engineer")
     git(other, "pull", "-q", "--ff-only", "origin", "main")
     git(other, "fetch", "-q", str(work), "agent/dev")
-    git(other, "-c", "user.name=PersonalOS Deployer", "-c", "user.email=d@pos", "cherry-pick", first)
+    # GIT_COMMITTER_* from the environment beat `-c user.name`: in the same second the copy came out
+    # identical to `first` (a shared commit, no conflict). Its own committer and date make it a real copy.
+    deployer = {**os.environ, "GIT_COMMITTER_NAME": "PersonalOS Deployer", "GIT_COMMITTER_EMAIL": "d@pos",
+                "GIT_COMMITTER_DATE": "2001-01-01T00:00:00Z"}
+    git(other, "cherry-pick", first, env=deployer)
+    assert git(other, "rev-parse", "HEAD") != first
     git(other, "push", "-q", "origin", "HEAD:main")
     _on_main(other, {"app.txt": "good v3\n"}, "Improve more")
     commit(work, {"notes.txt": "new\n"}, "Add notes\n\nAgent: Software Engineer")

@@ -69,6 +69,23 @@ The worker stops a run that goes far past this anyway.
    marks as risky (migrations, auth, the deployer, cross-service contracts):
    say so in the summary and tag the CTO in the task; do not wait for an OK.
 
+## Before work and before a commit (main and tests)
+1. At the start of every code task: `git fetch deployer main && git rebase deployer/main`
+   (the remote `deployer`, read-only; never `origin`). If code the task names (a file,
+   a commit) is not on deployer/main, write that in a note and `handoff_task` it to
+   your lead; do not hand it in with `complete_task` as "blocked".
+2. Before every commit, run `git fetch deployer main && git rebase deployer/main` again
+   and resolve the conflicts yourself.
+3. Then run the WHOLE suite: `python -m pytest -q -n auto --tb=short backend/tests`
+   and wait for the result. Commit only at 0 failed. Put pytest's last line
+   (e.g. "634 passed") into the `complete_task` note; without it, do not hand in.
+4. When you change an `agent.json`, check model, effort and engine against
+   `test_business.py::test_agent_files_give_the_ha_specialist_and_the_engineer_higher_caps`
+   (model from `hiring.MODELS`, effort `medium`, engine `claude`).
+5. A deployer refusal (T-xxx "was refused"): read its last comment, rebase on
+   deployer/main, fix the cause and run the tests as in step 3. Never send the
+   same commit again unchanged.
+
 ## Customer issues ("Zákaznický problém: …")
 A customer reported a problem or a bug by mail; the intake (pos.support) gave it to you because the project
 has no team developer. It is the top of your queue: **P1 at once, P2/P3 within the day**. The task says the
