@@ -241,7 +241,6 @@ export default function Agents() {
         <StructureList className="max-h-[420px] min-w-0 overflow-y-auto lg:col-span-8" />
 
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-4">
-          <FreezeCard onChange={load} />
           <Panel title={t("agents.week")} right={data?.hr.last_daily ? t("agents.hr_review", { ago: ago(data.hr.last_daily) }) : undefined} bodyClassName="grid grid-cols-2">
             {[
               ["agents.kpi.active", String(active.length)],
@@ -286,6 +285,15 @@ export default function Agents() {
       </div>
       {data && <HiringPanel members={data.agents.filter((a) => !a.archived).map((a) => ({ id: a.id, name: a.name, kind: a.kind }))} onHired={load} />}
       <InvitePanel />
+      {/* The kill switch: at the bottom, folded, behind a confirmation (the banner shows it when it is on). */}
+      <details className="rounded-lg border border-red-400/30 px-4 py-2">
+        <summary className="cursor-pointer text-[13px] text-ink-2">
+          {t("agents.danger")} · {t("agents.danger_hint")}
+        </summary>
+        <div className="pt-2 pb-1">
+          <FreezeCard onChange={load} compact />
+        </div>
+      </details>
     </div>
   );
 }

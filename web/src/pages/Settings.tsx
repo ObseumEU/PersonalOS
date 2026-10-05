@@ -11,7 +11,6 @@ export default function Settings() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader kicker={t("settings.kicker")} title={t("nav.settings")} sub={t("settings.sub")} />
-      <FreezeCard />
       <EmailModeCard />
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
         {SETTINGS.map((s) => {
@@ -28,6 +27,15 @@ export default function Settings() {
           );
         })}
       </div>
+      {/* The kill switch: folded at the bottom, behind a confirmation. */}
+      <details className="rounded-lg border border-red-400/30 px-4 py-2">
+        <summary className="cursor-pointer text-[13px] text-ink-2">
+          {t("agents.danger")} · {t("agents.danger_hint")}
+        </summary>
+        <div className="pt-2 pb-1">
+          <FreezeCard compact />
+        </div>
+      </details>
     </div>
   );
 }

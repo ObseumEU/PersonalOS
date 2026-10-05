@@ -2,7 +2,7 @@ import { Pencil } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { agentsApi, type Org as OrgData, type OrgMember } from "../agentsApi";
-import { ActorChip, Pill, StatusDot } from "../components/agents/bits";
+import { ActorChip, Pill, StatusDot, roleSaysMore } from "../components/agents/bits";
 import { toast } from "../components/overlay";
 import { Panel } from "../components/ui";
 import { t } from "../i18n";
@@ -56,7 +56,7 @@ function Branch({
         <Link to={`/team/${m.id}`} className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           {depth > 0 && <span className="text-ink-2" aria-hidden>└</span>}
           <ActorChip a={m} />
-          <Pill>{roleLabel(m.role)}</Pill>
+          {roleSaysMore(m.name, roleLabel(m.role)) && <Pill>{roleLabel(m.role)}</Pill>}
           {m.team && <span className="truncate text-xs text-ink-2">{t("org.team", { team: m.team })}</span>}
         </Link>
         {editing && blocked && (

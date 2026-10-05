@@ -66,3 +66,11 @@ export function Pill({ children, warn = false }: { children: string; warn?: bool
     </span>
   );
 }
+
+/** A role tag only when it says more than the name ("CEO · ceo", "QA Reviewer · qa" say it twice). */
+export function roleSaysMore(name: string, role: string | null | undefined): boolean {
+  const fold = (s: string) => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[_\s]+/g, " ").trim();
+  const r = fold(role ?? "");
+  if (!r || r === "owner") return false;
+  return !fold(name).includes(r);
+}

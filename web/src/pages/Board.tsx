@@ -56,8 +56,29 @@ export default function Board() {
         </Link>
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        <Panel title={t("work.board.panel")} right={t("work.board.live")} className="min-w-0 xl:col-span-9" bodyClassName="overflow-x-auto">
-          <div className="grid min-w-[760px] grid-cols-[200px_repeat(4,minmax(0,1fr))]">
+        <Panel title={t("work.board.panel")} right={t("work.board.live")} className="min-w-0 xl:col-span-9" bodyClassName="md:overflow-x-auto">
+          {/* On a phone: member by member, only the columns that have something (no sideways scrolling). */}
+          <div className="flex flex-col md:hidden">
+            {rows
+              ?.filter((r) => COLUMNS.some((k) => r[k].length))
+              .map((r) => (
+                <div key={r.actor.id} className="flex flex-col gap-2 border-b border-line px-3 py-3">
+                  <Link to={r.actor.kind === "human" ? "/tasks" : `/team/${r.actor.id}`} className="flex items-center gap-2">
+                    <ActorChip a={r.actor} />
+                    <StatusDot status={r.actor.status} />
+                  </Link>
+                  {COLUMNS.filter((k) => r[k].length).map((k) => (
+                    <div key={k} className="flex flex-col gap-1.5">
+                      <span className={`text-xs font-medium ${k === "needs_you" ? "text-amber-300" : "text-ink-2"}`}>{t(`work.board.col.${k}`)}</span>
+                      {r[k].map((c, i) => (
+                        <Card key={`${c.ref ?? c.approval_id}-${i}`} c={c} col={k} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ))}
+          </div>
+          <div className="hidden min-w-[760px] grid-cols-[200px_repeat(4,minmax(0,1fr))] md:grid">
             <div className="border-b border-line" />
             {COLUMNS.map((k) => (
               <div key={k} className="border-b border-line px-3 py-2.5">

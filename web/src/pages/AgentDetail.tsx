@@ -9,7 +9,7 @@ import { markdownSnippet } from "../markdownText";
 import { AccessSections, CompanyAccessPanel, Section } from "../components/agents/AccessPanel";
 import { AgentCredentialsPanel } from "./Credentials";
 import { BrowserLive, BrowserProfilePanel, Filmstrip } from "../components/agents/BrowserLive";
-import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bits";
+import { ActorChip, EngineBadge, Pill, StatusDot, roleSaysMore } from "../components/agents/bits";
 import { WorkingOnText, workingOn } from "../components/agents/WorkingOn";
 import { StatePill } from "../components/tasks/bits";
 import { FeedbackPanel, InstructionsEditor } from "../components/Feedback";
@@ -609,7 +609,7 @@ export default function AgentDetail() {
         <ActorChip a={a} />
         <StatusDot status={a.status} />
         {a.system && <Pill>{t("agents.system")}</Pill>}
-        {a.role && <Pill>{a.role.replace(/_/g, " ")}</Pill>}
+        {a.role && roleSaysMore(a.name, a.role.replace(/_/g, " ")) && <Pill>{a.role.replace(/_/g, " ")}</Pill>}
         {a.team && <span className="text-xs text-ink-2">{t("agent.team", { team: a.team })}</span>}
         {a.reports_to_name && (
           <Link to={`/team/${a.reports_to}`} className="text-xs text-ink-2 hover:text-accent">
@@ -625,7 +625,14 @@ export default function AgentDetail() {
                 <Play size={13} /> {t("act.resume")}
               </button>
             ) : (
-              <button className="btn" onClick={() => act(agentsApi.action(id, "pause"), t("agent.paused", { name: a.name }))}>
+              <button
+                className="btn"
+                title={t("agent.pause_title")}
+                onClick={async () => {
+                  const ok = await confirmDialog({ title: t("agent.pause_confirm", { name: a.name }), body: t("agent.pause_body"), confirm: t("act.pause") });
+                  if (ok !== null) act(agentsApi.action(id, "pause"), t("agent.paused", { name: a.name }));
+                }}
+              >
                 <Pause size={13} /> {t("act.pause")}
               </button>
             )}
@@ -634,7 +641,7 @@ export default function AgentDetail() {
                 <UserCheck size={13} /> {t("agent.take_over")}
               </button>
             )}
-            <button className="btn border-amber-400/60! text-amber-300!" onClick={stop}>
+            <button className="btn border-amber-400/60! text-amber-300!" title={t("agent.stop_title")} onClick={stop}>
               <Square size={13} /> {t("act.stop")}
             </button>
             {a.archived ? (
