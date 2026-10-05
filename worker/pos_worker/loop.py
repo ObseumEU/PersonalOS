@@ -260,6 +260,11 @@ class Worker:
         try:
             started = self.client.start_run(ref)
         except Blocked as e:
+            if "live run" in str(e):
+                # Another run is on this task (a race with a second worker): not a refusal of this
+                # agent's runs (no budget, no kill switch), so the worker neither waits nor gives its slot up.
+                log.info("%s already has a live run; skipping it", ref)
+                return "skipped"
             log.info("run for %s blocked: %s", ref, e)
             if not self.exit_idle_s:  # the pool's worker ends at once instead (run_forever)
                 self.sleep(min(self.poll_wait, 30))

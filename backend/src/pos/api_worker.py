@@ -130,8 +130,10 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     if st["frozen"] or st["paused"] or st["archived"]:
         return {"state": st}
     unread = chat.inbox_unread(conn, ctx.actor_id)
-    # A "working" task is offered again only when no worker is still on it
-    # (a second worker of the same agent must not pick up the same task).
+    # A task with a live run is never offered, whatever its status: a "working" one, and a "next"
+    # one too (a run between its start and its claim, or a task set back to `next` while its run
+    # goes on: a hand-back, an owner's comment). Offering those was the race behind 142 refused
+    # POST /runs ("already has a live run") in 72 h (prod 10-05).
     live, cutoff = _live_run_sql()
     from . import business, review_work
     from .access import service as access
@@ -147,7 +149,7 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     # being worked on (prod: T-516 with do_date 9 Oct was picked 241 times).
     candidates = conn.execute(
         f"""SELECT * FROM tasks WHERE assignee_id = ? AND archived_at IS NULL
-           AND (status = 'next' OR (status = 'working' AND NOT {live}))
+           AND status IN ('next', 'working') AND NOT {live}
            AND (retry_after IS NULL OR retry_after <= ?)
            AND (status = 'working' OR do_date IS NULL OR do_date <= ?)
            ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 50""",

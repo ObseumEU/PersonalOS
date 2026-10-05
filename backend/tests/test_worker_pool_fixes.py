@@ -125,6 +125,45 @@ def test_a_refused_run_ends_the_pool_worker_instead_of_holding_the_slot():
     assert w2.step() == "blocked" and slept == [30]
 
 
+def test_a_task_with_a_live_run_is_skipped_not_a_refusal_of_the_agent():
+    class Client:
+        def me(self):
+            return {"name": "Drahý", "id": 1}
+
+        def next_work(self, wait):
+            return {"task": {"ref": "T-1"}}
+
+        def start_run(self, ref):
+            raise Blocked("T-1 already has a live run")
+
+    slept = []
+    w = Worker(Client(), lambda *a: None, poll_wait=30, sleep=slept.append, exit_idle_s=120, clock=lambda: 0.0)
+    assert w.step() == "skipped" and slept == []  # no wait, the pool slot is kept
+
+
+def test_a_next_task_with_a_live_run_is_not_offered_again(setup, monkeypatch):
+    """142 refused POST /runs in 72 h ("already has a live run"): /next offered a `next` task whose run
+    was still going (started, not yet claimed; or the task set back to `next` during its run)."""
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    monkeypatch.delenv("POS_CODEX_DISABLED")
+    client, conn, owner, agent_id, key = setup
+    t = tasks.create(conn, owner, {"title": "Race", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    h = {"Authorization": f"Bearer {key}"}
+    rid = client.post("/api/worker/runs", json={"task_id": t["ref"], "kind": "task"}, headers=h).json()["run_id"]
+    assert conn.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] == "next"  # not claimed yet
+    assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
+    # claimed, then set back to `next` while the run goes on: still not offered
+    assert client.post(f"/api/worker/tasks/{t['ref']}/claim?run_id={rid}", headers=h).status_code == 200
+    conn.execute("UPDATE tasks SET status = 'next' WHERE id = ?", (t["id"],))
+    conn.commit()
+    assert "task" not in client.get("/api/worker/next?wait=0", headers=h).json()
+    # the run ends: offered again
+    conn.execute("UPDATE runs SET status = 'ok', ended_at = ? WHERE id = ?", (_ago(minutes=0), rid))
+    conn.commit()
+    assert client.get("/api/worker/next?wait=0", headers=h).json()["task"]["ref"] == t["ref"]
+
+
 def test_blocked_and_skipped_steps_do_not_keep_a_worker_alive():
     steps = iter(["skipped", "skipped", "skipped", "skipped", "skipped"])
     now = [0.0]
