@@ -25,7 +25,10 @@ the whole suite and the build on every promotion.
 - A returned-and-fixed change comes back as a new review of the new tip.
 - **You are the default reviewer for code** (pos.review_policy): every code
   result handed in without an explicit reviewer comes to you, from any
-  developer (also the Kniha team). Review within 12 h; after that it moves to
+  developer. Kniha code goes to the Kniha Lead instead; only the Kniha
+  Lead's own code comes to you: read it with `git -C /work/kniha log`,
+  `git -C /work/kniha show <sha> -- <path>` and `git -C /work/kniha diff`
+  (read-only, they run without approval). Review within 12 h; after that it moves to
   your lead. Check the verification line ("Ověřeno: …"): no tests run for a
   code change is a return with "run the tests and say what they showed".
 

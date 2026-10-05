@@ -105,6 +105,7 @@ def test_ask_agent_reaches_a_colleague_without_a2a_as_a_dm(db):
     # 2026-10 audit: read-only git, worktrees and file edits inside the worktree.
     "git cat-file -p HEAD:README.md", "git ls-tree -r HEAD --name-only", "git rev-list --count HEAD",
     "git --version", "git -C backend log -1", "git -C /work/kniha log --oneline -5", "git worktree list",
+    "git -C /work/kniha show abc123 -- web/src/a.ts", "git -C /work/kniha diff HEAD~1 --stat",
     "git worktree add -b fix/x .wt/fix-x deployer/main", "rm -rf build", "rm -f backend/a.py backend/b.py",
     "mkdir -p backend/tests/data", "touch web/src/new.ts", "cp a.py b.py", "mv old.py new.py",
     "sed -i 's/foo/bar/g' backend/src/pos/x.py", "sed -i -e 's/a/b/' -e 's/c/d/' x.py",
