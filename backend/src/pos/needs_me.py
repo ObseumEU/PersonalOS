@@ -71,7 +71,8 @@ def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
         a = asker.get(r["id"])
         out.append({
             "kind": "ask", "key": f"ask:{r['id']}", "id": r["id"], "ref": tasks.display_id(r["id"]),
-            "title": r["title"], "detail": "", "ask_kind": a["kind"] if a else None,
+            "title": r["title"], "detail": context(r["notes"] or ""), "links": links(r["notes"] or ""),
+            "ask_kind": a["kind"] if a else None,
             "blocking": bool(a["blocking"]) if a else False,
             "from_name": a["name"] if a else r["from_name"], "from_kind": a["akind"] if a else r["from_kind"],
             "at": r["created_at"], "link": f"/tasks?task={tasks.display_id(r['id'])}",
@@ -85,6 +86,45 @@ def _asks(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
             out[-1].update(options=card["options"], recommendation=card["recommendation"],
                            default_at=card["default_at"])
     return out
+
+
+_MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_SKIP_LINE = re.compile(r"^\s*(#|\*\*Ptá se:\*\*|\*\*Potřebuje|- \*\*Zdrojový úkol|\|)")
+
+
+def _plain(text: str) -> str:
+    t = _MD_LINK.sub(lambda m: m.group(1), text)
+    return " ".join(re.sub(r"[*_`>]+", "", t).split())
+
+
+def context(notes: str, limit: int = 240) -> str:
+    """One or two sentences of why the item waits for him: the "Proč" (or "Co udělat") section of an
+    ask, else the first plain paragraph. Never the agent's headers or meta lines."""
+    sections = re.split(r"(?m)^###\s+", notes or "")
+    for head in ("Proč", "Co udělat", "Co potřebuju"):
+        for s in sections:
+            if s.startswith(head):
+                body = s[len(head):].strip()
+                para = body.split("\n\n")[0]
+                if para.strip():
+                    return _plain(para)[:limit]
+    for line in (notes or "").split("\n"):
+        if line.strip() and not _SKIP_LINE.match(line):
+            return _plain(line)[:limit]
+    return ""
+
+
+def links(notes: str) -> list[dict]:
+    """Where he acts on it: Gmail drafts for draft items (T-629), else the first web link."""
+    text = notes or ""
+    m = re.search(r"https://mail\.google\.com/mail/u/\??(?:authuser=([^#&)\s]+))?", text)
+    if m and ("koncept" in text.lower() or "#drafts" in text):
+        user = f"?authuser={m.group(1)}" if m.group(1) else "0/"
+        return [{"label": "Otevřít koncepty v Gmailu", "href": f"https://mail.google.com/mail/u/{user}#drafts"}]
+    for lm in _MD_LINK.finditer(text):
+        if lm.group(2).startswith("http"):
+            return [{"label": _plain(lm.group(1))[:60] or "Otevřít odkaz", "href": lm.group(2)}]
+    return []
 
 
 def _reviews(conn: sqlite3.Connection, ctx: Ctx) -> list[dict]:

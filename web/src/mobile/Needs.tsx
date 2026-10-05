@@ -7,6 +7,7 @@ import { toast } from "../components/overlay";
 import { ago, label, t } from "../i18n/core";
 import ApprovalBody, { approveLabel } from "../components/ApprovalBody";
 import DecisionOptions from "../components/DecisionOptions";
+import { Detail } from "../components/NeedsInbox";
 import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
 import { tasksApi } from "../tasksApi";
 import { AttachChips, MicButton, useAttachments } from "../components/compose";
@@ -86,7 +87,7 @@ function Item({ it, highlight }: { it: NeedsItem; highlight: boolean }) {
           <Link to={openHref(it)} className="text-[15px] leading-snug break-words">
             {it.kind === "approval" ? (it.view?.title ?? (it.action ? label("approval", it.action) : it.title)) : it.title}
           </Link>
-          {it.view ? <ApprovalBody v={it.view} compact /> : it.detail && <p className="line-clamp-3 text-[13px] break-words text-ink-2">{it.detail}</p>}
+          {it.view ? <ApprovalBody v={it.view} compact /> : it.detail && <Detail text={it.detail} lines={3} />}
         </div>
       </div>
       <div className="flex flex-wrap gap-2 pl-8">
@@ -125,9 +126,14 @@ function Item({ it, highlight }: { it: NeedsItem; highlight: boolean }) {
             {t("act.mark_read")}
           </button>
         )}
+        {(it.links ?? []).map((l) => (
+          <a key={l.href} href={l.href} target="_blank" rel="noreferrer noopener" className={plain}>
+            {l.label}
+          </a>
+        ))}
         {it.kind === "ask" && (
           <button className={plain} disabled={busy} onClick={() => run(() => tasksApi.complete(it.ref!), t("needs.done.closed"))}>
-            {t("act.done")}
+            {t("needs.act.close")}
           </button>
         )}
       </div>

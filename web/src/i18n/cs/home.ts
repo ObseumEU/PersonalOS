@@ -21,6 +21,12 @@ export default {
   "home.upload": "Nahrát",
 
   "needs.title": "Čeká na tebe",
+  "needs.act.close": "Hotovo, zavřít",
+  "needs.more": "celé",
+  "needs.less": "méně",
+  "home.today_mine": "{today} tvých na dnes · {inbox} v doručených",
+  "home.calendar_connect": "Připoj kalendář",
+  "home.calendar_connect_hint": "a uvidíš tady dnešní program.",
   "needs.none": "Nic na tebe nečeká. Agenti se ozvou tady, až budou něco potřebovat.",
   "needs.none_short": "nic",
   "needs.count.approval.one": "ke schválení",

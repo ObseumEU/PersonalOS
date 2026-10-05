@@ -59,7 +59,7 @@ export default {
   "tk.deadline": "Termín {d}",
   "tk.someone": "Agent",
   "tk.system": "Systém",
-  "tk.act.handle": "Vyřídit",
+  "tk.act.handle": "Převezmu",
   "tk.act.complete": "Dokončit",
   "tk.act.reopen": "Znovu otevřít",
   "tk.act.intervene": "Zasáhl jsem ručně",

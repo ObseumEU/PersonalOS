@@ -91,3 +91,19 @@ def test_approval_decided_over_http_leaves_the_list(tmp_path):
         r = client.post(f"/api/approvals/{ap['id']}/decide", json={"approve": False, "comment": "not now"})
         assert r.status_code == 200 and r.json()["status"] == "rejected"
         assert client.get("/api/needs-me").json()["counts"]["approval"] == 0
+
+
+def test_ask_items_carry_context_and_the_gmail_drafts_link():
+    """Every "Čeká na tebe" item says why and where: T-629's drafts open the Gmail drafts."""
+    from pos import needs_me
+
+    ask = ("**Ptá se:** CEO · **K úkolu:** T-638 “Konektor” · **Potřebuje:** rozhodnutí · neblokuje\n\n"
+           "### Co potřebuju\nZalož přístup do datovky\n\n### Proč\nBez vlastního přístupu nemůže CTO napojit "
+           "datovku.\n\n### Souvislosti\n…")
+    assert needs_me.context(ask) == "Bez vlastního přístupu nemůže CTO napojit datovku."
+    drafts = ("### Co udělat\nOtevři koncept v Gmailu, zkontroluj ho a odešli.\n\n### Koncepty\n"
+              "- [Otevřít v Gmailu](https://mail.google.com/mail/u/?authuser=d@example.cz#drafts?compose=1a) · **x**")
+    assert needs_me.context(drafts).startswith("Otevři koncept v Gmailu")
+    assert needs_me.links(drafts) == [{"label": "Otevřít koncepty v Gmailu",
+                                       "href": "https://mail.google.com/mail/u/?authuser=d@example.cz#drafts"}]
+    assert needs_me.links("bez odkazu") == []

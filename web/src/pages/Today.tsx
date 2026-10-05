@@ -49,7 +49,7 @@ export default function Today() {
             title={t("home.today")}
             right={
               <Link to="/tasks?view=today" className="hover:text-accent">
-                {counts ? t("home.today_counts", { today: counts.today, inbox: counts.inbox }) : t("home.all_tasks")} →
+                {counts && tasks ? t("home.today_mine", { today: tasks.length, inbox: counts.inbox }) : t("home.all_tasks")} →
               </Link>
             }
             bodyClassName="overflow-y-auto"
@@ -85,6 +85,14 @@ export default function Today() {
           <QuickAnswer />
         </div>
 
+        {agenda && !agenda.configured ? (
+          <p className="panel min-w-0 px-4 py-3 text-sm text-ink-2 lg:col-span-9">
+            <Link to="/calendar" className="text-accent hover:underline">
+              {t("home.calendar_connect")} →
+            </Link>{" "}
+            {t("home.calendar_connect_hint")}
+          </p>
+        ) : (
         <Panel
           title={t("home.agenda")}
           right={
@@ -92,7 +100,6 @@ export default function Today() {
               {agenda?.configured ? t("home.events_today", { n: agenda.events.length }) : t("home.no_calendar")} →
             </Link>
           }
-          mock={agenda ? !agenda.configured : false}
           className="min-w-0 lg:col-span-9"
           bodyClassName="relative px-5 pt-3.5 pb-1.5"
         >
@@ -104,10 +111,8 @@ export default function Today() {
                 return { start: h(e.start), end: Math.max(h(e.end), h(e.start) + 0.25), title: e.title, meta: e.location ?? e.calendar };
               })}
           />
-          {agenda && !agenda.configured && (
-            <p className="pointer-events-none absolute inset-0 grid place-items-center px-4 text-center text-sm text-ink-2">{t("home.connect_calendar")}</p>
-          )}
         </Panel>
+        )}
 
         <Panel
           title={t("home.recent_files")}

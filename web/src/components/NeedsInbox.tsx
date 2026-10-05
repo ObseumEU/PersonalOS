@@ -22,6 +22,22 @@ const KIND = {
 
 type Mode = null | "reply" | "reject" | "return";
 
+/** The item's context, folded to a few lines with "celé" to read the rest (never cut without a way on). */
+export function Detail({ text, lines, className = "" }: { text: string; lines: 2 | 3; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > lines * 80;
+  return (
+    <p className={`text-[13px] break-words text-ink-2 ${className}`}>
+      <span className={open || !long ? "" : lines === 2 ? "line-clamp-2" : "line-clamp-3"}>{text}</span>
+      {long && (
+        <button type="button" className="ml-1 text-xs text-accent hover:underline" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? t("needs.less") : t("needs.more")}
+        </button>
+      )}
+    </p>
+  );
+}
+
 function Item({ it }: { it: NeedsItem }) {
   const [mode, setMode] = useState<Mode>(null);
   const [text, setText] = useState("");
@@ -77,7 +93,7 @@ function Item({ it }: { it: NeedsItem }) {
           <Link to={open} className="text-sm break-words hover:text-accent">
             {it.kind === "approval" ? (it.view?.title ?? (it.action ? label("approval", it.action) : it.title)) : it.title}
           </Link>
-          {it.view ? <ApprovalBody v={it.view} compact /> : it.detail && <p className="line-clamp-2 text-[13px] break-words text-ink-2">{it.detail}</p>}
+          {it.view ? <ApprovalBody v={it.view} compact /> : it.detail && <Detail text={it.detail} lines={2} />}
         </div>
       </div>
       {it.kind === "ask" && it.options?.length ? (
@@ -118,9 +134,14 @@ function Item({ it }: { it: NeedsItem }) {
         )}
         {it.kind === "ask" && (
           <button className="btn" disabled={busy} onClick={() => run(() => tasksApi.complete(it.ref!), t("needs.done.closed"))}>
-            {t("act.done")}
+            {t("needs.act.close")}
           </button>
         )}
+        {(it.links ?? []).map((l) => (
+          <a key={l.href} href={l.href} target="_blank" rel="noreferrer noopener" className="btn">
+            <ExternalLink size={13} /> {l.label}
+          </a>
+        ))}
         {it.kind === "mention" ? (
           <Link to={it.link} className="btn">
             <ExternalLink size={13} /> {t("act.open")}

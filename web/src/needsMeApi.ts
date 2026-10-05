@@ -18,6 +18,8 @@ export type NeedsItem = {
   action?: string;
   /** An approval as the owner reads it. */
   view?: ApprovalView;
+  /** Where he acts on it outside PersonalOS (Gmail drafts…). */
+  links?: { label: string; href: string }[];
   ask_kind?: string | null;
   blocking?: boolean;
   channel_id?: number;
