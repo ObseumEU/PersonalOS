@@ -165,7 +165,7 @@ def _fuzzy_hit(stem: str, token: str) -> bool:
 
 def fuzzy_markers(folded: str, table=FUZZY) -> list[str]:
     toks = _TOKEN.findall(folded)
-    cands = toks + [a + b for a, b in zip(toks, toks[1:])]
+    cands = toks + [a + b for a, b in zip(toks, toks[1:], strict=False)]
     return [name for name, stems in table if any(_fuzzy_hit(st, c) for st in stems for c in cands)]
 
 
