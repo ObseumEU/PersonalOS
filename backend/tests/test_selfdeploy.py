@@ -539,7 +539,8 @@ def test_reason_of_a_rejection_and_the_repeat_count(reporter):
     rep, client, conn = reporter
     tests_log = "....F\nFAILED tests/test_x.py::test_a - assert 1 == 2\nFAILED tests/test_x.py::test_b\n2 failed"
     r = selfdeploy.Result("a" * 40, "b" * 40, "rejected", stage="tests", log=tests_log, branch="dev/agent/dev")
-    assert selfdeploy.reason_of(r) == "tests: FAILED tests/test_x.py::test_a - assert 1 == 2 (+1 more)"
+    assert selfdeploy.reason_of(r) == ("tests: FAILED tests/test_x.py::test_a - assert 1 == 2 "
+                                       "(+1 more: tests/test_x.py::test_b)")
     rep.report(r)
     rep.report(r)  # the same commit refused at the same stage twice: a repeat
     rep.report(selfdeploy.Result("a" * 40, "c" * 40, "ok", branch="dev/agent/dev"))
@@ -577,3 +578,63 @@ def test_the_deployer_exits_cleanly_on_sigterm():
     with pytest.raises(SystemExit) as e:
         selfdeploy._stop(15, None)
     assert e.value.code == 0
+
+
+def test_new_commits_that_leave_the_conflict_as_it_was_stay_parked_silently(tmp_path, reporter):
+    """Deploys 46-51: six new tips on agent/dev, the same conflict in the same file, six refusals.
+    A new commit that does not touch the conflicting files changes nothing: parked, no report."""
+    rep, client, conn = reporter
+    origin, work, other, deploy, kw = _promote_setup(tmp_path)
+    commit(work, {"app.txt": "good from the branch\n"}, "Branch change\n\nAgent: Software Engineer")
+    _on_main(other, {"app.txt": "good from main\n"}, "Main change")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).stage == "merge"
+    for i in range(3):
+        commit(work, {f"more{i}.txt": "x\n"}, f"More work {i}\n\nAgent: Software Engineer")
+        again = selfdeploy.promote_tick(deploy, rep, **kw)
+        assert again.status == "nothing" and again.stage == "parked"
+    assert len(client.get("/api/deploys").json()) == 1
+    # a commit that works on the conflicting file is worth one more attempt
+    commit(work, {"app.txt": "good from the branch, again\n"}, "Resolve?\n\nAgent: Software Engineer")
+    assert selfdeploy.promote_tick(deploy, rep, **kw).stage == "merge"
+    deploys = client.get("/api/deploys").json()
+    assert len(deploys) == 2 and deploys[0]["reason"] == "merge conflict in app.txt"
+
+
+def test_a_refused_tip_and_base_is_never_tried_again_even_after_another_attempt(tmp_path):
+    state = tmp_path / "state"
+    selfdeploy._remember(state, "t1", "b1", "tests")
+    selfdeploy._remember(state, "t2", "b1", "tests")  # the branch moved to t2 ...
+    assert not selfdeploy._should_try(state, "t1", "b1")  # ... and back to t1 (a reset): still refused
+    assert selfdeploy._should_try(state, "t1", "b2")  # main moved: a new pair
+    selfdeploy._remember(state, "t3", "b1", "ok")
+    assert not selfdeploy._should_try(state, "t2", "b1")  # a success forgets no refusal
+
+
+def test_a_tests_rejection_names_every_failing_test_and_tests_get_a_git_identity(tmp_path, monkeypatch):
+    """T-746: the Software Engineer needs the failing tests' names, not the tail of the output; and
+    a test that commits must not depend on the machine's global git identity (deploy 52)."""
+    _no_identity(tmp_path, monkeypatch)
+    script = tmp_path / "t.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "subprocess.run(['git', 'init', '-q', 'r'], check=True)\n"
+        "subprocess.run(['git', '-C', 'r', 'commit', '-q', '--allow-empty', '-m', 'x'], check=True)\n"
+        "print('x' * 9000)\n"
+        "print('FAILED tests/test_a.py::test_one - boom')\n"
+        "print('ERROR tests/test_b.py::test_two')\n"
+        "sys.exit(1)\n")
+    ok, log = selfdeploy.run_tests(f'"{sys.executable}" t.py', tmp_path)
+    assert not ok
+    assert log.startswith("Failing tests (2):\n  - tests/test_a.py::test_one\n  - tests/test_b.py::test_two")
+    assert "CalledProcessError" not in log and "tell me who you are" not in log
+    assert selfdeploy.failing_tests(log) == ["tests/test_a.py::test_one", "tests/test_b.py::test_two"]
+
+
+def test_a_refusal_task_keeps_the_conflicting_files_however_long_the_log(reporter):
+    rep, client, conn = reporter
+    log = "CONFLICT: x. Conflicting files:\n  - a.py\n  - b.py\n\nHunks:\n" + "h" * 9000
+    rep.report(selfdeploy.Result("a" * 40, "b" * 40, "rejected", stage="merge", log=log, branch="agent/dev",
+                                 author="Software Engineer", reason="merge conflict in a.py, b.py"))
+    d = client.get("/api/deploys").json()[0]
+    t = tasks.get(conn, Ctx(actors.owner_id(conn)), d["task_id"])
+    assert "  - a.py\n  - b.py" in t["notes"] and "Reason: merge conflict in a.py, b.py" in t["notes"]

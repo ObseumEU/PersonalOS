@@ -74,6 +74,15 @@ def responsible(conn: sqlite3.Connection, author: str) -> int | None:
     return eng["id"] if eng else monitor.platform_owner_id(conn)
 
 
+def excerpt(log: str, limit: int) -> str:
+    """The log's head (the deployer puts the conflicting files and the failing tests' names there)
+    and its tail (the output), within `limit` characters: a plain tail cut the list off."""
+    if len(log) <= limit:
+        return log
+    head = log[: limit // 3]
+    return f"{head}\n[...]\n{log[-(limit - len(head) - 7):]}"
+
+
 def _open_refusal(conn: sqlite3.Connection, branch: str) -> sqlite3.Row | None:
     """The open task for changes on this branch that did not ship (one per branch, not one per tip)."""
     return conn.execute(
@@ -97,7 +106,7 @@ def _refusal_task(conn: sqlite3.Connection, ctx: Ctx, body: DeployIn) -> str:
     if open_ is not None:
         comments.log(conn, ctx, open_["id"],
                      f"Again: {rng} {what} at stage {body.stage} (author {body.author or '?'}, "
-                     f"{body.commits} commit(s)).\n\nLog:\n{body.log[-2500:]}", "system")
+                     f"{body.commits} commit(s)).\nReason: {body.reason or '?'}\n\nLog:\n{excerpt(body.log, 2500)}", "system")
         changes: dict = {}
         cur = actors.get(conn, open_["assignee_id"]) if open_["assignee_id"] else None
         if fixer and (cur is None or cur["is_owner"] or cur["archived_at"] or cur["kind"] == "human"):
@@ -122,8 +131,9 @@ def _refusal_task(conn: sqlite3.Connection, ctx: Ctx, body: DeployIn) -> str:
                  f"Source: the self-deploy pipeline ({body.status} at stage {body.stage}).\n"
                  f"Branch: {branch}\n\n"
                  f"The deployer checked {body.commits} commit(s). Stage: {body.stage}. Author: {body.author or '?'}.\n"
-                 f"Revert commit: {body.reverted_sha or '-'}\n\nFurther refusals of this branch are comments here "
-                 f"(one open task per branch).\n\nLog:\n{body.log[-4000:]}",
+                 f"Revert commit: {body.reverted_sha or '-'}\nReason: {body.reason or '?'}\n\n"
+                 f"Further refusals of this branch are comments here "
+                 f"(one open task per branch).\n\nLog:\n{excerpt(body.log, 4000)}",
         "definition_of_done": "The cause is fixed and the change deploys with all checks green "
                               "(or it is dropped with a note why).",
         "priority": 1 if body.status == "error" else 2, "topic": "platform", "status": "next",

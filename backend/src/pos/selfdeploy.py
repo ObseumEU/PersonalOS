@@ -128,10 +128,44 @@ def is_deployer_revert(repo: Path, sha: str) -> bool:
     return msg.startswith("Revert ") and bool(re.search(r"^Agent:\s*Deployer\s*$", msg, re.MULTILINE))
 
 
-def sh(cmd: str, repo: Path, timeout: int = 1800) -> tuple[bool, str]:
+def sh(cmd: str, repo: Path, timeout: int = 1800, env: dict | None = None,
+       tail: int | None = 6000) -> tuple[bool, str]:
     p = subprocess.run(cmd, cwd=repo, shell=True, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=timeout)
-    return p.returncode == 0, (p.stdout + p.stderr)[-6000:]
+                       errors="replace", timeout=timeout, env=env)
+    out = p.stdout + p.stderr
+    return p.returncode == 0, out[-tail:] if tail else out
+
+
+# The tests' own commits (fixtures that `git commit`) need an identity; the deployer's container
+# has no global one, and a test that relied on it failed only there (deploy 52). The tests run
+# with this one unless the environment brings its own.
+TEST_GIT_IDENTITY = {"GIT_AUTHOR_NAME": "PersonalOS Tests", "GIT_AUTHOR_EMAIL": "tests@personalos.local",
+                     "GIT_COMMITTER_NAME": "PersonalOS Tests", "GIT_COMMITTER_EMAIL": "tests@personalos.local"}
+
+
+def failing_tests(out: str) -> list[str]:
+    """The failing tests' names in pytest output (FAILED / ERROR lines, without the message)."""
+    names: list[str] = []
+    for ln in out.splitlines():
+        m = re.match(r"^(?:FAILED|ERROR) (\S+)", ln.strip())
+        if m and m.group(1) not in names:
+            names.append(m.group(1))
+    return names
+
+
+def run_tests(cmd: str, repo: Path) -> tuple[bool, str]:
+    """The test command, with a git identity, and a log that starts with the failing tests' names
+    (all of them, not only what survives the tail of the output), so whoever fixes it can act."""
+    env = {**os.environ}
+    for k, v in TEST_GIT_IDENTITY.items():
+        env.setdefault(k, v)
+    ok, out = sh(cmd, repo, env=env, tail=None)
+    if ok:
+        return ok, out[-6000:]
+    names = failing_tests(out)
+    head = (f"Failing tests ({len(names)}):\n" + "\n".join(f"  - {n}" for n in names) if names else
+            "Failing tests: pytest named none (a crash or a collection error?): see the end of the output.")
+    return ok, f"{head}\n\n--- output (end) ---\n{out[-6000:]}"
 
 
 # What the deployer's image is built from (ops/deployer.Dockerfile): a change here needs a new deployer.
@@ -253,7 +287,7 @@ def deploy_range(repo: Path, old: str, new: str, *, test_cmd: str, up_cmd: str, 
         res.log = "warning (signing not set up yet): " + "; ".join(
             f"{p.sha[:10]} changes {', '.join(p.paths)}" for p in check.unsigned_protected)
     if test_cmd:
-        ok, log = sh(test_cmd, repo)
+        ok, log = run_tests(test_cmd, repo)
         if not ok:
             return fail("tests", log)
     if up_cmd:
@@ -296,7 +330,7 @@ class Reporter:
     def report(self, res: Result) -> dict:
         r = self.http.post("/api/deploys", headers=self.auth, json={
             "old_sha": res.old, "new_sha": res.new, "status": res.status, "stage": res.stage,
-            "log": res.log[-8000:], "author": res.author, "reverted_sha": res.reverted_sha,
+            "log": res.log if len(res.log) <= 8000 else f"{res.log[:2500]}\n[...]\n{res.log[-5400:]}", "author": res.author, "reverted_sha": res.reverted_sha,
             "commits": len(res.commits), "branch": res.branch, "reason": res.reason or reason_of(res),
         })
         r.raise_for_status()
@@ -328,9 +362,14 @@ def reason_of(res: Result) -> str:
     if res.stage == "tests":
         failed = [ln for ln in lines if ln.startswith(("FAILED ", "ERROR "))]
         pick = failed[0] if failed else (lines[-1] if lines else "")
-        extra = f" (+{len(failed) - 1} more)" if len(failed) > 1 else ""
-        return f"tests: {pick[:200]}{extra}"
+        rest = failing_tests("\n".join(failed))[1:]
+        extra = f" (+{len(rest)} more: {', '.join(rest)})" if rest else ""
+        return _clip(f"tests: {pick[:200]}{extra}")
     return f"{res.stage}: {(lines[0] if lines else res.status)[:200]}"
+
+
+def _clip(line: str, n: int = 300) -> str:
+    return line if len(line) <= n else line[:n - 4] + " ..."
 
 
 def _load(state: Path) -> dict | None:
@@ -344,14 +383,21 @@ def _load(state: Path) -> dict | None:
     return last if isinstance(last, dict) else {}
 
 
+REJECTED_KEPT = 50  # the (tip, base) pairs refused lately: none of them is tried again
+
+
 def _remember(state: Path, tip: str, base: str, stage: str, conflict: list[str] | None = None) -> None:
-    data: dict = {"tip": tip, "base": base, "stage": stage}
+    last = _load(state) or {}
+    rejected = [p for p in last.get("rejected") or [] if isinstance(p, list) and len(p) == 2]
+    if stage != "ok" and [tip, base] not in rejected:
+        rejected = (rejected + [[tip, base]])[-REJECTED_KEPT:]
+    data: dict = {"tip": tip, "base": base, "stage": stage, "rejected": rejected}
     if conflict is not None:
         data["conflict"] = sorted(conflict)
     state.write_text(json.dumps(data), encoding="utf-8")
 
 
-def _should_try(state: Path, tip: str, base: str, clean=None) -> bool:
+def _should_try(state: Path, tip: str, base: str, clean=None, same_conflict=None) -> bool:
     """Not the same attempt again: a tip is tried once. A tip parked on a merge conflict is tried
     again only once it merges cleanly into the new main (`clean(tip, base)`, a silent
     `git merge-tree` check: no report, no task); the same (tip, base) pair never twice. The old
@@ -360,8 +406,12 @@ def _should_try(state: Path, tip: str, base: str, clean=None) -> bool:
     last = _load(state)
     if not last:
         return True  # no attempt yet, or the old format: one more try with the fixed deployer
+    if [tip, base] in (last.get("rejected") or []):
+        return False  # refused before, unchanged: never the same attempt twice
     if last.get("tip") != tip:
-        return True
+        # A new commit on a parked branch that leaves the conflict as it was (deploys 46-51: six
+        # tips, the same conflict in the same file, six refusals): stays parked, silently.
+        return not (last.get("stage") == "merge" and same_conflict and same_conflict(last, tip, base))
     if last.get("stage") != "merge" or last.get("base") == base:
         return False
     return bool(clean and clean(tip, base))  # still conflicting (or cannot tell): stays parked
@@ -399,6 +449,31 @@ def mirror_check(wt: Path, remote: str, target: str, prod: str | None) -> tuple[
     deployer, mirror = rev(f"{remote}/{target}" if remote else target), rev(f"refs/heads/{target}")
     line = f"deployer {deployer[:10] or '?'}, mirror {mirror[:10] or '?'}, prod {(prod or '?')[:10]}"
     return bool(deployer) and deployer == mirror == (prod or deployer), line
+
+
+def conflicting_files(wt: Path, tip: str, base: str) -> list[str] | None:
+    """The files `tip` conflicts in when merged into `base` ([] = it merges cleanly, None = git
+    could not tell). Checked without touching the worktree."""
+    p = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", base, tip],
+                       cwd=wt, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if p.returncode == 0:
+        return []
+    if p.returncode != 1:
+        return None
+    return [f for f in p.stdout.splitlines()[1:] if f.strip()]
+
+
+def unchanged_conflict(wt: Path, last: dict, tip: str, base: str) -> bool:
+    """`tip` (new) still conflicts with `base`, and what it added since the parked tip touches none of
+    the conflicting files: the same conflict, nothing to try again. A tip that rewrote the branch (a
+    rebase), touches a conflicting file or merges cleanly now is worth an attempt."""
+    old = last.get("tip") or ""
+    now = conflicting_files(wt, tip, base)
+    if not now or not old or not _is_ancestor(wt, old, tip):
+        return False
+    files = set(last.get("conflict") or []) | set(now)
+    touched = set(git(wt, "diff", "--name-only", old, tip).splitlines())
+    return not (touched & files)
 
 
 def merges_cleanly(wt: Path, tip: str, base: str) -> bool:
@@ -470,11 +545,13 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
         print(err, flush=True)
     if _is_ancestor(wt, tip, base):
         return Result(base, tip, "nothing")  # everything on the branch is already in main
-    if not _should_try(state, tip, base, lambda t, b: merges_cleanly(wt, t, b)):
+    if not _should_try(state, tip, base, lambda t, b: merges_cleanly(wt, t, b),
+                       lambda last, t, b: unchanged_conflict(wt, last, t, b)):
         last = _load(state) or {}
         parked = last.get("stage") == "merge"
-        if parked and last.get("base") != base:  # checked against this main too: not again
-            _remember(state, tip, base, "merge", last.get("conflict") or [])
+        if parked and (last.get("base"), last.get("tip")) != (base, tip):  # checked against this main too
+            _remember(state, tip, base, "merge", sorted(set(last.get("conflict") or [])
+                                                        | set(conflicting_files(wt, tip, base) or [])))
         return Result(base, tip, "nothing", stage="parked" if parked else "")  # wait for a new commit
     commits = [c for c in git(wt, "rev-list", f"{base}..{tip}").splitlines() if c]
     res = Result(base, tip, "ok", author=author_of(wt, base, tip), commits=commits, branch=source)
@@ -510,8 +587,7 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
              f"Agent: {res.author or 'unknown'}", rev], cwd=wt, capture_output=True, text=True)
 
     def conflict(files: list[str], hunks: str, why: str) -> Result:
-        more = " ..." if len(files) > 5 else ""
-        res.reason = f"merge conflict in {', '.join(files[:5]) or '?'}{more}"
+        res.reason = _clip(f"merge conflict in {', '.join(files) or '?'}")
         return fail("merge", conflict_log(source, target, files, hunks, why), conflict=files)
 
     protected = _touches_protected(wt, commits)
@@ -541,7 +617,7 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
                if protected else "the merge conflicted")
         return conflict(files, hunks or (first.stdout + first.stderr), why)
     if test_cmd:
-        ok, log = sh(test_cmd, wt)
+        ok, log = run_tests(test_cmd, wt)
         if not ok:
             return fail("tests", log)
 
