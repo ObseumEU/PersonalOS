@@ -17,11 +17,11 @@ export default function DecisionOptions({ it, busy, onChoose, big }: { it: Needs
               key={o}
               disabled={busy}
               onClick={() => onChoose(o)}
-              className={`${rec ? "btn-accent" : "btn"} ${big ? "min-h-11 px-3" : ""} max-w-full text-left whitespace-normal`}
+              className={`${rec ? "btn-accent" : "btn"} btn-wrap ${big ? "min-h-11 px-3" : ""} max-w-full`}
               title={rec ? t("needs.card.recommended") : undefined}
             >
               {rec && <Check size={14} aria-hidden />}
-              <span className="break-words">{o}</span>
+              <span className="min-w-0">{o}</span>
             </button>
           );
         })}
