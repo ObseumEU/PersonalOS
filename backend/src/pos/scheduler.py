@@ -294,9 +294,18 @@ def member_schedules(conn: sqlite3.Connection) -> dict:
 
 
 def routines_overdue(conn: sqlite3.Connection) -> dict:
-    from . import schedules
+    """Late routines, and the stuck-work sweep (pos.stuck_sweep: code, no model run) in the same core
+    loop, so it cannot be switched off with the paused "hlídání výpadků" routines."""
+    from . import schedules, stuck_sweep
 
-    return schedules.watch_overdue(conn)
+    out = schedules.watch_overdue(conn)
+    try:
+        stuck = stuck_sweep.sweep(conn)
+    except Exception as e:  # noqa: BLE001 - the routine watch stands either way
+        log.exception("stuck sweep failed")
+        conn.rollback()
+        stuck = {"error": str(e)[:300]}
+    return {**out, "stuck": stuck} if stuck else out
 
 
 def a2a_sync(conn: sqlite3.Connection) -> dict:
@@ -759,7 +768,7 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
             or result.get("finished") or result.get("released") or result.get("fired") or result.get("pushed") \
             or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
             or result.get("alerted") or result.get("moved") or result.get("tasks") or result.get("published") \
-            or result.get("filed") or result.get("duplicate") or result.get("issue") or result.get("triage")             or result.get("routed") or result.get("follow_up") or result.get("status_drafts")             or result.get("follow_ups") or result.get("errors"):
+            or result.get("filed") or result.get("duplicate") or result.get("issue") or result.get("triage")             or result.get("routed") or result.get("follow_up") or result.get("status_drafts")             or result.get("follow_ups") or result.get("errors") or result.get("stuck"):
         audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
     conn.commit()
     return result
