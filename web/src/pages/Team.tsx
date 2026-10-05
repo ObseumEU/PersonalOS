@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import Agents from "./Agents";
@@ -30,6 +30,10 @@ export default function Team() {
             {t(x.key)}
           </button>
         ))}
+        {/* HR (pos.hr): scores, proposals, admissions, restore: its own page. */}
+        <Link to="/hr" className="-mb-px ml-auto shrink-0 border-b-2 border-transparent px-3 py-2 text-sm whitespace-nowrap text-ink-2 hover:text-accent">
+          {t("hr.link")}
+        </Link>
       </nav>
       <tab.Page />
     </div>

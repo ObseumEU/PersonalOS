@@ -5,6 +5,7 @@ import common from "./cs/common";
 import company from "./cs/company";
 import goals from "./cs/goals";
 import home from "./cs/home";
+import hr from "./cs/hr";
 import knowledge from "./cs/knowledge";
 import meetings from "./cs/meetings";
 import mobile from "./cs/mobile";
@@ -17,6 +18,6 @@ import work from "./cs/work";
 
 import { register } from "./core";
 
-register(common, company, home, chat, agents, work, knowledge, settings, team, tickets, projects, mobile, report, meetings, goals);
+register(common, company, home, chat, agents, work, knowledge, settings, team, tickets, projects, mobile, report, meetings, goals, hr);
 
 export * from "./core";

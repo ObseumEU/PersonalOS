@@ -19,6 +19,7 @@ const Connectors = lazy(() => import("./pages/Connectors"));
 const Credentials = lazy(() => import("./pages/Credentials"));
 const Files = lazy(() => import("./pages/Files"));
 const Goals = lazy(() => import("./pages/Goals"));
+const HR = lazy(() => import("./pages/HR"));
 const InboxClarify = lazy(() => import("./pages/InboxClarify"));
 const Invite = lazy(() => import("./pages/Invite"));
 const Knowledge = lazy(() => import("./pages/Knowledge"));
@@ -106,6 +107,7 @@ export default function App() {
           <Route path="/topics/:slug" element={<Know><Topics /></Know>} />
           {/* Tým */}
           <Route path="/team" element={<Team />} />
+          <Route path="/hr" element={<HR />} />
           <Route path="/team/:id" element={<AgentDetail />} />
           <Route path="/agents" element={<Navigate to="/team" replace />} />
           <Route path="/agents/:id" element={<AgentDetail />} />

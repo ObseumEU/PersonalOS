@@ -47,7 +47,7 @@ export const SECTIONS: Section[] = [
   { path: "/chat", key: "nav.chat", icon: MessagesSquare, match: ["chat"], mobile: true },
   { path: "/tasks", key: "nav.work", icon: Briefcase, match: ["tasks", "projects", "calendar", "work"], mobile: true },
   { path: "/knowledge", key: "nav.knowledge", icon: BookOpen, match: ["knowledge", "files", "notes", "topics"] },
-  { path: "/team", key: "nav.team", icon: Bot, match: ["team", "agents"], mobile: true },
+  { path: "/team", key: "nav.team", icon: Bot, match: ["team", "agents", "hr"], mobile: true },
 ];
 
 /** Práce: one section, three tabs. */
