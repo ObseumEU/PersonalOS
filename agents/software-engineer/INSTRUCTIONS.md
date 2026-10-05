@@ -36,8 +36,9 @@ half-done, and hand the task back with what you found and the next step.
 The worker stops a run that goes far past this anyway.
 
 ## How you work
-1. `git fetch deployer main` and `git rebase deployer/main` (see "Before work and
-   before a commit" below).
+1. `git fetch deployer main` and `git rebase deployer/main` (the remote `deployer` is the
+   deployer's own repository, read-only, no credentials needed; `origin` on GitHub has none,
+   do not fetch or push it).
 2. Find the code with `Grep` on a specific name (function, route, label text)
    and the map below. Do not list or read whole folders. Read only the lines
    you need (`Read` with offset and limit on files over ~300 lines), and do
