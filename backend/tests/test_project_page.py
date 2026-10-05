@@ -113,7 +113,15 @@ def test_summary_is_cached_and_falls_back_without_a_model(co, kb, monkeypatch):
     assert (s["text"], s["source"], s["fresh"]) == ("Jde to dobře.", "llm", True) and len(calls) == 1
     project_info.summary(c, me, projects.get(c, me, p["slug"]))
     assert len(calls) == 1  # unchanged: cached
+    # Open tasks moving (status, progress) do not change what the summary says: it settles.
+    t0 = projects.get(c, me, p["slug"])["tasks"][0]
+    c.execute("UPDATE tasks SET status = 'working', progress = 40 WHERE id = ?", (t0["id"],))
+    project_info.summary(c, me, projects.get(c, me, p["slug"]))
+    assert len(calls) == 1
     tasks.create(c, me, {"title": "Pick a theme", "project": p["slug"], "status": "next"})
+    # A real change waits until the last model summary is SETTLE_S old (one rebuild per half hour).
+    assert project_info.summary(c, me, projects.get(c, me, p["slug"]), generate=False)["fresh"] is True
+    monkeypatch.setattr(project_info, "SETTLE_S", 0)
     assert project_info.summary(c, me, projects.get(c, me, p["slug"]), generate=False)["fresh"] is False
     monkeypatch.setattr(project_info, "_llm", lambda conn, prompt: None)
     s = project_info.summary(c, me, projects.get(c, me, p["slug"]))

@@ -65,6 +65,8 @@ export default {
   "pj.goal": "Cíl",
   "pj.dod": "Definice hotového",
   "pj.todo": "doplnit",
+  "pj.fill_in": "Doplnit: {what}",
+  "pj.waits_for_you": "Čeká na tvůj zásah:",
   "pj.save": "Uložit",
   "pj.cancel": "Zrušit",
 

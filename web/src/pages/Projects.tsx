@@ -223,7 +223,7 @@ function QuickLinks({ p }: { p: Project }) {
   );
 }
 
-function SummaryBox({ summary, loading, onRefresh }: { summary: Summary | null; loading: boolean; onRefresh: () => void }) {
+function SummaryBox({ summary, loading, onRefresh, mine = [] }: { summary: Summary | null; loading: boolean; onRefresh: () => void; mine?: Task[] }) {
   return (
     <section aria-labelledby="pj-summary" className="rounded-lg border border-line bg-raised/60 px-4 py-3.5">
       <h3 id="pj-summary" className="flex items-center gap-2 pb-1.5 text-xs font-medium tracking-wide text-ink-2 uppercase">
@@ -242,6 +242,18 @@ function SummaryBox({ summary, loading, onRefresh }: { summary: Summary | null; 
         <div className="flex flex-col gap-2" aria-hidden>
           <span className="h-3 w-11/12 rounded bg-line" />
           <span className="h-3 w-3/4 rounded bg-line" />
+        </div>
+      )}
+      {/* "čeká na tvůj zásah": the items themselves, one click away */}
+      {mine.length > 0 && (
+        <div className="mt-2.5 flex flex-col gap-1 border-t border-line pt-2">
+          <span className="text-xs text-amber-200">{t("pj.waits_for_you")}</span>
+          {mine.slice(0, 5).map((x) => (
+            <TaskLink key={x.ref} taskRef={x.ref} className="flex min-w-0 items-baseline gap-2 text-[14px] hover:text-accent">
+              <span className="font-mono text-xs text-ink-2">{x.ref}</span>
+              <span className="min-w-0 truncate">{x.title}</span>
+            </TaskLink>
+          ))}
         </div>
       )}
     </section>
@@ -278,12 +290,13 @@ function Meta({ p, onEdit }: { p: Project; onEdit: () => void }) {
         {t("pj.facts")}
       </SectionTitle>
       <dl className="flex flex-col divide-y divide-line">
-        <MetaRow k={t("pj.fact.customer")}>{val(f.customer ?? p.info.links.customer)}</MetaRow>
-        <MetaRow k={t("pj.fact.contact")}>{val(f.contact)}</MetaRow>
-        <MetaRow k={t("pj.fact.budget")}>{val(f.budget)}</MetaRow>
-        <MetaRow k={t("pj.fact.stack")}>{val(f.stack)}</MetaRow>
-        <MetaRow k={t("pj.start")}>{p.info.start_date ? day(p.info.start_date, true) : <span className="text-ink-2">{t("pj.unset")}</span>}</MetaRow>
-        <MetaRow k={t("pj.target")}>{p.due ? day(p.due, true) : <span className="text-ink-2">{t("pj.unset")}</span>}</MetaRow>
+        {/* Only what is filled in: no "doplnit" / "neurčeno" placeholders for the owner to read. */}
+        {!missing(f.customer ?? p.info.links.customer) && <MetaRow k={t("pj.fact.customer")}>{val(f.customer ?? p.info.links.customer)}</MetaRow>}
+        {!missing(f.contact) && <MetaRow k={t("pj.fact.contact")}>{val(f.contact)}</MetaRow>}
+        {!missing(f.budget) && <MetaRow k={t("pj.fact.budget")}>{val(f.budget)}</MetaRow>}
+        {!missing(f.stack) && <MetaRow k={t("pj.fact.stack")}>{val(f.stack)}</MetaRow>}
+        {p.info.start_date && <MetaRow k={t("pj.start")}>{day(p.info.start_date, true)}</MetaRow>}
+        {p.due && <MetaRow k={t("pj.target")}>{day(p.due, true)}</MetaRow>}
         {p.info.kb_workspace && <MetaRow k={t("pj.kb")}>#{p.info.kb_workspace}</MetaRow>}
         {(p.labels.length > 0 || p.info.keywords.length > 0) && (
           <MetaRow k={t("pj.labels")}>
@@ -476,14 +489,13 @@ function EditableText({
           <p className="text-[14px] leading-relaxed break-words whitespace-pre-wrap">{shown}</p>
         )
       ) : (
-        <p className="text-[13px] text-ink-2">
-          {value && missing(value) ? <Todo /> : empty}
-          {canEdit && !value && (
-            <button type="button" className="ml-2 text-accent hover:underline" onClick={() => setEditing(true)}>
-              {t("pj.description_add")}
-            </button>
-          )}
-        </p>
+        canEdit ? (
+          <button type="button" className="self-start text-[13px] text-accent hover:underline" onClick={() => setEditing(true)}>
+            + {t("pj.fill_in", { what: label.toLowerCase() })}
+          </button>
+        ) : (
+          <p className="text-[13px] text-ink-2">{empty}</p>
+        )
       )}
     </section>
   );
@@ -544,14 +556,9 @@ function Decisions({ p, onChange }: { p: Project; onChange: () => void }) {
           <li key={d.id} className="group grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-b border-line py-2.5 last:border-0 sm:grid-cols-[88px_minmax(0,1fr)_auto]">
             <span className="col-span-2 pt-px text-xs text-ink-2 tabular-nums sm:col-span-1">{day(d.date)}</span>
             <span className="flex min-w-0 flex-col gap-0.5">
-              <span className="text-[14px] break-words">{d.text}</span>
-              {(d.why || d.who) && (
-                <span className="text-[13px] break-words text-ink-2">
-                  {d.why}
-                  {d.why && d.who && " · "}
-                  {d.who && <span className="text-ink-3">{d.who}</span>}
-                </span>
-              )}
+              <Markdown text={d.text} compact className="text-[14px]" />
+              {d.why && <Markdown text={d.why} compact className="text-[13px] text-ink-2" />}
+              {d.who && <span className="text-[13px] text-ink-3">{d.who}</span>}
               {d.source?.startsWith("http") && (
                 <a href={d.source} target="_blank" rel="noreferrer" className="self-start text-xs text-accent hover:underline">
                   {t("pj.files.open")}
@@ -1195,12 +1202,14 @@ function ProjectDetail({ slug }: { slug: string }) {
               <span className="text-xs text-ink-2">{t("pj.lead")}</span>
             </span>
           </span>
-          <span className="flex flex-col text-[13px] leading-tight">
-            <span>{t("pj.dates", { start: p.info.start_date ? day(p.info.start_date) : "—", target: p.due ? day(p.due) : "—" })}</span>
-            <span className="text-xs text-ink-2">
-              {t("pj.start")} → {t("pj.target").toLowerCase()}
+          {(p.info.start_date || p.due) && (
+            <span className="flex flex-col text-[13px] leading-tight">
+              <span>{t("pj.dates", { start: p.info.start_date ? day(p.info.start_date) : "—", target: p.due ? day(p.due) : "—" })}</span>
+              <span className="text-xs text-ink-2">
+                {t("pj.start")} → {t("pj.target").toLowerCase()}
+              </span>
             </span>
-          </span>
+          )}
           <Progress p={p} wide />
         </div>
         <QuickLinks p={p} />
@@ -1213,7 +1222,12 @@ function ProjectDetail({ slug }: { slug: string }) {
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="flex min-w-0 flex-col gap-6">
-          <SummaryBox summary={summary} loading={summaryLoading} onRefresh={() => refreshSummary(true)} />
+          <SummaryBox
+            summary={summary}
+            loading={summaryLoading}
+            onRefresh={() => refreshSummary(true)}
+            mine={(p.tasks ?? []).filter((x) => x.status !== "done" && (x.assignee_name === "Owner" || (x.status === "review" && x.reviewer_name === "Owner")))}
+          />
           <div className="flex min-w-0 flex-col">
             <div
               role="tablist"

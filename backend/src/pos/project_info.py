@@ -639,7 +639,10 @@ _locks_guard = threading.Lock()
 
 
 def _fingerprint(project: dict, info: dict, entries: list[dict]) -> str:
-    tasks_state = sorted((t["id"], t["status"], t.get("progress")) for t in project.get("tasks") or [])
+    """What the summary says changes only when this changes: tasks added or finished, the goal, the
+    decisions. Not every status or progress tick of the open tasks (agents move them all day: the Kniha
+    summary was rebuilt on every open and never settled)."""
+    tasks_state = sorted((t["id"], t["status"] == "done") for t in project.get("tasks") or [])
     parts = [project["name"], project["status"], project.get("goal"), project.get("definition_of_done"),
              project.get("due"), info["description"][:4000], info["goal_progress"], tasks_state,
              [e["id"] for e in entries[:10]]]
@@ -717,6 +720,9 @@ def _llm(conn: sqlite3.Connection, prompt: str) -> tuple[str, int | None] | None
     return (text if len(text) <= SUMMARY_MAX else text[: SUMMARY_MAX - 1].rstrip() + "…"), res.run_id
 
 
+SETTLE_S = 30 * 60
+
+
 def _age_s(iso: str) -> float:
     try:
         return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds()
@@ -748,7 +754,8 @@ def summary(conn: sqlite3.Connection, ctx: Ctx, project: dict, *, generate: bool
         if row is None or force:
             return False
         if row["fingerprint"] != fp:
-            return False
+            # changed, but a model summary from the last SETTLE_S stands (one rebuild per half hour at most)
+            return row["source"] == "llm" and _age_s(row["created_at"]) < SETTLE_S
         # a fallback (no model then) is tried again after an hour; an LLM summary lasts a week unchanged
         return _age_s(row["created_at"]) < (3600 if row["source"] == "fallback" else 7 * 86400)
 
