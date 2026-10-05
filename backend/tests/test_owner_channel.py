@@ -198,6 +198,52 @@ def test_questions_and_the_past_are_not_promises():
     assert promises.extract("Včera v 16:00 proběhl deploy.", NOW) == []
 
 
+EVENING = datetime(2026, 10, 5, 21, 30, tzinfo=TZ)  # prod owner_promises 6-16 were recorded that evening
+
+
+@pytest.mark.parametrize("text", [
+    # a past date was moved into 2027
+    "Jenže od 2. 10. nikdo nespustil testy, protože vývojář má starou verzi Node, a nic není nasazené.",
+    "Kontroly zaseknutých úkolů jsme 4. 10. kvůli nákladům vypnuli a nic je nenahradilo.",
+    # status lines, attachments, headings
+    "Denní přehled 5. 10.: byznys jen 37 % nákladů, ven skoro nic (1 zpráva, 0 oslovených kontaktů).",
+    "📎 Denní přehled firmy 2026-10-06.html (soubor #13)",
+    "Od zítřka je to takhle:",
+    "Opravu jsem dal CTO s termínem zítra 6. 10.: [Opravit podle screenshotu majitele](/tasks/764).",
+    "Proto má Kniha Lead jasné termíny: zítra opravit Node a pustit testy, do čtvrtka 8. 10. nasadit.",
+])
+def test_status_lines_attachments_and_past_dates_are_not_promises(text):
+    assert promises.extract(text, EVENING) == []
+    assert promises.unparsed(text, []) == []
+
+
+@pytest.mark.parametrize("text,local", [
+    ("Já ji vyzkouším a nejpozději ve čtvrtek 8. 10. ti pošlu odkaz a krátký návod.", "2026-10-08 17:00"),
+    ("Kdyby se to zdrželo, napíšu ti ve středu nový termín.", "2026-10-07 17:00"),
+    ("Pokud by se to zdrželo, dozvíš se to ode mě nejpozději ve středu 7.10. i s novým termínem.",
+     "2026-10-07 17:00"),
+    ("Návrh ti pošlu 5. 1.", "2027-01-05 17:00"),  # well over half a year back: next year's
+])
+def test_real_promises_still_count(text, local):
+    found = promises.extract(text, EVENING if "5. 1." not in text else datetime(2026, 12, 20, 9, 0, tzinfo=TZ))
+    assert len(found) == 1
+    assert datetime.fromisoformat(found[0]["due_at"]).astimezone(TZ).strftime("%Y-%m-%d %H:%M") == local
+
+
+def test_a_promise_closes_when_its_task_is_done_or_cancelled(conn, me, tmp_path):
+    ceo = make(conn, me, tmp_path, "CEO", role="ceo")
+    sent = chat.send_dm(conn, Ctx(ceo), me.actor_id, "Souhrn ti pošlu zítra. Návrh ceny ti dám v pátek.")
+    rows = conn.execute("SELECT * FROM owner_promises WHERE message_id = ? ORDER BY id", (sent["id"],)).fetchall()
+    assert [r["status"] for r in rows] == ["open", "open"]
+    tasks.update(conn, me, rows[0]["task_id"], {"status": "done"})
+    assert conn.execute("SELECT status FROM owner_promises WHERE id = ?", (rows[0]["id"],)).fetchone()[0] == "done"
+    conn.execute("UPDATE tasks SET archived_at = '2026-10-05T00:00:00+00:00' WHERE id = ?", (rows[1]["task_id"],))
+    later = datetime.now(timezone.utc) + timedelta(days=9)
+    out = promises.tick(conn, later, ask=lambda *a: None)
+    assert out.get("closed") == 1 and not out.get("missed")
+    assert conn.execute("SELECT status FROM owner_promises WHERE id = ?", (rows[1]["id"],)).fetchone()[0] == "cancelled"
+
+
 def test_the_ceos_promise_becomes_its_task_and_the_1600_run_starts_with_the_missed_ones(conn, me, tmp_path):
     ceo = make(conn, me, tmp_path, "CEO", role="ceo")
     chat.send_dm(conn, me, ceo, "kdy bude daily report?")

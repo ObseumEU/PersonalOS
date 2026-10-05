@@ -15,6 +15,15 @@ Every message from the CEO that reaches the owner (pos.chat.send) is read for da
 
 `tick` also tells the CEO once (from PersonalOS) when a promise passed its time undone, and the
 CEO's 16:00 routine (pos.schedules.fire → `with_missed`) starts with the missed promises.
+
+Fixed 2026-10-05 (prod owner_promises 1-16): a date already past ("od 2. 10.", "4. 10. jsme
+vypnuli") was moved into next year (2027) instead of being read as the past; a promise stayed
+`open` after its task was done; status lines ("Denní přehled 5. 10.: …"), attachments
+("📎 … (soubor #13)") and headings ("Od zítřka je to takhle:") were logged as promises. Now a
+sentence needs a commitment cue, a past date is the past (next year only for a date over half a
+year back, "5. 1." said in December), "od <date>" is a start, not a deadline, a sentence in the
+past tense ("jsem dal", "jsme vypnuli") is no promise, and a promise closes with its task
+(`done` when the task is done, `cancelled` when it is archived).
 """
 
 import json
@@ -66,8 +75,16 @@ DEFAULT_TIME = time(17, 0)  # "zítra", "v pátek": by the end of that working d
 CUE = re.compile(
     r"(?i)\b(pošlu|pošleme|zašlu|udělám|uděláme|dodám|dodáme|připravím|připravíme|ozvu|ozveme|dám vědět|"
     r"dáme vědět|nasadím|nasadíme|dokončím|dokončíme|dotáhnu|vyřeším|vyřešíme|zjistím|napíšu|napíšeme|"
-    r"pustím|spustím|budeš mít|bude(?:me)? hotov\w*|přijde ti|dostaneš|pošle ti|připraví|dodá|report|přehled)\b")
-_PAST = re.compile(r"(?i)\b(včera|minul\w*|proběhl\w*|byl[aoiy]?|poslal[aoiy]?|udělal[aoiy]?|hotovo)\b")
+    r"pustím|spustím|budeš mít|bude(?:me)? hotov\w*|přijde ti|dostaneš|pošle ti|připraví|dodá|report|přehled|"
+    r"dám|přibude|dozvíš|nejpozději)\b")
+_PAST = re.compile(r"(?i)\b(včera|minul\w*|proběhl\w*|byl[aoiy]?|poslal[aoiy]?|udělal[aoiy]?|hotovo|"
+                   r"jsem|jsme|jsi|jste)\b")
+# Not a promise whatever its words: an attachment line, a heading (ends with a colon) or a dated
+# status line ("Denní přehled 5. 10.: byznys 37 %").
+_NOT_A_PROMISE = re.compile(r"^\W*📎|\(soubor #\d+\)|\bsoubor #\d+|:\s*$|"
+                            r"\d{1,2}\.\s*\d{1,2}\.(?:\s*\d{4})?\s*:|\d{4}-\d{2}-\d{2}\s*:")
+_NOUNS = re.compile(r"(?i)\b(report|přehled)\b")  # cues that are things, not a commitment verb
+PAST_YEAR_DAYS = 180  # a date this far back without a year means next year ("5. 1." in December)
 _CLOCK = r"(\d{1,2})(?::|\.)(\d{2})|(\d{1,2})\s*h\b"
 
 
@@ -84,8 +101,29 @@ def _sentences(text: str) -> list[str]:
     return [p.strip(" -*•\t") for p in parts if p.strip(" -*•\t")]
 
 
+def _not_a_promise(sent: str) -> bool:
+    """A question, an attachment, a heading or status line, no commitment cue at all, or the past
+    tense ("jsem dal", "jsme vypnuli") without a commitment verb."""
+    if sent.endswith("?") or _NOT_A_PROMISE.search(sent) or not CUE.search(sent):
+        return True
+    return bool(_PAST.search(sent)) and not CUE.search(_NOUNS.sub(" ", sent))
+
+
 def _at(d: date, t: time) -> datetime:
     return datetime.combine(d, t, tzinfo=TZ)
+
+
+def _ahead(d: date, today: date) -> date | None:
+    """A day and month without a year: this year's, unless it is over half a year back (then next
+    year's). A date that just passed is the past: None (it was moved into next year, 2027)."""
+    if d >= today:
+        return d
+    if (today - d).days > PAST_YEAR_DAYS:
+        try:
+            return d.replace(year=d.year + 1)
+        except ValueError:
+            return None
+    return None
 
 
 def _due(sentence: str, now: datetime) -> datetime | None:
@@ -111,23 +149,24 @@ def _due(sentence: str, now: datetime) -> datetime | None:
             return None
     m = re.search(r"(?<![\d.])(\d{1,2})\.\s*(\d{1,2})\.(?:\s*(\d{4}))?", s)
     if m and not re.match(r"\d{1,2}\.\d{2}\b", m.group(0)):
+        if re.search(r"\bod\s*$", s[:m.start()]):
+            return None  # "od 2. 10.": since then, not a deadline
         try:
             d = date(int(m.group(3) or today.year), int(m.group(2)), int(m.group(1)))
         except ValueError:
             d = None
         if d is not None:
-            if d < today and not m.group(3):
-                d = d.replace(year=d.year + 1)
-            return _at(d, t or part or DEFAULT_TIME)
+            d = d if m.group(3) else _ahead(d, today)
+            return _at(d, t or part or DEFAULT_TIME) if d else None
     m = re.search(r"\b(\d{1,2})\.\s*(" + "|".join(MONTHS) + r")\b", s)
     if m:
+        if re.search(r"\bod\s*$", s[:m.start()]):
+            return None
         try:
-            d = date(today.year, MONTHS[m.group(2)], int(m.group(1)))
+            d = _ahead(date(today.year, MONTHS[m.group(2)], int(m.group(1))), today)
         except ValueError:
             return None
-        if d < today:
-            d = d.replace(year=d.year + 1)
-        return _at(d, t or part or DEFAULT_TIME)
+        return _at(d, t or part or DEFAULT_TIME) if d else None
     if re.search(r"\bpozítří\b|\bpozitri\b", s):
         return _at(today + timedelta(days=2), t or part or DEFAULT_TIME)
     if re.search(r"\bzítra\b|\bzitra\b|\bzítřk\w*", s):
@@ -154,7 +193,7 @@ def extract(text: str, now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(timezone.utc)
     out = []
     for sent in _sentences(text):
-        if sent.endswith("?") or _PAST.search(sent) and not CUE.search(sent):
+        if _not_a_promise(sent):
             continue
         due = _due(sent, now)
         if due is None or due <= now:
@@ -166,7 +205,7 @@ def extract(text: str, now: datetime | None = None) -> list[dict]:
 def unparsed(text: str, found: list[dict]) -> list[str]:
     """Sentences with a commitment cue the rules gave no time to (for the haiku fallback)."""
     have = {f["text"] for f in found}
-    return [s[:300] for s in _sentences(text) if CUE.search(s) and not s.endswith("?") and s[:300] not in have
+    return [s[:300] for s in _sentences(text) if not _not_a_promise(s) and s[:300] not in have
             and re.search(r"(?i)\b(dnes|zítra|týden|týdne|pátek|odpoledne|večer|ráno|brzy|hned|během|do |v \d)", s)]
 
 
@@ -244,14 +283,38 @@ def _ask_model(conn: sqlite3.Connection, actor_id: int, sentence: str, now: date
         return None
 
 
+def close_finished(conn: sqlite3.Connection, task_id: int | None = None) -> int:
+    """Promises whose task is done (`done`) or archived (`cancelled`) are closed; all of them, or one
+    task's. Returns how many closed."""
+    ensure_schema(conn)
+    one = " AND t.id = ?" if task_id is not None else ""
+    args = (task_id,) if task_id is not None else ()
+    n = 0
+    for status, cond in (("cancelled", "t.archived_at IS NOT NULL"), ("done", "t.status = 'done'")):
+        n += conn.execute(f"""UPDATE owner_promises SET status = ? WHERE status IN ('open', 'parsed')
+                              AND task_id IN (SELECT t.id FROM tasks t WHERE {cond}{one})""",
+                          (status, *args)).rowcount
+    return n
+
+
+def on_task_changed(conn: sqlite3.Connection, task_id: int) -> None:
+    """A promise's task was done (pos.tasks.update): the promise closes with it."""
+    try:
+        close_finished(conn, task_id)
+    except Exception:  # noqa: BLE001 - the task change stands either way
+        log.exception("could not close the promise of task %s", task_id)
+
+
 def tick(conn: sqlite3.Connection, now: datetime | None = None, ask=None) -> dict:
-    """The haiku fallback for pending sentences, and the CEO hears once about a missed promise."""
+    """The haiku fallback for pending sentences, the CEO hears once about a missed promise, and
+    promises whose task is done or cancelled close."""
     from . import notices, tasks
 
     ensure_schema(conn)
     now = now or datetime.now(timezone.utc)
     ask = ask or _ask_model
     made, missed = [], []
+    closed = close_finished(conn)
     for p in conn.execute("SELECT * FROM owner_promises WHERE status = 'pending' ORDER BY id LIMIT 5").fetchall():
         try:
             out = ask(conn, p["ceo_id"], p["text"], now)
@@ -284,13 +347,13 @@ def tick(conn: sqlite3.Connection, now: datetime | None = None, ask=None) -> dic
             pass
         missed.append(tasks.display_id(p["task_id"]))
     conn.commit()
-    return {k: v for k, v in (("recorded", made), ("missed", missed)) if v}
+    return {k: v for k, v in (("recorded", made), ("missed", missed), ("closed", closed)) if v}
 
 
 def _missed_rows(conn: sqlite3.Connection, now: datetime) -> list[sqlite3.Row]:
     return conn.execute(
         """SELECT p.* FROM owner_promises p JOIN tasks t ON t.id = p.task_id
-           WHERE p.task_id IS NOT NULL AND p.due_at < ? AND t.status NOT IN ('done', 'review')
+           WHERE p.task_id IS NOT NULL AND p.status = 'open' AND p.due_at < ? AND t.status NOT IN ('done', 'review')
              AND t.archived_at IS NULL ORDER BY p.due_at""",
         (now.isoformat(timespec="seconds"),)).fetchall()
 
