@@ -4,7 +4,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "../components/overlay";
 import { t } from "../i18n/core";
 import { type Task, type View, dueLabel, tasksApi } from "../tasksApi";
-import { TopBar } from "./ui";
+import { LoadError, TopBar, errText } from "./ui";
 
 const VIEWS: View[] = ["today", "next", "agents", "waiting", "review"];
 
@@ -31,12 +31,14 @@ export default function Tasks() {
   const view = (params.get("view") as View) || "today";
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [text, setText] = useState("");
+  const [failed, setFailed] = useState<string | null>(null);
   const load = useCallback(() => {
     setTasks(null);
+    setFailed(null);
     tasksApi
       .list(view === "review" ? "to_review" : view)
       // "Dnes" is work still to do today: results handed in for review (100 %) belong to "K revizi".
-      .then((xs) => setTasks(view === "today" ? xs.filter((x) => x.status !== "review") : xs), () => setTasks([]));
+      .then((xs) => setTasks(view === "today" ? xs.filter((x) => x.status !== "review") : xs), (e) => setFailed(errText(e)));
   }, [view]);
   useEffect(load, [load]);
   useEffect(() => {
@@ -91,7 +93,7 @@ export default function Tasks() {
           <Plus size={20} />
         </button>
       </form>
-      {tasks === null && <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>}
+      {tasks === null && (failed ? <LoadError error={failed} onRetry={load} /> : <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>)}
       {tasks?.length === 0 && <p className="px-4 py-8 text-center text-sm text-ink-2">{t("m.tasks.empty")}</p>}
       {tasks?.map((x) => <Row key={x.id} task={x} view={view} />)}
     </div>

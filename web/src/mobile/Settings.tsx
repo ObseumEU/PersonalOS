@@ -15,6 +15,7 @@ import {
   pushSupported,
   useInstallable,
 } from "./pwa";
+import { LoadError, errText } from "./ui";
 
 type Device = { id: string; label: string; app: boolean; created_at: string; last_seen_at: string; current: boolean; push: boolean };
 
@@ -117,10 +118,17 @@ export function PushSection() {
   const [cfg, setCfg] = useState<PushConfig | null>(null);
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
   const supported = pushSupported();
   const permission = supported ? Notification.permission : "denied";
   const load = useCallback(() => {
-    pushApi.config().then(setCfg, () => undefined);
+    pushApi.config().then(
+      (c) => {
+        setCfg(c);
+        setFailed(null);
+      },
+      (e) => setFailed(errText(e)),
+    );
     currentSubscription().then((s) => setSubscribed(!!s), () => undefined);
   }, []);
   useEffect(load, [load]);
@@ -154,10 +162,14 @@ export function PushSection() {
 
   return (
     <Section title={t("m.push.title")} icon={<Bell size={18} />}>
-      <p className="text-sm text-ink-2">
-        {status}
-        {cfg && cfg.devices > 0 ? ` · ${t("m.push.devices", { n: cfg.devices })}` : ""}
-      </p>
+      {!cfg && failed ? (
+        <LoadError error={failed} onRetry={load} className="py-3!" />
+      ) : (
+        <p className="text-sm text-ink-2">
+          {status}
+          {cfg && cfg.devices > 0 ? ` · ${t("m.push.devices", { n: cfg.devices })}` : ""}
+        </p>
+      )}
       {supported && cfg?.enabled && permission !== "denied" && (
         <div className="flex flex-wrap gap-2">
           {subscribed ? (
@@ -207,7 +219,18 @@ export function PushSection() {
 
 export function DevicesSection() {
   const [list, setList] = useState<Device[] | null>(null);
-  const load = useCallback(() => api<Device[]>("/api/auth/devices").then(setList, () => setList([])), []);
+  const [failed, setFailed] = useState<string | null>(null);
+  const load = useCallback(
+    () =>
+      api<Device[]>("/api/auth/devices").then(
+        (l) => {
+          setList(l);
+          setFailed(null);
+        },
+        (e) => setFailed(errText(e)),
+      ),
+    [],
+  );
   useEffect(() => {
     load();
   }, [load]);
@@ -250,6 +273,7 @@ export function DevicesSection() {
   const others = (list ?? []).filter((d) => !d.current).length;
   return (
     <Section title={t("m.devices.title")} icon={<Smartphone size={18} />}>
+      {!list && failed && <LoadError error={failed} onRetry={load} className="py-3!" />}
       {list?.length === 0 && <p className="text-sm text-ink-2">{t("m.devices.none")}</p>}
       {others > 1 && (
         <button className="btn h-10! self-start" onClick={() => revokeMany(null, others)}>

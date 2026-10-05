@@ -78,14 +78,23 @@ export type NeedsMe = { count: number; counts: Record<NeedsItem["kind"], number>
 let state: NeedsMe | null = null;
 const subs = new Set<(s: NeedsMe) => void>();
 let inflight: Promise<void> | null = null;
+// The last load failed (and nothing came since): the screens show it with "Zkusit znovu", not "načítám…" forever.
+let failed: string | null = null;
+const failSubs = new Set<(e: string | null) => void>();
+function setFailed(e: string | null) {
+  if (e === failed) return;
+  failed = e;
+  failSubs.forEach((f) => f(e));
+}
 
 export function refreshNeedsMe(): Promise<void> {
   if (!inflight)
     inflight = api<NeedsMe>("/api/needs-me")
       .then((s) => {
         state = s;
+        setFailed(null);
         subs.forEach((f) => f(s));
-      }, () => undefined)
+      }, (e) => setFailed(e instanceof Error ? e.message : String(e)))
       .finally(() => {
         inflight = null;
       });
@@ -112,6 +121,7 @@ function fromStream() {
   void import("./liveStream").then((live) => {
     live.subscribe<NeedsMe>("needs", (s) => {
       state = s;
+      setFailed(null);
       subs.forEach((f) => f(s));
     });
     live.onStatus((st) => (streamDown = st === "down"));
@@ -139,4 +149,17 @@ export function useNeedsMe(): NeedsMe | null {
     };
   }, []);
   return s;
+}
+
+/** Why the list could not load (null: it loaded, or is loading). */
+export function useNeedsMeError(): string | null {
+  const [e, setE] = useState<string | null>(failed);
+  useEffect(() => {
+    failSubs.add(setE);
+    setE(failed);
+    return () => {
+      failSubs.delete(setE);
+    };
+  }, []);
+  return e;
 }

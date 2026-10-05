@@ -9,10 +9,10 @@ import ApprovalBody, { approveLabel } from "../components/ApprovalBody";
 import DecisionOptions from "../components/DecisionOptions";
 import OwnerActions, { OWNER_KINDS } from "../components/OwnerActions";
 import { Detail } from "../components/NeedsInbox";
-import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
+import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe, useNeedsMeError } from "../needsMeApi";
 import { tasksApi } from "../tasksApi";
 import { AttachChips, MicButton, useAttachments } from "../components/compose";
-import { TopBar } from "./ui";
+import { LoadError, TopBar } from "./ui";
 
 const KIND = {
   approval: { Icon: ShieldCheck, key: "needs.kind.approval", cls: "text-amber-300" },
@@ -179,12 +179,13 @@ function Item({ it, highlight }: { it: NeedsItem; highlight: boolean }) {
 
 export default function Needs() {
   const needs = useNeedsMe();
+  const failed = useNeedsMeError();
   const [params] = useSearchParams();
   const focus = params.get("item");
   return (
     <div className="flex flex-col">
       <TopBar title={t("m.needs.title")} sub={needs && needs.count > 0 ? String(needs.count) : undefined} />
-      {!needs && <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>}
+      {!needs && (failed ? <LoadError error={failed} onRetry={refreshNeedsMe} /> : <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>)}
       {needs?.count === 0 && <p className="px-6 py-10 text-center text-[15px] leading-relaxed text-ink-2">{t("m.needs.empty")}</p>}
       <ul>
         {needs?.items.map((it) => <Item key={it.key} it={it} highlight={it.key === focus} />)}

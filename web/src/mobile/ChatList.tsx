@@ -7,7 +7,8 @@ import ThreadList, { useThreads } from "../chat/ThreadList";
 import { systemCs } from "../chat/systemText";
 import { markdownSnippet } from "../markdownText";
 import { isMessageEvent, onChatEvent, usePresence } from "./live";
-import { ActionSheet, Avatar, Dots, SheetButton, TopBar, when } from "./ui";
+import { toast } from "../components/overlay";
+import { ActionSheet, Avatar, Dots, LoadError, SheetButton, TopBar, errText, when } from "./ui";
 
 const isSystem = (c: Channel) => c.kind === "group" && c.name === "system";
 
@@ -98,7 +99,18 @@ export default function ChatList() {
   const members = useMembers();
   const presence = usePresence();
   const navigate = useNavigate();
-  const load = useCallback(() => chatApi.channels().then(setChannels, () => undefined), []);
+  const [failed, setFailed] = useState<string | null>(null);
+  const load = useCallback(
+    () =>
+      chatApi.channels().then(
+        (c) => {
+          setChannels(c);
+          setFailed(null);
+        },
+        (e) => setFailed(errText(e)),
+      ),
+    [],
+  );
 
   useEffect(() => {
     load();
@@ -132,10 +144,13 @@ export default function ChatList() {
   const noDm = members.filter((m) => m.id !== me && !m.archived && !mine.some((c) => c.kind === "dm" && c.members.some((x) => x.id === m.id)));
 
   const openDm = (id: number) =>
-    chatApi.dm(id).then((c) => {
-      setPicking(false);
-      navigate(`/m/chat/${c.id}`);
-    });
+    chatApi.dm(id).then(
+      (c) => {
+        setPicking(false);
+        navigate(`/m/chat/${c.id}`);
+      },
+      (e) => toast(errText(e), { error: true }),
+    );
 
   return (
     <div className="flex flex-col">
@@ -167,7 +182,7 @@ export default function ChatList() {
         <ThreadList data={threads} onOpen={(it) => navigate(`/m/chat/${it.channel_id}?thread=${it.root.id}`)} />
       ) : (
       <>
-      {channels === null && <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>}
+      {channels === null && (failed ? <LoadError error={failed} onRetry={load} /> : <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>)}
       {channels !== null && mine.length === 0 && <p className="px-4 py-6 text-sm text-ink-2">{t("m.chat.empty_list")}</p>}
       {ceoDm ? (
         <Row c={ceoDm} {...rowProps} typing={typingIn(ceoDm)} pinned />

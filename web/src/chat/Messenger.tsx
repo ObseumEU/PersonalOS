@@ -285,6 +285,13 @@ export default function Messenger(props: MessengerProps) {
   const anchor = useRef<{ h: number; top: number } | null>(null);
   const loading = useRef(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  // Older messages failed to load: no new try on every scroll, a "Zkusit znovu" button instead.
+  const [olderFailed, setOlderFailed] = useState(false);
+  const olderFailedRef = useRef(false);
+  useEffect(() => {
+    olderFailedRef.current = false;
+    setOlderFailed(false);
+  }, [viewKey]);
   const [unseen, setUnseen] = useState(0);
   const [flash, setFlash] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -350,13 +357,17 @@ export default function Messenger(props: MessengerProps) {
     return () => ro.disconnect();
   }, []);
 
-  const older = useCallback(() => {
+  const older = useCallback((retry = false) => {
     const el = box.current;
-    if (!onOlder || !hasMore || loading.current || !el) return;
+    if (!onOlder || !hasMore || loading.current || !el || (olderFailedRef.current && !retry)) return;
     loading.current = true;
     setLoadingOlder(true);
     anchor.current = { h: el.scrollHeight, top: el.scrollTop };
-    onOlder().finally(() => {
+    const failed = (v: boolean) => {
+      olderFailedRef.current = v;
+      setOlderFailed(v);
+    };
+    onOlder().then(() => failed(false), () => failed(true)).finally(() => {
       loading.current = false;
       setLoadingOlder(false);
       // Nothing came (an error): forget the anchor.
@@ -395,8 +406,13 @@ export default function Messenger(props: MessengerProps) {
             <div className="flex h-10 items-center justify-center text-[12px] text-ink-2">
               {loadingOlder ? (
                 <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> {t("m.chat.loading_older")}</span>
+              ) : olderFailed ? (
+                <span role="alert" className="flex items-center gap-1">
+                  <AlertCircle size={14} className="text-red-400" /> {t("m.chat.older_failed")}
+                  <button type="button" onClick={() => older(true)} className="h-10 px-2 text-accent">{t("m.error.retry")}</button>
+                </span>
               ) : (
-                <button type="button" onClick={older} className="h-10 px-4">{t("m.chat.load_older")}</button>
+                <button type="button" onClick={() => older(true)} className="h-10 px-4">{t("m.chat.load_older")}</button>
               )}
             </div>
           )}

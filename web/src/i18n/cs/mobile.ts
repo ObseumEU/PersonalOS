@@ -17,6 +17,10 @@ export default {
   "m.update": "Nová verze",
   "m.update.reload": "Obnovit",
 
+  "m.error.title": "Nepovedlo se to načíst",
+  "m.error.retry": "Zkusit znovu",
+  "m.chat.older_failed": "Starší zprávy se nenačetly.",
+
   "m.login.app": "Zůstaneš přihlášený na tomto zařízení; odhlásit ho jde v Nastavení → Zařízení.",
 
   "m.chat.title": "Chat",

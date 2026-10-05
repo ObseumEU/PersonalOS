@@ -1,7 +1,7 @@
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Fragment, useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { LOCALE } from "../i18n/core";
+import { LOCALE, t } from "../i18n/core";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 
 /** The top bar of a screen: back arrow (optional), title and subtitle, actions on the right. */
@@ -127,5 +127,21 @@ export function SheetButton({ icon, children, onClick, danger }: { icon?: ReactN
       <span className="text-ink-2">{icon}</span>
       {children}
     </button>
+  );
+}
+
+/** The message of a failed request, for the owner. */
+export const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** A screen (or a part of one) that could not load: what went wrong and "Zkusit znovu", never an endless "načítám…". */
+export function LoadError({ error, onRetry, className = "" }: { error?: string | null; onRetry: () => void; className?: string }) {
+  return (
+    <div role="alert" className={`flex flex-col items-center gap-2 px-6 py-8 text-center ${className}`}>
+      <p className="text-[15px]">{t("m.error.title")}</p>
+      {error && <p className="max-w-xs text-[13px] break-words text-ink-2">{error}</p>}
+      <button onClick={onRetry} className="mt-1 flex h-11 items-center gap-2 rounded-lg border border-accent bg-accent/10 px-5 text-[15px] text-accent active:bg-accent/20">
+        <RefreshCw size={16} /> {t("m.error.retry")}
+      </button>
+    </div>
   );
 }
