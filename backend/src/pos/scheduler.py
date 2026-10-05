@@ -298,6 +298,8 @@ def routines_overdue(conn: sqlite3.Connection) -> dict:
     loop, so it cannot be switched off with the paused "hlídání výpadků" routines."""
     from . import schedules, stuck_sweep
 
+    from . import frustration
+
     out = schedules.watch_overdue(conn)
     try:
         stuck = stuck_sweep.sweep(conn)
@@ -305,6 +307,14 @@ def routines_overdue(conn: sqlite3.Connection) -> dict:
         log.exception("stuck sweep failed")
         conn.rollback()
         stuck = {"error": str(e)[:300]}
+    try:  # the owner's messages nobody answered in 2 h: to the CEO's frustration task (pos.frustration)
+        unanswered = frustration.unanswered_sweep(conn)
+    except Exception:  # noqa: BLE001
+        log.exception("unanswered sweep failed")
+        conn.rollback()
+        unanswered = []
+    if unanswered:
+        out = {**out, "unanswered": unanswered}
     return {**out, "stuck": stuck} if stuck else out
 
 

@@ -1129,6 +1129,12 @@ def send_dm(conn: sqlite3.Connection, ctx: Ctx, to_actor: int, body: str, **kw) 
     target = actors.get(conn, to_actor)
     if target["archived_at"]:
         raise ChatError(f"{target['name']} is archived")
+    if kw.get("system") and actors.get(conn, ctx.actor_id)["is_owner"]:
+        # A platform notice (system=True) is never the owner's words: PersonalOS sends it (prod msgs
+        # 1230, 1400, 1406 "Owner handed in …" counted as his messages in the frustration stats).
+        from .notices import system_ctx
+
+        ctx = system_ctx(conn)
     ch = dm_channel(conn, ctx.actor_id, to_actor, ctx)
     return send(conn, ctx, ch["id"], body, **kw)
 

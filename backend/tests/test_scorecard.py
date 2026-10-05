@@ -237,9 +237,56 @@ def test_the_ceo_monday_plan_and_friday_board_carry_the_scorecard(conn, owner, c
     ("pošli to zase Petrovi", False),
     ("Díky, super práce.", False),
     ("Proč je to modré?", False),
+    # prod 10-05, missed: typos, no háčky, two words run together
+    ("ok hlidejte vix veci at se nezasejavaj v zduchoprazdnu! nekdo musi pravidelne hlidat ze se veci "
+     "bezasekly bez vysledku", True),
+    ("at to dodelaj!! to svetlo funguje naprd", True),
+    ("automatizace svetla nefunguej", True),
+    ("Každý manažer si nastaví kontrolu: výpadky, zaseknuté úkoly, limity rozpočtu.", False),  # a description
+    ("Owner handed in T-375 'App E2E 2/4' for your review!!", False),  # a platform notice, not his words
 ])
 def test_frustration_markers(text, flagged):
     assert bool(frustration.markers(text)) is flagged
+
+
+def test_the_same_status_question_the_third_time_in_five_days_is_flagged(conn, owner, company):
+    ceo = company["ceo"]
+    for body in ("na cem stoji vyvoj aplikace proc jen 35%?", "jak to vypada s aplikaci na knihu?"):
+        chat.send_dm(conn, owner, ceo, body)
+    frustration.ensure_schema(conn)
+    assert not conn.execute("SELECT 1 FROM owner_frustration").fetchone()  # twice is a question, not a flag
+    third = chat.send_dm(conn, owner, ceo, "v jakem stavu je ta aplikace na to zadavani? je uz nekde k vyzkouseni?")
+    row = conn.execute("SELECT * FROM owner_frustration WHERE message_id = ?", (third["id"],)).fetchone()
+    assert row and "opakovaný dotaz na stav (3× za 5 dní)" in json.loads(row["markers"])
+    # another subject is another question
+    other = chat.send_dm(conn, owner, ceo, "v jakem stavu je zaloha serveru?")
+    assert not conn.execute("SELECT 1 FROM owner_frustration WHERE message_id = ?", (other["id"],)).fetchone()
+
+
+def test_an_owner_message_nobody_answered_in_2h_is_flagged_once(conn, owner, company, monkeypatch):
+    from pos import wake
+
+    monkeypatch.setattr(wake, "wake", lambda aid: 1)
+    now = datetime.now(timezone.utc)
+    lonely = chat.send_dm(conn, owner, company["cto"], "Pošli mi prosím stav záloh.")
+    answered = chat.send_dm(conn, owner, company["ceo"], "Jaký je plán na týden?")
+    ch = conn.execute("SELECT channel_id FROM chat_messages WHERE id = ?", (answered["id"],)).fetchone()[0]
+    conn.execute("INSERT INTO chat_messages (channel_id, author_id, body, trust, created_at) VALUES (?, ?, 'Plán: …', "
+                 "'agent', ?)", (ch, company["ceo"], iso(now)))
+    conn.execute("UPDATE chat_messages SET created_at = ? WHERE id IN (?, ?)",
+                 (iso(now - timedelta(hours=3)), lonely["id"], answered["id"]))
+    conn.commit()
+    assert frustration.unanswered_sweep(conn, now) == [lonely["id"]]
+    row = conn.execute("SELECT * FROM owner_frustration WHERE message_id = ?", (lonely["id"],)).fetchone()
+    assert json.loads(row["markers"]) == ["bez odpovědi 2 h"] and row["task_id"]
+    assert frustration.unanswered_sweep(conn, now) == []  # once
+
+
+def test_platform_notices_never_go_out_in_the_owners_name(conn, owner, company):
+    """Msgs 1230, 1400, 1406: "Owner handed in …" was sent as the owner and counted as his message."""
+    m = chat.send_dm(conn, owner, company["cto"], "Owner handed in T-1 'x' for your review.", system=True)
+    row = conn.execute("SELECT author_id FROM chat_messages WHERE id = ?", (m["id"],)).fetchone()
+    assert row["author_id"] == actors.system_id(conn) != owner.actor_id
 
 
 def test_a_frustrated_owner_message_reaches_the_ceo_with_context(conn, owner, company, monkeypatch):

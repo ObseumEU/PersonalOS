@@ -335,9 +335,10 @@ def test_deciding_records_on_the_task_and_the_last_answer_resumes_the_agent(tmp_
     assert out["resumed"] and out["decisions_open"] == 0
     t = tasks.get(conn, owner, ex["task"])
     assert t["status"] == "next" and t["assignee_name"] == "Head of Growth"
+    # the platform tells the agent (PersonalOS), never a DM in the owner's name
     dm = conn.execute("""SELECT m.body FROM chat_messages m JOIN channels c ON c.id = m.channel_id
                          WHERE c.kind = 'dm' AND m.author_id = ? ORDER BY m.id DESC LIMIT 1""",
-                      (owner.actor_id,)).fetchone()["body"]
+                      (actors.system_id(conn),)).fetchone()["body"]
     assert "ale jen na fázi 1" in dm and "Až po ceně fáze 1." in dm and "note_update" in dm
     log = [r["body"] for r in conn.execute("SELECT body FROM task_comments WHERE task_id = ?", (ex["task"],))]
     assert sum(b.startswith("**Rozhodnutí:**") for b in log) == len(view["decisions"])
