@@ -158,10 +158,26 @@ def ensure(agent: str, team: str = "all"):
         time.sleep(3)
     if box is None:
         box = _create(c, agent, team)
-    box.start()
-    box.reload()
+    _revive(box)
     _last_used[name] = time.time()
     return box
+
+
+def _revive(box, wait_s: float = 15) -> None:
+    """Bring a stopped, paused or just created container to running, or say it cannot run."""
+    box.reload()
+    if box.status == "paused":
+        box.unpause()
+    elif box.status != "running":
+        box.start()
+    deadline = time.time() + wait_s
+    while True:
+        box.reload()
+        if box.status == "running":
+            return
+        if time.time() > deadline:
+            raise Problem(503, f"the sandbox is not running (status {box.status}); try again or reset it")
+        time.sleep(0.5)
 
 
 class _Use:
@@ -183,8 +199,19 @@ class _Use:
 
 def _exec(box, cmd: list[str], env: dict | None = None, workdir: str = "/workspace") -> tuple[int, bytes, bytes]:
     api = box.client.api
-    ex = api.exec_create(box.id, cmd, environment=env or {}, workdir=workdir, user="root")
-    out, err = api.exec_start(ex["Id"], demux=True)
+    for attempt in (1, 2):
+        try:
+            ex = api.exec_create(box.id, cmd, environment=env or {}, workdir=workdir, user="root")
+            out, err = api.exec_start(ex["Id"], demux=True)
+            break
+        except APIError as e:
+            # 409 Conflict: the container stopped or paused under us; start it and try once more.
+            if getattr(e, "status_code", None) != 409:
+                raise
+            if attempt == 2:
+                raise Problem(503, "the sandbox is not running (Docker 409); try again or reset it") from e
+            log.warning("exec into %s: 409, starting it again", box.name)
+            _revive(box)
     code = api.exec_inspect(ex["Id"]).get("ExitCode")
     return (code if code is not None else -1), out or b"", err or b""
 
@@ -218,7 +245,6 @@ def op_exec(agent: str, team: str, command: str, timeout: int | None = None, wor
     if not command or not command.strip():
         raise Problem(400, "empty command")
     t = max(1, min(int(timeout or DEFAULT_TIMEOUT), MAX_TIMEOUT))
-    box = ensure(agent, team)
     stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
     run = f"/var/tmp/.pos-exec/{stamp}"  # not /tmp: the archive API does not see a tmpfs
     log_path = f"/workspace/.logs/exec-{stamp}.log"
@@ -229,7 +255,9 @@ def op_exec(agent: str, team: str, command: str, timeout: int | None = None, wor
               f'{{ printf "$ %s\\n" "$POS_CMD"; cat {run}/out; echo "--- stderr"; cat {run}/err; '
               f'echo "--- exit $(cat {run}/code)"; }} > {log_path} 2>/dev/null; '
               f'ls -1t /workspace/.logs/exec-*.log 2>/dev/null | tail -n +101 | xargs -r rm -f')
-    with _Use(box.name):
+    # Busy before ensure(): otherwise another call's capacity stop or the reaper can stop it in between.
+    with _Use(cname(agent)):
+        box = ensure(agent, team)
         started = time.time()
         _exec(box, ["bash", "-c", script], env={"POS_CMD": command}, workdir=_abs(workdir or "/workspace"))
         duration = round(time.time() - started, 1)
@@ -270,9 +298,9 @@ def _read_tar(box, path: str) -> dict[str, bytes]:
 def op_read(agent: str, team: str, path: str, max_bytes: int = 1024 * 1024) -> dict:
     """A file's bytes, from any path (an exec, not the archive API, which misses tmpfs mounts)."""
     p = _abs(path)
-    box = ensure(agent, team)
     limit = max(1, min(int(max_bytes or 1024 * 1024), MAX_READ))
-    with _Use(box.name):
+    with _Use(cname(agent)):
+        box = ensure(agent, team)
         code, out, err = _exec(box, ["stat", "-L", "-c", "%F|%s", p])
         if code != 0:
             raise Problem(404, f"no such file: {p}")
@@ -295,8 +323,8 @@ def op_write(agent: str, team: str, path: str, content_b64: str, mode: int = 0o6
     data = base64.b64decode(content_b64 or "")
     if len(data) > MAX_READ:
         raise Problem(413, f"at most {MAX_READ // (1024 * 1024)} MB per file")
-    box = ensure(agent, team)
-    with _Use(box.name):
+    with _Use(cname(agent)):
+        box = ensure(agent, team)
         if p.startswith("/workspace"):
             used = workspace_mb(box)
             if used is not None and used > QUOTA_MB:
@@ -320,9 +348,9 @@ def op_write(agent: str, team: str, path: str, content_b64: str, mode: int = 0o6
 
 def op_list(agent: str, team: str, path: str = "/workspace", depth: int = 2) -> dict:
     p = _abs(path)
-    box = ensure(agent, team)
     d = max(1, min(int(depth or 2), 5))
-    with _Use(box.name):
+    with _Use(cname(agent)):
+        box = ensure(agent, team)
         code, out, err = _exec(box, ["bash", "-c", f"find {shlex.quote(p)} -mindepth 1 -maxdepth {d} "
                                      "-not -path '*/.logs/*' -not -path '*/node_modules/*' -not -path '*/.git/*' "
                                      "-printf '%y\\t%s\\t%TY-%Tm-%Td %TH:%TM\\t%p\\n' 2>&1 | sort -k4 | head -n 501"])
