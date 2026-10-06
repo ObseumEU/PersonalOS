@@ -152,9 +152,29 @@ def test_worker_runs_a_task_and_injects_a_message(setup, fake_codex, tmp_path, m
     msg = conn.execute("SELECT delivered_in_run FROM chat_inbox").fetchone()
     assert msg["delivered_in_run"] == run["id"]
     done = tasks.get(conn, owner, t["id"])
-    assert done["status"] == "review"
-    assert "Resumed and adapted" in done["progress_note"]
+    # The fake agent never calls complete_task: the task stays open with it, its state kept (T-107).
+    assert done["status"] == "next" and done["assignee_id"] == agent_id
+    assert "without complete_task" in done["progress_note"] and "Resumed and adapted" in done["progress_note"]
     assert conn.execute("SELECT COUNT(*) FROM budget_runs WHERE agent_id = ?", (str(agent_id),)).fetchone()[0] >= 1
+
+
+def test_a_run_without_complete_task_leaves_the_task_open_but_a_chat_answer_is_handed_in(setup):
+    # T-107: T-026 went to done although its agent ended the run saying "not marking done".
+    _, conn, owner, agent_id, _ = setup
+    from pos import api_worker, tasks
+
+    me = Ctx(agent_id)
+    work = tasks.create(conn, owner, {"title": "Build the web", "assignee": {"type": "agent", "id": agent_id}})
+    answer = tasks.create(conn, owner, {"title": "Reply in the thread", "topic": "chat",
+                                        "assignee": {"type": "agent", "id": agent_id}})
+    for t in (work, answer):
+        tasks.update(conn, me, t["id"], {"status": "working"})
+    assert api_worker.left_open(conn, me, work["id"]) is True
+    row = tasks.get(conn, owner, work["id"])
+    assert row["status"] == "next" and row["assignee_id"] == agent_id and "without complete_task" in row["progress_note"]
+    assert api_worker.left_open(conn, me, answer["id"]) is False  # its reply is the result: the worker hands it in
+    assert tasks.get(conn, owner, answer["id"])["status"] == "working"
+    assert api_worker.left_open(conn, me, work["id"]) is False  # not working any more: nothing to do
 
 
 def test_worker_holds_when_frozen_and_idles_without_tokens(setup, fake_codex, tmp_path):
@@ -192,7 +212,7 @@ def test_claude_worker_injects_via_resume_and_records_usage(setup, fake_claude, 
     run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
     assert run["engine"] == "claude" and run["status"] == "ok" and run["input_tokens"] == 40
     done = tasks.get(conn, owner, t["id"])
-    assert done["status"] == "review" and "Adapted" in done["progress_note"]
+    assert done["status"] == "next" and "Adapted" in done["progress_note"]  # no complete_task: not handed in
     usage = conn.execute("SELECT * FROM engine_usage WHERE actor_id = ?", (agent_id,)).fetchall()
     assert usage and usage[0]["cost_usd"] > 0
     st = engines.status(conn)["claude"]
@@ -327,7 +347,7 @@ def test_auto_is_codex_first_and_switches_to_claude_on_the_codex_limit(setup, fa
     runs = conn.execute("SELECT engine, status, model FROM runs WHERE actor_id = ? ORDER BY id", (agent_id,)).fetchall()
     assert [(r["engine"], r["status"]) for r in runs] == [("codex", "error"), ("claude", "ok")]
     assert runs[1]["model"] == "claude-opus-5-5"  # the fallback's model, as the CLI reported it
-    assert tasks.get(conn, owner, t["id"])["status"] == "review"
+    assert tasks.get(conn, owner, t["id"])["status"] == "next"  # ran, no complete_task: stays open (T-107)
     # After the reset Codex is first again.
     conn.execute("UPDATE engine_limits SET paused_until = '2000-01-01T00:00:00+00:00' WHERE engine = 'codex'")
     assert engines.choose(conn, agent_id)[0] == "codex"

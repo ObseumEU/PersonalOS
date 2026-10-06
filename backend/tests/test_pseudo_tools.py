@@ -307,7 +307,7 @@ def test_one_retry_with_real_tools_finishes_the_task(pool, tmp_path, monkeypatch
     conn.commit()
     assert _worker(client, key, binary, tmp_path).step() == "ok"
     row = tasks.get(conn, owner, t["id"])
-    assert row["status"] == "review" and row["progress_note"].startswith("Repo naklonováno")
+    assert row["status"] == "next" and "Repo naklonováno" in row["progress_note"]  # no complete_task (T-107)
     run = conn.execute("SELECT * FROM runs WHERE actor_id = ? ORDER BY id DESC", (aid,)).fetchone()
     assert run["status"] == "ok" and run["tool_calls"] >= 1
 

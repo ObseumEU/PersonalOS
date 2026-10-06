@@ -318,6 +318,20 @@ def idle_back_off(conn: sqlite3.Connection, task_id: int, actor_id: int) -> str 
     return at
 
 
+def left_open(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> bool:
+    """An ok run ended without complete_task (T-107: T-026 went to done although its agent wrote
+    "not marking done"): the task is not handed in for it, it goes back to `next` with its agent.
+    A chat answer or a meeting turn is the exception: its reply is the result (the worker hands it in)."""
+    t = conn.execute("SELECT status, assignee_id, topic, source FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if t is None or t["status"] != "working" or t["assignee_id"] != ctx.actor_id:
+        return False
+    if (t["topic"] or "") == "chat" or (t["source"] or "").startswith("meeting"):
+        return False
+    tasks.update(conn, ctx, task_id, {"status": "next",
+                                      "progress_note": "The run ended without complete_task; the task stays open."})
+    return True
+
+
 # A task re-dispatched again and again without a result (T-107: a run that ends without complete_task
 # comes back; T-517 ran 176 times, T-516 57): after this many runs of one agent on one task in
 # NO_RESULT_WINDOW_HOURS with nothing handed in, it is held for NO_RESULT_HOLD_HOURS and the agent's
@@ -653,6 +667,8 @@ def finish_run(run_id: int, body: FinishIn, conn=Depends(get_db), ctx: Ctx = Dep
         except Exception:  # noqa: BLE001 - the run's end is what matters here
             conn.rollback()
     if body.status == "ok" and row["task_id"] and row["status"] == "ok":
+        if left_open(conn, ctx, row["task_id"]):
+            conn.commit()
         if idle_back_off(conn, row["task_id"], ctx.actor_id):
             conn.commit()
             out["held_until"] = conn.execute("SELECT retry_after FROM tasks WHERE id = ?",
