@@ -21,6 +21,9 @@ Each **capability** (or user-journey step) of a project has:
   deployer's status file, POS_DEPLOY_STATUS) must contain that commit. Then the capability is
   **test_only and verified** (`verified` in the view; it expires like live). It never becomes live: that
   still takes the anonymous probe of a public URL. An anonymous fetch that gets in is flagged as exposed.
+  Without a usable credential (1Password item missing) a capability with `deploy_ref` and no
+  `probe_expect` is verified by its deployment: the instance answers `/healthz` and runs a version that
+  contains the commit (verify_method `deploy`).
 - `verified_at` + `evidence`: a live capability whose last passing verification is older than
   EXPIRY_HOURS (72) reads as **unverified** (`effective`), and the probe job writes that down; a failing
   probe reverts it at once.
@@ -429,7 +432,7 @@ def upsert(conn: sqlite3.Connection, ctx: Ctx, project, key: str, fields: dict) 
                     for k in ("url", "access", "probe_url", "probe_expect", "probe_mode", *_COLUMNS))
         if reset:
             changes.update({"status": "unverified", "verified_at": None, "verified_by": None, "verify_method": None})
-        elif moved and prev["verify_method"] == TEST_METHOD:  # what the test probe verified is not this any more
+        elif moved and prev["verify_method"] in TEST_METHODS:  # what the test probe verified is not this any more
             changes.update({"verified_at": None, "verified_by": None, "verify_method": None})
         changes.update({"updated_at": now, "archived_at": None})
         sets = ", ".join(f"{k} = ?" for k in changes)
@@ -548,7 +551,9 @@ def _record_check(conn: sqlite3.Connection, row, pr: Probe) -> None:
                  "WHERE id = ?", (now_iso(), int(pr.ok), pr.why[:500], row["id"]))
 
 
-TEST_METHOD = "probe_test"
+TEST_METHOD = "probe_test"  # the authenticated probe passed (and the deployed version, with deploy_ref)
+DEPLOY_METHOD = "deploy"  # no usable credential: the instance answers /healthz and runs a version with deploy_ref
+TEST_METHODS = (TEST_METHOD, DEPLOY_METHOD)
 
 
 def _status_files() -> list[str]:
@@ -612,7 +617,7 @@ def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) ->
     if exposed and not _recent(conn, "reality_exposed", row["project_id"], row["key"], hours=24):
         audit.log(conn, ctx, "reality_exposed", "project", row["project_id"], key=row["key"], url=url)
     cred = row["probe_credential"]
-    ok, why, auth = False, "", None
+    ok, why, auth, method = False, "", None, TEST_METHOD
     if not cred:
         why = "chybí probe_credential: testovací instanci nejde ověřit bez hesla"
     else:
@@ -627,6 +632,12 @@ def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) ->
             return {**out, **auth.as_dict()}
         ok = auth.ok
         why = f"s heslem: HTTP {auth.status}" if ok else f"s heslem: {auth.why}"
+    elif row["deploy_ref"] and not row["probe_expect"]:
+        # No usable credential: what the deployer reports is the evidence (the version that runs there contains
+        # the commit, and the instance answers its health check). Not for a page whose content must be seen.
+        health = probe(f"{urlsplit(url).scheme}://{urlsplit(url).netloc}/healthz")
+        ok, method = health.ok, DEPLOY_METHOD
+        why = f"{why}; podle nasazení: /healthz HTTP {health.status}" if ok else f"{why}; {health.why}"
     if ok and row["deploy_ref"]:
         ok, dwhy = DEPLOYED_CONTAINS(host, row["deploy_ref"])
         why = f"{why}; {dwhy}"
@@ -637,14 +648,14 @@ def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) ->
         conn.execute("""UPDATE reality_capabilities SET status = CASE WHEN status = 'live' THEN status ELSE 'test_only'
                         END, verified_at = ?, verified_by = 'probe', verify_method = ?, evidence = ?, updated_at = ?,
                         last_check_at = ?, last_check_ok = 1, last_check_detail = ? WHERE id = ?""",
-                     (now, TEST_METHOD, f"testovací instance {url} ({why}, {now[:16]})"[:2000], now, now, why[:500],
+                     (now, method, f"testovací instance {url} ({why}, {now[:16]})"[:2000], now, now, why[:500],
                       row["id"]))
-        if not (row["status"] == "test_only" and row["verify_method"] == TEST_METHOD and row["verified_at"]):
+        if not (row["status"] == "test_only" and row["verify_method"] == method and row["verified_at"]):
             audit.log(conn, ctx, "reality_test_verified", "project", row["project_id"], key=row["key"], url=url)
     else:
         conn.execute("UPDATE reality_capabilities SET last_check_at = ?, last_check_ok = 0, last_check_detail = ? "
                      "WHERE id = ?", (now, why[:500], row["id"]))
-        if row["verify_method"] == TEST_METHOD and row["verified_at"]:
+        if row["verify_method"] in TEST_METHODS and row["verified_at"]:
             conn.execute("UPDATE reality_capabilities SET verified_at = NULL, updated_at = ? WHERE id = ?",
                          (now, row["id"]))
             audit.log(conn, ctx, "reality_test_failed", "project", row["project_id"], key=row["key"], why=why[:300])
@@ -901,6 +912,7 @@ KNIHA_TEST_PROBES = {
 }
 # Seeded as missing on 2026-10-06 before they were on the test instance: still in that state, they are moved.
 KNIHA_UPGRADE_FROM = {"order": "missing", "photos": "missing", "payment": "missing"}
+KNIHA_OLD_EXPECT = "Objednat knihu"  # the first test-instance seed (2026-10-06) checked this text on every page
 
 KNIHA = [
     # key, name, status, url, access, probe_mode, probe_expect, aliases, notes
@@ -918,10 +930,10 @@ KNIHA = [
      "Ve vývoji: rozhovor s vypravěčem běží jen jako atrapa (mock)."),
     ("chapters", "Kapitoly knihy z vyprávění", "mock", None, "internal", None, None,
      ["kapitol", "generování knihy", "složení knihy", "text knihy"], "Skládání kapitol je zatím atrapa (mock)."),
-    ("order", "Objednávkový formulář", "test_only", f"{KNIHA_TEST}/objednat", "password", "test", "Objednat knihu",
+    ("order", "Objednávkový formulář", "test_only", f"{KNIHA_TEST}/objednat", "password", "test", None,
      ["objedn", "koupit", "kupte", "nákup"],
      "Jen na testovací instanci (za heslem): veřejně zatím ne, dokud platba a e-maily nejsou ostré."),
-    ("photos", "Nahrávání fotek", "test_only", KNIHA_TEST, "password", "test", "Objednat knihu",
+    ("photos", "Nahrávání fotek", "test_only", KNIHA_TEST, "password", "test", None,
      ["fotk", "fotograf", "foto"],
      "Jen na testovací instanci: fotky v rodinném portálu (/o/<token>/fotky, až 80, v náhledu i v PDF). Probe "
      "ověří, že instance běží a nasazená verze je obsahuje (T-884)."),
@@ -961,6 +973,12 @@ def seed_kniha(conn: sqlite3.Connection) -> int:
         prev = conn.execute("SELECT * FROM reality_capabilities WHERE project_id = ? AND key = ?",
                             (p["id"], key)).fetchone()
         if prev is not None:
+            if (mode == "test" and prev["probe_mode"] == "test" and not prev["verified_at"]
+                    and prev["probe_expect"] == KNIHA_OLD_EXPECT and expect != KNIHA_OLD_EXPECT):
+                conn.execute("UPDATE reality_capabilities SET probe_expect = ?, updated_at = ? WHERE id = ?",
+                             (expect, now, prev["id"]))
+                moved.append(key)
+                continue
             # still exactly as an older seed left it (nobody changed it since): brought up to date
             if (KNIHA_UPGRADE_FROM.get(key) == prev["status"] and not prev["url"] and not prev["probe_mode"]
                     and prev["status"] != status):

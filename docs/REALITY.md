@@ -24,7 +24,9 @@ Per project, each capability or user-journey step: `status` (live, unverified, t
   anonymously. A passing authenticated fetch (2xx, `probe_expect`), and, with `deploy_ref`, a deployed
   version that contains that commit (the deployer's status file, `POS_DEPLOY_STATUS`), make it **test_only
   and verified** (expiring like live). It is never live; an instance that opens without a password is
-  flagged. Only a person or an agent holding the credential may name it.
+  flagged. Only a person or an agent holding the credential may name it. Without a usable credential (its
+  1Password item missing), a capability with `deploy_ref` and no `probe_expect` is verified by its
+  deployment: the instance answers `/healthz` and runs a version containing the commit (method `deploy`).
 - The job `reality_tick` (every 30 min) runs the probes, the expiry and the release of held tasks.
 - Agents read it with `reality_list`; the owner sees "Co je živé" on the project page (with the content the
   gate stopped, and his override button).

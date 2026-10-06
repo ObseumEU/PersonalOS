@@ -257,6 +257,40 @@ def test_no_usable_credential_means_no_verification(env, web, test_instance, mon
     assert c.execute("SELECT ok FROM credential_uses").fetchone()[0] == 0
 
 
+def test_without_the_1password_item_the_deployment_is_the_evidence(env, web, test_instance, monkeypatch):
+    """prod 2026-10-06: kniha-test-basic-auth is registered, but its 1Password item does not exist yet."""
+    from pos.credentials import onepassword
+
+    def missing(ref):
+        raise onepassword.Unavailable("error resolving secret reference: no item matched the secret reference query")
+
+    c = env["conn"]
+    monkeypatch.setattr(onepassword, "resolve", missing)
+    base = web.pages.pop("https://kniha-test.obseum.cz")
+    web.pages["https://kniha-test.obseum.cz/healthz"] = page(200, body="ok")
+    web.pages["https://kniha-test.obseum.cz"] = base  # everything else still asks for the password
+    reality.tick(c)
+    order, photos, payment = cap(env, "order"), cap(env, "photos"), cap(env, "payment")
+    assert order["verified"] and order["verify_method"] == "deploy" and photos["verified"]
+    assert "healthz" in order["last_check_detail"] and "nasazen" in order["last_check_detail"]
+    assert not payment["verified"]  # its page text must be seen: the deployment alone does not show it
+    assert cap(env, "test_app")["last_check_ok"] is True
+    test_instance["deployed"].discard("cfd3f24")
+    reality.tick(c)
+    assert not cap(env, "photos")["verified"] and cap(env, "order")["verified"]
+    web.pages["https://kniha-test.obseum.cz/healthz"] = page(502, body="")
+    reality.tick(c)
+    assert not cap(env, "order")["verified"]
+
+
+def test_the_seed_corrects_its_first_cut_while_nothing_is_verified(env):
+    c = env["conn"]
+    c.execute("UPDATE reality_capabilities SET probe_expect = 'Objednat knihu' WHERE key IN ('order', 'photos')")
+    assert reality.seed_kniha(c) == 2
+    assert cap(env, "order")["probe_expect"] is None and cap(env, "payment")["probe_expect"] == "QR kód"
+    assert reality.seed_kniha(c) == 0
+
+
 def test_only_a_holder_points_the_probe_at_a_credential(env, test_instance):
     c = env["conn"]
     with pytest.raises(Forbidden, match="cred:kniha-test-basic-auth"):
