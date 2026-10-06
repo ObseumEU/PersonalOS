@@ -237,6 +237,5 @@ export default {
   "compose.mic_listening": "Poslouchám…",
   "compose.mic_denied": "Mikrofon není povolený. Povol ho prohlížeči pro tuto stránku a zkus to znovu.",
   "compose.mic_error": "Diktování se nepovedlo ({error}).",
-  "compose.mic_unsupported": "Tenhle prohlížeč diktování neumí. Na telefonu použij mikrofon na klávesnici, na počítači Chrome nebo Edge.",
   "compose.paste_hint": "Obrázek vložíš i přes Ctrl+V.",
 } as Record<string, string>;

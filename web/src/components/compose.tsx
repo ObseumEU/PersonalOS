@@ -9,13 +9,15 @@
  * - MicButton: dictation with the browser's speech recognition (Web Speech API, cs-CZ). Tap to
  *   start, tap to stop; what is heard goes live into the box (interim results too) so it can be
  *   edited before sending. The stack has no speech-to-text service of its own, so a browser
- *   without it (some iOS home-screen apps) gets a hint to use the keyboard's microphone.
+ *   without it (Firefox, some iOS home-screen apps) shows no button: the keyboard's microphone
+ *   still works there.
  */
 import { Mic, Square, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { filesApi } from "../filesApi";
 import { t } from "../i18n/core";
 import { IMAGE_EXT, joinDictation, pastedName, splitFileLines } from "../composeText";
+import { createDictation, recognitionClass } from "../dictation";
 import { toast } from "./overlay";
 
 export { joinDictation, splitFileLines };
@@ -91,107 +93,43 @@ export function AttachChips({ files, uploading, onRemove, className = "" }: { fi
 
 /* ------------------------------------------------------------------ dictation */
 
-type SpeechAlt = { transcript: string };
-type SpeechResult = { isFinal: boolean; length: number; [i: number]: SpeechAlt };
-type SpeechEvent = { resultIndex: number; results: { length: number; [i: number]: SpeechResult } };
-type Recognition = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((e: SpeechEvent) => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-};
-
-function recognitionClass(): (new () => Recognition) | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as { SpeechRecognition?: new () => Recognition; webkitSpeechRecognition?: new () => Recognition };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
-
 export const canDictate = () => recognitionClass() !== null;
 
 /**
  * Tap to dictate into a box; tap again to stop. `value`/`onChange` are the box's own state: the
  * words go in live (the not-yet-final ones too) after what was there when dictation started.
- * Android's recogniser repeats itself in continuous mode, so there it listens a phrase at a time
- * and starts again until stopped.
+ * A browser without speech recognition (Firefox) gets no button.
  */
 export function MicButton({ value, onChange, className = "", size = 18 }: { value: string; onChange: (v: string) => void; className?: string; size?: number }) {
   const [on, setOn] = useState(false);
-  const rec = useRef<Recognition | null>(null);
-  const want = useRef(false);
-  const base = useRef("");
+  const session = useRef<ReturnType<typeof createDictation> | null>(null);
   const latest = useRef(value);
   latest.current = value;
   const change = useRef(onChange);
   change.current = onChange;
-  const android = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+  const Cls = recognitionClass();
 
-  const stop = useCallback(() => {
-    want.current = false;
-    setOn(false);
-    try {
-      rec.current?.stop();
-    } catch {
-      /* already stopped */
-    }
-  }, []);
-  useEffect(() => () => {
-    want.current = false;
-    rec.current?.abort();
-  }, []);
+  useEffect(() => () => session.current?.abort(), []);
 
-  const listen = useCallback(() => {
-    const Cls = recognitionClass();
+  const toggle = useCallback(() => {
+    if (on) return session.current?.stop();
     if (!Cls) return;
-    const r = new Cls();
-    r.lang = "cs-CZ";
-    r.interimResults = true;
-    r.continuous = !android;
-    base.current = latest.current;
-    r.onresult = (e) => {
-      let said = "";
-      for (let i = 0; i < e.results.length; i++) said += `${e.results[i][0]?.transcript ?? ""} `;
-      change.current(joinDictation(base.current, said));
-    };
-    r.onerror = (e) => {
-      if (e.error === "no-speech" || e.error === "aborted") return;
-      want.current = false;
-      setOn(false);
-      toast(e.error === "not-allowed" || e.error === "service-not-allowed" ? t("compose.mic_denied") : t("compose.mic_error", { error: e.error }), { error: true });
-    };
-    r.onend = () => {
-      if (want.current && android) {
-        listen(); // the next phrase, after what is in the box now
-        return;
-      }
-      want.current = false;
-      setOn(false);
-    };
-    rec.current = r;
-    try {
-      r.start();
-    } catch {
-      want.current = false;
-      setOn(false);
-    }
-  }, [android]);
-
-  const toggle = () => {
-    if (on) return stop();
-    if (!canDictate()) {
-      toast(t("compose.mic_unsupported"), { error: true });
-      return;
-    }
-    want.current = true;
+    const android = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+    session.current = createDictation(
+      Cls,
+      {
+        base: () => latest.current,
+        onText: (base, said) => change.current(joinDictation(base, said)),
+        onError: (error) => toast(error === "not-allowed" || error === "service-not-allowed" ? t("compose.mic_denied") : t("compose.mic_error", { error }), { error: true }),
+        onStop: () => setOn(false),
+      },
+      android,
+    );
     setOn(true);
-    listen();
-  };
+    session.current.start();
+  }, [on, Cls]);
 
+  if (!Cls) return null;
   return (
     <button
       type="button"
