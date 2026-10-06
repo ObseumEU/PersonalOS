@@ -267,6 +267,13 @@ def update_draft(conn: sqlite3.Connection, ctx: Ctx, draft_id: str, body: str, *
     if len(body) < 20:
         raise tasks.Invalid("the body is too short: the whole new text of the e-mail, without a signature")
     account, row = d["account"], d["row"]
+    from . import grounding
+
+    # The new text is checked like a new draft (pos.grounding): no dead links, no promise of what is not live.
+    keys = row.keys()
+    grounding.gate(conn, ctx, "gmail_update_draft", "\n".join(x for x in (subject, body) if x),
+                   task_id=row["task_id"] if "task_id" in keys else None,
+                   project_hint=row["project_slug"] if "project_slug" in keys else None)
     conn.commit()  # no write lock while Gmail answers
     if d["kind"] == "outbound":
         res = d["result"]

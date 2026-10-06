@@ -89,6 +89,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from . import agents_code, projects
 
             projects.migrate_step_projects(conn)  # once: tasks with steps become projects
+            from . import reality
+
+            try:  # "Co je živé" for Kniha as audited on 2026-10-06 (idempotent; never live until probed)
+                reality.seed_kniha(conn)
+                conn.commit()
+            except Exception:  # noqa: BLE001 - never block the start on it
+                logging.getLogger(__name__).exception("reality seed failed")
             agents_code.ensure_from_repo(conn, settings.data_dir)  # role agents from agents/*/agent.json
             from .access import service as access
 
@@ -189,6 +196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     guard_api.install_error_handler(app)
     app.include_router(api_tasks.router)
     app.include_router(api_projects.router)  # a project's page (pos.project_info)
+    app.include_router(api_projects.reality_router)  # the owner's override of the claim gate (pos.grounding)
     app.include_router(api_files.router)
     app.include_router(api_agents.router)
     app.include_router(api_worker.router)

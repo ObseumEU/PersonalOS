@@ -96,3 +96,66 @@ def project_activity(ref: str, days: int = 30, conn=Depends(get_db), ctx=Depends
 async def ask_project(ref: str, body: AskIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
     p = projects.get(conn, ctx, ref)
     return await run_in_threadpool(project_info.ask, conn, p, body.question, body.effort)
+
+
+# ------------------------------------------------------------------ "Co je živé" (pos.reality, pos.grounding)
+
+class VerifyIn(BaseModel):
+    accept: bool = True
+    note: str = ""
+
+
+class OverrideIn(BaseModel):
+    reason: str = ""
+
+
+@router.get("/{ref}/reality")
+def project_reality(ref: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """What is usable now, and the content the claim gate blocked for this project (the owner may let it through)."""
+    from . import actors, grounding, reality
+
+    row = projects._row(conn, ctx, ref)
+    is_owner = bool(actors.get(conn, ctx.actor_id)["is_owner"])
+    return {"capabilities": reality.registry(conn, [row["id"]]), "expiry_hours": reality.EXPIRY_HOURS,
+            "blocked": grounding.recent(conn, [row["id"]], "block", 10) if is_owner else [],
+            "can_override": is_owner}
+
+
+@router.post("/{ref}/reality/probe")
+async def project_reality_probe(ref: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Run the project's probes now (an outsider's view of every URL)."""
+    from . import reality
+
+    row = projects._row(conn, ctx, ref)
+
+    def go():
+        out = reality.probe_project(conn, row["id"])
+        reality.release_holds(conn, row["id"])
+        conn.commit()
+        return {"results": out, "capabilities": reality.registry(conn, [row["id"]])}
+
+    return await run_in_threadpool(go)
+
+
+@router.post("/{ref}/reality/{key}/verify")
+def project_reality_verify(ref: str, key: str, body: VerifyIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """A person accepts (or rejects) the evidence that a capability works; its URL must pass the probe."""
+    from . import reality
+
+    row = projects._row(conn, ctx, ref)
+    out = reality.verify(conn, ctx, row["id"], key, body.accept, body.note)
+    conn.commit()
+    return out
+
+
+reality_router = APIRouter(prefix="/api/reality", tags=["projects"], dependencies=[Depends(require_user)])
+
+
+@reality_router.post("/checks/{check_id}/override")
+def reality_override(check_id: int, body: OverrideIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The owner's escape hatch: let one blocked content through (the agent sends it again unchanged)."""
+    from . import grounding
+
+    out = grounding.override(conn, ctx, check_id, body.reason)
+    conn.commit()
+    return out

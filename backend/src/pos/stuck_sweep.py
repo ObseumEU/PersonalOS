@@ -63,9 +63,13 @@ def wake_due(conn: sqlite3.Connection, now: datetime, apply: bool = True) -> lis
                            AND COALESCE(t.do_date, t.follow_up) IS NOT NULL
                            AND MIN(COALESCE(t.do_date, '9999'), COALESCE(t.follow_up, '9999')) <= ?
                            ORDER BY t.id""", (today,)).fetchall()
+    from . import reality
+
     for t in rows:
         if _done_since(conn, "stuck_wake", "task", t["id"], since):
             continue
+        if reality.held(conn, t["id"]) is not None:
+            continue  # promotion held until what it promotes is live (pos.reality); the probe job releases it
         due = min(d for d in (t["do_date"], t["follow_up"]) if d)
         item = {"id": t["id"], "ref": tasks.display_id(t["id"]), "title": t["title"], "assignee": t["assignee_id"],
                 "why": f"čekal do {due}"}

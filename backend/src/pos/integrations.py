@@ -176,6 +176,10 @@ def register_mcp_tools(mcp, session) -> None:
     from . import mcp_scorecard
 
     mcp_scorecard.register_mcp(mcp, session)  # scorecard: the company's numbers (the CEO's plan and board input)
+    from . import grounding, reality
+
+    reality.register_mcp(mcp, session)  # "Co je živé": reality_list, reality_upsert, reality_submit_evidence, reality_verify
+    grounding.register_mcp(mcp, session)  # reality_check: the claim gate's dry run before sending
 
 
 def budget_check(conn: sqlite3.Connection) -> dict:

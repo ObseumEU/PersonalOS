@@ -344,6 +344,11 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
             # A task carrying mail, web or other outside content taints this run (pos.taint).
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
+            from . import delivery
+
+            crit = delivery.criteria_view(conn, row)  # what complete_task needs evidence for (K1, K2, ...)
+            if crit:
+                out["acceptance_criteria"] = crit
             if not taint.mark_task(conn, c.actor_id, row):
                 taint.mark_text(conn, c.actor_id, "\n".join(a["body"] or "" for a in activity), out["ref"])
             return out
@@ -604,10 +609,15 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         with session(ctx, "update_task", task_id=task_id, fields=sorted(fields)) as (conn, c):
             return brief(tasks.update(conn, c, tasks.parse_id(task_id), fields))
 
-    @mcp.tool(description="Finish a task. Work done by AI or agents goes to the owner's review first. " + REPORT_DESC)
+    @mcp.tool(description="Finish a task. Work done by AI or agents goes to the owner's review first. Done means "
+                          "it works for the real user: each criterion of the task's definition_of_done needs "
+                          "evidence (a commit sha, a URL that opens for an outsider, a sent message's id, a file or "
+                          "note id, test output): lines 'K1: <evidence>' in the note, or criteria_evidence "
+                          "['<evidence for K1>', ...]; a criterion about a live URL needs that URL. A parent with "
+                          "open (or silently archived) steps cannot be handed in. " + REPORT_DESC)
     def complete_task(ctx: Context, task_id: str, note: str | None = None, result_ref: str | None = None,
-                      report: dict[str, Any] | None = None) -> dict:
-        from . import owner_report
+                      report: dict[str, Any] | None = None, criteria_evidence: list[Any] | None = None) -> dict:
+        from . import delivery, owner_report
 
         with session(ctx, "complete_task", task_id=task_id, result_ref=result_ref) as (conn, c):
             rep = owner_report.validate(
@@ -617,8 +627,9 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             tid = tasks.parse_id(task_id)
             from . import evidence
 
-            with evidence.extra_text(evidence.report_text(rep)):  # the report's numbers and links count too
-                done = tasks.complete(conn, c, tid, text)
+            with evidence.extra_text(evidence.report_text(rep)), \
+                    delivery.criteria_input(delivery.parse_input(criteria_evidence)):
+                done = tasks.complete(conn, c, tid, text)  # the report's numbers and links count too
             out = brief(done) | ({"platform_note": done["platform_note"]} if done.get("platform_note") else {})
             if rep:
                 out["report"] = owner_report.submit(conn, c, tid, rep)
@@ -673,6 +684,12 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             tid = tasks.parse_id(task_id) if task_id else None
             if tid:
                 tasks.get(conn, c, tid)
+            from . import grounding
+
+            # What would go out once approved is grounded before it reaches the owner (pos.grounding).
+            grounding.gate(conn, c, f"approval:{action}", grounding.approval_text(details or {}), task_id=tid,
+                           project_hint=(details or {}).get("project") if isinstance(details, dict) else None)
+            grounding.blocker_gate(conn, c, "approval_why", why)
             return approvals.request(conn, c, action, {**(details or {}), **({"why": why} if why else {})}, tid)
 
     @mcp.tool(description="Chain of command: report to your lead, not the owner. Only the top of the chain "
@@ -765,6 +782,10 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             target = actors.find_by_name(conn, to)
             if target is None:
                 raise NotFound(f"no member called {to}")
+            from . import grounding
+
+            if grounding.is_owner(conn, target["id"]):  # a blocker told to the owner is checked first
+                grounding.owner_message_gate(conn, c, "message_owner", body)
             try:
                 return agents.send_message(conn, c, target["id"], body,
                                            tasks.parse_id(task_id) if task_id else None, priority)
@@ -819,6 +840,13 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                   task_id: str | None = None, attachments: list[int] | None = None) -> dict:
         with session(ctx, "chat_send", channel=channel, to=to, reply_to=reply_to, priority=priority,
                      blocking=blocking or None, attachments=attachments) as (conn, c):
+            from . import grounding
+
+            if grounding.to_owner(conn, to, body):
+                # To the owner: a blocker claim is checked, content he is asked to send or approve grounded.
+                grounding.owner_message_gate(conn, c, "chat_owner", body,
+                                             asks_to_send=blocking and grounding.asks_to_send(body))
+
             def go(chat):
                 from . import files
 

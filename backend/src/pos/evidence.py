@@ -470,6 +470,15 @@ def check(conn: sqlite3.Connection, text: str | None, task_id: int | None = None
     res.contradictions = contradictions(conn, text)
     if not res.claim:
         return res
+    res.items = gather(conn, text, task_id, budget_s=budget_s, since=since)
+    return res
+
+
+def gather(conn: sqlite3.Connection, text: str | None, task_id: int | None = None, budget_s: float = BUDGET_S,
+           since: str | None = None) -> list[Item]:
+    """Every piece of evidence in `text`, each verified (git and HTTP within `budget_s`, failing open);
+    with `task_id`, also what the platform knows the task did (its sends, deploys, messages since `since`).
+    Shared with pos.delivery (evidence per acceptance criterion)."""
     from .verification import TESTS_FAIL_RE, TESTS_PASS_RE
 
     found = extract(text)
@@ -517,8 +526,7 @@ def check(conn: sqlite3.Connection, text: str | None, task_id: int | None = None
                     items.append(fallback)
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
-    res.items = items
-    return res
+    return items
 
 
 def _gated(conn: sqlite3.Connection, ctx: Ctx, row) -> bool:

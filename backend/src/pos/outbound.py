@@ -53,6 +53,10 @@ REQUIRED = {
 }
 # Only ever done by a person: approved, they become a task for the owner.
 OWNER_ONLY = {"payment", "web.post"}
+# Content for people outside: checked against reality first (pos.grounding: links open for an outsider,
+# no promise of what is not live). GitHub comments, issues and PRs are developers' collaboration.
+GROUNDED = {"email.send": ("subject", "body"), "linkedin.post": ("text",), "discord.post": ("content",),
+            "web.post": ("url", "content")}
 WEB_PUBLISH = ("web.publish is not an outbound action: the Kniha web goes out through its production branch "
                "(git checkout production && git merge --ff-only agent/<téma>); the kniha-deployer pushes and "
                "deploys it within ~3 minutes (see your instructions).")
@@ -110,6 +114,12 @@ def request(conn: sqlite3.Connection, ctx: Ctx, action: str, payload: dict, task
 
     # The capability is the Access manager's to grant (Ú5); what needs approval is the guard's call (Ú1).
     access.require_outbound(conn, ctx, action)
+    if action in GROUNDED:
+        from . import grounding
+
+        # Before anything is drafted, sent or queued for the owner: grounded in what is live (pos.grounding).
+        grounding.gate(conn, ctx, f"outbound:{action}", grounded_text(action, payload), task_id=task_id,
+                       project_hint=payload.get("project"))
     found, reason = classify(action, payload, kind)
     if found != "ordinary" or action in OWNER_ONLY:
         details = {"payload": payload, "kind": found, "reason": reason, **({"why": why} if why else {})}
@@ -202,6 +212,10 @@ def _email(conn: sqlite3.Connection, payload: dict, *, task_id: int | None, why:
     if why:
         result["why"] = why[:300]
     return {**result, "mode": how}
+
+
+def grounded_text(action: str, payload: dict) -> str:
+    return "\n".join(str(payload.get(k) or "") for k in GROUNDED.get(action, ()) if payload.get(k))
 
 
 def body_hash(p: dict) -> str:

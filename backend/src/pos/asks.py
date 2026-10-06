@@ -223,6 +223,13 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
     me = actors.get(conn, ctx.actor_id)
     owner = actors.get(conn, actors.owner_id(conn))
     source = tasks.get(conn, ctx, task_id) if task_id else None
+    if chat_message_id is None:  # (a question from chat was checked before it was posted)
+        from . import grounding
+
+        # Grounded: a blocker claim is checked, content the owner is asked to send or approve too.
+        text = "\n".join(x for x in (title, why, details or "", *[str(x) for x in (links or [])]) if x)
+        grounding.owner_message_gate(conn, ctx, "ask_owner", text, task_id=task_id,
+                                     asks_to_send=grounding.asks_to_send(title, kind, details or ""))
     key = topic_key(topic or title)
     if not key:
         raise tasks.Invalid("give a topic or a title with words in it")

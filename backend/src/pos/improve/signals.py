@@ -47,8 +47,8 @@ log = logging.getLogger(__name__)
 EXAMPLES = 5
 LOOP_CLAIMS = 5  # claims of one task in the window that make a loop
 # How much one occurrence of a category hurts (the owner's pain first); 0 = information only.
-WEIGHTS = {"owner": 5.0, "deploy": 3.0, "run_error": 3.0, "loop": 3.0, "ux": 3.0, "tool_error": 2.0,
-           "cost_cap": 2.0, "guard": 1.0, "stuck": 1.0, "agent_fail": 0.0, "spend": 0.0}
+WEIGHTS = {"owner": 5.0, "grounding": 4.0, "deploy": 3.0, "run_error": 3.0, "loop": 3.0, "ux": 3.0,
+           "tool_error": 2.0, "cost_cap": 2.0, "guard": 1.0, "stuck": 1.0, "agent_fail": 0.0, "spend": 0.0}
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS improve_signals (
     day        TEXT NOT NULL,
@@ -364,7 +364,38 @@ def _spend(conn, acc: _Acc, s: str, u: str) -> None:
             acc.set(f"spend:{cat}", "spend", f"USD on {cat}", round(v, 2))
 
 
-EVENT_COLLECTORS = (_runs, _tools, _guard, _loops, _deploys, _owner, _agents, _spend)
+GROUNDING_ACTIONS = ("claim_ungrounded", "blocker_unfounded", "delivery_incomplete", "reality_expired",
+                     "reality_exposed", "reality_unverified")
+
+
+def _grounding(conn, acc: _Acc, s: str, u: str) -> None:
+    """Claims not grounded in reality (pos.grounding, pos.delivery, pos.reality): what an agent tried to
+    send or tell the owner that was not true, hand-ins without delivery, capabilities that stopped being live."""
+    q = (f"SELECT id, action, entity, entity_id, detail FROM audit_log WHERE at >= ? AND at < ? AND action IN "
+         f"({','.join('?' * len(GROUNDING_ACTIONS))}) ORDER BY id DESC")
+    for r in conn.execute(q, (s, u, *GROUNDING_ACTIONS)):
+        try:
+            d = json.loads(r["detail"] or "{}") or {}
+        except (TypeError, ValueError):
+            d = {}
+        reasons = d.get("reasons") or []
+        sample = reasons[0] if reasons else ""
+        if r["action"] in ("claim_ungrounded", "blocker_unfounded"):
+            surface = slug(str(d.get("surface") or "unknown").split(":")[0], 1, cut=False)
+            kind = "_".join(sorted(str(k) for k in (d.get("kinds") or ["unknown"])))[:30]
+            acc.add(f"{r['action']}:{surface}.{kind}", "grounding",
+                    "ungrounded content blocked" if r["action"] == "claim_ungrounded" else "false or unfounded blocker",
+                    f"check:{r['entity_id']}", sample)
+        elif r["action"] == "delivery_incomplete":
+            what = "accept" if d.get("accepting") else "hand_in"
+            acc.add(f"delivery_incomplete:{what}", "grounding", "done without delivery (criteria, dropped steps)",
+                    _t(r["entity_id"]), "; ".join(d.get("children") or [])[:200])
+        else:
+            acc.add(f"{r['action']}:{slug(str(d.get('key') or 'capability'), 2, cut=False)}", "grounding",
+                    r["action"].replace("_", " "), f"project:{r['entity_id']}", str(d.get("url") or ""))
+
+
+EVENT_COLLECTORS = (_runs, _tools, _guard, _loops, _deploys, _owner, _agents, _spend, _grounding)
 
 
 def events(conn: sqlite3.Connection, s: str, u: str) -> dict[str, dict]:

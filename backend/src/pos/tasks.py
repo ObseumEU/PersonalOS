@@ -393,6 +393,15 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         from . import head_alerts
 
         head_alerts.assigned(conn, ctx, new_id)  # an agent's task for the owner: its head hears of it
+    if me["kind"] != "human" and values.get("project_id"):
+        from . import reality
+
+        # Promotion waits for what it promotes to be live (pos.reality: sequencing).
+        hold = reality.on_task_created(conn, ctx, {**values, "id": new_id})
+        if hold:
+            out = get(conn, ctx, new_id)
+            out["note"] = hold["note"]
+            return out
     return get(conn, ctx, new_id)
 
 
@@ -481,6 +490,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         business.ensure_schema(conn)
     if changes.get("status") in ("inbox", "next", "working") and "assignee_id" not in extra:
         _refuse_archived(conn, row)  # reopening work for a member who is gone (T-026 went to the archived Dev agent)
+    if changes.get("status") not in (None, "waiting") and row["status"] == "waiting":
+        from . import reality
+
+        reality.refuse_if_held(conn, ctx, task_id)  # promotion of what is not live yet stays held
     if "visibility" in changes and changes["visibility"] != row["visibility"]:
         from .integrations import check_visibility_change
 
@@ -512,6 +525,12 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
             else:
                 changes["status"] = "review"
     handed_in = changes.get("status") == "review" and row["status"] != "review"
+    if (accepted or (changes.get("status") in ("review", "done") and row["status"] not in ("review", "done")))             and not routine_closed:
+        # Done means delivered (pos.delivery): every acceptance criterion has evidence, no step was dropped.
+        from . import delivery, evidence
+
+        delivery.check(conn, ctx, row, changes.get("progress_note"), accepting=accepted,
+                       extra_text=evidence._extra_text.get())
     gate = None
     if handed_in:  # an agent's done-claim carries evidence (pos.evidence); before the review policy reads it
         from . import evidence
@@ -956,6 +975,10 @@ def claim(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> dict:
     if row["assignee_id"] not in (None, ctx.actor_id):
         raise Forbidden(f"{display_id(task_id)} is assigned to someone else")
     if row["status"] not in ("next", "inbox"):
+        if row["status"] == "waiting":
+            from . import reality
+
+            reality.refuse_if_held(conn, ctx, task_id)  # says what the promotion waits for
         raise Invalid(f"{display_id(task_id)} is {row['status']}, not claimable")
     changes = {"status": "working", "progress": 0}
     if row["assignee_id"] is None:

@@ -619,7 +619,9 @@ def _label(key: str) -> str:
     return {"run_error": "selhané běhy", "tool_error": "chyby nástroje", "deploy_rejected": "odmítnuté deploye",
             "loop": "smyčky", "owner": "nevyřízené zprávy majitele", "cost_cap": "zastavení o strop",
             "guard": "zamítnuté příkazy", "stuck": "zaseknuté úkoly", "ux": "chyby webu",
-            "agent_fail": "selhané běhy agenta"}.get(cat, "výskyty")
+            "agent_fail": "selhané běhy agenta", "claim_ungrounded": "nepodložená tvrzení",
+            "blocker_unfounded": "nepravdivé blokery", "delivery_incomplete": "hotovo bez doručení",
+            "reality_expired": "propadlá ověření", "reality_exposed": "otevřené testovací instance"}.get(cat, "výskyty")
 
 
 def render_section(sec: dict | None) -> str:

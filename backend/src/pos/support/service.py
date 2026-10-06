@@ -579,6 +579,11 @@ def create_draft(conn: sqlite3.Connection, ctx: Ctx, thread_id: str, account: st
     if len(body) < 20:
         raise Refused("the body is too short: what happened, what we fixed, what they should check, next steps")
     row = _row(conn, account, thread_id)
+    from .. import grounding
+
+    # A reply promises only what is live and links only what opens for the customer (pos.grounding).
+    grounding.gate(conn, ctx, "gmail_create_draft", body, task_id=task_id,
+                   project_hint=row["project_slug"] if row is not None else None)
     conn.commit()  # no write transaction is held while Google answers
     msgs = gm.thread_headers(account, thread_id, gmail_factory)
     lang = (row["language"] if row is not None else None) or cls.language(body)
