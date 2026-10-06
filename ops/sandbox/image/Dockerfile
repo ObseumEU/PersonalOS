@@ -5,7 +5,7 @@
 #
 # Built on the server once (and when this file changes):
 #   docker build -t pos-agent-sandbox:latest ops/sandbox/image
-FROM python:3.12-bookworm
+FROM python:3.14-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Europe/Prague
 RUN apt-get update && apt-get install -y --no-install-recommends \

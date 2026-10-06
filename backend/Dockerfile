@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Claude Code CLI for the server's own AI calls (Inbox suggestions); it logs in
 # with CLAUDE_CODE_OAUTH_TOKEN. Without it the app falls back to rules.

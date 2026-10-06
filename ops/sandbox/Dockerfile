@@ -1,6 +1,6 @@
 # The sandbox manager (docs/SANDBOX.md): the control API the PersonalOS api calls, and the egress
 # proxy that is the sandboxes' only way out. It holds the Docker socket; nothing else here does.
-FROM python:3.12-slim
+FROM python:3.14-slim
 RUN pip install --no-cache-dir "docker>=7.1"
 WORKDIR /app
 COPY manager.py ./
