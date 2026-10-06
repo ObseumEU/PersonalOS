@@ -20,13 +20,16 @@ GPG_RECIPIENT="B553517B011A040CA0DBD068D168BA163D99F61A"
 ENV_FILE="/opt/server/personalos/app/.env"
 
 # what is backed up (name=volume or path)
-SQLITE_VOLUMES=(personalos_pos-data personalos_sentinel-state kb_kb_data)
+SQLITE_VOLUMES=(personalos_pos-data personalos_sentinel-state kb_kb_data kniha-test_kniha-test-data)
 SQLITE_SPECS=(personalos=/v/personalos_pos-data/personalos.db
               sentinel=/v/personalos_sentinel-state/sentinel.db
               knowlage=/v/kb_kb_data/kb.sqlite
-              knowlage-gdrive=/v/kb_kb_data/gdrive/*.sqlite)
+              knowlage-gdrive=/v/kb_kb_data/gdrive/*.sqlite
+              kniha-test=/v/kniha-test_kniha-test-data/rodinne-pribehy.sqlite)
 PG_CONTAINERS=(nexus-process-pilot-postgres-1 litellm-postgres langfuse-postgres)
-FILE_VOLUMES=(personalos_pos-data nexus-process-pilot_knowledge-objects nexus-process-pilot_team-files)
+# kniha-test: the Kniha app's test instance (recordings nahravky/, print exports tisk/; T-878)
+FILE_VOLUMES=(personalos_pos-data nexus-process-pilot_knowledge-objects nexus-process-pilot_team-files
+              kniha-test_kniha-test-data)
 CONFIG_FILES=(/opt/server/personalos/app/docker-compose.yml
               /opt/server/personalos/app/deploy/prod/docker-compose.prod.yml
               /opt/server/knowlage/docker-compose.yml /opt/server/knowlage/deploy/prod/docker-compose.prod.yml
@@ -36,9 +39,12 @@ CONFIG_FILES=(/opt/server/personalos/app/docker-compose.yml
               /opt/server/litellm/docker-compose.yaml /opt/server/litellm/config.yaml
               /opt/server/langfuse/docker-compose.yaml
               /opt/server/docker-migration/caddy/Caddyfile /opt/server/docker-migration/caddy/docker-compose.yml
-              /opt/server/observability/docker-compose.yml /opt/server/observability/config.alloy)
+              /opt/server/observability/docker-compose.yml /opt/server/observability/config.alloy
+              /opt/server/kniha-test/compose.override.yml /opt/server/kniha-deployer/compose.yaml
+              /opt/server/kniha-deployer/sync.sh /opt/server/kniha-deployer/entry.sh)
 SECRET_FILES=(/opt/server/personalos/app/.env /opt/server/knowlage/.env /opt/server/nexus-process-pilot/app/.env
-              /opt/server/litellm/.env /opt/server/langfuse/.env /opt/server/observability/secrets)
+              /opt/server/litellm/.env /opt/server/langfuse/.env /opt/server/observability/secrets
+              /opt/server/kniha-test/.env)
 
 mkdir -p "$STORE"/{daily,weekly,archive,metrics,logs}
 exec 9>"$STORE/.lock"
@@ -87,7 +93,7 @@ done
 # 3. Files: the data volumes without the SQLite files (those are in sqlite/), tar + zstd
 for v in "${FILE_VOLUMES[@]}"; do
   "${NICE[@]}" docker run --rm --cpus 1 -v "$v:/v:ro" "$PY_IMAGE" \
-    tar -C /v --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='*.db.*' -cf - . \
+    tar -C /v --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='*.db.*' \n      --exclude='*.sqlite' --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' -cf - . \
     | "${NICE[@]}" zstd -q -T2 -10 > "$WORK/files/$v.tar.zst"
 done
 log "files done"
