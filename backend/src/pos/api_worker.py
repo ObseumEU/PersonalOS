@@ -145,6 +145,14 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     reserve = access.business_only(conn)
     if reserve:
         st["business_only"] = True
+    # The company cap is spent (prod 10-06: 24 runs made only to be refused, T-883 15x, T-884 11x, one every
+    # ~5.5 min): no task is offered until the rolling window has room, so neither the worker nor the pool's
+    # probe starts a run. No run row, no re-dispatch count, no failure signal, no comment asking anyone to
+    # unblock the task; the owner hears it once a day (pos.access.cap_notice).
+    capped = access.company_capped(conn)
+    if capped:
+        st["company_capped"] = capped["metric"]
+        st["company_capped_until"] = capped["until"]
     row = None
     # A task planned for a later day (do_date, Europe/Prague) waits for that day unless it is already
     # being worked on (prod: T-516 with do_date 9 Oct was picked 241 times).
@@ -161,7 +169,14 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
         if review_work.stale(conn, cand):
             conn.commit()
             continue
+        if capped:
+            if (cand["topic"] or "") == "chat":
+                _tell_chat_capped(conn, cand["id"], capped)  # the person waiting hears why (once per message)
+            elif access.cap_notice(conn, capped):  # work is waiting: the owner hears it (once a day)
+                conn.commit()
+            continue
         if reserve and cand["status"] != "working" and business.classify(conn, cand) != "business":
+            st.setdefault("business_only_until", access.business_only_until(conn))
             continue
         row = cand
         break
@@ -539,11 +554,34 @@ def _tell_chat_waiting(conn: sqlite3.Connection, tid: int | None, refused: str =
         pass
 
 
+def _tell_chat_capped(conn: sqlite3.Connection, tid: int, hit: dict) -> None:
+    """A chat task held by the company cap: the person hears why and when, once per message."""
+    from . import availability
+
+    try:
+        if availability.autoreply(conn, tid, why={"reason": "firma vyčerpala strop útraty na 24 hodin",
+                                                  "retry": availability.when_cz(hit["until"]),
+                                                  "until": hit["until"]}):
+            conn.commit()
+    except Exception:  # noqa: BLE001 - the hold stands either way
+        pass
+
+
 @router.post("/runs", status_code=201)
 def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     from . import engines
+    from .access import service as access
 
     tid = tasks.parse_id(body.task_id) if body.task_id else None
+    # The company cap is spent: refused before a run row exists (a race with /next, or a worker without the
+    # pool). Not a refusal of this agent or this task: no owner notice, no lead alert, no failure signal.
+    capped = access.company_capped(conn)
+    if capped:
+        if tid is not None and chat.chat_origin(conn, tid):
+            _tell_chat_capped(conn, tid, capped)
+        if access.cap_notice(conn, capped):
+            conn.commit()
+        raise HTTPException(409, access.company_cap_reason(capped))
     engine, why, model = engines.choose(conn, ctx.actor_id)
     if engine is None:
         _tell_chat_waiting(conn, tid, f"no runtime available: {why}")
@@ -576,8 +614,6 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)
     # Its question is in the prompt: not injected again at the first step (a double answer).
     chat.take_question(conn, ctx.actor_id, tid)
-    from .access import service as access
-
     # The agent's max USD per run (pos.access): the worker hands it to the engine as its cost cap.
     out = {"run_id": res.run_id, "engine": engine, "model": model,
            "max_budget_usd": access.run_cap_usd(conn, ctx.actor_id)}

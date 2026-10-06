@@ -59,6 +59,7 @@ export default {
   "pj.reality.password": "na heslo",
   "pj.reality.internal": "interní",
   "pj.reality_verified": "ověřeno {age}",
+  "pj.reality_verified_test": "ověřeno na testovací instanci {age}",
   "pj.reality_expired": "ověření propadlo",
   "pj.reality_never": "zatím neověřeno",
   "pj.reality_blocked": "Zastavené zprávy",

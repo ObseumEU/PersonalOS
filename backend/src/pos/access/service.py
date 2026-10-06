@@ -505,16 +505,11 @@ def budget_gate(conn: sqlite3.Connection, req) -> None:
     if actor["kind"] == "human":
         return
     now = utcnow()
-    for metric in GATED:
-        cap = limit(conn, None, metric, now)
-        if cap is None:
-            continue
-        # the run being started already has its row: it does not count against runs_day yet
-        u = used(conn, None, metric, now) - (1 if metric == "runs_day" else 0)
-        if u >= cap:
-            _cap_alert(conn, metric, u, cap, now, full=True)
-            raise RunBlocked(f"company cap {METRICS[metric]} reached ({_fmt(metric, u)} of {_fmt(metric, cap)}); "
-                             "only the owner raises it")
+    # the run being started already has its row: it does not count against runs_day yet
+    hit = company_capped(conn, now, pending=True)
+    if hit:
+        cap_notice(conn, hit, now)
+        raise RunBlocked(company_cap_reason(hit))
     fast = hold_fast_loop(conn, req.actor_id, getattr(req, "task_id", None), now)
     if fast:
         raise RunBlocked(f"task {fast['task']} was started {fast['runs']} times in the last hour (a loop): it is "
@@ -528,6 +523,92 @@ def budget_gate(conn: sqlite3.Connection, req) -> None:
             ref = limit_hit(conn, req.actor_id, metric, u, lim, task_id=req.task_id)
             raise RunBlocked(f"budget {METRICS[metric]} reached ({_fmt(metric, u)} of {_fmt(metric, lim)}); "
                              f"the Access manager has it as request #{ref}")
+
+
+# ------------------------------------------------------------------ the company cap holds the queue
+
+def _window_events(conn: sqlite3.Connection, metric: str, start: datetime, end: datetime) -> list[tuple[datetime, float]]:
+    """What counts towards a company day metric in [start, end), oldest first (the same sources as `spend`)."""
+    s, e = _iso(start), _iso(end)
+    if metric.startswith("usd"):
+        rows = conn.execute("SELECT at, cost_usd FROM engine_usage WHERE at >= ? AND at < ? AND cost_usd > 0",
+                            (s, e)).fetchall()
+    elif metric.startswith("tokens"):
+        rows = conn.execute("SELECT at, input_tokens + output_tokens FROM engine_usage WHERE at >= ? AND at < ?",
+                            (s, e)).fetchall()
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'budget_runs'").fetchone():
+            rows += conn.execute("SELECT at, billable_tokens FROM budget_runs WHERE at >= ? AND at < ? "
+                                 "AND agent_id IS NOT NULL", (s, e)).fetchall()
+    else:
+        rows = conn.execute("SELECT started_at, 1 FROM runs WHERE started_at >= ? AND started_at < ? "
+                            "AND status != 'blocked'", (s, e)).fetchall()
+    out = []
+    for at, amount in rows:
+        t = _parse(at)
+        if t is not None and amount:
+            out.append((t, float(amount)))
+    return sorted(out, key=lambda x: x[0])
+
+
+def company_free_at(conn: sqlite3.Connection, metric: str, below: float, now: datetime | None = None) -> datetime:
+    """When the company's use of `metric` drops under `below` with nothing new spent: a month metric at the
+    next month, a rolling 24 h one when enough of the oldest spend has left the window."""
+    now = now or utcnow()
+    if metric.endswith("month"):
+        local = _month_start(now).astimezone(TZ)
+        nxt = local.replace(year=local.year + 1, month=1) if local.month == 12 else local.replace(month=local.month + 1)
+        return nxt.astimezone(timezone.utc)
+    u = used(conn, None, metric, now)
+    gone = 0.0
+    for at, amount in _window_events(conn, metric, now - timedelta(days=1), now + timedelta(seconds=1)):
+        gone += amount
+        if u - gone < below:
+            return max(at + timedelta(days=1), now)
+    return now + timedelta(days=1)
+
+
+def company_capped(conn: sqlite3.Connection, now: datetime | None = None, pending: bool = False) -> dict | None:
+    """The company cap that stops every agent's new run now, or None: {metric, used, cap, until (ISO, when the
+    window has room again)}; the latest `until` when several are full. `pending`: the run being started
+    already has its row (it does not count against runs_day yet)."""
+    if not store.ready(conn):
+        return None
+    now = now or utcnow()
+    hit = None
+    for metric in GATED:
+        cap = limit(conn, None, metric, now)
+        if cap is None:
+            continue
+        u = used(conn, None, metric, now) - (1 if pending and metric == "runs_day" else 0)
+        if u < cap:
+            continue
+        until = company_free_at(conn, metric, cap, now)
+        if hit is None or until > hit["_until"]:
+            hit = {"metric": metric, "used": u, "cap": cap, "until": _iso(until), "_until": until}
+    if hit:
+        hit.pop("_until")
+    return hit
+
+
+def business_only_until(conn: sqlite3.Connection, now: datetime | None = None) -> str | None:
+    """When the business reserve (`business_only`) lets every task start again (ISO), or None."""
+    now = now or utcnow()
+    cap = limit(conn, None, "usd_day", now)
+    ratio = float(settings(conn).get("business_reserve_ratio") or 0)
+    if not cap or ratio <= 0:
+        return None
+    return _iso(company_free_at(conn, "usd_day", ratio * cap, now))
+
+
+def company_cap_reason(hit: dict) -> str:
+    m = hit["metric"]
+    return (f"company cap {METRICS[m]} reached ({_fmt(m, hit['used'])} of {_fmt(m, hit['cap'])}); new runs wait "
+            f"until {hit['until']} (the rolling window has room again then), or until the owner raises it")
+
+
+def cap_notice(conn: sqlite3.Connection, hit: dict, now: datetime | None = None) -> bool:
+    """The owner hears once a day that the company cap holds every agent: until when, and where to raise it."""
+    return _cap_alert(conn, hit["metric"], hit["used"], hit["cap"], now or utcnow(), full=True, until=hit["until"])
 
 
 def limited_until(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None) -> str | None:
@@ -1250,22 +1331,37 @@ def _resumed_since(conn: sqlite3.Connection, agent_id: int, since: datetime) -> 
                         "AND entity_id = ? AND at >= ?", (agent_id, _iso(since))).fetchone() is not None
 
 
-def _cap_alert(conn: sqlite3.Connection, metric: str, u: float, cap: float, now: datetime, full: bool) -> bool:
-    """One ping per metric, period and level (80 % / full)."""
+def _cap_alert(conn: sqlite3.Connection, metric: str, u: float, cap: float, now: datetime, full: bool,
+               until: str | None = None) -> bool:
+    """80 %: one ping to the CEO per metric and period. Full: one notice to the owner a day (whatever the
+    metric), with when the rolling window has room again and where he raises the cap; the queue waits on
+    its own meanwhile (no run is started only to be refused, no task asks him to unblock it)."""
     from .. import settings_store
 
-    period = now.astimezone(TZ).strftime("%Y-%m" if metric.endswith("month") else "%Y-%m-%d")
+    day = now.astimezone(TZ).strftime("%Y-%m-%d")
+    period = day if full or not metric.endswith("month") else now.astimezone(TZ).strftime("%Y-%m")
     key = f"{metric}:{period}:{'full' if full else '80'}"
     sent = settings_store.get(conn, "access.cap_alerts", []) or []
-    if key in sent:
+    if key in sent or (full and any(str(k).endswith(f":{day}:full") for k in sent)):
         return False
     owner = actors.owner_id(conn)
     settings_store.put(conn, Ctx(owner, via="system"), "access.cap_alerts", (sent + [key])[-50:])
     pct = int(100 * u / cap) if cap else 100
-    # Chain of command (docs/REORG.md): the CEO hears it and decides whether to ask the owner.
-    _dm_ceo(conn, f"Strop firmy {METRICS[metric]}: {_fmt(metric, u)} z {_fmt(metric, cap)} ({pct} %)."
-            + (" Agenti teď nepoběží, dokud majitel strop nezvedne; když je to potřeba, požádej ho (ask_owner)."
-               if full else " Hlídám to; strop zvedá jen majitel (ask_owner, když je potřeba víc)."))
+    if full:
+        from ..availability import when_cz
+
+        until = until or _iso(company_free_at(conn, metric, cap, now))
+        am = manager_id(conn)
+        where = (f"[{AM_DISPLAY} \u2192 Strop pro celou firmu](/team/{am})" if am
+                 else "u Správce přístupů (Strop pro celou firmu)")
+        _dm_owner(conn, f"Strop firmy {METRICS[metric]} je vyčerpaný: {_fmt(metric, u)} z {_fmt(metric, cap)}. "
+                  f"Agenti nové běhy nezačínají a fronta čeká sama; místo se uvolní {when_cz(until)} "
+                  f"a pak se rozběhne bez zásahu. Když to má jet dřív, zvedni strop: {where}. "
+                  "Dnes už o tom další zprávu nedostaneš.")
+    else:
+        # Chain of command (docs/REORG.md): the CEO hears it and decides whether to ask the owner.
+        _dm_ceo(conn, f"Strop firmy {METRICS[metric]}: {_fmt(metric, u)} z {_fmt(metric, cap)} ({pct} %)."
+                " Hlídám to; strop zvedá jen majitel (ask_owner, když je potřeba víc).")
     audit.log(conn, Ctx(manager_id(conn) or owner, via="system"), "access_cap_alert", None, None, metric=metric,
               used=u, cap=cap, full=full)
     return True

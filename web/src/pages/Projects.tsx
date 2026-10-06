@@ -323,7 +323,15 @@ function RealityBox({ slug }: { slug: string }) {
             <span className="text-xs text-ink-2">
               {ACCESS_LABEL[c.access]()}
               {" · "}
-              {c.expired ? t("pj.reality_expired") : c.verified_at ? t("pj.reality_verified", { age: shortAge(c.verified_at) }) : t("pj.reality_never")}
+              {c.expired
+                ? t("pj.reality_expired")
+                : c.status === "test_only" && c.verified && c.verified_at
+                  ? t("pj.reality_verified_test", { age: shortAge(c.verified_at) })
+                  : c.status === "test_only" && c.verified_at
+                    ? t("pj.reality_expired")
+                    : c.verified_at
+                      ? t("pj.reality_verified", { age: shortAge(c.verified_at) })
+                      : t("pj.reality_never")}
             </span>
             {c.url && (
               <a href={c.url} target="_blank" rel="noreferrer" className="basis-full truncate text-xs text-ink-2 hover:text-accent">

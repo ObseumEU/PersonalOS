@@ -18,6 +18,13 @@ Per project, each capability or user-journey step: `status` (live, unverified, t
   reads, and is written down as, `unverified`. A failing probe reverts it at once.
 - `probe_mode=protected` (a test instance): an outsider must NOT get in; if it opens without a password the
   check fails and `reality_exposed` is recorded.
+- `probe_mode=test` (a capability deployed on a password-protected test instance): the platform opens
+  `probe_url` with a registered credential (`probe_credential`, e.g. `kniha-test-basic-auth`; put into that
+  one request by `pos.credentials.platform_header`, the use logged as the platform's, the value never) and
+  anonymously. A passing authenticated fetch (2xx, `probe_expect`), and, with `deploy_ref`, a deployed
+  version that contains that commit (the deployer's status file, `POS_DEPLOY_STATUS`), make it **test_only
+  and verified** (expiring like live). It is never live; an instance that opens without a password is
+  flagged. Only a person or an agent holding the credential may name it.
 - The job `reality_tick` (every 30 min) runs the probes, the expiry and the release of held tasks.
 - Agents read it with `reality_list`; the owner sees "Co je živé" on the project page (with the content the
   gate stopped, and his override button).

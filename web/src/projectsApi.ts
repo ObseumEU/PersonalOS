@@ -122,6 +122,8 @@ export type Capability = {
   last_check_ok: boolean | null;
   last_check_detail: string | null;
   expired: boolean;
+  /** live (fresh), or test_only with a passing probe of the password-protected test instance */
+  verified: boolean;
 };
 export type BlockedCheck = { id: number; at: string; agent: string | null; surface: string; reasons: string[]; excerpt: string; overridden: boolean };
 export type Reality = { capabilities: Capability[]; expiry_hours: number; blocked: BlockedCheck[]; can_override: boolean };

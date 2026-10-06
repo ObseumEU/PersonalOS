@@ -12,7 +12,15 @@ Each **capability** (or user-journey step) of a project has:
   An agent may declare test_only, mock, missing or unverified, never live.
 - `url`, `access` (public | password | internal), the probe (`probe_mode` live: a passing probe makes
   it live; protected: it must NOT be reachable anonymously, a test instance open to the world is
-  flagged), `aliases` (the words that name it in a text: the claim gate and the sequencing use them).
+  flagged; test: it runs on a password-protected test instance, see below), `aliases` (the words that
+  name it in a text: the claim gate and the sequencing use them).
+- **On a test instance** (`probe_mode` test): the platform fetches `probe_url` with a registered
+  credential (`probe_credential`, e.g. kniha-test-basic-auth; the value is put into that one request
+  by pos.credentials.platform_header and never logged) and anonymously. The authenticated fetch must
+  pass (2xx, `probe_expect` on the page), and when `deploy_ref` is set the version deployed there (the
+  deployer's status file, POS_DEPLOY_STATUS) must contain that commit. Then the capability is
+  **test_only and verified** (`verified` in the view; it expires like live). It never becomes live: that
+  still takes the anonymous probe of a public URL. An anonymous fetch that gets in is flagged as exposed.
 - `verified_at` + `evidence`: a live capability whose last passing verification is older than
   EXPIRY_HOURS (72) reads as **unverified** (`effective`), and the probe job writes that down; a failing
   probe reverts it at once.
@@ -48,12 +56,17 @@ from .core import Ctx, Forbidden, NotFound, now_iso
 STATUSES = ("live", "unverified", "test_only", "mock", "missing")
 AGENT_STATUSES = ("unverified", "test_only", "mock", "missing")  # live only through a verification
 ACCESS = ("public", "password", "internal")
-PROBE_MODES = ("live", "protected")
+PROBE_MODES = ("live", "protected", "test")
 EXPIRY_HOURS = float(os.environ.get("POS_REALITY_EXPIRY_HOURS") or 72)
 NETWORK_ENV = "POS_GROUNDING_NETWORK"  # 0: no DNS or HTTP from the registry and the gates (tests)
 FETCH_TIMEOUT_S = 6.0
 BODY_LIMIT = 300_000
 UA = "PersonalOS reality probe (anonymous outsider)"
+# Where the deployers write what runs on a test instance (pos.reality.deployed_contains): the Kniha deployer's
+# status.txt in the Kniha agents' checkout (mounted read-only into the API as /agent-work).
+DEPLOY_STATUS_ENV = "POS_DEPLOY_STATUS"
+DEPLOY_STATUS_DEFAULT = "/agent-work/kniha/.deploy/status.txt"
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 STATUS_CS = {"live": "živé (ověřeno)", "unverified": "neověřeno", "test_only": "jen testovací",
              "mock": "atrapa (mock)", "missing": "chybí"}
@@ -121,9 +134,16 @@ _SCHEMA = [
 ]
 
 
+_COLUMNS = {"probe_credential": "TEXT", "deploy_ref": "TEXT"}  # added after the first release
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     for sql in _SCHEMA:
         conn.execute(sql)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(reality_capabilities)")}
+    for col, typ in _COLUMNS.items():
+        if col not in have:
+            conn.execute(f"ALTER TABLE reality_capabilities ADD COLUMN {col} {typ}")
 
 
 def network_on() -> bool:
@@ -189,11 +209,11 @@ def _default_resolve(host: str) -> list[str]:
     return sorted({i[4][0] for i in socket.getaddrinfo(host, None)})
 
 
-def _default_fetch(url: str, timeout: float) -> Fetched:
+def _default_fetch(url: str, timeout: float, headers: dict | None = None) -> Fetched:
     import httpx
 
     with httpx.Client(timeout=timeout, follow_redirects=True, max_redirects=5,
-                      headers={"User-Agent": UA, "Accept": "text/html,*/*"}) as c:
+                      headers={"User-Agent": UA, "Accept": "text/html,*/*", **(headers or {})}) as c:
         with c.stream("GET", url) as r:
             chunks, size = [], 0
             for chunk in r.iter_bytes():
@@ -221,9 +241,11 @@ def resolve(host: str) -> list[str]:
         return []
 
 
-def probe(url: str, expect_text: str | None = None, timeout: float = FETCH_TIMEOUT_S) -> Probe:
+def probe(url: str, expect_text: str | None = None, timeout: float = FETCH_TIMEOUT_S,
+          headers: dict | None = None) -> Probe:
     """Fetch `url` the way an outsider would: no cookie, no password, from the public internet. ok only
-    for a 2xx page that asks for no password and no login (and shows `expect_text` when given)."""
+    for a 2xx page that asks for no password and no login (and shows `expect_text` when given).
+    `headers`: the test-instance probe's credential (pos.credentials.platform_header); never logged."""
     parts = urlsplit((url or "").strip())
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return Probe(url, "bad", "není to webová adresa (http/https)")
@@ -239,7 +261,7 @@ def probe(url: str, expect_text: str | None = None, timeout: float = FETCH_TIMEO
     except ValueError:
         pass
     try:
-        f = FETCH(url, timeout)
+        f = FETCH(url, timeout, headers=headers) if headers else FETCH(url, timeout)
     except Exception as e:  # noqa: BLE001 - any network failure: the outsider cannot open it
         return Probe(url, "unreachable", f"{host} neodpovídá ({type(e).__name__})", addresses=addrs)
     p = Probe(url, "ok", f"HTTP {f.status}", status=f.status, final_url=f.final_url, addresses=addrs)
@@ -279,11 +301,22 @@ def effective(row, now: datetime | None = None) -> str:
     return st
 
 
+def verified(row, now: datetime | None = None) -> bool:
+    """Verified now: live (fresh), or test_only with a passing test-instance probe in EXPIRY_HOURS."""
+    st = effective(row, now)
+    if st == "live":
+        return True
+    return st == "test_only" and bool(row["verified_at"]) and _age_hours(row["verified_at"], now) <= EXPIRY_HOURS
+
+
 def view(row, now: datetime | None = None) -> dict:
     st = effective(row, now)
+    keys = row.keys()
     out = {k: row[k] for k in ("id", "key", "name", "kind", "position", "url", "access", "probe_mode", "probe_url",
                                "probe_expect", "notes", "verified_at", "verified_by", "verify_method", "evidence",
                                "last_check_at", "last_check_detail")}
+    out.update({k: (row[k] if k in keys else None) for k in _COLUMNS})
+    out["verified"] = verified(row, now)
     out.update({"project_id": row["project_id"], "status": st, "declared": row["status"],
                 "status_cs": STATUS_CS[st], "access_cs": ACCESS_CS.get(row["access"], row["access"]),
                 "aliases": json.loads(row["aliases"] or "[]"), "live": st == "live",
@@ -352,7 +385,7 @@ def upsert(conn: sqlite3.Connection, ctx: Ctx, project, key: str, fields: dict) 
     key = _key(key)
     fields = {k: v for k, v in (fields or {}).items() if v is not None}
     unknown = set(fields) - {"name", "kind", "position", "status", "url", "access", "aliases", "probe_mode",
-                             "probe_url", "probe_expect", "notes"}
+                             "probe_url", "probe_expect", "notes", *_COLUMNS}
     if unknown:
         raise _invalid(f"unknown fields {sorted(unknown)}")
     if fields.get("status") == "live":
@@ -367,6 +400,12 @@ def upsert(conn: sqlite3.Connection, ctx: Ctx, project, key: str, fields: dict) 
     for u in ("url", "probe_url"):
         if fields.get(u) and urlsplit(str(fields[u])).scheme not in ("http", "https"):
             raise _invalid(f"{u} is an http(s) address")
+    if fields.get("deploy_ref"):
+        fields["deploy_ref"] = str(fields["deploy_ref"]).strip().lower()
+        if not SHA_RE.match(fields["deploy_ref"]):
+            raise _invalid("deploy_ref is a commit sha (7-40 hex characters) the deployed version must contain")
+    if fields.get("probe_credential"):
+        fields["probe_credential"] = _probe_credential(conn, ctx, str(fields["probe_credential"]))
     if "aliases" in fields:
         al = fields["aliases"]
         al = [a for a in (al.split(",") if isinstance(al, str) else list(al))]
@@ -386,8 +425,12 @@ def upsert(conn: sqlite3.Connection, ctx: Ctx, project, key: str, fields: dict) 
         changes = dict(fields)
         reset = prev["status"] == "live" and any(
             k in changes and changes[k] != prev[k] for k in ("url", "access", "probe_url", "probe_expect"))
+        moved = any(k in changes and changes[k] != prev[k]
+                    for k in ("url", "access", "probe_url", "probe_expect", "probe_mode", *_COLUMNS))
         if reset:
             changes.update({"status": "unverified", "verified_at": None, "verified_by": None, "verify_method": None})
+        elif moved and prev["verify_method"] == TEST_METHOD:  # what the test probe verified is not this any more
+            changes.update({"verified_at": None, "verified_by": None, "verify_method": None})
         changes.update({"updated_at": now, "archived_at": None})
         sets = ", ".join(f"{k} = ?" for k in changes)
         conn.execute(f"UPDATE reality_capabilities SET {sets} WHERE id = ?", [*changes.values(), prev["id"]])
@@ -396,6 +439,23 @@ def upsert(conn: sqlite3.Connection, ctx: Ctx, project, key: str, fields: dict) 
     out = view(get(conn, p["id"], key))
     release_holds(conn, p["id"])
     return out
+
+
+def _probe_credential(conn: sqlite3.Connection, ctx: Ctx, name: str) -> str:
+    """A credential the test-instance probe may use: registered, and the one who names it a person or an agent
+    holding it (nobody points the platform's probe at a credential they could not use themselves)."""
+    from .credentials import service as creds
+
+    name = name.strip().lower()
+    try:
+        c = creds.get(conn, name)
+    except NotFound:
+        raise _invalid(f"probe_credential: no credential {name!r} in the registry (credentials_list)") from None
+    if c["archived_at"]:
+        raise _invalid(f"probe_credential: {name} is archived")
+    if not _is_person(conn, ctx.actor_id) and not creds.grants(conn, name=name, agent_id=ctx.actor_id):
+        raise Forbidden(f"probe_credential: you do not hold cred:{name}")
+    return name
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, project, key: str) -> None:
@@ -488,6 +548,109 @@ def _record_check(conn: sqlite3.Connection, row, pr: Probe) -> None:
                  "WHERE id = ?", (now_iso(), int(pr.ok), pr.why[:500], row["id"]))
 
 
+TEST_METHOD = "probe_test"
+
+
+def _status_files() -> list[str]:
+    raw = os.environ.get(DEPLOY_STATUS_ENV)
+    return [p.strip() for p in (DEPLOY_STATUS_DEFAULT if raw is None else raw).split(",") if p.strip()]
+
+
+def _deployed_sha(host: str) -> tuple[str | None, str | None]:
+    """The commit running on `host` per a deployer's status file (a section naming https://<host>, its
+    "live:" line), and that checkout's folder."""
+    from pathlib import Path
+
+    for f in _status_files():
+        try:
+            text = Path(f).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        section = False
+        for line in text.splitlines():
+            if line and not line[0].isspace():
+                section = f"//{host}" in line.lower()
+            elif section and line.strip().startswith("live:"):
+                sha = line.split(":", 1)[1].strip().split()[0] if line.split(":", 1)[1].strip() else ""
+                if SHA_RE.match(sha.lower()):
+                    return sha.lower(), str(Path(f).resolve().parent.parent)
+    return None, None
+
+
+def _default_deployed_contains(host: str, ref: str) -> tuple[bool, str]:
+    """Does the version deployed on `host` contain commit `ref`? (ok, why in Czech)."""
+    import subprocess
+
+    sha, repo = _deployed_sha(host)
+    if not sha:
+        return False, f"nevím, která verze běží na {host} (stav nasazení není k dispozici)"
+    try:
+        r = subprocess.run(["git", "-c", "safe.directory=*", "-C", repo, "merge-base", "--is-ancestor", ref, sha],
+                           capture_output=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "verzi nasazení nejde ověřit (git)"
+    if r.returncode == 0:
+        return True, f"nasazená verze {sha[:7]} obsahuje {ref[:7]}"
+    if r.returncode == 1:
+        return False, f"na {host} běží {sha[:7]}, ta {ref[:7]} ještě neobsahuje (nenasazeno)"
+    return False, f"commit {ref[:7]} nebo {sha[:7]} v repozitáři není"
+
+
+DEPLOYED_CONTAINS = _default_deployed_contains  # tests replace it
+
+
+def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) -> dict:
+    """A capability on a password-protected test instance: the authenticated probe (and the deployed version)
+    make it test_only and verified; an anonymous fetch that gets in flags the instance as exposed."""
+    from .credentials import service as creds
+
+    host = _host(url)
+    anon = probe(url)
+    if not anon.verified:
+        return {**out, **anon.as_dict()}
+    exposed = anon.ok
+    if exposed and not _recent(conn, "reality_exposed", row["project_id"], row["key"], hours=24):
+        audit.log(conn, ctx, "reality_exposed", "project", row["project_id"], key=row["key"], url=url)
+    cred = row["probe_credential"]
+    ok, why, auth = False, "", None
+    if not cred:
+        why = "chybí probe_credential: testovací instanci nejde ověřit bez hesla"
+    else:
+        try:
+            name, value = creds.platform_header(conn, ctx, cred, host, f"reality probe {row['key']}")
+            auth = probe(url, row["probe_expect"], headers={name: value})
+            del value
+        except creds.CredentialError as e:
+            why = f"heslo {cred} pro ověření nejde použít ({str(e)[:200]})"
+    if auth is not None:
+        if not auth.verified:
+            return {**out, **auth.as_dict()}
+        ok = auth.ok
+        why = f"s heslem: HTTP {auth.status}" if ok else f"s heslem: {auth.why}"
+    if ok and row["deploy_ref"]:
+        ok, dwhy = DEPLOYED_CONTAINS(host, row["deploy_ref"])
+        why = f"{why}; {dwhy}"
+    if exposed:
+        why = f"{why}; POZOR: {url} je dostupné i bez hesla"
+    now = now_iso()
+    if ok:
+        conn.execute("""UPDATE reality_capabilities SET status = CASE WHEN status = 'live' THEN status ELSE 'test_only'
+                        END, verified_at = ?, verified_by = 'probe', verify_method = ?, evidence = ?, updated_at = ?,
+                        last_check_at = ?, last_check_ok = 1, last_check_detail = ? WHERE id = ?""",
+                     (now, TEST_METHOD, f"testovací instance {url} ({why}, {now[:16]})"[:2000], now, now, why[:500],
+                      row["id"]))
+        if not (row["status"] == "test_only" and row["verify_method"] == TEST_METHOD and row["verified_at"]):
+            audit.log(conn, ctx, "reality_test_verified", "project", row["project_id"], key=row["key"], url=url)
+    else:
+        conn.execute("UPDATE reality_capabilities SET last_check_at = ?, last_check_ok = 0, last_check_detail = ? "
+                     "WHERE id = ?", (now, why[:500], row["id"]))
+        if row["verify_method"] == TEST_METHOD and row["verified_at"]:
+            conn.execute("UPDATE reality_capabilities SET verified_at = NULL, updated_at = ? WHERE id = ?",
+                         (now, row["id"]))
+            audit.log(conn, ctx, "reality_test_failed", "project", row["project_id"], key=row["key"], why=why[:300])
+    return {**out, "kind": "ok" if ok else "failed", "why": why, "verified": ok, "exposed": exposed}
+
+
 def run_probe(conn: sqlite3.Connection, row, ctx: Ctx | None = None) -> dict:
     """One capability's probe and what follows from it."""
     url = row["probe_url"] or row["url"]
@@ -495,6 +658,8 @@ def run_probe(conn: sqlite3.Connection, row, ctx: Ctx | None = None) -> dict:
     out = {"key": row["key"], "mode": mode, "url": url}
     if not url or mode not in PROBE_MODES:
         return {**out, "skipped": True}
+    if mode == "test":
+        return _probe_test(conn, row, url, ctx or _system(conn), out)
     pr = probe(url, row["probe_expect"] if mode == "live" else None)
     out.update(pr.as_dict())
     if not pr.verified:
@@ -726,6 +891,17 @@ def release_holds(conn: sqlite3.Connection, project_id: int | None = None) -> li
 
 # ------------------------------------------------------------------ the Kniha seed
 
+KNIHA_TEST = "https://kniha-test.obseum.cz"
+KNIHA_TEST_CREDENTIAL = "kniha-test-basic-auth"
+# The test-instance probe (probe_mode test): which credential, the page it opens, the commit it must run.
+KNIHA_TEST_PROBES = {
+    "order": {"probe_url": f"{KNIHA_TEST}/objednat", "deploy_ref": "a8f4f15"},  # T-883 the order form
+    "photos": {"probe_url": f"{KNIHA_TEST}/objednat", "deploy_ref": "cfd3f24"},  # T-884 photos in the portal
+    "payment": {"probe_url": f"{KNIHA_TEST}/objednat", "deploy_ref": "2015d8d"},  # T-888 transfer + QR Platba
+}
+# Seeded as missing on 2026-10-06 before they were on the test instance: still in that state, they are moved.
+KNIHA_UPGRADE_FROM = {"order": "missing", "photos": "missing", "payment": "missing"}
+
 KNIHA = [
     # key, name, status, url, access, probe_mode, probe_expect, aliases, notes
     ("landing", "Úvodní stránka Rodinné příběhy", "unverified", "https://rodinne-pribehy.obseum.cz", "public", "live",
@@ -742,12 +918,18 @@ KNIHA = [
      "Ve vývoji: rozhovor s vypravěčem běží jen jako atrapa (mock)."),
     ("chapters", "Kapitoly knihy z vyprávění", "mock", None, "internal", None, None,
      ["kapitol", "generování knihy", "složení knihy", "text knihy"], "Skládání kapitol je zatím atrapa (mock)."),
-    ("order", "Objednávkový formulář", "missing", None, "public", None, None,
+    ("order", "Objednávkový formulář", "test_only", f"{KNIHA_TEST}/objednat", "password", "test", "Objednat knihu",
      ["objedn", "koupit", "kupte", "nákup"],
-     "Veřejně neexistuje (jen na testovací instanci kniha-test /objednat)."),
-    ("photos", "Nahrávání fotek", "missing", None, "public", None, None, ["fotk", "fotograf", "foto"], ""),
-    ("payment", "Platba (platební brána)", "missing", None, "public", None, None,
-     ["platb", "zaplat", "plaťte", "platební", "kartou"], "Platební brána není vybraná ani zapojená."),
+     "Jen na testovací instanci (za heslem): veřejně zatím ne, dokud platba a e-maily nejsou ostré."),
+    ("photos", "Nahrávání fotek", "test_only", KNIHA_TEST, "password", "test", "Objednat knihu",
+     ["fotk", "fotograf", "foto"],
+     "Jen na testovací instanci: fotky v rodinném portálu (/o/<token>/fotky, až 80, v náhledu i v PDF). Probe "
+     "ověří, že instance běží a nasazená verze je obsahuje (T-884)."),
+    ("payment", "Platba převodem s QR Platbou", "test_only", KNIHA_TEST, "password", "test", "QR kód",
+     ["platb", "zaplat", "plaťte", "platební", "kartou", "qr platb", "qr kód"],
+     "Jen na testovací instanci: převod s QR Platbou (SPD) a ruční potvrzení v adminu (T-888); online "
+     "platební brána není. Ověřeno, až ji formulář nabízí (QR kód): bez čísla účtu a ceny "
+     "(PLATBA_UCET, PLATBA_CASTKA_KC) je vypnutá a objednávka nezávazná."),
     ("email", "E-maily zákazníkům (potvrzení, kniha@obseum.cz)", "missing", None, "public", None, None,
      ["kniha@obseum.cz", "potvrzovací e-mail", "potvrzení e-mailem"], "Schránka kniha@obseum.cz zatím neexistuje."),
 ]
@@ -770,20 +952,34 @@ def seed_kniha(conn: sqlite3.Connection) -> int:
     p = _kniha_project(conn)
     if p is None:
         return 0
-    n = 0
+    n, moved = 0, []
     now = now_iso()
     for pos, (key, name, status, url, access, mode, expect, aliases, notes) in enumerate(KNIHA):
-        if conn.execute("SELECT 1 FROM reality_capabilities WHERE project_id = ? AND key = ?", (p["id"], key)).fetchone():
+        extra = KNIHA_TEST_PROBES.get(key, {})
+        cred = KNIHA_TEST_CREDENTIAL if mode == "test" else None
+        probe_url = extra.get("probe_url") or (url if mode else None)
+        prev = conn.execute("SELECT * FROM reality_capabilities WHERE project_id = ? AND key = ?",
+                            (p["id"], key)).fetchone()
+        if prev is not None:
+            # still exactly as an older seed left it (nobody changed it since): brought up to date
+            if (KNIHA_UPGRADE_FROM.get(key) == prev["status"] and not prev["url"] and not prev["probe_mode"]
+                    and prev["status"] != status):
+                conn.execute("""UPDATE reality_capabilities SET name = ?, status = ?, url = ?, access = ?, aliases = ?,
+                                probe_mode = ?, probe_url = ?, probe_expect = ?, notes = ?, probe_credential = ?,
+                                deploy_ref = ?, updated_at = ? WHERE id = ?""",
+                             (name, status, url, access, json.dumps(aliases, ensure_ascii=False), mode, probe_url,
+                              expect, notes, cred, extra.get("deploy_ref"), now, prev["id"]))
+                moved.append(key)
             continue
         conn.execute("""INSERT INTO reality_capabilities (project_id, key, name, kind, position, status, url, access,
-                        aliases, probe_mode, probe_url, probe_expect, notes, created_at, updated_at)
-                        VALUES (?, ?, ?, 'journey_step', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        aliases, probe_mode, probe_url, probe_expect, notes, probe_credential, deploy_ref, created_at,
+                        updated_at) VALUES (?, ?, ?, 'journey_step', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                      (p["id"], key, name, pos, status, url, access, json.dumps(aliases, ensure_ascii=False), mode,
-                      url if mode else None, expect, notes, now, now))
+                      probe_url, expect, notes, cred, extra.get("deploy_ref"), now, now))
         n += 1
-    if n:
-        audit.log(conn, _system(conn), "reality_seed", "project", p["id"], added=n)
-    return n
+    if n or moved:
+        audit.log(conn, _system(conn), "reality_seed", "project", p["id"], added=n, **({"moved": moved} if moved else {}))
+    return n + len(moved)
 
 
 # ------------------------------------------------------------------ MCP
@@ -818,8 +1014,11 @@ def register_mcp(mcp, session) -> None:
         "reviewer does). key: short id. fields: name (Czech: what the user can do), kind (capability | "
         "journey_step), position, status (unverified | test_only | mock | missing), url, access (public | "
         "password | internal), aliases (words that name it in a text), probe_mode (live: a passing anonymous "
-        "probe of probe_url makes it live; protected: it must not open without a password), probe_url, "
-        "probe_expect (text the page must show), notes."))
+        "probe of probe_url makes it live; protected: it must not open without a password; test: it runs on a "
+        "password-protected test instance, the platform opens probe_url with probe_credential and marks it "
+        "test_only + verified), probe_url, probe_expect (text the page must show), probe_credential (a "
+        "credential you hold, e.g. kniha-test-basic-auth), deploy_ref (a commit the deployed test version must "
+        "contain), notes."))
     def reality_upsert(ctx: Context, project: str, key: str, fields: dict[str, Any]) -> dict:
         with session(ctx, "reality_upsert", project=project, key=key) as (conn, c):
             return upsert(conn, c, project, key, fields)

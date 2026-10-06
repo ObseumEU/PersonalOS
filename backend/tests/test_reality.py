@@ -51,12 +51,15 @@ class Web:
         self.dns = {}
         self.pages = {}
         self.calls = []
+        self.auth = None  # fetches that carry a credential header: auth(url, headers) -> Fetched
 
     def resolve(self, host):
         return self.dns.get(host, [])
 
-    def fetch(self, url, timeout):
+    def fetch(self, url, timeout, headers=None):
         self.calls.append(url)
+        if headers and self.auth is not None:
+            return self.auth(url, headers)
         for prefix, f in self.pages.items():
             if url.startswith(prefix):
                 if isinstance(f, Exception):
@@ -91,7 +94,11 @@ def test_seed_is_idempotent_and_never_live(env):
     assert caps["landing"]["status"] == "unverified" and caps["reservation"]["url"] == "https://rodinne-pribehy.obseum.cz"
     assert caps["test_app"]["status"] == "test_only" and caps["test_app"]["access"] == "password"
     assert {caps[k]["status"] for k in ("narrator", "chapters")} == {"mock"}
-    assert {caps[k]["status"] for k in ("order", "photos", "payment", "email")} == {"missing"}
+    assert {caps[k]["status"] for k in ("order", "photos", "payment")} == {"test_only"}
+    assert caps["email"]["status"] == "missing"
+    assert {caps[k]["probe_credential"] for k in ("order", "photos", "payment")} == {"kniha-test-basic-auth"}
+    assert caps["order"]["url"] == "https://kniha-test.obseum.cz/objednat" and caps["order"]["access"] == "password"
+    assert not any(c["verified"] for c in caps.values())  # nothing is verified by the seed
 
 
 def test_an_agent_cannot_declare_live(env):
@@ -160,6 +167,160 @@ def test_the_probe_job_makes_live_reverts_and_flags_an_open_test_instance(env, w
     assert cap(env, "landing")["status"] == "unverified"
 
 
+# ------------------------------------------------------------------ the password-protected test instance
+
+SECRET = "dGVzdGVyOnMzY3IzdA=="  # what 1Password would return (base64 user:password): never stored or logged
+
+
+@pytest.fixture
+def test_instance(env, web, monkeypatch):
+    """kniha-test behind basic auth, the kniha-test-basic-auth credential registered, and what is deployed."""
+    from pos.credentials import onepassword, store
+
+    c = env["conn"]
+    store.ensure_schema(c)
+    c.execute("""INSERT INTO credentials (name, op_ref, header, allowed_hosts, allowed_tools, created_at, updated_at)
+                 VALUES ('kniha-test-basic-auth', 'op://pos/kniha-test/basic', 'Authorization: Basic {value}',
+                         '["kniha-test.obseum.cz"]', '["browser", "http"]', '2026-10-06', '2026-10-06')""")
+    c.commit()
+    monkeypatch.setattr(onepassword, "configured", lambda: (True, ""))
+    monkeypatch.setattr(onepassword, "resolve", lambda ref: SECRET)
+    web.dns["kniha-test.obseum.cz"] = ["93.184.216.34"]
+    web.pages["https://kniha-test.obseum.cz"] = page(401, body="", headers={"www-authenticate": "Basic"})
+    seen = []
+
+    def auth(url, headers):
+        seen.append(headers)
+        if headers.get("Authorization") != f"Basic {SECRET}":
+            return page(401, body="", headers={"www-authenticate": "Basic"})
+        return page(200, body="<h1>Objednat knihu Rodinné příběhy</h1> Dokud nespustíme online platbu, je "
+                              "objednávka nezávazná.")
+
+    web.auth = auth
+    deployed = {"a8f4f15", "cfd3f24", "2015d8d"}
+    monkeypatch.setattr(reality, "DEPLOYED_CONTAINS",
+                        lambda host, ref: (ref in deployed, "nasazená verze obsahuje" if ref in deployed else "nenasazeno"))
+    return {"seen": seen, "deployed": deployed}
+
+
+def test_the_test_instance_probe_makes_deployed_capabilities_test_only_and_verified(env, test_instance):
+    c = env["conn"]
+    out = reality.tick(c)
+    assert out["live"] == 0  # nothing public answers here; a test-instance capability is never live
+    order, photos, payment = cap(env, "order"), cap(env, "photos"), cap(env, "payment")
+    assert order["status"] == "test_only" and order["verified"] and order["verify_method"] == "probe_test"
+    assert photos["status"] == "test_only" and photos["verified"] and photos["last_check_ok"] is True
+    # the QR payment is deployed, but the form does not offer it (no account and price on the instance)
+    assert payment["status"] == "test_only" and not payment["verified"] and payment["last_check_ok"] is False
+    assert "QR kód" in payment["last_check_detail"]
+    assert not cap(env, "landing")["live"] and cap(env, "test_app")["last_check_ok"] is True  # still protected
+    assert test_instance["seen"] and all(h == {"Authorization": f"Basic {SECRET}"} for h in test_instance["seen"])
+    # every use is logged as the platform's (no agent), and the value is nowhere in the database
+    uses = c.execute("SELECT agent_id, tool, host, ok FROM credential_uses").fetchall()
+    assert uses and {tuple(u) for u in uses} == {(None, "probe", "kniha-test.obseum.cz", 1)}
+    dump = "\n".join(c.iterdump())
+    assert SECRET not in dump and "s3cr3t" not in dump
+    # the claim gate still treats it as not live: no "order now" to customers
+    with pytest.raises(tasks.Invalid, match="Objednávkový formulář"):
+        grounding.gate(c, env["Growth"], "outbound:email.send", "Knihu si objednejte ještě dnes!")
+
+
+def test_a_failing_test_probe_or_an_undeployed_commit_is_not_verified(env, web, test_instance):
+    c = env["conn"]
+    reality.tick(c)
+    assert cap(env, "photos")["verified"]
+    test_instance["deployed"].discard("cfd3f24")  # a rollback to a version without the photos
+    reality.tick(c)
+    photos = cap(env, "photos")
+    assert not photos["verified"] and photos["status"] == "test_only" and "nenasazeno" in photos["last_check_detail"]
+    assert c.execute("SELECT 1 FROM audit_log WHERE action = 'reality_test_failed'").fetchone()
+    web.auth = lambda url, headers: page(502, body="")
+    reality.tick(c)
+    assert not cap(env, "order")["verified"] and "502" in cap(env, "order")["last_check_detail"]
+    # an instance that lets anyone in is flagged (the authenticated probe still verifies it)
+    web.auth = None
+    web.pages["https://kniha-test.obseum.cz"] = page(200, body="<h1>Objednat knihu</h1>")
+    reality.tick(c)
+    assert cap(env, "order")["verified"] and "bez hesla" in cap(env, "order")["last_check_detail"]
+    assert c.execute("SELECT 1 FROM audit_log WHERE action = 'reality_exposed'").fetchone()
+
+
+def test_no_usable_credential_means_no_verification(env, web, test_instance, monkeypatch):
+    from pos.credentials import onepassword
+
+    c = env["conn"]
+    monkeypatch.setattr(onepassword, "configured", lambda: (False, "no service account token"))
+    reality.tick(c)
+    order = cap(env, "order")
+    assert not order["verified"] and "kniha-test-basic-auth" in order["last_check_detail"]
+    assert not test_instance["seen"]
+    assert c.execute("SELECT ok FROM credential_uses").fetchone()[0] == 0
+
+
+def test_only_a_holder_points_the_probe_at_a_credential(env, test_instance):
+    c = env["conn"]
+    with pytest.raises(Forbidden, match="cred:kniha-test-basic-auth"):
+        reality.upsert(c, env["Dev"], "kniha", "chapters", {"probe_mode": "test",
+                                                             "probe_credential": "kniha-test-basic-auth"})
+    with pytest.raises(tasks.Invalid, match="no credential"):
+        reality.upsert(c, env["owner"], "kniha", "chapters", {"probe_credential": "nope"})
+    with pytest.raises(tasks.Invalid, match="deploy_ref"):
+        reality.upsert(c, env["owner"], "kniha", "chapters", {"deploy_ref": "main"})
+    out = reality.upsert(c, env["owner"], "kniha", "chapters", {
+        "probe_mode": "test", "probe_url": "https://kniha-test.obseum.cz/objednat", "deploy_ref": "a8f4f15",
+        "probe_credential": "kniha-test-basic-auth", "probe_expect": "Objednat"})
+    assert out["probe_credential"] == "kniha-test-basic-auth"
+    reality.tick(c)
+    assert cap(env, "chapters")["verified"] and cap(env, "chapters")["status"] == "test_only"
+    # what was verified changes: the verification goes until the probe passes again
+    reality.upsert(c, env["owner"], "kniha", "chapters", {"probe_url": "https://kniha-test.obseum.cz/jinde"})
+    assert not cap(env, "chapters")["verified"]
+
+
+def test_the_seed_moves_the_old_missing_rows_to_the_test_instance(env):
+    c = env["conn"]
+    pid = env["project"]["id"]
+    c.execute("""UPDATE reality_capabilities SET status = 'missing', url = NULL, access = 'public', probe_mode = NULL,
+                 probe_url = NULL, probe_expect = NULL, probe_credential = NULL, deploy_ref = NULL
+                 WHERE project_id = ? AND key IN ('order', 'photos', 'payment')""", (pid,))
+    reality.upsert(c, env["Dev"], "kniha", "payment", {"status": "mock"})  # someone changed this one since
+    assert reality.seed_kniha(c) == 2
+    assert cap(env, "order")["probe_mode"] == "test" and cap(env, "order")["deploy_ref"] == "a8f4f15"
+    assert cap(env, "photos")["status"] == "test_only" and cap(env, "payment")["status"] == "mock"
+    assert reality.seed_kniha(c) == 0
+
+
+def test_the_deployed_version_is_read_from_the_deployers_status_file(tmp_path, monkeypatch):
+    import subprocess
+
+    repo = tmp_path / "kniha"
+    repo.mkdir()
+
+    def git(*a):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(repo), *a],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "order form")
+    first = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "photos")
+    second = git("rev-parse", "HEAD")
+    git("checkout", "-q", "-b", "later")
+    git("commit", "-q", "--allow-empty", "-m", "payment, not deployed yet")
+    third = git("rev-parse", "HEAD")
+    (repo / ".deploy").mkdir()
+    status = repo / ".deploy" / "status.txt"
+    status.write_text(f"web (https://rodinne-pribehy.obseum.cz)\n  live:              {third}\n\n"
+                      f"app (https://kniha-test.obseum.cz, built from origin/main app/ + produkt/)\n"
+                      f"  live:              {second}\n  last deploy:       {second} ok\n", encoding="utf-8")
+    monkeypatch.setenv("POS_DEPLOY_STATUS", str(status))
+    assert reality._deployed_sha("kniha-test.obseum.cz")[0] == second
+    assert reality._default_deployed_contains("kniha-test.obseum.cz", first[:7])[0] is True
+    ok, why = reality._default_deployed_contains("kniha-test.obseum.cz", third[:7])
+    assert ok is False and "nenasazeno" in why
+    assert reality._default_deployed_contains("elsewhere.example", first)[0] is False
+
+
 def test_a_reviewer_verifies_evidence_and_the_url_must_open(env, web):
     c = env["conn"]
     reality.upsert(c, env["Dev"], "kniha", "order", {"access": "public", "url": "https://rodinne-pribehy.obseum.cz/objednat"})
@@ -170,7 +331,7 @@ def test_a_reviewer_verifies_evidence_and_the_url_must_open(env, web):
     web.pages["https://rodinne-pribehy.obseum.cz/objednat"] = page(404)
     with pytest.raises(tasks.Invalid, match="not accepted"):
         reality.verify(c, env["Lead"], "kniha", "order", True)
-    web.pages["https://rodinne-pribehy.obseum.cz/objednat"] = page(200, body="<form>Objednat</form>")
+    web.pages["https://rodinne-pribehy.obseum.cz/objednat"] = page(200, body="<form>Objednat knihu</form>")
     assert reality.verify(c, env["Lead"], "kniha", "order", True)["status"] == "live"
 
 

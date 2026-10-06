@@ -265,6 +265,59 @@ def test_company_cap_blocks_everyone_and_only_the_owner_sets_it(app):
     assert any("Strop firmy" in b for b in _dms(conn, actors.owner_id(conn)))
 
 
+def test_a_spent_company_cap_holds_the_queue_without_runs_comments_or_retries(app):
+    """prod 2026-10-06: 24 runs created as blocked, T-883 re-dispatched 15x and T-884 11x every ~5.5 min."""
+    from pos import api_worker
+
+    client, conn, agent, key = app["client"], app["conn"], app["agent"], app["key"]
+    h = {"Authorization": f"Bearer {key}"}
+    owner = actors.owner_id(conn)
+    t = tasks.create(conn, app["owner"], {"title": "Napiš kapitolu", "assignee": {"type": "agent", "id": agent}})
+    conn.execute("UPDATE tasks SET status = 'next' WHERE id = ?", (t["id"],))
+    access.set_budget(conn, app["owner"], None, "usd_day", 5.0, "company cap")
+    _usage(conn, agent, 3.0, hours_ago=20)
+    _usage(conn, agent, 3.0, hours_ago=2)  # $6 of $5: room again when the $3 of 20 h ago leaves the window
+    for _ in range(3):  # the pool's probe and the worker poll again and again
+        work = client.get("/api/worker/next", params={"wait": 0}, headers=h).json()
+        assert "task" not in work and work["state"]["company_capped"] == "usd_day"
+        r = client.post("/api/worker/runs", json={"kind": "task", "task_id": t["ref"]}, headers=h)
+        assert r.status_code == 409 and "company cap" in r.json()["detail"]
+    until = datetime.fromisoformat(work["state"]["company_capped_until"])
+    assert timedelta(hours=3.9) < until - datetime.now(timezone.utc) < timedelta(hours=4.1)
+    assert until.isoformat(timespec="seconds") in r.json()["detail"]
+    # no run row (nothing counts towards the re-dispatch limits or the failure signals), no hold, no comment
+    assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+    assert conn.execute("SELECT retry_after FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] is None
+    assert api_worker.no_result_hold(conn, t["id"], agent) is None
+    assert not conn.execute("SELECT 1 FROM task_comments WHERE task_id = ? AND kind = 'system'", (t["id"],)).fetchone()
+    assert not conn.execute("SELECT 1 FROM audit_log WHERE action IN ('owner_failure_notice', 'head_alert')").fetchone()
+    # the owner hears it once today: until when, and where he raises the cap
+    notices = [b for b in _dms(conn, owner) if "Strop firmy" in b]
+    assert len(notices) == 1 and "uvolní" in notices[0] and f"/team/{app['am'].actor_id}" in notices[0]
+    assert access.cap_notice(conn, access.company_capped(conn)) is False
+    # the window has room again: the task comes back by itself
+    conn.execute("UPDATE engine_usage SET at = ? WHERE cost_usd = 3.0 AND at < ?",
+                 ((datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(timespec="seconds"),
+                  (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat(timespec="seconds")))
+    conn.commit()
+    work = client.get("/api/worker/next", params={"wait": 0}, headers=h).json()
+    assert work["task"]["id"] == t["id"] and "company_capped" not in work["state"]
+    assert client.post("/api/worker/runs", json={"kind": "task", "task_id": t["ref"]}, headers=h).status_code == 201
+
+
+def test_company_free_at_follows_the_rolling_window_and_the_month(app):
+    conn, agent = app["conn"], app["agent"]
+    now = datetime.now(timezone.utc)
+    for hours, usd in ((23, 1.0), (12, 2.0), (1, 4.0)):
+        _usage(conn, agent, usd, hours_ago=hours)
+    # $7 used: under $6.5 when the $1 leaves (in 1 h), under $4.5 when the $2 leaves too (in 12 h)
+    assert abs((access.company_free_at(conn, "usd_day", 6.5, now) - now) - timedelta(hours=1)) < timedelta(minutes=1)
+    assert abs((access.company_free_at(conn, "usd_day", 4.5, now) - now) - timedelta(hours=12)) < timedelta(minutes=1)
+    nxt = access.company_free_at(conn, "usd_month", 1.0, now)
+    assert nxt > now and nxt.astimezone(access.TZ).day == 1 and nxt.astimezone(access.TZ).hour == 0
+    assert access.company_capped(conn) is None  # no company cap set
+
+
 # ------------------------------------------------------------------ the Access manager's hard limits
 
 def test_access_manager_cannot_grant_or_raise_anything_for_itself(app):

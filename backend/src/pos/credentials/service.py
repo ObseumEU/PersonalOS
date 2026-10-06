@@ -707,6 +707,44 @@ def resolve_for(conn: sqlite3.Connection, ctx: Ctx, names: list[str], tool: str,
     return out
 
 
+def platform_header(conn: sqlite3.Connection, ctx: Ctx, name: str, host: str, purpose: str) -> tuple[str, str]:
+    """PersonalOS itself (no agent, no worker) puts a registered credential into one HTTPS request of its own:
+    the reality probe of a password-protected test instance (pos.reality, probe_mode test). Only to a host the
+    credential allows, only one with a header and HTTP use; every use is logged (agent_id NULL, tool `probe`),
+    the value never. Returns (header name, header value) for that one request. Raises CredentialError."""
+    store.ensure_schema(conn)
+    name = str(name or "").strip().lower()
+    host = (host or "").lower()
+    c: dict | None = None
+
+    def refuse(why: str):
+        _log_use(conn, ctx, c, name, None, "probe", host, False, why, None, None)
+        raise CredentialError(f"{name}: {why}")
+
+    try:
+        c = get(conn, name)
+    except NotFound:
+        refuse("no such credential in the registry")
+    on, off_why = onepassword.configured()
+    if not on:
+        refuse(f"credentials are disabled ({off_why})")
+    if c["archived_at"]:
+        refuse("archived")
+    if c["allowed_tools"] and "http" not in c["allowed_tools"]:
+        refuse("not allowed for HTTP")
+    if not c["allowed_hosts"] or not _host_ok(host, c["allowed_hosts"]):
+        refuse(f"host {host or '?'} is not allowed (only {', '.join(c['allowed_hosts']) or 'none'})")
+    if not c["header"]:
+        refuse("no header configured")
+    try:
+        value = onepassword.resolve(c["op_ref"])
+    except onepassword.Unavailable as e:
+        refuse(f"1Password unavailable, failing closed ({str(e)[:160]})")
+    _log_use(conn, ctx, c, name, None, "probe", host, True, None, None, None)
+    key, _, tmpl = c["header"].partition(":")
+    return key.strip(), tmpl.strip().replace("{value}", value)
+
+
 def _default_env(name: str) -> str:
     return "CRED_" + re.sub(r"[^A-Z0-9]", "_", name.upper())
 

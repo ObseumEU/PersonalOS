@@ -468,3 +468,13 @@ def test_near_the_company_cap_the_picker_offers_only_business_work(conn, owner, 
     assert access.business_only(conn)
     out = api_worker._next_work(conn, w)
     assert out["task"]["id"] == kniha["id"] and out["state"]["business_only"]
+    # the platform task waits for the window: the state says until when (the $41 leaves it in 24 h)
+    until = datetime.fromisoformat(out["state"]["business_only_until"])
+    assert timedelta(hours=23.9) < until - datetime.now(timezone.utc) <= timedelta(hours=24)
+    # the cap itself is spent: no task at all (not even business), no run is started only to be refused
+    conn.execute("INSERT INTO engine_usage (at, engine, actor_id, input_tokens, output_tokens, cost_usd) "
+                 "VALUES (?, 'claude', ?, 1000, 0, 10.0)", (now_iso(), co["qa"].actor_id))
+    conn.commit()
+    out = api_worker._next_work(conn, w)
+    assert "task" not in out and out["state"]["company_capped"] == "usd_day"
+    assert out["state"]["company_capped_until"] == until.isoformat(timespec="seconds")
