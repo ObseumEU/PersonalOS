@@ -20,12 +20,16 @@ GPG_RECIPIENT="B553517B011A040CA0DBD068D168BA163D99F61A"
 ENV_FILE="/opt/server/personalos/app/.env"
 
 # what is backed up (name=volume or path)
-SQLITE_VOLUMES=(personalos_pos-data personalos_sentinel-state kb_kb_data kniha-test_kniha-test-data)
+SQLITE_VOLUMES=(personalos_pos-data personalos_sentinel-state kb_kb_data)
 SQLITE_SPECS=(personalos=/v/personalos_pos-data/personalos.db
               sentinel=/v/personalos_sentinel-state/sentinel.db
               knowlage=/v/kb_kb_data/kb.sqlite
-              knowlage-gdrive=/v/kb_kb_data/gdrive/*.sqlite
-              kniha-test=/v/kniha-test_kniha-test-data/rodinne-pribehy.sqlite)
+              knowlage-gdrive=/v/kb_kb_data/gdrive/*.sqlite)
+# kniha-test (T-890): only encrypted data leaves the server. Its SQLite (transcripts) goes as the app's own
+# snapshot zalohy/zaloha-*/db.sqlite.enc (AES-256-GCM, DATA_KLIC), recordings and photos are encrypted at
+# rest; both are in the volume's tar below. The key travels apart: keys/DATA_KLIC in the gpg secrets.
+KNIHA_CONTAINER=kniha-test
+KNIHA_SNAPSHOT_MAX_AGE_MIN=1200   # the app's own nightly snapshot (02:00 UTC) is used when newer than this
 PG_CONTAINERS=(nexus-process-pilot-postgres-1 litellm-postgres langfuse-postgres)
 # kniha-test: the Kniha app's test instance (recordings nahravky/, print exports tisk/; T-878)
 FILE_VOLUMES=(personalos_pos-data nexus-process-pilot_knowledge-objects nexus-process-pilot_team-files
@@ -44,7 +48,7 @@ CONFIG_FILES=(/opt/server/personalos/app/docker-compose.yml
               /opt/server/kniha-deployer/sync.sh /opt/server/kniha-deployer/entry.sh)
 SECRET_FILES=(/opt/server/personalos/app/.env /opt/server/knowlage/.env /opt/server/nexus-process-pilot/app/.env
               /opt/server/litellm/.env /opt/server/langfuse/.env /opt/server/observability/secrets
-              /opt/server/kniha-test/.env)
+              /opt/server/kniha-test/.env /opt/server/kniha-test/keys/DATA_KLIC)
 
 mkdir -p "$STORE"/{daily,weekly,archive,metrics,logs}
 exec 9>"$STORE/.lock"
@@ -89,6 +93,21 @@ for c in "${PG_CONTAINERS[@]}"; do
   docker exec "$c" sh -c 'pg_dumpall -U "$POSTGRES_USER" --globals-only' > "$WORK/pg/$c.globals.sql"
   log "pg $c: $(du -h "$WORK/pg/$c.dump" | cut -f1)"
 done
+
+# 2b. kniha-test: a fresh encrypted snapshot of its SQLite when the app's nightly one is missing or old.
+#     Its problems are logged and never stop the backup of everything else.
+if docker inspect -f '{{.State.Running}}' "$KNIHA_CONTAINER" 2>/dev/null | grep -q true; then
+  if ! docker exec "$KNIHA_CONTAINER" sh -c 'test -n "$DATA_KLIC"'; then
+    log "kniha-test: DATA_KLIC is not set, no encrypted snapshot of its SQLite (FAILED)"
+  else
+    fresh="$(docker exec "$KNIHA_CONTAINER" sh -c "find \"\${ZALOHA_DIR:-\${DATA_DIR:-/data}/zalohy}\" -name db.sqlite.enc -mmin -$KNIHA_SNAPSHOT_MAX_AGE_MIN 2>/dev/null | head -1" || true)"
+    if [ -n "$fresh" ] || docker exec "$KNIHA_CONTAINER" npm run -s zaloha > /dev/null 2>&1; then
+      log "kniha-test: encrypted snapshot ok"
+    else
+      log "kniha-test: encrypted snapshot FAILED"
+    fi
+  fi
+fi
 
 # 3. Files: the data volumes without the SQLite files (those are in sqlite/), tar + zstd
 for v in "${FILE_VOLUMES[@]}"; do

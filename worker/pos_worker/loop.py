@@ -238,9 +238,13 @@ class Worker:
         if work.get("task"):
             return self.handle_task(work["task"])
         if work.get("unread_messages"):
-            # Idle: read them now (no tokens), use them as context for the next task.
-            self.context.extend(self.client.inbox())
-            return "read_messages"
+            # Unread messages stay unread until a run takes them (its inbox, with the run's id): read
+            # here, while idle, they were marked read, kept only in this process and lost when the
+            # pool's worker ended idle (prod 2026-10-06: DM 2226 to the CEO). PersonalOS gives an
+            # agent with unread messages and no work a task for them (pos.chat.ensure_inbox_task);
+            # until one is offered, wait instead of polling in a tight loop.
+            self.sleep(min(self.poll_wait, 30))
+            return "idle"
         return "idle"
 
     # ------------------------------------------------------------- one task
@@ -337,6 +341,8 @@ class Worker:
         session = self.new_session(engine, model, me)
         # Claude takes the constitution and the stable part as its system prompt (cached
         # across runs); Codex gets both at the top of the prompt.
+        # The unread messages go into the first prompt, delivered to this run (PersonalOS records it).
+        self.context.extend(self._safe(self.client.inbox, [], run_id))
         prompt = build_task_prompt(me, task, self.context, include_guardrails=not claude, include_stable=not claude)
         self.context = []
         self.images = run_images.RunImages(self.client, self.images_dir / f"run-{run_id}")

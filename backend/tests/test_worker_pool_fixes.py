@@ -47,9 +47,14 @@ def _keys(root, *slugs):
 
 # ------------------------------------------------------------------ 1. the pool wakes for messages
 
-def test_pool_wakes_an_agent_for_unread_messages_not_only_tasks():
+def test_pool_wakes_an_agent_for_unread_messages_with_the_task_that_delivers_them():
     assert wpool.work_rank({"state": {}, "unread_messages": 0}) is None
-    assert wpool.work_rank({"state": {}, "unread_messages": 2}) == wpool.RANK_MESSAGES  # a review request, a DM
+    # Messages alone start nobody: a worker without a task read them and lost them (prod DM 2226). PersonalOS
+    # offers the task that delivers them (pos.chat.ensure_inbox_task).
+    assert wpool.work_rank({"state": {}, "unread_messages": 2}) is None
+    assert wpool.work_rank({"state": {}, "unread_messages": 2,
+                            "task": {"topic": "chat", "priority": 2}}) == wpool.RANK_CHAT
+    assert wpool.work_rank({"state": {}, "unread_messages": 2, "task": {"topic": "dev"}}) == wpool.RANK_MESSAGES
     assert wpool.work_rank({"state": {"paused": True}, "unread_messages": 2}) is None
     assert wpool.work_rank({"task": {"topic": "chat", "priority": 1}}) == wpool.RANK_OWNER
     assert wpool.work_rank({"task": {"topic": "chat", "priority": 2}}) == wpool.RANK_CHAT
@@ -62,7 +67,7 @@ def test_pool_probe_reads_unread_messages(monkeypatch):
             pass
 
         def json(self):
-            return {"state": {}, "unread_messages": 1}
+            return {"state": {}, "unread_messages": 1, "task": {"topic": "dev"}}
 
     monkeypatch.setattr(httpx, "get", lambda *a, **k: R())
     assert wpool.has_work("http://api", "k") == wpool.RANK_MESSAGES

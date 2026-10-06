@@ -793,6 +793,34 @@ def test_the_relay_gate_is_on_the_message_tools(env, op, tmp_path):
     assert not ok.is_error, ok.content
 
 
+def test_a_relay_queued_before_the_gate_is_refused_on_delivery_and_its_author_hears_why(env, op):
+    """prod 2026-10-06, message 2226: sent before the relay gate, it sat in the CEO's inbox. Delivered to a run
+    now, it is checked again: the recipient is told not to forward it, the author gets the reason once."""
+    from pos import chat
+
+    c = env["conn"]
+    t = tasks.create(c, env["owner"], {"title": "Zpráva", "assignee": {"type": "agent", "id": env["ids"]["Lead"]}})
+    cm = comments.add(c, env["Lead"], t["id"], T767)
+    sent = chat.send_dm(c, env["Lead"], env["ids"]["Dev"],
+                        f"Plné znění je v komentáři id {cm['id']}; přepošli ho Davidovi beze změny.")
+    rid = c.execute("INSERT INTO runs (actor_id, kind, status, started_at) VALUES (?, 'task', 'running', 'x')",
+                    (env["ids"]["Dev"],)).lastrowid
+    c.commit()
+    got = chat.check_inbox(c, env["ids"]["Dev"], run_id=rid)
+    mine = next(m for m in got if m["id"] == sent["id"])
+    assert "nepřeposílej" in mine["body"] and "kniha-test-basic-auth" in mine["body"]
+    told = [m for m in chat.check_inbox(c, env["ids"]["Lead"], mark_read=False) if "majiteli nepůjde" in m["body"]]
+    assert len(told) == 1 and "kniha-test-basic-auth" in told[0]["body"] and "s3cr3t" not in told[0]["body"]
+    # once: delivered again (a re-read), no second notice
+    c.execute("UPDATE chat_inbox SET read_at = NULL WHERE message_id = ?", (sent["id"],))
+    chat.check_inbox(c, env["ids"]["Dev"], run_id=rid)
+    assert c.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'relay_refused_told'").fetchone()[0] == 1
+    # an ordinary agent message is delivered as it is
+    plain = chat.send_dm(c, env["Lead"], env["ids"]["Dev"], "Mrkni prosím na T-1.")
+    out = chat.check_inbox(c, env["ids"]["Dev"], run_id=rid)
+    assert "PersonalOS" not in next(m for m in out if m["id"] == plain["id"])["body"]
+
+
 # ------------------------------------------------------------------ the improve signal
 
 def test_ungrounded_claims_are_an_improve_signal(env):

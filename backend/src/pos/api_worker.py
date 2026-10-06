@@ -185,6 +185,15 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             continue
         row = cand
         break
+    if row is None and not candidates and unread and not capped:
+        # Unread messages and nothing that would deliver them: a task whose run does (pos.chat.ensure_inbox_task).
+        # Without it they waited for a run that never came, or an idle worker read them and lost them.
+        tid = chat.ensure_inbox_task(conn, ctx.actor_id)
+        if tid is not None:
+            cand = conn.execute(f"SELECT * FROM tasks WHERE id = ? AND status IN ('next', 'working') AND NOT {live}",
+                                (tid, cutoff, None)).fetchone()
+            if cand is not None and not (reserve and business.classify(conn, cand) != "business"):
+                row = cand
     out: dict = {"state": st, "unread_messages": unread}
     if row:
         # Over its own limit (runs_day, usd_day...): no task until the limit resets, so neither this

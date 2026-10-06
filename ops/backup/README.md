@@ -13,11 +13,11 @@
 |---|---|---|
 | PersonalOS `personalos.db`, sentinel `sentinel.db` | SQLite online backup API + integrity_check + row counts | `sqlite/*.db.zst`, `sqlite/sqlite-manifest.json` |
 | knowlage `kb.sqlite` and the Drive catalogs `gdrive/*.sqlite` | same (quick_check for the 1 GB kb.sqlite) | `sqlite/knowlage*.db.zst` |
-| Kniha test instance `rodinne-pribehy.sqlite` (volume `kniha-test_kniha-test-data`) | same | `sqlite/kniha-test.db.zst` |
+| Kniha test instance SQLite (volume `kniha-test_kniha-test-data`, T-890) | the app's own snapshot `zalohy/zaloha-*/db.sqlite.enc`, **AES-256-GCM with `DATA_KLIC`** (made by the backup when the app's 02:00 one is missing); never the plain file | inside `files/kniha-test_kniha-test-data.tar.zst` |
 | Nexus, LiteLLM, Langfuse Postgres | `pg_dump -Fc`, `pg_restore --list`, exact row counts | `pg/<container>.dump`, `.counts.tsv`, `.image` |
 | Volumes `personalos_pos-data` (agents, files), Nexus `knowledge-objects`, `team-files`, `kniha-test_kniha-test-data` (recordings, print exports) | tar without SQLite files | `files/*.tar.zst` |
 | Compose files, Caddyfiles, LiteLLM and Alloy config, the Kniha deployer and kniha-test override | tar | `config/config.tar.zst` |
-| `.env` of PersonalOS, knowlage, Nexus, LiteLLM, Langfuse, kniha-test; Alloy secrets; Postgres roles | tar, **gpg-encrypted** | `config/secrets.tar.zst.gpg` |
+| `.env` of PersonalOS, knowlage, Nexus, LiteLLM, Langfuse, kniha-test; the kniha-test data key copy `/opt/server/kniha-test/keys/DATA_KLIC`; Alloy secrets; Postgres roles | tar, **gpg-encrypted** | `config/secrets.tar.zst.gpg` |
 
 Not backed up: Qdrant (derived: re-index from `kb.sqlite`, costs embedding calls), knowlage's
 `workspace/` export and `cache/` (derived), the Codex/Claude logins (sign in again).

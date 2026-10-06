@@ -72,11 +72,14 @@ def work_rank(work: dict) -> int | None:
     task = work.get("task") or None
     if task and task.get("topic") == "chat":
         return RANK_OWNER if task.get("priority") == 1 else RANK_CHAT
+    if not task:
+        # Unread messages alone start nobody: a worker without a task cannot deliver them to a run
+        # and ended idle after two minutes, again and again. PersonalOS offers an agent with unread
+        # messages and no work a task for them (pos.chat.ensure_inbox_task), which starts it here.
+        return None
     if work.get("unread_messages"):
-        # Messages wake the agent too (2026-09-27: review requests and DMs sat unread while
-        # the pool only started agents with a task).
-        return RANK_MESSAGES
-    return RANK_TASK if task else None
+        return RANK_MESSAGES  # messages wait as well: ahead of ordinary work
+    return RANK_TASK
 
 
 def has_work(url: str, key: str) -> int | None:

@@ -184,7 +184,11 @@ def test_worker_holds_when_frozen_and_idles_without_tokens(setup, fake_codex, tm
     worker = worker_for(client, key, fake_codex, tmp_path)
     assert worker.step() == "idle"
     agents.send_message(conn, owner, agent_id, "FYI: new repo layout")
-    assert worker.step() == "read_messages" and worker.context[0]["body"] == "FYI: new repo layout"
+    from pos import chat
+
+    # Unread messages are not read by an idle poll: PersonalOS offers a task whose run delivers them.
+    assert worker.client.next_work(0)["task"]["title"] == chat.INBOX_TASK_TITLE
+    assert chat.inbox_unread(conn, agent_id) == 1 and not worker.context
     killswitch.freeze(conn, owner, "test")
     assert worker.step() == "held"
     assert conn.execute("SELECT COUNT(*) FROM runs WHERE actor_id = ?", (agent_id,)).fetchone()[0] == 0
@@ -925,3 +929,52 @@ def test_session_sends_the_run_and_the_agents_own_git_identity():
     assert git_identity({}) == {}
     assert tool_count(["a", "b"], {}, {"pos": {}, "browser": {}}) == 12
     assert tool_count([], {"pos_tools": ["x"] * 120}, {"pos": {}}) == 120
+
+
+def test_an_idle_agents_dm_reaches_a_run_and_is_never_lost(setup, fake_codex, tmp_path, monkeypatch):
+    """prod 2026-10-06, DM 2226 (Kniha Lead -> CEO): the CEO had no task, the pool started its worker for the
+    unread DM, the idle worker read it into memory (marked read, delivered to no run) and ended two minutes
+    later. Runs 1645, 1646 and 1651 never saw it."""
+    monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    client, conn, owner, agent_id, key = setup
+    from pos import chat
+
+    lead = agents.create_agent(conn, owner, name="Lead", purpose="lead", lifetime="long_lived",
+                               permissions=["tasks:read", "messages:send"], data_dir=tmp_path)["agent"]["id"]
+    sent = chat.send_dm(conn, Ctx(lead), agent_id, "M1 je hotová, odkaz je v T-767.")
+    worker = worker_for(client, key, fake_codex, tmp_path)
+    seen = []
+    real_inbox = worker.client.inbox
+
+    def inbox(run_id=None):
+        out = real_inbox(run_id)
+        seen.append((run_id, [m["id"] for m in out]))
+        return out
+
+    worker.client.inbox = inbox
+    assert worker.step() == "ok"
+    run = conn.execute("SELECT id, task_id FROM runs WHERE actor_id = ? ORDER BY id DESC", (agent_id,)).fetchone()
+    task = conn.execute("SELECT title, topic FROM tasks WHERE id = ?", (run["task_id"],)).fetchone()
+    assert task["title"] == chat.INBOX_TASK_TITLE and task["topic"] == "chat"
+    row = conn.execute("SELECT read_at, delivered_in_run FROM chat_inbox WHERE message_id = ? AND actor_id = ?",
+                       (sent["id"], agent_id)).fetchone()
+    assert row["delivered_in_run"] == run["id"] and row["read_at"]
+    assert seen[0] == (run["id"], [sent["id"]])  # in the run's first prompt, never read without a run
+    assert all(r == run["id"] for r, _ in seen)
+    assert chat.ensure_inbox_task(conn, agent_id) is None  # nothing unread: no second task
+
+
+def test_unread_messages_wait_for_a_run_when_the_agent_has_other_work(setup, tmp_path):
+    """A queued task's run takes them at its start: no extra inbox task, and nobody marks them read meanwhile."""
+    client, conn, owner, agent_id, key = setup
+    from pos import api_worker, chat, tasks
+
+    tasks.create(conn, owner, {"title": "Fix the bug", "assignee": {"type": "agent", "id": agent_id},
+                               "status": "next"})
+    lead = agents.create_agent(conn, owner, name="Lead2", purpose="lead", lifetime="long_lived",
+                               permissions=["tasks:read", "messages:send"], data_dir=tmp_path)["agent"]["id"]
+    chat.send_dm(conn, Ctx(lead), agent_id, "Ahoj")
+    work = api_worker._next_work(conn, Ctx(agent_id))
+    assert work["task"]["title"] == "Fix the bug" and work["unread_messages"] == 1
+    assert not conn.execute("SELECT 1 FROM tasks WHERE title = ?", (chat.INBOX_TASK_TITLE,)).fetchone()
+    assert chat.inbox_unread(conn, agent_id) == 1
