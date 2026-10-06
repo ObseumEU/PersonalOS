@@ -1,0 +1,27 @@
+# Kniha deployer: pushes the Kniha team's commits from its shared workspace (/work/kniha in the
+# PersonalOS agent pool) to GitHub and deploys the web's `production` branch to
+# rodinne-pribehy.obseum.cz, and Kniha `main` (app/) to the test instance kniha-test.obseum.cz. The agents never hold a GitHub credential: the write deploy keys
+# live only here (keys/, one per repo).
+name: kniha-deployer
+
+services:
+  deployer:
+    image: docker:27-cli
+    container_name: kniha-deployer
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/deployer/entry.sh"]
+    environment:
+      SITE_URL: https://rodinne-pribehy.obseum.cz
+      INTERVAL: "60"
+      APP_URL: https://kniha-test.obseum.cz
+    volumes:
+      - /opt/server/kniha-deployer:/deployer
+      - personalos_agent-pool-work:/work
+      - /opt/server/rodinne-pribehy:/opt/server/rodinne-pribehy
+      # the app's compose runs from here (same path as on the host): src/ = deployed sha, .env = passwords
+      - /opt/server/kniha-test:/opt/server/kniha-test
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  personalos_agent-pool-work:
+    external: true
