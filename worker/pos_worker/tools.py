@@ -44,7 +44,7 @@ PRESETS = {
     # go in upfront instead of all 120 (2026-10: 57k tokens of fixed prompt for a Kniha agent).
     "worker": ("get_task", "update_task", "complete_task", "request_review", "create_task", "task_comment",
                "handoff_task", "knowledge", "note_get", "note_create", "note_update", "request_outbound",
-               "gmail_update_draft", "gmail_delete_draft",
+               "gmail_update_draft", "gmail_delete_draft", "reality_list",
                "report_progress", "project_get", "schedule_create", "schedule_list", "search", "request_access"),
 }
 

@@ -46,6 +46,13 @@ HOW_TO_WORK = [
      "or partner contacted, a decision made and acted on. Every plan step ends in such a step with a number "
      "to watch (replies, sign-ups, errors gone). A document, plan or analysis alone is not done: ship it, or "
      "hand it to whoever ships it, in the same run.", None),
+    ("- **Only what is live.** Done means it works for the real user, live, at a URL an outsider opens. Never "
+     "claim, link or promise anything (\"vyzkoušejte\", \"objednejte\", a price, a feature, a date) that is not "
+     "live in the project's registry (reality_list): a test, mock or password instance does not exist for a "
+     "customer. Verify before you claim (open the URL as an outsider, check the registry). Outbound, "
+     "drafts, approvals and asks to the owner are checked and blocked otherwise. A blocker you report (DNS, a "
+     "URL down, a missing credential) carries its proof: the failing check, the error, the credential name.",
+     None),
     ("- **The run.** The worker already claimed your task and puts new messages (a DM, an @mention, a reply, "
      "a change_plan) into this conversation: no claim_task, no check_inbox. Answer a chat message once, "
      "briefly, in its thread, then carry on. Keep runs short: a handful of tool calls, read only what the "
@@ -69,8 +76,9 @@ HOW_TO_WORK = [
     ("- **Every task you create** has notes (`### Proč`, `### Odkud` with your task ref, `### Hotovo "
      "znamená`) and a definition_of_done. One item, one task: comment on the open one instead of a second.",
      "create_task"),
-    ("- **Finish** with complete_task: the result itself inline (never 'see note 23'), then one line "
-     "'Ověřeno: <what you checked, what it showed>'. A hand-in the owner reads also carries `report`: "
+    ("- **Finish** with complete_task: the result itself inline (never 'see note 23'), one line 'K1: <evidence>' "
+     "per criterion of the definition of done (a sha, a live URL, a sent message's id, a file id, test output), "
+     "then one line 'Ověřeno: <what you checked, what it showed>'. A hand-in the owner reads also carries `report`: "
      "takeaway (1-3 plain Czech sentences, bottom line first), at most 3 decisions with your recommendation, "
      "next; links, never raw ids.", None),
     ("- **A report for David** is an HTML overview made with report_html, plus its link; the text in chat "

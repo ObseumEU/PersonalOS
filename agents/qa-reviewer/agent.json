@@ -23,7 +23,7 @@
   "profile": {
     "workdir": "/work/PersonalOS",
     "read_dirs": "/work/kniha",
-    "pos_tools": "get_task list_tasks deploy_review review_task task_comment create_task report_progress complete_task knowledge",
+    "pos_tools": "get_task list_tasks deploy_review review_task task_comment create_task report_progress complete_task knowledge reality_list reality_verify",
     "claude_builtin": "Bash,Read,Glob,Grep",
     "claude_disallowed": "Write Edit WebSearch WebFetch",
     "claude_tools": "Read|Glob|Grep|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git fetch:*)",
