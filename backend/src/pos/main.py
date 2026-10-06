@@ -215,6 +215,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import api_scorecard
 
     app.include_router(api_scorecard.router)  # the Firma page: the company scorecard (pos.scorecard)
+    from . import html_reports
+
+    app.include_router(html_reports.router)  # /reports/<uuid>: report_html overviews behind the login
     api_tasks.install_error_handlers(app)
     app.router.routes.extend(mcp_app.routes)
 

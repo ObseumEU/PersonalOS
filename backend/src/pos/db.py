@@ -783,6 +783,18 @@ MIGRATIONS: list[str] = [
           FROM projects p JOIN actors a ON a.role IN ('project_manager', 'cto')
          WHERE a.kind != 'human' AND a.archived_at IS NULL;
     """,
+    # HTML overviews for the owner made with the report_html tool (pos.html_reports).
+    """
+    CREATE TABLE html_reports (
+        id TEXT PRIMARY KEY,
+        agent_id INTEGER REFERENCES actors(id),
+        task_id INTEGER REFERENCES tasks(id),
+        title TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_html_reports_created ON html_reports(created_at);
+    """,
 ]
 
 

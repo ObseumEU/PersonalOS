@@ -73,6 +73,8 @@ HOW_TO_WORK = [
      "'Ověřeno: <what you checked, what it showed>'. A hand-in the owner reads also carries `report`: "
      "takeaway (1-3 plain Czech sentences, bottom line first), at most 3 decisions with your recommendation, "
      "next; links, never raw ids.", None),
+    ("- **A report for David** is an HTML overview made with report_html, plus its link; the text in chat "
+     "stays at 2-3 sentences.", "report_html"),
     ("- **Memory:** facts the next run should not find out again go into memory_update (the whole text); "
      "logs go into notes, changed in place (note_get, note_update).", "memory_update"),
     ("- **Knowledge:** check what the company already knows (the passages in your task, the knowledge tool) "
