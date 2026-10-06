@@ -22,6 +22,7 @@
   "effort": "medium",
   "profile": {
     "workdir": "/work/PersonalOS",
+    "read_dirs": "/work/kniha",
     "pos_tools": "get_task list_tasks deploy_review review_task task_comment create_task report_progress complete_task knowledge",
     "claude_builtin": "Bash,Read,Glob,Grep",
     "claude_disallowed": "Write Edit WebSearch WebFetch",
@@ -37,5 +38,5 @@
     "usd_run": 2.0,
     "runs_day": 20
   },
-  "note": "Pool worker that reads the Software Engineer's worktree (/work/PersonalOS) with read-only tools. With POS_DEPLOY_REVIEW=1 the deployer waits for its approval (deploy_review) before promoting."
+  "note": "Pool worker that reads the Software Engineer's worktree (/work/PersonalOS) and the Kniha team's checkout (/work/kniha, read_dirs; git -C /work/kniha log/show/diff, also /work/kniha/web) with read-only tools. With POS_DEPLOY_REVIEW=1 the deployer waits for its approval (deploy_review) before promoting."
 }

@@ -124,14 +124,17 @@ def review_repos() -> list[Path]:
 
         root = repo_root()
         paths = [root] if root else []
-    return [p for p in paths if (p / ".git").exists()]
+    from .evidence import with_submodules
+
+    # with the submodules: a Kniha web commit (/agent-work/kniha/web) gets its diff stat too
+    return [p for p in with_submodules(paths) if (p / ".git").exists()]
 
 
 def diff_stat(sha: str, repos: list[Path] | None = None) -> str | None:
     """`git show --stat` of a commit in the first repository that has it; None when none does."""
     for repo in repos if repos is not None else review_repos():
         try:
-            p = subprocess.run(["git", "-C", str(repo), "show", "--stat", "--format=%h %s (%an)", sha],
+            p = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(repo), "show", "--stat", "--format=%h %s (%an)", sha],
                                capture_output=True, text=True, encoding="utf-8", timeout=5)
         except (OSError, subprocess.SubprocessError):
             continue

@@ -102,6 +102,13 @@ def session_workdir(me: dict, default: str) -> str:
     return wanted
 
 
+def read_dirs(me: dict) -> list[str]:
+    """The profile's extra readable folders (claude --add-dir) that exist here: the QA Reviewer reads
+    the Kniha team's checkout /work/kniha besides its own /work/PersonalOS."""
+    raw = (me.get("profile") or {}).get("read_dirs") or []
+    return [d for d in (raw if isinstance(raw, list) else str(raw).split()) if os.path.isdir(d)]
+
+
 def claude_extra_mcp() -> dict:
     """More MCP servers for a Claude agent as JSON in WORKER_CLAUDE_MCP, e.g.
     {"knowlage": {"type": "http", "url": "https://…/ingest/mcp", "headers": {"Authorization": "Bearer …"}}}."""
@@ -262,6 +269,7 @@ def main() -> None:
             return ClaudeSession(
                 binary=os.environ.get("CLAUDE_BIN", "claude"),
                 workdir=where,
+                add_dirs=read_dirs(me),
                 model=model,
                 # Byte-stable across runs (no task, no time), so the prompt cache reuses it.
                 system_prompt="\n\n".join(p for p in (me.get("guardrails", ""), me.get("stable_prompt", ""), skills)

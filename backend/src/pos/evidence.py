@@ -304,17 +304,40 @@ def repos() -> list[Path]:
     return [root] if root and (root / ".git").exists() else []
 
 
+_SUBMODULE_PATH_RE = re.compile(r"^\s*path\s*=\s*(.+?)\s*$", re.MULTILINE)
+
+
+def with_submodules(paths: list[Path]) -> list[Path]:
+    """Each repository and then its checked-out submodules (from .gitmodules): a commit in the Kniha
+    web submodule (roskodav/web-builder-studio, /work/kniha/web) is evidence too (prod 2026-10: T-248
+    and T-509 were returned for web commits 'not in the repository')."""
+    out: list[Path] = []
+    for repo in paths:
+        repo = Path(repo)
+        out.append(repo)
+        try:
+            text = (repo / ".gitmodules").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for rel in _SUBMODULE_PATH_RE.findall(text):
+            sub = repo / rel.strip()
+            if ".." not in Path(rel).parts and (sub / ".git").exists():
+                out.append(sub)
+    return list(dict.fromkeys(out))
+
+
 def check_sha(sha: str, paths: list[Path] | None = None) -> Item:
     """verified when a known repo has the commit; failed when every reachable repo lacks it;
     unverifiable when no repo is reachable (no git, no checkout, a timeout)."""
-    paths = repos() if paths is None else paths
+    paths = with_submodules(repos() if paths is None else paths)
     git = shutil.which("git")
     if not git or not paths:
         return Item("sha", sha, "unverifiable", "no repository here")
     looked = 0
     for repo in paths:
         try:
-            r = subprocess.run([git, "-C", str(repo), "cat-file", "-e", f"{sha}^{{commit}}"],
+            # safe.directory: the checkouts are mounted from another user's volume (read-only)
+            r = subprocess.run([git, "-c", "safe.directory=*", "-C", str(repo), "cat-file", "-e", f"{sha}^{{commit}}"],
                                capture_output=True, text=True, timeout=GIT_TIMEOUT_S)
         except (OSError, subprocess.TimeoutExpired):
             continue

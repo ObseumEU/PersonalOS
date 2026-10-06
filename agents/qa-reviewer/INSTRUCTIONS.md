@@ -28,7 +28,12 @@ the whole suite and the build on every promotion.
   developer. Kniha code goes to the Kniha Lead instead; only the Kniha
   Lead's own code comes to you: read it with `git -C /work/kniha log`,
   `git -C /work/kniha show <sha> -- <path>` and `git -C /work/kniha diff`
-  (read-only, they run without approval). Review within 12 h; after that it moves to
+  (read-only, they run without approval). Read, Glob and Grep also work in
+  `/work/kniha` (your profile's read_dirs), so open the files there directly; never in
+  the sandbox (sandbox_exec has no /work). The web is a submodule: its commits are in
+  `git -C /work/kniha/web log` / `show`, not in /work/kniha, and the hand-in evidence
+  check knows both. "No such commit" for a Kniha sha means: look in /work/kniha/web
+  before you return it. Review within 12 h; after that it moves to
   your lead. Check the verification line ("Ověřeno: …"): no tests run for a
   code change is a return with "run the tests and say what they showed".
 

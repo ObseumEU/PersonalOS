@@ -99,6 +99,23 @@ def test_a_sha_is_verified_in_a_git_repo(env, monkeypatch):
     assert _actions(env["conn"], out["id"]) == ["handin_evidence_failed"]
 
 
+def test_a_commit_in_a_submodule_is_evidence_too(env, monkeypatch):
+    """Prod 2026-10: T-248 and T-509 were returned with "no such commit in the repository" for commits
+    of the Kniha web submodule (/agent-work/kniha/web) while only /agent-work/kniha was searched."""
+    app_sha = _git_repo(env["tmp"] / "kniha")
+    web_sha = _git_repo(env["tmp"] / "kniha" / "web")
+    gitmodules = ["[submodule \"web\"]", "\tpath = web", "\turl = https://example.invalid/web.git",
+                  "[submodule \"Knowlage\"]", "\tpath = Knowlage", "\turl = https://example.invalid/k.git", ""]
+    (env["tmp"] / "kniha" / ".gitmodules").write_text("\n".join(gitmodules), encoding="utf-8")
+    monkeypatch.setenv("POS_EVIDENCE_REPOS", str(env["tmp"] / "kniha"))
+    assert evidence.with_submodules([env["tmp"] / "kniha"]) == [env["tmp"] / "kniha", env["tmp"] / "kniha" / "web"]
+    assert evidence.check_sha(app_sha[:7]).status == "verified"   # the app repo (ObseumEU/Kniha)
+    assert evidence.check_sha(web_sha[:7]).status == "verified"   # the web submodule
+    assert evidence.check_sha("deadbee1234").status == "failed"   # in neither: still flagged
+    out = _hand_in(env, f"Nasazeno: web {web_sha[:7]} a aplikace {app_sha[:7]}.")
+    assert _actions(env["conn"], out["id"]) == ["handin_evidence_ok"]
+
+
 def test_a_deployed_sha_needs_no_repo(env):
     conn = env["conn"]
     conn.execute("INSERT INTO deploys (old_sha, new_sha, status, created_at) VALUES ('a1b2c3d4e5', 'f6e5d4c3b2a1', "

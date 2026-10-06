@@ -90,6 +90,22 @@ def test_the_worker_prefers_the_agents_profile(monkeypatch, tmp_path):
     assert session_workdir({}, "/work") == "/work"
 
 
+def test_the_qa_reviewer_reads_the_kniha_checkout(tmp_path):
+    """Prod 2026-10 (T-248, T-509): the QA Reviewer's file tools could not open /work/kniha, only its own
+    /work/PersonalOS. agent.json "read_dirs" becomes claude --add-dir; only folders under /work or /repos."""
+    pytest.importorskip("pos_worker")
+    from pos_worker.__main__ import read_dirs
+
+    assert agents_code.worker_profile("QA Reviewer")["read_dirs"] == ["/work/kniha"]
+    norm = agents_code._normalized({"read_dirs": "/work/kniha/, /etc /work/../etc /repos/x /work/kniha"})
+    assert norm["read_dirs"] == ["/work/kniha", "/repos/x"]
+    assert "read_dirs" not in agents_code._normalized({"read_dirs": ["/etc", "/tmp"]})
+    (tmp_path / "kniha").mkdir()
+    me = {"profile": {"read_dirs": [str(tmp_path / "kniha"), str(tmp_path / "missing")]}}
+    assert read_dirs(me) == [str(tmp_path / "kniha")]  # only folders that exist in this worker
+    assert read_dirs({}) == []
+
+
 def test_the_deploy_review_gate(company):
     conn = company["conn"]
     deployer = Ctx(actors.find_by_name(conn, "Deployer")["id"], via="deployer")

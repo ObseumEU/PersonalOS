@@ -18,6 +18,7 @@ POS_AGENTS_AS_CODE=0 turns the start-up creation off (tests create their own).
 import json
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -274,6 +275,7 @@ def is_dormant(name: str) -> bool:
 # it overrides the worker's environment for this agent only (the agent pool serves many agents).
 PROFILE_KEYS = {"pos_tools", "claude_tools", "claude_builtin", "claude_disallowed", "max_usd_run", "max_steps",
                 "max_steps_owner", "workdir",
+                "read_dirs",  # more folders the file tools may read (claude --add-dir), e.g. the QA Reviewer: /work/kniha
                 "cache_ttl"}  # "5m" | "1h": overrides pos.cache_policy's choice by the run cadence
 WORKDIR_ROOTS = ("/work/", "/repos/")
 MIN_STEPS = 200      # a step cap below this stops real work (agents are autonomous, 2026-09-27)
@@ -328,6 +330,15 @@ def _normalized(profile: dict) -> dict:
     if "workdir" in out and not (isinstance(out["workdir"], str) and out["workdir"].startswith(WORKDIR_ROOTS)
                                  and ".." not in out["workdir"]):
         out.pop("workdir")
+    if "read_dirs" in out:  # a list or a space/comma-separated string; only under /work or /repos
+        raw = out["read_dirs"]
+        dirs = raw if isinstance(raw, list) else re.split(r"[\s,]+", str(raw or ""))
+        dirs = [d for d in (str(x).strip().rstrip("/") for x in dirs)
+                if d and (d + "/").startswith(WORKDIR_ROOTS) and ".." not in d.split("/")]
+        if dirs:
+            out["read_dirs"] = list(dict.fromkeys(dirs))
+        else:
+            out.pop("read_dirs")
     if isinstance(out.get("max_steps"), (int, float)) and 0 < out["max_steps"] < MIN_STEPS:
         out["max_steps"] = MIN_STEPS
         if isinstance(out.get("max_steps_owner"), (int, float)):  # the owner's own tasks keep their higher cap
