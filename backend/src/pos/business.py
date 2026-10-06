@@ -135,6 +135,20 @@ def _team_kind(conn: sqlite3.Connection, row) -> str | None:
     return None
 
 
+def _business_work(conn: sqlite3.Connection, row, roles: dict[int, str | None] | None, source: str) -> bool:
+    """A review or system task that belongs to a business team: its project or its assignee's team is a
+    business team, or (a review) the reviewed task itself is business work."""
+    if _team_kind(conn, row) == "business":
+        return True
+    if source.startswith("review:"):
+        ref = source.split(":", 1)[1].strip().upper().removeprefix("T-")
+        if ref.isdigit() and int(ref) != row["id"]:
+            reviewed = conn.execute("SELECT * FROM tasks WHERE id = ?", (int(ref),)).fetchone()
+            if reviewed is not None and not (reviewed["source"] or "").lower().startswith("review:"):
+                return classify(conn, reviewed, roles) == "business"
+    return False
+
+
 def is_demo(row) -> bool:
     title = (row["title"] or "").strip().lower()
     return title in DEMO_TITLES or bool(DEMO_RE.search(row["title"] or "")) or (row["topic"] or "") == "acme"
@@ -153,6 +167,11 @@ def classify(conn: sqlite3.Connection, row, roles: dict[int, str | None] | None 
         m = _REPO_RE.search(row["title"] or "")
         return "platform" if not m or m[1].lower() in PLATFORM_REPOS else "business"
     if source in PLATFORM_SOURCES or source.startswith("review:"):
+        # A business team's reviews and the system's tasks for that team are its work (prod 2026-10: Kniha
+        # reviews like T-792 and setup tasks like T-312 were platform and did not start under the reserve).
+        if source.startswith("review:") or source == "system":
+            if _business_work(conn, row, roles, source):
+                return "business"
         return "platform"
     # The work's project and team count before its topic: a Kniha developer's "dev" task is the Kniha
     # product, business (prod: Kniha roles were counted as platform).

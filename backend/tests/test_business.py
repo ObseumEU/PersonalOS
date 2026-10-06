@@ -660,3 +660,41 @@ def test_the_same_item_without_a_ref_is_one_escalation_passed_up(conn, owner, co
     conn.execute("UPDATE tasks SET created_at = ? WHERE id = ?", (old, other["id"]))
     fresh = tasks.create(conn, cfo, {"title": "Digest: znovu FAK-2026-0107", "assignee": "CEO", "topic": "digest"})
     assert not fresh.get("deduplicated")
+
+
+def test_a_business_teams_reviews_and_system_tasks_count_as_business(conn, owner, company, tmp_path):
+    """Prod 2026-10: Kniha reviews (T-792, review:378) and system setup tasks (T-312) were labelled platform
+    before their team was looked at, so under the 80 % business reserve they never started."""
+    lead = _agent(conn, owner, tmp_path, "Kniha Lead", "lead")
+    dev = _agent(conn, owner, tmp_path, "Kniha Developer", "developer", lead)
+    qa = _agent(conn, owner, tmp_path, "QA Reviewer", "qa", company["cto"])
+    conn.execute("UPDATE actors SET team = 'kniha' WHERE id IN (?, ?)", (lead.actor_id, dev.actor_id))
+    conn.execute("UPDATE actors SET team = 'engineering' WHERE id IN (?, ?)", (qa.actor_id, company["se"].actor_id))
+    conn.commit()
+    work = tasks.create(conn, lead, {"title": "App E2E 4/4", "assignee": {"type": "agent", "id": dev.actor_id}})
+    platform_work = tasks.create(conn, owner, {"title": "Fix the worker", "topic": "dev",
+                                               "assignee": {"type": "agent", "id": company["se"].actor_id}})
+    by_lead = tasks.create(conn, owner, {"title": "Review T-1", "source": f"review:{work['id']}",
+                                         "assignee": {"type": "agent", "id": lead.actor_id}})
+    by_qa = tasks.create(conn, owner, {"title": "Review T-2", "source": f"review:{work['id']}",
+                                       "assignee": {"type": "agent", "id": qa.actor_id}})
+    platform_review = tasks.create(conn, owner, {"title": "Review T-3", "source": f"review:{platform_work['id']}",
+                                                 "assignee": {"type": "agent", "id": qa.actor_id}})
+    setup = tasks.create(conn, owner, {"title": "Review the video", "source": "system",
+                                       "assignee": {"type": "agent", "id": lead.actor_id}})
+    sys_platform = tasks.create(conn, owner, {"title": "Agent profiles", "source": "system", "topic": "agents",
+                                              "assignee": {"type": "agent", "id": company["se"].actor_id}})
+    sched = tasks.create(conn, owner, {"title": "Nightly check", "source": "scheduler",
+                                       "assignee": {"type": "agent", "id": lead.actor_id}})
+    kind = lambda t: tasks.get(conn, owner, t["id"])["value_kind_effective"]  # noqa: E731
+    assert kind(work) == "business" and kind(platform_work) == "platform"
+    assert kind(by_lead) == "business"          # the business team's reviewer
+    assert kind(by_qa) == "business"            # a platform reviewer of business work: the reviewed task decides
+    assert kind(platform_review) == "platform"  # a review of platform work stays platform
+    assert kind(setup) == "business"            # the system's task for a business team
+    assert kind(sys_platform) == "platform"
+    assert kind(sched) == "platform"            # other platform sources are unchanged
+    # A self-referencing or malformed review source cannot loop.
+    odd = tasks.create(conn, owner, {"title": "Review ?", "source": "review:x",
+                                     "assignee": {"type": "agent", "id": qa.actor_id}})
+    assert kind(odd) == "platform"
