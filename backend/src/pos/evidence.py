@@ -67,6 +67,9 @@ NEGATION_RE = re.compile(r"(?:\b(?:not|nothing|never|no|wasn't|isn't|haven't|has
 URL_RE = re.compile(r"https?://[^\s<>()\[\]{}\"'`|]+", re.IGNORECASE)
 # A commit sha: lowercase hex with a digit and a letter, not a part of a uuid, a path or a chunk id.
 SHA_RE = re.compile(r"(?<![\w\-/.])([0-9a-f]{7,40})(?![\w\-/]|:c\d)")
+# Right after "commit"/"sha"/"hash", an all-digit (or all-letter) hex run is a sha too: about 4 % of
+# 7-character short shas are all digits, and "commit 4825913" must not read as a hand-in without evidence.
+SHA_KEYWORD_RE = re.compile(r"\b(?:commit\w*|sha|hash|revize|revision)\s*[:#]?\s*$", re.IGNORECASE)
 OUTBOUND_RE = re.compile(r"\b(?:outbound|odchozí(?:\s+zpráv[ayě])?|audit)\s*(?:id\s*)?[#:]?\s*(\d{1,9})\b",
                          re.IGNORECASE)
 MESSAGE_ID_RE = re.compile(r"(?:message[\s\-_]?id|msg[\s\-_]?id|id\s+zprávy)\s*[:=#]?\s*<?([^\s<>,;]{3,200})>?",
@@ -185,8 +188,10 @@ def extract(text: str | None) -> dict[str, list[str]]:
     t = text or ""
     urls = list(dict.fromkeys(u.rstrip(".,;:!?)'\"") for u in URL_RE.findall(t)))
     rest = URL_RE.sub(" ", t)
-    shas = [s for s in dict.fromkeys(SHA_RE.findall(rest))
-            if re.search(r"\d", s) and re.search(r"[a-f]", s)]
+    shas = list(dict.fromkeys(
+        m.group(1) for m in SHA_RE.finditer(rest)
+        if (re.search(r"\d", m.group(1)) and re.search(r"[a-f]", m.group(1)))
+        or SHA_KEYWORD_RE.search(rest[max(0, m.start() - 20):m.start()])))
     return {
         "url": urls,
         "sha": shas,

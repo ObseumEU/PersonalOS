@@ -2,6 +2,7 @@
 or test output that checks out; goal numbers match the metrics; people and review items are not gated."""
 
 import json
+import os
 import subprocess
 import time
 
@@ -57,11 +58,17 @@ def _actions(conn, task_id):
                                        "AND action LIKE 'handin_evidence%' ORDER BY id", (task_id,))]
 
 
-def _git_repo(path):
+def _git_repo(path, message="x"):
+    """A repo with one commit whose sha is fixed (fixed author, dates and message), so a test never
+    depends on a random sha; different messages give the repos different shas."""
     path.mkdir()
-    run = lambda *a: subprocess.run(["git", "-C", str(path), *a], check=True, capture_output=True, text=True)  # noqa: E731
+    env = {**os.environ, "GIT_AUTHOR_DATE": "2026-10-01T12:00:00+00:00",
+           "GIT_COMMITTER_DATE": "2026-10-01T12:00:00+00:00"}
+    run = lambda *a: subprocess.run(["git", "-C", str(path), *a], check=True, capture_output=True,  # noqa: E731
+                                    text=True, env=env)
     run("init", "-q")
-    run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+    run("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+        "commit", "-q", "--allow-empty", "-m", message)
     return run("rev-parse", "HEAD").stdout.strip()
 
 
@@ -78,6 +85,9 @@ def test_claims_and_items_are_found():
     assert found["sha"] == ["3f2a9c1d"] and found["url"] == ["https://example.com/a?b=1"]
     assert found["file"] == ["12"] and found["note"] == ["7"] and found["outbound"] == ["44"]
     assert found["message_id"] == ["abc@mail.x"]
+    # An all-digit short sha counts right after "commit"/"sha", not as a bare number in prose.
+    assert evidence.extract("Opraveno, commit 4825913.")["sha"] == ["4825913"]
+    assert evidence.extract("SHA: 1234567890ab, číslo 4825913")["sha"] == ["1234567890ab"]
 
 
 # ------------------------------------------------------------------ a commit sha
@@ -102,8 +112,9 @@ def test_a_sha_is_verified_in_a_git_repo(env, monkeypatch):
 def test_a_commit_in_a_submodule_is_evidence_too(env, monkeypatch):
     """Prod 2026-10: T-248 and T-509 were returned with "no such commit in the repository" for commits
     of the Kniha web submodule (/agent-work/kniha/web) while only /agent-work/kniha was searched."""
-    app_sha = _git_repo(env["tmp"] / "kniha")
-    web_sha = _git_repo(env["tmp"] / "kniha" / "web")
+    app_sha = _git_repo(env["tmp"] / "kniha", "app")
+    web_sha = _git_repo(env["tmp"] / "kniha" / "web", "web")
+    assert app_sha != web_sha
     gitmodules = ["[submodule \"web\"]", "\tpath = web", "\turl = https://example.invalid/web.git",
                   "[submodule \"Knowlage\"]", "\tpath = Knowlage", "\turl = https://example.invalid/k.git", ""]
     (env["tmp"] / "kniha" / ".gitmodules").write_text("\n".join(gitmodules), encoding="utf-8")
