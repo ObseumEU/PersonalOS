@@ -106,3 +106,32 @@ def test_a_platform_fault_goes_to_the_sre(env, tmp_path):
     assert [m for m in _dms_to(conn, sre) if t["ref"] in m["body"] and "platformy" in m["body"]]
     assert not [m for m in _dms_to(conn, lead) if t["ref"] in m["body"]]
     assert not [m for m in _thread(conn, msg["id"]) if m["author_id"] != aid]
+
+
+def test_a_hand_back_goes_to_who_delegated_it_not_to_the_owner(env, tmp_path):
+    """Prod 2026-10: the Kniha Lead's App E2E subtasks (T-373/T-375/T-377) went to the owner's queue
+    after every failed Developer run. Now: the delegating agent, else the agent's lead, else the owner."""
+    client, conn, owner, aid, key = env
+    lead = _lead(conn, owner, aid, tmp_path)
+    other = agents.create_agent(conn, owner, name="Kniha Lead 2", purpose="lead", lifetime="long_lived",
+                                data_dir=tmp_path)["agent"]["id"]
+    delegated = tasks.create(conn, Ctx(other), {"title": "App E2E 1/4", "assignee": {"type": "agent", "id": aid}})
+    own = tasks.create(conn, Ctx(aid), {"title": "Vlastní úklid", "assignee": {"type": "agent", "id": aid}})
+    from_owner = tasks.create(conn, owner, {"title": "Světlo v garáži", "assignee": {"type": "agent", "id": aid}})
+    conn.commit()
+    h = {"Authorization": f"Bearer {key}"}
+    for t in (delegated, own, from_owner):
+        assert client.post(f"/api/worker/tasks/{t['ref']}/handback", headers=h, json={"note": "no budget"}).status_code == 200
+    got = {t["title"]: tasks.get(conn, owner, t["id"]) for t in (delegated, own, from_owner)}
+    assert got["App E2E 1/4"]["assignee_id"] == other           # the agent that delegated it
+    assert got["Vlastní úklid"]["assignee_id"] == lead           # its own task: its lead
+    assert got["Světlo v garáži"]["assignee_id"] == owner.actor_id  # the owner's own request stays his
+    assert all(t["status"] == "next" and "handed it back" in t["progress_note"] for t in got.values())
+    # Without a lead (and an archived delegator) it still lands somewhere: the owner.
+    conn.execute("UPDATE actors SET reports_to = NULL WHERE id = ?", (aid,))
+    agents.archive(conn, owner, other)
+    again = tasks.create(conn, owner, {"title": "x", "assignee": {"type": "agent", "id": aid}})
+    conn.execute("UPDATE tasks SET created_by = ? WHERE id = ?", (other, again["id"]))
+    conn.commit()
+    assert client.post(f"/api/worker/tasks/{again['ref']}/handback", headers=h, json={"note": "x"}).status_code == 200
+    assert tasks.get(conn, owner, again["id"])["assignee_id"] == owner.actor_id

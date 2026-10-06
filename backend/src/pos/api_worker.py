@@ -378,6 +378,32 @@ def no_result_hold(conn: sqlite3.Connection, task_id: int, actor_id: int) -> str
     return at
 
 
+def hand_back_to(conn: sqlite3.Connection, tid: int, agent_id: int) -> dict:
+    """Who gets a task an agent hands back: the agent that delegated it (its creator), else the
+    handing agent's lead, else the owner. Only the owner's own tasks (and work nobody else can take)
+    go to him (prod 2026-10: the Kniha Lead's App E2E subtasks T-373/T-375/T-377 landed in the owner's
+    queue after every failed Developer run, and he "accepted" their reviews)."""
+    owner = actors.owner_id(conn)
+    row = conn.execute("SELECT created_by FROM tasks WHERE id = ?", (tid,)).fetchone()
+
+    def active_agent(aid) -> bool:
+        if not aid or aid in (owner, agent_id) or actors.is_system(conn, aid):
+            return False
+        a = conn.execute("SELECT kind, archived_at FROM actors WHERE id = ?", (aid,)).fetchone()
+        return a is not None and a["kind"] != "human" and not a["archived_at"]
+
+    creator = row["created_by"] if row else None
+    if creator == owner:
+        return {"type": "human", "id": owner}
+    if active_agent(creator):
+        return {"type": "agent", "id": creator}
+    me = conn.execute("SELECT reports_to FROM actors WHERE id = ?", (agent_id,)).fetchone()
+    lead = me["reports_to"] if me is not None and "reports_to" in me.keys() else None
+    if active_agent(lead):
+        return {"type": "agent", "id": lead}
+    return {"type": "human", "id": owner}
+
+
 def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
     from . import meetings, owner_notice
 
@@ -387,7 +413,7 @@ def _hand_back(conn: sqlite3.Connection, ctx: Ctx, tid: int, note: str) -> dict:
     name = actors.get(conn, ctx.actor_id)["name"]
     before = conn.execute("SELECT progress_note FROM tasks WHERE id = ?", (tid,)).fetchone()
     tasks.update(conn, ctx, tid, {"status": "next", "progress_note": f"{name} handed it back: {note}"[:500]})
-    t = tasks.assign(conn, ctx, tid, {"type": "human", "id": actors.owner_id(conn)})
+    t = tasks.assign(conn, ctx, tid, hand_back_to(conn, tid, ctx.actor_id))
     back_off(conn, tid)
     # Never silent: a task the owner asked for tells him what happened, in his thread.
     owner_notice.notify(conn, tid, ctx.actor_id, "capped" if (note or "").startswith("step limit") else "handed_back",
