@@ -582,12 +582,185 @@ def company_capped(conn: sqlite3.Connection, now: datetime | None = None, pendin
         u = used(conn, None, metric, now) - (1 if pending and metric == "runs_day" else 0)
         if u < cap:
             continue
-        until = company_free_at(conn, metric, cap, now)
+        if metric in USD_METRICS:
+            # The queue wakes when the cheapest waiting business run fits, not when a few cents free up
+            # (prod 10-06 19:10: $0.14 free, two runs started, $0.50 spent; the queue flapped).
+            until = _usd_free_at(conn, metric, cap, cheapest_waiting_usd(conn, now), in_flight(conn, now)["usd"], now)
+        else:
+            until = company_free_at(conn, metric, cap, now)
         if hit is None or until > hit["_until"]:
             hit = {"metric": metric, "used": u, "cap": cap, "until": _iso(until), "_until": until}
     if hit:
         hit.pop("_until")
     return hit
+
+
+# ------------------------------------------------------------------ budget-aware admission
+#
+# prod 2026-10-06: the cap gate opened when anything at all was free. 19:10 UTC $0.14 free, two runs started
+# ($0.50 spent); 19:23 three runs started ($1.20). A run's cost reaches engine_usage only when it ends, so every
+# run admitted in the same minute saw the same headroom. A run is admitted now only when the USD headroom left
+# after the runs already in flight (their estimate, less what they have recorded) covers its own estimate, and
+# POST /runs admits one at a time (a write lock around the check and the run row).
+
+USD_METRICS = ("usd_day", "usd_month")
+RUN_EST_FLOOR_USD = 0.30         # no run is estimated below this (prod 10-06: half the agents' medians are ~$0.15-0.30)
+CODING_RUN_EST_FLOOR_USD = 0.75  # a coding run (CODING_ROLES): its p75 and at least this (Software Engineer p75 $0.64)
+RUN_EST_SAMPLE = 20              # the agent's last this many finished runs ...
+RUN_EST_LOOKBACK_D = 7           # ... within this many days
+IN_FLIGHT_MINUTES = 15           # a running run with a heartbeat (or start) this recent is in flight
+IN_FLIGHT_MAX_H = 3              # an older "running" row is a stale one, not spend to come
+IN_FLIGHT_RECHECK_MIN = 5        # the runs in flight alone fill the room: ask again this soon (they end and record)
+
+
+def _is_coding(conn: sqlite3.Connection, agent_id: int) -> bool:
+    r = conn.execute("SELECT role FROM actors WHERE id = ?", (agent_id,)).fetchone()
+    return r is not None and (r["role"] or "") in CODING_ROLES
+
+
+def estimate_run_usd(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None) -> float:
+    """What the agent's next run will likely cost: the median of its recent finished runs (a coding agent: the
+    75th percentile), never below RUN_EST_FLOOR_USD (CODING_RUN_EST_FLOOR_USD for a coding agent)."""
+    now = now or utcnow()
+    rows = conn.execute(
+        "SELECT cost_usd FROM runs WHERE actor_id = ? AND started_at >= ? AND status NOT IN ('blocked', 'running') "
+        "AND cost_usd IS NOT NULL ORDER BY id DESC LIMIT ?",
+        (agent_id, _iso(now - timedelta(days=RUN_EST_LOOKBACK_D)), RUN_EST_SAMPLE)).fetchall()
+    costs = sorted(float(r[0]) for r in rows)
+    coding = _is_coding(conn, agent_id)
+    floor = CODING_RUN_EST_FLOOR_USD if coding else RUN_EST_FLOOR_USD
+    if not costs:
+        return floor
+    if coding:
+        typical = costs[min(len(costs) - 1, int(0.75 * len(costs)))]
+    else:
+        mid = len(costs) // 2
+        typical = costs[mid] if len(costs) % 2 else (costs[mid - 1] + costs[mid]) / 2
+    return round(max(floor, typical), 4)
+
+
+def in_flight(conn: sqlite3.Connection, now: datetime | None = None, exclude_run: int | None = None) -> dict:
+    """The runs going on now and what they will still spend: each one's estimate less what it has recorded."""
+    now = now or utcnow()
+    rows = conn.execute(
+        "SELECT id, actor_id FROM runs WHERE status = 'running' AND started_at >= ? "
+        "AND COALESCE(heartbeat_at, started_at) >= ? AND id IS NOT ?",
+        (_iso(now - timedelta(hours=IN_FLIGHT_MAX_H)), _iso(now - timedelta(minutes=IN_FLIGHT_MINUTES)),
+         exclude_run)).fetchall()
+    est: dict[int, float] = {}
+    total = 0.0
+    for r in rows:
+        if r["actor_id"] not in est:
+            est[r["actor_id"]] = estimate_run_usd(conn, r["actor_id"], now)
+        spent = conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM engine_usage WHERE run_id = ?",
+                             (r["id"],)).fetchone()[0]
+        total += max(0.0, est[r["actor_id"]] - float(spent or 0))
+    return {"runs": len(rows), "usd": round(total, 4)}
+
+
+_waiting_cache: dict = {}
+WAITING_CACHE_S = 60  # every waiting agent's /next poll asks; the queue changes slower than that
+
+
+def cheapest_waiting_usd(conn: sqlite3.Connection, now: datetime | None = None) -> float:
+    """The estimate of the cheapest run waiting in the queue: a business task's when one waits (near the cap only
+    those start, pos.access.business_only), else any task's; RUN_EST_FLOOR_USD when nothing waits."""
+    import time
+
+    from .. import business
+
+    now = now or utcnow()
+    fp = conn.execute("SELECT COUNT(*), SUM(id), SUM(COALESCE(assignee_id, 0) * id), MAX(retry_after), "
+                      "SUM(CASE WHEN status = 'working' THEN id ELSE 0 END) FROM tasks "
+                      "WHERE status IN ('next', 'working') AND archived_at IS NULL").fetchone()
+    db = conn.execute("PRAGMA database_list").fetchone()[2]
+    key = (db, tuple(fp))
+    hit = _waiting_cache.get(key)
+    if hit and time.monotonic() - hit[0] < WAITING_CACHE_S:
+        return hit[1]
+    rows = conn.execute(
+        """SELECT t.* FROM tasks t JOIN actors a ON a.id = t.assignee_id
+           WHERE a.kind != 'human' AND a.paused_at IS NULL AND a.archived_at IS NULL AND t.archived_at IS NULL
+           AND t.status IN ('next', 'working') AND (t.retry_after IS NULL OR t.retry_after <= ?)
+           ORDER BY COALESCE(t.priority, 4), t.id LIMIT 300""", (_iso(now),)).fetchall()
+    roles = business._roles(conn)
+    est: dict[int, float] = {}
+    best_business = best_any = None
+    for r in rows:
+        aid = r["assignee_id"]
+        if aid not in est:
+            est[aid] = estimate_run_usd(conn, aid, now)
+        e = est[aid]
+        best_any = e if best_any is None else min(best_any, e)
+        if (best_business is None or e < best_business) and business.classify(conn, r, roles) == "business":
+            best_business = e
+    value = best_business if best_business is not None else best_any if best_any is not None else RUN_EST_FLOOR_USD
+    if len(_waiting_cache) > 32:
+        _waiting_cache.clear()
+    _waiting_cache[key] = (time.monotonic(), value)
+    return value
+
+
+def _usd_free_at(conn: sqlite3.Connection, metric: str, cap: float, need: float, flying: float,
+                 now: datetime) -> datetime:
+    """When a run estimated at `need` fits under the USD cap, with `flying` still to be spent by the runs in
+    flight: the month metric at the next month, the rolling 24 h one when enough old spend has left the window."""
+    if metric.endswith("month"):
+        return company_free_at(conn, metric, cap, now)
+    below = cap - flying - need
+    if below <= 0:  # the runs in flight alone fill it: they end, record their cost, and the room is counted again
+        return now + timedelta(minutes=IN_FLIGHT_RECHECK_MIN)
+    if used(conn, None, metric, now) <= below:
+        return now
+    return company_free_at(conn, metric, below + 1e-6, now)
+
+
+def admission(conn: sqlite3.Connection, agent_id: int, now: datetime | None = None,
+              exclude_run: int | None = None) -> dict | None:
+    """May the agent start a run now? None when it fits; else the hold: {metric, used, cap, in_flight,
+    in_flight_runs, estimate, headroom, until (when its own run fits), queue_until (when the cheapest waiting
+    business run fits; the queue's company_capped_until), spent (nothing at all fits)}.
+
+    A company cap that is spent holds everyone (company_capped). Under a USD cap a run is admitted only when
+    cap - used - in flight >= its estimate (estimate_run_usd)."""
+    if not store.ready(conn):
+        return None
+    now = now or utcnow()
+    hard = company_capped(conn, now)
+    if hard:
+        return {**hard, "estimate": None, "in_flight": None, "in_flight_runs": None, "headroom": None,
+                "queue_until": hard["until"], "spent": True}
+    est = flying = None
+    hit = None
+    for metric in USD_METRICS:
+        cap = limit(conn, None, metric, now)
+        if cap is None:
+            continue
+        if est is None:
+            est, flying = estimate_run_usd(conn, agent_id, now), in_flight(conn, now, exclude_run)
+        u = used(conn, None, metric, now)
+        headroom = cap - u - flying["usd"]
+        if headroom >= est:
+            continue
+        until = _usd_free_at(conn, metric, cap, est, flying["usd"], now)
+        if hit is not None and until <= datetime.fromisoformat(hit["until"]):
+            continue
+        queue = _usd_free_at(conn, metric, cap, cheapest_waiting_usd(conn, now), flying["usd"], now)
+        hit = {"metric": metric, "used": round(u, 4), "cap": cap, "in_flight": flying["usd"],
+               "in_flight_runs": flying["runs"], "estimate": est, "headroom": round(headroom, 4),
+               "until": _iso(until), "queue_until": _iso(min(queue, until)),
+               "spent": cap - u < RUN_EST_FLOOR_USD}
+    return hit
+
+
+def admission_reason(hold: dict) -> str:
+    if hold.get("estimate") is None:
+        return company_cap_reason(hold)
+    m = hold["metric"]
+    return (f"company cap {METRICS[m]}: {_fmt(m, hold['used'])} of {_fmt(m, hold['cap'])} used and "
+            f"{_fmt(m, hold['in_flight'])} still to come from {hold['in_flight_runs']} runs in flight; this "
+            f"agent's run (about {_fmt(m, hold['estimate'])}) does not fit. It waits until {hold['until']} "
+            "(nothing to do: the queue resumes by itself), or until the owner raises the cap")
 
 
 def business_only_until(conn: sqlite3.Connection, now: datetime | None = None) -> str | None:

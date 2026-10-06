@@ -510,8 +510,11 @@ def blocker_findings(conn: sqlite3.Connection, text: str) -> list[Finding]:
                          and p not in ("api", "key", "token", "prod", "test")]
                 if parts and all(re.search(r"(?<![a-z])" + re.escape(p), n) for p in parts[:2]):
                     checked = True
-                    out.append(Finding("blocker", f"credential „{name}“ v registru existuje (použij {{{{cred:{name}}}}}); "
-                                                  f"tvrzení „{s[:100]}“ neplatí, nebo napiš přesnou chybu", name))
+                    # registered, but its 1Password item is missing (prod 10-06: kniha-test-basic-auth): the claim holds
+                    if _cred_state(conn, name=name)["state"] != "missing":
+                        out.append(Finding("blocker", f"credential „{name}“ v registru existuje (použij "
+                                                      f"{{{{cred:{name}}}}}); tvrzení „{s[:100]}“ neplatí, nebo napiš "
+                                                      "přesnou chybu", name))
                     break
             else:
                 checked = True  # the registry confirms it is missing
@@ -543,10 +546,170 @@ def blocker_gate(conn: sqlite3.Connection, ctx: Ctx, surface: str, text: str) ->
 
 def owner_message_gate(conn: sqlite3.Connection, ctx: Ctx, surface: str, text: str, *,
                        asks_to_send: bool = False, task_id: int | None = None) -> None:
-    """A message, ask or chat to the owner: blockers grounded; content he should send or approve, grounded."""
-    blocker_gate(conn, ctx, surface, text)
+    """A message, ask or chat to the owner: what it points him to resolves (credentials, 1Password references),
+    blockers grounded; content he should send or approve, grounded. A comment the message sends him to read
+    ("plné znění v komentáři id 1364") is checked with it."""
+    full = (text or "") + referenced_content(conn, text)
+    credential_gate(conn, ctx, surface, full)
+    blocker_gate(conn, ctx, surface, full)
     if asks_to_send:
         gate(conn, ctx, surface, text, audience="owner", task_id=task_id)
+
+
+# ------------------------------------------------------------------ credentials the text points to
+
+# prod 2026-10-06 (T-767, message 2226): a message for the owner said the logins were in the 1Password items
+# kniha-test-basic-auth and kniha-test-admin, which did not exist; it went to the CEO "to forward unchanged".
+CRED_CONTEXT_RE = re.compile(r"(?<![a-z])(?:1password|1pass|polozk|credential|trezor|vault|prihlasovaci|"
+                             r"prihlaseni|login|heslo|hesla|secret)")
+CRED_TOKEN_RE = re.compile(r"(?<![\w{])cred:([a-z0-9][a-z0-9_.-]*[a-z0-9])", re.IGNORECASE)
+QUOTED_TOKEN_RE = re.compile(r"[`„“\"']([A-Za-z0-9][A-Za-z0-9_.-]{2,62})[`“”\"']")
+QUOTED_OP_RE = re.compile(r"`(op://[^`\n]+)`")
+# A sentence asking for the item to be made ("doplň položku X do 1Password") points to nothing yet.
+CRED_CREATE_RE = re.compile(r"(?<![a-z])(?:dopln|vytvor|zaloz|pridej|pridat|pridejte|nastav|vloz|uloz|create|add|"
+                            r"set up)")
+CRED_CACHE_S = 120
+_cred_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+def _cred_state(conn: sqlite3.Connection, *, name: str | None = None, ref: str | None = None) -> dict:
+    """pos.credentials.check_reference (check only, never a value), cached briefly: one owner message does not
+    ask 1Password again for every sentence, nor every retry of the same message."""
+    import time
+
+    from .credentials import service as creds
+
+    db = conn.execute("PRAGMA database_list").fetchone()[2]
+    key = (db, name, ref)
+    hit = _cred_cache.get(key)
+    if hit and time.monotonic() - hit[0] < CRED_CACHE_S:
+        return hit[1]
+    try:
+        got = creds.check_reference(conn, name=name, ref=ref)
+    except Exception as e:  # noqa: BLE001 - a check that cannot run says nothing either way
+        got = {"state": "unknown", "why": str(e)[:200]}
+    if len(_cred_cache) > 256:
+        _cred_cache.clear()
+    _cred_cache[key] = (time.monotonic(), got)
+    return got
+
+
+def credential_findings(conn: sqlite3.Connection, text: str) -> list[Finding]:
+    """Credentials and 1Password references the text presents as usable that do not resolve. A sentence that says
+    one is missing is a blocker claim (blocker_findings), not a pointer."""
+    from .credentials import service as creds
+
+    names = [n.lower() for n in _credential_names(conn)]
+    out: list[Finding] = []
+    seen: set[str] = set()
+    for s in _sentences(text):
+        n = reality.norm(s)
+        if (BLOCKER_RE.search(n) and not FIXED_RE.search(n)) or CRED_CREATE_RE.search(n):
+            continue
+        refs = list(dict.fromkeys(QUOTED_OP_RE.findall(s) + creds.OP_REF_RE.findall(QUOTED_OP_RE.sub(" ", s))))
+        low = s.lower()
+        found = [m.lower() for m in CRED_TOKEN_RE.findall(s)]
+        found += [nm for nm in names if re.search(r"(?<![\w.-])" + re.escape(nm) + r"(?![\w-])", low)]
+        if CRED_CONTEXT_RE.search(n):
+            found += [t.lower() for t in QUOTED_TOKEN_RE.findall(s)
+                      if ("-" in t or "_" in t) and "." not in t and "/" not in t]
+        for ref in refs:
+            ref = ref.strip().rstrip(".,;:!?)")
+            if ref in seen:
+                continue
+            seen.add(ref)
+            st = _cred_state(conn, ref=ref)
+            if st["state"] == "missing":
+                out.append(Finding("credential", f"reference {ref} se nepřeloží: {st['why']} („{s[:100]}“)", ref))
+        for name in dict.fromkeys(found):
+            if name in seen:
+                continue
+            seen.add(name)
+            st = _cred_state(conn, name=name)
+            if st["state"] == "missing":
+                out.append(Finding("credential", f"credential „{name}“ {st['why']} („{s[:100]}“)", name))
+    return out
+
+
+def credential_gate(conn: sqlite3.Connection, ctx: Ctx, surface: str, text: str) -> None:
+    """Before content reaches the owner (directly or through another agent): every credential name and 1Password
+    reference it points him to must resolve (checked without reading a value into anything), else it goes back
+    to the agent with a Czech reason. The owner can let the same text through (override)."""
+    if not enabled() or not (text or "").strip() or _is_person(conn, ctx.actor_id):
+        return
+    found = credential_findings(conn, text)
+    if not found:
+        return
+    ensure_schema(conn)
+    fp = _fp(surface, text)
+    v = Verdict(findings=found)
+    ov = _override(conn, fp)
+    if ov is not None:
+        _record(conn, ctx, surface, "owner", fp, "override", v, text, None)
+        conn.execute("UPDATE grounding_overrides SET used_count = used_count + 1 WHERE id = ?", (ov["id"],))
+        return
+    cid = _record(conn, ctx, surface, "owner", fp, "block", v, text, None)
+    audit.log(conn, ctx, "claim_ungrounded", "grounding_check", cid, surface=surface, audience="owner",
+              kinds=["credential"], reasons=v.reasons[:5])
+    conn.commit()
+    raise _invalid(f"Zpráva majiteli nedoručena (kontrola #{cid}): " + "; ".join(v.reasons[:4]) + ". Majitel by "
+                   "hledal přihlášení, které neexistuje. Nejdřív zařiď, aby se credential přeložil (credentials_list; "
+                   "chybějící položku v 1Password doplní provozovatel), nebo napiš pravdu: že položka chybí a kdo ji "
+                   "doplní. Výjimku může povolit jen majitel.")
+
+
+# ------------------------------------------------------------------ relays to the owner
+
+COMMENT_REF_RE = re.compile(r"(?<![a-z])(?:koment\w*|comment\w*)[^\n]{0,60}?(?:\bid\s*|#)(\d{1,9})", re.IGNORECASE)
+RELAY_RE = re.compile(r"(?<![a-z])(?:prepos|preposl|predej|predat|predas|tlumoc|forward|relay|pass (?:it|this) on|"
+                      r"posli (?:to|ji|mu|ho|tu zpravu)|dorucit|doruc)")
+VERBATIM_RE = re.compile(r"(?<![a-z])(?:beze zmen|bez zmen|doslova|presne jak|v puvodnim zneni|verbatim|unchanged|"
+                         r"as is|word for word)")
+
+
+def referenced_content(conn: sqlite3.Connection, text: str) -> str:
+    """The task comments a message points to by id ("plné znění je v komentáři T-767 (id 1364)"): what the
+    reader is sent to read, checked with the message."""
+    out = []
+    for cid in list(dict.fromkeys(COMMENT_REF_RE.findall(text or "")))[:5]:
+        try:
+            r = conn.execute("SELECT body FROM task_comments WHERE id = ? AND archived_at IS NULL",
+                             (int(cid),)).fetchone()
+        except sqlite3.OperationalError:
+            return ""
+        if r is not None and r["body"]:
+            out.append(r["body"][:6000])
+    return "".join("\n\n" + b for b in out)
+
+
+def _owner_words(conn: sqlite3.Connection) -> list[str]:
+    name = actors.get(conn, actors.owner_id(conn))["name"] or ""
+    first = reality.norm(name.split()[0]) if name.strip() else ""
+    words = ["majitel", "majitele", "majiteli", "owner", "ownerovi", "davidovi", "davida", "davide", "david"]
+    if len(first) >= 3:
+        words += [first, first + "ovi", first + "a", first + "e"]
+    return list(dict.fromkeys(words))
+
+
+def is_relay_request(conn: sqlite3.Connection, body: str) -> bool:
+    """A message to another agent that asks it to pass something on to the owner ("přepošli ji Davidovi beze
+    změny"): what reaches the owner that way is the sender's, and passes the owner's gate."""
+    n = reality.norm(body or "")
+    if not (RELAY_RE.search(n) or VERBATIM_RE.search(n)):
+        return False
+    return any(re.search(r"(?<![a-z])" + re.escape(w) + r"(?![a-z])", n) for w in _owner_words(conn))
+
+
+def relay_gate(conn: sqlite3.Connection, ctx: Ctx, surface: str, body: str) -> bool:
+    """Before an agent asks another agent to pass content on to the owner: the same gate as a direct message to
+    him (owner_message_gate), on the message and the comments it points to. A relay is not a way around it.
+    Returns whether it was a relay request."""
+    if not enabled() or _is_person(conn, ctx.actor_id) or not is_relay_request(conn, body):
+        return False
+    owner_message_gate(conn, ctx, f"relay_owner:{surface}", body)
+    audit.log(conn, ctx, "owner_relay_checked", None, None, surface=surface,
+              verbatim=bool(VERBATIM_RE.search(reality.norm(body or ""))))
+    return True
 
 
 SEND_ASK_RE = re.compile(r"(?<![a-z])(?:odesl|posl|rozesl|publik|zverejn|schval|send|approve|publish|post)",

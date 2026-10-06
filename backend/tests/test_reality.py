@@ -645,6 +645,154 @@ def test_a_blocker_needs_a_verifiable_reason(env):
                     blocking=False, topic="dpa")["ref"]
 
 
+# ------------------------------------------------------------------ credentials the owner is pointed to
+
+KNIHA_REF = "op://PersonalOS/kniha-test-basic-auth/password"
+GH_REF = "op://PersonalOS/GitHub deploy/token"
+
+
+class FakeOP:
+    """1Password: only GH_REF exists; down=True is a network failure (nothing can be said)."""
+
+    def __init__(self):
+        self.down = False
+        self.resolved = []
+
+    def resolve(self, ref):
+        from pos.credentials import onepassword
+
+        self.resolved.append(ref)
+        if self.down:
+            raise onepassword.Unavailable("1Password: ConnectError: unreachable")
+        if ref != GH_REF:
+            raise onepassword.Unavailable("1Password: error resolving secret reference: no item matched the "
+                                          "secret reference query")
+        return "s3cr3t-value"
+
+    def items(self, vault):
+        if self.down:
+            from pos.credentials import onepassword
+
+            raise onepassword.Unavailable("1Password: ConnectError: unreachable")
+        return [{"id": "i1", "title": "GitHub deploy", "category": "ApiCredentials", "fields": []},
+                {"id": "i2", "title": "Kniha SMTP", "category": "Login", "fields": []}]
+
+
+@pytest.fixture
+def op(env, monkeypatch):
+    from pos.credentials import onepassword, store
+
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "ops_test")
+    monkeypatch.setenv("POS_OP_VAULT", "PersonalOS")
+    fake = FakeOP()
+    onepassword.set_provider(fake)
+    grounding._cred_cache.clear()
+    c = env["conn"]
+    store.ensure_schema(c)
+    for name, ref in (("kniha-test-basic-auth", KNIHA_REF), ("github-deploy", GH_REF)):
+        c.execute("INSERT OR IGNORE INTO credentials (name, op_ref, created_at, updated_at) VALUES (?, ?, "
+                  "'2026-10-01', '2026-10-01')", (name, ref))
+    c.commit()
+    yield fake
+    onepassword.set_provider(None)
+    grounding._cred_cache.clear()
+
+
+T767 = ("Davide, aplikace Kniha je k vyzkoušení na testovací instanci.\n\n"
+        "**Přihlášení** (hodnoty jsou jen v 1Password, trezor **PersonalOS**):\n"
+        "- objednávka a test: položka `kniha-test-basic-auth`\n"
+        "- admin: položka `kniha-test-admin`\n")
+
+
+def test_an_owner_message_pointing_to_a_1password_item_that_does_not_exist_is_blocked(env, op):
+    """prod 2026-10-06, T-767: the owner was told his logins were in 1Password items that did not exist."""
+    c = env["conn"]
+    with pytest.raises(tasks.Invalid, match="kniha-test-basic-auth.*neexistuje") as e:
+        grounding.owner_message_gate(c, env["Lead"], "chat_owner", T767)
+    assert "kniha-test-admin" in str(e.value) and "není v registru" in str(e.value)
+    assert "s3cr3t" not in str(e.value)
+    row = c.execute("SELECT verdict, reasons, detail FROM grounding_checks ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["verdict"] == "block" and "credential" in row["detail"] and "s3cr3t" not in row["reasons"]
+    assert c.execute("SELECT 1 FROM audit_log WHERE action = 'claim_ungrounded'").fetchone()
+    # what resolves passes: a registered credential, its op:// reference, an item of the vault by its title
+    grounding.owner_message_gate(c, env["Lead"], "chat_owner", "Token najdeš v 1Password, položka `github-deploy`.")
+    grounding.owner_message_gate(c, env["Lead"], "chat_owner", f"Reference: `{GH_REF}`.")
+    grounding.owner_message_gate(c, env["Lead"], "chat_owner", "Heslo je v 1Password v položce `kniha-smtp`.")
+    with pytest.raises(tasks.Invalid, match="op://PersonalOS/nic-tu-neni/password"):
+        grounding.owner_message_gate(c, env["Lead"], "chat_owner", "Klíč je v op://PersonalOS/nic-tu-neni/password")
+    # the truth passes: the item is missing and who adds it
+    grounding.owner_message_gate(c, env["Lead"], "chat_owner",
+                                 "Položka `kniha-test-basic-auth` v 1Password zatím chybí: resolve vrací "
+                                 "`no item matched`; doplní ji provozovatel.")
+    grounding.owner_message_gate(c, env["Lead"], "chat_owner",
+                                 "Doplň prosím do 1Password položku `kniha-test-basic-auth` (trezor PersonalOS).")
+    # nothing was written anywhere but the check: no use of the credential is logged
+    assert not c.execute("SELECT 1 FROM credential_uses").fetchone()
+
+
+def test_a_credential_check_that_cannot_reach_1password_does_not_block(env, op):
+    op.down = True
+    grounding.owner_message_gate(env["conn"], env["Lead"], "chat_owner", T767.replace("kniha-test-admin", "x"))
+
+
+def test_a_registered_credential_whose_item_is_missing_really_is_missing(env, op):
+    """The blocker check said "it exists in the registry" although its 1Password item did not."""
+    c = env["conn"]
+    grounding.blocker_gate(c, env["Lead"], "chat_owner", "Chybí nám přístup ke kniha test basic auth: resolve "
+                                                         "vrací `no item matched`.")
+    with pytest.raises(tasks.Invalid, match="github-deploy"):
+        grounding.blocker_gate(c, env["Lead"], "chat_owner", "Chybí nám GitHub token pro deploy.")
+
+
+def test_asking_another_agent_to_forward_to_the_owner_unchanged_passes_the_owner_gate(env, op):
+    """prod 2026-10-06, message 2226: "přepošli ji Davidovi beze změny" sent the T-767 text around the gate."""
+    c = env["conn"]
+    t = tasks.create(c, env["owner"], {"title": "Zpráva pro Davida", "assignee": {"type": "agent",
+                                                                                 "id": env["ids"]["Lead"]}})
+    cm = comments.add(c, env["Lead"], t["id"], T767)
+    c.commit()
+    ask = (f"Zpráva pro Davida je hotová, plné znění je v komentáři {t['ref']} (id {cm['id']}). Prosím, přepošli ji "
+           "Davidovi beze změny jako jednu zprávu.")
+    assert grounding.is_relay_request(c, ask)
+    assert not grounding.is_relay_request(c, "Předej prosím review QA, až bude build zelený.")
+    with pytest.raises(tasks.Invalid, match="kniha-test-basic-auth"):
+        grounding.relay_gate(c, env["Lead"], "chat", ask)
+    row = c.execute("SELECT surface FROM grounding_checks ORDER BY id DESC LIMIT 1").fetchone()
+    assert row["surface"] == "relay_owner:chat"
+    # a relay of grounded content goes through (and is noted)
+    ok = "Přepošli prosím Davidovi: token je v 1Password, položka `github-deploy`."
+    assert grounding.relay_gate(c, env["Lead"], "chat", ok)
+    assert c.execute("SELECT 1 FROM audit_log WHERE action = 'owner_relay_checked'").fetchone()
+    # an ordinary message between agents is not a relay
+    assert not grounding.relay_gate(c, env["Lead"], "chat", "Položka `kniha-test-basic-auth` mi nejde, mrkneš?")
+
+
+def test_the_relay_gate_is_on_the_message_tools(env, op, tmp_path):
+    import anyio
+    from mcp.client import Client
+
+    from pos import mcp_server
+
+    c = env["conn"]
+    t = tasks.create(c, env["owner"], {"title": "Zpráva", "assignee": {"type": "agent", "id": env["ids"]["Lead"]}})
+    cm = comments.add(c, env["Lead"], t["id"], T767)
+    c.commit()
+    server = mcp_server.build(tmp_path / "r.db", default_actor=lambda conn: env["ids"]["Lead"])
+    body = f"Plné znění je v komentáři id {cm['id']}; přepošli ho Davidovi beze změny."
+
+    async def scenario():
+        async with Client(server) as cl:
+            a = await cl.call_tool("chat_send", {"to": "Dev", "body": body})
+            b = await cl.call_tool("send_message", {"to": "Dev", "body": body})
+            ok = await cl.call_tool("chat_send", {"to": "Dev", "body": "Mrkni prosím na T-1."})
+            return a, b, ok
+
+    a, b, ok = anyio.run(scenario)
+    assert a.is_error and "kniha-test-basic-auth" in a.content[0].text
+    assert b.is_error and "kniha-test-basic-auth" in b.content[0].text
+    assert not ok.is_error, ok.content
+
+
 # ------------------------------------------------------------------ the improve signal
 
 def test_ungrounded_claims_are_an_improve_signal(env):

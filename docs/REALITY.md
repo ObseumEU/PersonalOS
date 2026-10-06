@@ -73,8 +73,18 @@ switches it off.
 
 A message, ask or approval to the owner that says something is blocked or missing is checked before
 delivery: DNS (the host resolves → false), a URL "down" (it answers 2xx → false), a credential "missing" (it
-is in the registry → false); any other blocker needs a verifiable reason (an error, a check, an HTTP code, a
-task). Refusals record `blocker_unfounded`.
+is in the registry and its 1Password item resolves → false); any other blocker needs a verifiable reason (an
+error, a check, an HTTP code, a task). Refusals record `blocker_unfounded`.
+
+Credentials the owner is pointed to (`credential_gate`): a credential name, `cred:<name>` or `op://` reference
+that the content presents as usable must resolve (pos.credentials.check_reference: check only, no value read
+into a log or a result, no use logged); an unregistered name must at least be an item of the vault. Otherwise
+the message goes back with a Czech reason (`claim_ungrounded`, kind credential). 1Password unreachable says
+nothing either way. A comment the message points to by id is checked with it.
+
+Relays: a message to another agent that asks it to pass something on to the owner ("přepošli ji Davidovi beze
+změny") passes the same owner gate, on the message and the comments it points to (`relay_gate`, surface
+`relay_owner:*`). The agent that forwards is gated again as it writes to the owner.
 
 ## Not covered (deliberately)
 

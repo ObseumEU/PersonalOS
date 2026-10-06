@@ -30,6 +30,12 @@ approvals); `actors.permissions` stays as a mirror of the active grants.
   cap first, then the agent's limits. `usd_run` is returned by `start_run`;
   the worker uses the tighter of it and `WORKER_CLAUDE_MAX_USD`.
 - The kill switch is unchanged (`pos.killswitch`).
+- Budget-aware admission (`access.admission`): under a USD company cap a run starts only when
+  `cap - used - in flight >= its estimate`. The estimate is the agent's median run cost over its last 20
+  finished runs in 7 days, at least $0.30 (a coding agent: its p75, at least $0.75); a run in flight counts
+  its estimate less what it has recorded. `POST /runs` admits one run at a time (a write lock around the
+  check and the run row); `/next` offers no task to an agent whose run does not fit. The queue's
+  `company_capped_until` is when the cheapest waiting business run fits, not when cents free up.
 
 ## The Access manager's hard limits
 It decides alone (any capability, any budget, permanent or temporary) except:

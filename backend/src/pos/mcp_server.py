@@ -786,6 +786,8 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
 
             if grounding.is_owner(conn, target["id"]):  # a blocker told to the owner is checked first
                 grounding.owner_message_gate(conn, c, "message_owner", body)
+            else:  # "forward it to David unchanged": what reaches him that way passes his gate too
+                grounding.relay_gate(conn, c, "message", body)
             try:
                 return agents.send_message(conn, c, target["id"], body,
                                            tasks.parse_id(task_id) if task_id else None, priority)
@@ -846,6 +848,11 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
                 # To the owner: a blocker claim is checked, content he is asked to send or approve grounded.
                 grounding.owner_message_gate(conn, c, "chat_owner", body,
                                              asks_to_send=blocking and grounding.asks_to_send(body))
+            else:
+                # Asking another agent to pass something on to the owner ("přepošli ji Davidovi beze změny",
+                # prod 10-06 message 2226) is no way around his gate: the message and the comments it points
+                # to are checked as if sent to him.
+                grounding.relay_gate(conn, c, "chat", body)
 
             def go(chat):
                 from . import files

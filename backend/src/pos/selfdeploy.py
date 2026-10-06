@@ -722,6 +722,21 @@ def restore_owner(repo: Path, tree: bool = True) -> int:
     return fixed
 
 
+MANUAL_AUTHOR = "manual deploy"
+
+
+def record_manual(repo: Path, reporter: "Reporter", old: str, new: str, note: str = "") -> Result:
+    """A deploy made by hand (prod 2026-10-06: two manual deploys after 08:29 left the deploy history and the
+    last good deploy behind): reported like the deployer's own ok deploy, stage "manual"."""
+    old, new = git(repo, "rev-parse", old), git(repo, "rev-parse", new)
+    commits = [c for c in git(repo, "rev-list", f"{old}..{new}").splitlines() if c]
+    subjects = git(repo, "log", "--format=%h %s", f"{old}..{new}")
+    res = Result(old, new, "ok", stage="manual", author=MANUAL_AUTHOR, commits=commits,
+                 log=((note.strip() + "\n\n") if note.strip() else "") + subjects)
+    reporter.report(res)
+    return res
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=".")
@@ -731,6 +746,10 @@ def main() -> None:
     ap.add_argument("--source-remote", default="", help="remote to fetch the promote branch from first")
     ap.add_argument("--check-mirror", action="store_true",
                     help="health check: exit 1 unless <remote>/main = the checkout's main = the last good deploy")
+    ap.add_argument("--record-manual", nargs=2, metavar=("OLD", "NEW"),
+                    help="record a deploy made by hand (outside the deployer) as an ok deploy of OLD..NEW, so the "
+                         "deploy history and the last good deploy show what runs")
+    ap.add_argument("--note", default="", help="with --record-manual: what was deployed and how (the deploy log)")
     a = ap.parse_args()
     if os.environ.get("POS_CHILD_PIDFILE"):  # the real interpreter pid (a venv python.exe is only a launcher)
         open(os.environ["POS_CHILD_PIDFILE"], "w").write(str(os.getpid()))
@@ -740,6 +759,10 @@ def main() -> None:
     kw = dict(remote=os.environ.get("DEPLOY_REMOTE", "origin"), branch=os.environ.get("DEPLOY_BRANCH", "main"),
               test_cmd=os.environ.get("DEPLOY_TEST_CMD", DEFAULT_TEST), up_cmd=os.environ.get("DEPLOY_UP_CMD", DEFAULT_UP),
               health_url=os.environ.get("DEPLOY_HEALTH_URL", "http://localhost:8090/api/health"))
+    if a.record_manual:
+        res = record_manual(Path(a.repo), reporter, *a.record_manual, note=a.note)
+        print(f"recorded manual deploy {res.old[:10]}..{res.new[:10]} ({len(res.commits)} commits)", flush=True)
+        return
     if a.check_mirror:  # health check: deployer's main = the agents' deployer/main = production
         ok, line = mirror_check(Path(a.repo), kw["remote"], kw["branch"], reporter.last_good())
         print(f"mirror {'ok' if ok else 'MISMATCH'}: {line}", flush=True)

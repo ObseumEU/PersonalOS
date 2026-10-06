@@ -305,6 +305,111 @@ def test_a_spent_company_cap_holds_the_queue_without_runs_comments_or_retries(ap
     assert client.post("/api/worker/runs", json={"kind": "task", "task_id": t["ref"]}, headers=h).status_code == 201
 
 
+def _run_row(conn, agent_id, cost=None, status="ok", minutes_ago=30.0, heartbeat=True):
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds")
+    cur = conn.execute("INSERT INTO runs (actor_id, kind, status, started_at, heartbeat_at, cost_usd) "
+                       "VALUES (?, 'task', ?, ?, ?, ?)", (agent_id, status, at, at if heartbeat else None, cost))
+    conn.commit()
+    return cur.lastrowid
+
+
+def _second_agent(app, name="Builder"):
+    made = agents.create_agent(app["conn"], app["owner"], name=name, purpose="builds", lifetime="long_lived",
+                               permissions=["tasks:read", "tasks:claim"], data_dir=app["db"].parent)
+    return made["agent"]["id"], made["api_key"]
+
+
+def test_run_estimate_is_the_median_with_a_floor_and_higher_for_coding_agents(app):
+    conn, agent = app["conn"], app["agent"]
+    assert access.estimate_run_usd(conn, agent) == access.RUN_EST_FLOOR_USD  # no history: the floor
+    for c in (0.05, 0.10, 0.12):
+        _run_row(conn, agent, c)
+    assert access.estimate_run_usd(conn, agent) == access.RUN_EST_FLOOR_USD  # cheap runs: still the floor
+    for c in (0.60, 0.70, 0.80, 2.0):
+        _run_row(conn, agent, c)
+    assert access.estimate_run_usd(conn, agent) == pytest.approx(0.60)  # the median of 7
+    _run_row(conn, agent, 50.0, status="blocked")  # refused and running rows are not costs
+    _run_row(conn, agent, None, status="running")
+    assert access.estimate_run_usd(conn, agent) == pytest.approx(0.60)
+    dev, _ = _second_agent(app, "Coder")
+    conn.execute("UPDATE actors SET role = 'developer' WHERE id = ?", (dev,))
+    assert access.estimate_run_usd(conn, dev) == access.CODING_RUN_EST_FLOOR_USD > access.RUN_EST_FLOOR_USD
+    for c in (0.2, 0.3, 0.5, 1.2):
+        _run_row(conn, dev, c)
+    assert access.estimate_run_usd(conn, dev) == pytest.approx(1.2)  # a coding agent: its p75
+
+
+def test_admission_counts_the_runs_in_flight_and_admits_one_at_a_time(app):
+    """prod 2026-10-06: 19:10 UTC $0.14 free and two runs started ($0.50); 19:23 three runs started ($1.20)."""
+    client, conn, agent = app["client"], app["conn"], app["agent"]
+    other, other_key = _second_agent(app)
+    access.set_budget(conn, app["owner"], None, "usd_day", 5.0, "company cap")
+    _usage(conn, agent, 4.45, hours_ago=20)  # $0.55 of room: one run at the $0.30 floor, not two
+    # the first agent's run fits and is admitted
+    r = client.post("/api/worker/runs", json={"kind": "task"}, headers={"Authorization": f"Bearer {app['key']}"})
+    assert r.status_code == 201, r.text
+    assert access.in_flight(conn) == {"runs": 1, "usd": access.RUN_EST_FLOOR_USD}
+    # the second sees it in flight: $0.55 - $0.30 = $0.25 does not cover its $0.30 run; refused before a run row
+    h2 = {"Authorization": f"Bearer {other_key}"}
+    r = client.post("/api/worker/runs", json={"kind": "task"}, headers=h2)
+    assert r.status_code == 409 and "does not fit" in r.json()["detail"] and "company cap" in r.json()["detail"]
+    assert conn.execute("SELECT COUNT(*) FROM runs WHERE actor_id = ?", (other,)).fetchone()[0] == 0
+    t = tasks.create(conn, app["owner"], {"title": "Napiš kapitolu", "assignee": {"type": "agent", "id": other}})
+    conn.execute("UPDATE tasks SET status = 'next' WHERE id = ?", (t["id"],))
+    conn.commit()
+    work = client.get("/api/worker/next", params={"wait": 0}, headers=h2).json()
+    assert "task" not in work and work["state"]["company_capped"] == "usd_day"
+    adm = work["state"]["admission"]
+    assert adm["in_flight_runs"] == 1 and adm["estimate"] == access.RUN_EST_FLOOR_USD and adm["headroom"] < 0.3
+    # the cap is not spent ($4.45 of $5): no owner notice for a run that waits on the one in flight
+    assert not [b for b in _dms(conn, actors.owner_id(conn)) if "Strop firmy" in b]
+    # the run in flight ends having spent $0.10: the room is $0.45 again and the task is offered
+    run_id = conn.execute("SELECT id FROM runs WHERE actor_id = ?", (agent,)).fetchone()[0]
+    conn.execute("UPDATE runs SET status = 'ok', cost_usd = 0.10 WHERE id = ?", (run_id,))
+    conn.execute("INSERT INTO engine_usage (at, engine, actor_id, run_id, cost_usd) VALUES (?, 'claude', ?, ?, 0.10)",
+                 (datetime.now(timezone.utc).isoformat(timespec="seconds"), agent, run_id))
+    conn.commit()
+    work = client.get("/api/worker/next", params={"wait": 0}, headers=h2).json()
+    assert work["task"]["id"] == t["id"] and "company_capped" not in work["state"]
+    assert client.post("/api/worker/runs", json={"kind": "task", "task_id": t["ref"]}, headers=h2).status_code == 201
+
+
+def test_a_stale_running_row_is_not_in_flight(app):
+    conn, agent = app["conn"], app["agent"]
+    _run_row(conn, agent, status="running", minutes_ago=5)
+    _run_row(conn, agent, status="running", minutes_ago=60)  # no heartbeat for an hour: a dead worker
+    _run_row(conn, agent, status="running", minutes_ago=600, heartbeat=False)
+    assert access.in_flight(conn)["runs"] == 1
+    # what a run in flight has already recorded is not counted twice
+    rid = _run_row(conn, agent, status="running", minutes_ago=1)
+    conn.execute("INSERT INTO engine_usage (at, engine, actor_id, run_id, cost_usd) VALUES (?, 'claude', ?, ?, 0.25)",
+                 (datetime.now(timezone.utc).isoformat(timespec="seconds"), agent, rid))
+    assert access.in_flight(conn) == {"runs": 2, "usd": pytest.approx(access.RUN_EST_FLOOR_USD + 0.05)}
+
+
+def test_the_queue_wakes_when_the_cheapest_waiting_business_run_fits_not_for_cents(app):
+    conn, agent = app["conn"], app["agent"]
+    access.set_budget(conn, app["owner"], None, "usd_day", 5.0, "company cap")
+    _usage(conn, agent, 0.05, hours_ago=23)   # leaves in 1 h: $0.05 is no room for a run
+    _usage(conn, agent, 2.0, hours_ago=10)    # leaves in 14 h
+    _usage(conn, agent, 3.0, hours_ago=1)     # $5.05 of $5: spent
+    hit = access.company_capped(conn)
+    assert hit and hit["metric"] == "usd_day"
+    until = datetime.fromisoformat(hit["until"]) - datetime.now(timezone.utc)
+    assert timedelta(hours=13.9) < until < timedelta(hours=14.1)
+    held = access.admission(conn, agent)
+    assert held["spent"] and held["queue_until"] == hit["until"]
+    # an agent whose runs cost more waits longer than the queue
+    access._waiting_cache.clear()
+    conn.execute("DELETE FROM engine_usage WHERE cost_usd = 3.0")
+    _usage(conn, agent, 2.80, hours_ago=1)    # $4.85 of $5: $0.15 of room, the cap is not spent but no run fits
+    assert access.company_capped(conn) is None
+    held = access.admission(conn, agent)
+    assert held and held["spent"] and held["estimate"] == access.RUN_EST_FLOOR_USD
+    queue = datetime.fromisoformat(held["queue_until"]) - datetime.now(timezone.utc)
+    assert timedelta(hours=13.9) < queue < timedelta(hours=14.1)
+
+
 def test_company_free_at_follows_the_rolling_window_and_the_month(app):
     conn, agent = app["conn"], app["agent"]
     now = datetime.now(timezone.utc)

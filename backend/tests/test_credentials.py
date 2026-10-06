@@ -342,6 +342,21 @@ def test_http_call_injects_in_the_api_and_redacts_the_response(app):
     _nowhere_in_db(app["db"], SECRET)
 
 
+def test_http_call_without_a_credential_names_the_ones_the_agent_holds(app):
+    conn, agent = app["conn"], app["agent"]
+    with pytest.raises(creds.CredentialError, match="You hold no credential for HTTP.*request_access"):
+        creds.http_call(conn, Ctx(agent), "GET", "https://api.github.com/user")
+    creds.grant(conn, app["owner"], agent, "github-deploy", "reads the API")
+    with pytest.raises(creds.CredentialError) as e:
+        creds.http_call(conn, Ctx(agent), "GET", "https://api.github.com/user", [" "])
+    msg = str(e.value)
+    assert "credentials=['<name>']" in msg and "{{cred:<name>}}" in msg
+    assert "Granted to you for api.github.com: github-deploy (hosts: api.github.com, github.com)" in msg
+    with pytest.raises(creds.CredentialError, match=r"Granted to you for HTTP \(other hosts\): github-deploy"):
+        creds.http_call(conn, Ctx(agent), "GET", "https://example.com/x")
+    assert SECRET not in msg
+
+
 def test_mcp_tools_list_names_and_refuse_without_a_grant(app):
     agent, db = app["agent"], app["db"]
     server = mcp_server.build(db, default_actor=lambda c: agent)

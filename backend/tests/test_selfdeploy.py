@@ -87,6 +87,20 @@ def test_good_change_ships_bad_change_is_reverted(repo, reporter):
     assert run(repo, rep).status == "nothing"
 
 
+def test_a_manual_deploy_is_recorded_and_becomes_the_last_good_one(repo, reporter):
+    """prod 2026-10-06: two deploys by hand after 08:29 and the deploy history still ended at 08:29."""
+    rep, client, conn = reporter
+    base = git(repo, "rev-parse", "HEAD")
+    new = commit(repo, {"app.txt": "good v2"}, "Cap gate admits by headroom")
+    res = selfdeploy.record_manual(repo, rep, base[:7], "HEAD", note="built and started api, web by hand")
+    assert res.old == base and res.new == new and len(res.commits) == 1
+    d = client.get("/api/deploys").json()[0]
+    assert d["status"] == "ok" and d["stage"] == "manual" and d["author"] == selfdeploy.MANUAL_AUTHOR
+    assert rep.last_good() == new
+    assert "by hand" in conn.execute("SELECT log FROM deploys ORDER BY id DESC LIMIT 1").fetchone()[0]
+    assert not conn.execute("SELECT 1 FROM tasks WHERE source = 'deployer'").fetchone()  # nothing to fix
+
+
 def test_unsigned_constitution_change_is_refused(repo, reporter, tmp_path, monkeypatch):
     rep, client, conn = reporter
     git(repo, "checkout", "-q", "-b", "deployed")

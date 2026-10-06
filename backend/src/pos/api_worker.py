@@ -149,10 +149,15 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     # ~5.5 min): no task is offered until the rolling window has room, so neither the worker nor the pool's
     # probe starts a run. No run row, no re-dispatch count, no failure signal, no comment asking anyone to
     # unblock the task; the owner hears it once a day (pos.access.cap_notice).
-    capped = access.company_capped(conn)
+    # Budget-aware (prod 10-06 19:10: $0.14 free and two runs started): a task is offered only when this
+    # agent's estimated run fits in the headroom the runs in flight leave (pos.access.admission). The queue's
+    # company_capped_until is when the cheapest waiting business run fits, so it does not wake for cents.
+    capped = access.admission(conn, ctx.actor_id)
     if capped:
         st["company_capped"] = capped["metric"]
-        st["company_capped_until"] = capped["until"]
+        st["company_capped_until"] = capped["queue_until"]
+        if capped.get("estimate") is not None:
+            st["admission"] = {k: capped[k] for k in ("estimate", "headroom", "in_flight", "in_flight_runs", "until")}
     row = None
     # A task planned for a later day (do_date, Europe/Prague) waits for that day unless it is already
     # being worked on (prod: T-516 with do_date 9 Oct was picked 241 times).
@@ -172,7 +177,7 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
         if capped:
             if (cand["topic"] or "") == "chat":
                 _tell_chat_capped(conn, cand["id"], capped)  # the person waiting hears why (once per message)
-            elif access.cap_notice(conn, capped):  # work is waiting: the owner hears it (once a day)
+            elif capped["spent"] and access.cap_notice(conn, capped):  # work waits: the owner hears it (once a day)
                 conn.commit()
             continue
         if reserve and cand["status"] != "working" and business.classify(conn, cand) != "business":
@@ -559,7 +564,9 @@ def _tell_chat_capped(conn: sqlite3.Connection, tid: int, hit: dict) -> None:
     from . import availability
 
     try:
-        if availability.autoreply(conn, tid, why={"reason": "firma vyčerpala strop útraty na 24 hodin",
+        reason = ("firma vyčerpala strop útraty na 24 hodin" if hit.get("spent", True)
+                  else "firma je těsně u stropu útraty na 24 hodin a běžící práce zbytek ještě spotřebuje")
+        if availability.autoreply(conn, tid, why={"reason": reason,
                                                   "retry": availability.when_cz(hit["until"]),
                                                   "until": hit["until"]}):
             conn.commit()
@@ -573,25 +580,28 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     from .access import service as access
 
     tid = tasks.parse_id(body.task_id) if body.task_id else None
-    # The company cap is spent: refused before a run row exists (a race with /next, or a worker without the
-    # pool). Not a refusal of this agent or this task: no owner notice, no lead alert, no failure signal.
-    capped = access.company_capped(conn)
-    if capped:
-        if tid is not None and chat.chat_origin(conn, tid):
-            _tell_chat_capped(conn, tid, capped)
-        if access.cap_notice(conn, capped):
-            conn.commit()
-        raise HTTPException(409, access.company_cap_reason(capped))
     engine, why, model = engines.choose(conn, ctx.actor_id)
     if engine is None:
         _tell_chat_waiting(conn, tid, f"no runtime available: {why}")
         raise HTTPException(409, f"no runtime available: {why}")
+    # Admission is serial: the write lock makes the budget check, the one-live-run check and the run row one
+    # step, so the next request counts this run as in flight (prod 10-06 19:23: three runs started at once into
+    # $0.30 of room). The company cap, or no room for this agent's estimated run: refused before a run row
+    # exists (a race with /next, or a worker without the pool). Not a refusal of this agent or this task: no
+    # lead alert, no failure signal; the owner hears it only when the cap is spent (once a day).
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    capped = access.admission(conn, ctx.actor_id)
+    if capped:
+        conn.rollback()
+        if tid is not None and chat.chat_origin(conn, tid):
+            _tell_chat_capped(conn, tid, capped)
+        if capped["spent"] and access.cap_notice(conn, capped):
+            conn.commit()
+        raise HTTPException(409, access.admission_reason(capped))
     if tid is not None:
         # One live run per task: a second worker (or a retry) is refused here,
-        # before a run row exists, not later at claim. The write lock makes the
-        # check and the insert one step for concurrent requests.
-        if not conn.in_transaction:
-            conn.execute("BEGIN IMMEDIATE")
+        # before a run row exists, not later at claim.
         live, cutoff = _live_run_sql()
         if conn.execute(f"SELECT 1 FROM tasks WHERE id = ? AND {live}", (tid, cutoff, None)).fetchone():
             conn.rollback()

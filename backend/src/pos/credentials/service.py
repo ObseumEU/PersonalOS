@@ -745,6 +745,63 @@ def platform_header(conn: sqlite3.Connection, ctx: Ctx, name: str, host: str, pu
     return key.strip(), tmpl.strip().replace("{value}", value)
 
 
+# What 1Password says when the item, the field or the vault behind a reference does not exist (a definite
+# "missing"), unlike a network error or a missing token (unknown: nothing can be said either way).
+MISSING_RE = re.compile(r"no item matched|no such item|item .*not found|no field|field .*not found|no vault|"
+                        r"vault .*not found|not a valid secret reference|invalid secret reference|does not exist|"
+                        r"returned no value|no section", re.I)
+OP_REF_RE = re.compile(r"op://[^\s`'\"<>()\[\]{}|,;]+")
+
+
+def _check_ref(ref: str) -> tuple[str, str]:
+    on, why = onepassword.configured()
+    if not on:
+        return "unknown", why
+    try:
+        value = onepassword.resolve(ref)  # check only: the value stays in the resolver's short cache, never here
+        del value
+        return "ok", ""
+    except onepassword.Unavailable as e:
+        msg = str(e)[:200]
+        return ("missing" if MISSING_RE.search(msg) else "unknown"), msg
+
+
+def _slug(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")
+
+
+def check_reference(conn: sqlite3.Connection, *, name: str | None = None, ref: str | None = None) -> dict:
+    """Does a credential name or an op:// reference that a text points to resolve? Check-only, for the grounding
+    gate: {"state": "ok" | "missing" | "unknown", "why": str (Czech)}. The value is never returned, logged or
+    stored; nothing is written to the use log (it is not a use). "unknown": 1Password is off or unreachable."""
+    store.ensure_schema(conn)
+    if ref:
+        state, why = _check_ref(ref.rstrip(".,;:!?)"))
+        return {"state": state, "why": "reference v 1Password neexistuje (" + why + ")" if state == "missing"
+                else why}
+    name = str(name or "").strip().lower()
+    try:
+        c = get(conn, name)
+    except NotFound:
+        # Not in the registry: an item of that title in the vault still lets a person find it.
+        try:
+            listed = onepassword.items()
+            titles = {_slug(i.get("title", "")) for i in listed} | {(i.get("title") or "").strip().lower()
+                                                                     for i in listed}
+        except onepassword.Unavailable as e:
+            return {"state": "unknown", "why": str(e)[:200]}
+        if name in titles or _slug(name) in titles:
+            return {"state": "ok", "why": "položka v 1Password existuje (v registru credentials není)"}
+        return {"state": "missing", "why": "není v registru credentials ani jako položka v 1Password"}
+    if c["archived_at"]:
+        return {"state": "missing", "why": "credential je v registru archivovaný"}
+    state, why = _check_ref(c["op_ref"])
+    if state == "missing":
+        return {"state": "missing", "why": "je v registru, ale jeho položka v 1Password neexistuje (resolve: "
+                                           + why[:120] + ")"}
+    return {"state": state, "why": why}
+
+
 def _default_env(name: str) -> str:
     return "CRED_" + re.sub(r"[^A-Z0-9]", "_", name.upper())
 
@@ -864,6 +921,28 @@ def private_host(host: str) -> bool:
     return ip.is_private or ip.is_link_local or ip.is_loopback
 
 
+def no_credential_named(conn: sqlite3.Connection, agent_id: int, host: str | None = None) -> str:
+    """credential_http without a credential: what to pass, and which granted credentials the agent could name."""
+    mine = {g["credential"] for g in grants(conn, agent_id=agent_id)}
+    usable, other = [], []
+    for c in list_all(conn):
+        if c["name"] not in mine or (c["allowed_tools"] and "http" not in c["allowed_tools"]):
+            continue
+        hosts = c["allowed_hosts"]
+        line = f"{c['name']} (hosts: {', '.join(hosts) or 'none'})"
+        (usable if host and hosts and _host_ok(host, hosts) else other).append(line)
+    msg = ("no credential named: pass credentials=['<name>'] (it goes into its configured header) or put "
+           "{{cred:<name>}} where the secret goes (a header, the body or the URL). ")
+    if usable:
+        msg += f"Granted to you for {host}: " + "; ".join(usable) + ". "
+    if other:
+        msg += ("Granted to you for HTTP" + (" (other hosts)" if host else "") + ": " + "; ".join(other[:10]) + ". ")
+    if not usable and not other:
+        msg += ("You hold no credential for HTTP: see credentials_list, then request_access(what='capability', "
+                "capability='cred:<name>', why=...).")
+    return msg.strip()
+
+
 def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credentials: list[str] | None = None,
               headers: dict | None = None, body: str | None = None, task_id: int | None = None,
               transport=None) -> dict:
@@ -891,6 +970,8 @@ def http_call(conn: sqlite3.Connection, ctx: Ctx, method: str, url: str, credent
     named = {str(n).strip().lower() for n in (credentials or []) if str(n).strip()}
     used = placeholders(url, body or "", *headers.values(), *headers.keys())
     names = sorted(named | used)
+    if not names:
+        raise CredentialError(no_credential_named(conn, ctx.actor_id, host))
     values = resolve_for(conn, ctx, names, "http", host=host, task_id=task_id, server_side=True)
     red = Redactor({n: v["value"] for n, v in values.items()})
     try:
