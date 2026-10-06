@@ -110,9 +110,13 @@ if docker inspect -f '{{.State.Running}}' "$KNIHA_CONTAINER" 2>/dev/null | grep 
 fi
 
 # 3. Files: the data volumes without the SQLite files (those are in sqlite/), tar + zstd
+# A live volume (kniha-test writes recordings) may change while it is read: GNU tar then exits 1, which is
+# fine for a nightly copy; 2 and above is a real error.
 for v in "${FILE_VOLUMES[@]}"; do
-  "${NICE[@]}" docker run --rm --cpus 1 -v "$v:/v:ro" "$PY_IMAGE" \
-    tar -C /v --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' --exclude='*.db.*' \n      --exclude='*.sqlite' --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' -cf - . \
+  "${NICE[@]}" docker run --rm --cpus 1 -v "$v:/v:ro" "$PY_IMAGE" sh -c \
+    "tar -C /v --warning=no-file-changed --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
+       --exclude='*.db.*' --exclude='*.sqlite' --exclude='*.sqlite-wal' --exclude='*.sqlite-shm' -cf - .; \
+     r=\$?; [ \$r -le 1 ]" \
     | "${NICE[@]}" zstd -q -T2 -10 > "$WORK/files/$v.tar.zst"
 done
 log "files done"
