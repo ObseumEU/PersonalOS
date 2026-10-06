@@ -274,6 +274,14 @@ def reap_runs(conn: sqlite3.Connection, silent_minutes: int = SILENT_MINUTES) ->
         out["requeued"] = requeued
     if escalated:
         out["escalated"] = escalated
+    try:  # the owner handoffs of agents' browsers (pos.handoff): expire what is due, one reminder
+        from . import handoff
+
+        swept = handoff.sweep(conn)
+        if swept["expired"] or swept["reminded"]:
+            out["handoffs"] = swept
+    except Exception:  # noqa: BLE001 - the runs above are what this job is for
+        conn.rollback()
     return out
 
 

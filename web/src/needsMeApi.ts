@@ -4,7 +4,7 @@ import type { ApprovalView } from "./components/ApprovalBody";
 
 /** One thing that waits for the owner (GET /api/needs-me). */
 export type NeedsItem = {
-  kind: "approval" | "access" | "publish" | "draft" | "ask" | "review" | "mention";
+  kind: "handoff" | "approval" | "access" | "publish" | "draft" | "ask" | "review" | "mention";
   key: string;
   id: number;
   ref: string | null;
@@ -38,6 +38,11 @@ export type NeedsItem = {
   connected?: boolean;
   text?: string;
   error?: string | null;
+  /** handoff: an agent's live browser waits for one step of his (pos.handoff); m_link opens it in /m. */
+  m_link?: string;
+  status?: string;
+  expired?: boolean;
+  expires_at?: string;
   /** draft: one waiting Gmail draft; an ask of a draft campaign lists its drafts. */
   draft?: WaitingDraft;
   drafts?: WaitingDraft[];
@@ -61,6 +66,12 @@ export const ownerActions = {
       body: JSON.stringify({ decision: grant ? "grant" : "deny", note: grant ? "Schváleno majitelem." : "Zamítnuto majitelem." }),
     }),
   publish: (url: string) => api<{ status: string; url?: string }>(url, { method: "POST", body: "{}" }),
+  /** "Připojit LinkedIn": an agent prepares everything in its browser; he only logs in and confirms. */
+  connectLinkedIn: () =>
+    api<{ task_ref: string; agent: string; existing: boolean }>("/api/integrations/linkedin/agent-connect", { method: "POST", body: "{}" }),
+  /** An expired handoff: Pokračovat (the agent prepares the page again) or Zahodit. */
+  handoffResume: (id: number) => api(`/api/handoffs/${id}/resume`, { method: "POST", body: "{}" }),
+  handoffDismiss: (id: number) => api(`/api/handoffs/${id}/cancel`, { method: "POST", body: "{}" }),
   markDraft: (url: string, state: "sent" | "discarded") => api(url, { method: "POST", body: JSON.stringify({ state }) }),
 };
 
@@ -105,7 +116,7 @@ export function refreshNeedsMe(): Promise<void> {
 export function dropNeedsItem(key: string) {
   if (!state) return;
   const items = state.items.filter((i) => i.key !== key);
-  const counts = { approval: 0, access: 0, publish: 0, draft: 0, ask: 0, review: 0, mention: 0 };
+  const counts = { handoff: 0, approval: 0, access: 0, publish: 0, draft: 0, ask: 0, review: 0, mention: 0 };
   items.forEach((i) => (counts[i.kind] += 1));
   state = { count: items.length, counts, items };
   subs.forEach((f) => f(state!));

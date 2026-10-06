@@ -1,4 +1,4 @@
-import { Check, ExternalLink, KeyRound, Mail, Send, Trash2, X } from "lucide-react";
+import { Check, ExternalLink, KeyRound, Link2, Mail, MousePointerClick, RotateCcw, Send, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { t } from "../i18n/core";
 import { type NeedsItem, type WaitingDraft, ownerActions, refreshNeedsMe } from "../needsMeApi";
@@ -6,6 +6,7 @@ import { toast } from "./overlay";
 
 /** Icons of the owner's one-click kinds in "Čeká na tebe" (the web Home and /m share them). */
 export const OWNER_KINDS = {
+  handoff: { Icon: MousePointerClick, key: "needs.kind.handoff", cls: "text-amber-300" },
   access: { Icon: KeyRound, key: "needs.kind.access", cls: "text-amber-300" },
   publish: { Icon: Send, key: "needs.kind.publish", cls: "text-accent" },
   draft: { Icon: Mail, key: "needs.kind.draft", cls: "text-accent" },
@@ -64,6 +65,26 @@ function DraftRow({ d, cls }: { d: WaitingDraft; cls: Cls }) {
 /** The buttons of an access request, an approved LinkedIn post, a waiting draft, and the drafts listed on
  * a draft campaign's ask. `run` acts on the whole item (it leaves the list). Small: ships in /m too. */
 export default function OwnerActions({ it, busy, run, cls }: { it: NeedsItem; busy: boolean; run: (p: () => Promise<unknown>, done: string) => void; cls: Cls }) {
+  if (it.kind === "handoff") {
+    const inApp = typeof location !== "undefined" && location.pathname.startsWith("/m");
+    if (it.expired)
+      return (
+        <>
+          <button className={cls.primary} disabled={busy} onClick={() => run(() => ownerActions.handoffResume(it.id), t("needs.done.handoff_resumed"))}>
+            <RotateCcw size={cls.size} /> {t("needs.act.handoff_resume")}
+          </button>
+          <button className={cls.plain} disabled={busy} onClick={() => run(() => ownerActions.handoffDismiss(it.id), t("needs.done.handoff_dismissed"))}>
+            <X size={cls.size} /> {t("needs.act.handoff_dismiss")}
+          </button>
+          <span className="w-full text-xs text-ink-2">{t("needs.handoff.expired")}</span>
+        </>
+      );
+    return (
+      <a href={(inApp ? it.m_link : it.link) ?? it.link} className={cls.primary}>
+        <MousePointerClick size={cls.size} /> {t("needs.act.open_browser")}
+      </a>
+    );
+  }
   if (it.kind === "access" && it.decide_url) {
     const url = it.decide_url;
     return (
@@ -85,9 +106,9 @@ export default function OwnerActions({ it, busy, run, cls }: { it: NeedsItem; bu
       </button>
     ) : (
       <>
-        <a href={it.connect_url ?? "/api/integrations/linkedin/start"} className={cls.primary}>
-          {t("needs.act.connect_linkedin")}
-        </a>
+        <button className={cls.primary} disabled={busy} onClick={() => run(() => ownerActions.connectLinkedIn(), t("needs.done.linkedin_agent"))}>
+          <Link2 size={cls.size} /> {t("needs.act.connect_linkedin")}
+        </button>
         <span className="w-full text-xs text-ink-2">{t("needs.publish.not_connected")}</span>
       </>
     );

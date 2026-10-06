@@ -38,6 +38,8 @@ const Topics = lazy(() => import("./pages/Topics"));
 const WeeklyReview = lazy(() => import("./pages/WeeklyReview"));
 // The owner's report on one task as a document (pos.owner_report).
 const ReportPage = lazy(() => import("./pages/ReportPage"));
+// The owner in an agent's live browser (pos.handoff).
+const Handoff = lazy(() => import("./pages/Handoff"));
 
 /** While a page's chunk loads (once per page; then it is cached). */
 function PageLoading() {
@@ -129,6 +131,7 @@ export default function App() {
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:week" element={<Reports />} />
           <Route path="/report/:ref" element={<ReportPage />} />
+          <Route path="/handoff/:id" element={<Handoff />} />
           <Route path="*" element={<Navigate to="/today" replace />} />
         </Routes>
       </Suspense>

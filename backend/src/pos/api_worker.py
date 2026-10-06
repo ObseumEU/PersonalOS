@@ -928,6 +928,37 @@ def browser_credential(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(work
     return {"name": name, "value": v["value"]}
 
 
+@router.post("/browser/capture")
+def browser_capture(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
+    """browser_capture_secret: a value the guard took off a page (a client id or secret in a developer portal)
+    goes straight into PersonalOS, encrypted; the model never sees it. Only known targets, only from their
+    hosts over HTTPS, only for the agent's running run. Audited without the value."""
+    from urllib.parse import urlparse
+
+    from . import audit, browser, outbound_linkedin
+
+    if not browser.may_browse(conn, ctx.actor_id):
+        raise HTTPException(403, "this agent lacks tool:browser")
+    run_id = _live_run(conn, ctx, body.get("run_id"))
+    target = str(body.get("target") or "")
+    hosts = outbound_linkedin.CAPTURE_TARGETS.get(target)
+    if hosts is None:
+        raise HTTPException(422, f"target: one of {sorted(outbound_linkedin.CAPTURE_TARGETS)}")
+    u = urlparse(str(body.get("url") or ""))
+    if u.scheme != "https" or (u.hostname or "").lower() not in hosts:
+        raise HTTPException(403, f"{target} is taken only from {', '.join(hosts)} over HTTPS")
+    try:
+        n = outbound_linkedin.capture(conn, ctx.actor_id, target, str(body.get("value") or ""))
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    audit.log(conn, Ctx(ctx.actor_id, via="worker", run_id=run_id), "secret_captured", None, None, target=target,
+              host=u.hostname, chars=n)
+    conn.commit()
+    return {"ok": True, "target": target, "chars": n}
+
+
 @router.post("/browser/log")
 def browser_log(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx),
                 settings: Settings = Depends(get_settings)):

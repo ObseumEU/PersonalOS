@@ -45,16 +45,27 @@ A connector that is off returns `not_configured` (an approved item becomes a tas
 | `payment`, `web.post` | never automatic: approved, a task for you | – |
 | Kniha web | not an action: the `production` branch and the kniha-deployer | – |
 
-### LinkedIn (your steps, once)
+### LinkedIn (one click; the agent does the rest)
 
-1. https://www.linkedin.com/developers/apps/new → app "PersonalOS" (company page: Obseum), logo, accept the terms.
-2. Products: add **Sign In with LinkedIn using OpenID Connect** and **Share on LinkedIn** (both self-serve).
-3. Auth → Authorized redirect URLs: `https://personalos.obseum.cz/api/integrations/linkedin/callback`.
-4. Put the Client ID and Primary Client Secret in `/opt/server/personalos/app/.env` as
-   `POS_LINKEDIN_CLIENT_ID` and `POS_LINKEDIN_CLIENT_SECRET` (or hand them to the deployer); restart `api`.
-5. Open https://personalos.obseum.cz/api/integrations/linkedin/start (logged in, on the LAN/VPN) and allow
-   `openid profile w_member_social`. The token is stored encrypted in `<data>/secrets/linkedin.bin`; about
-   60 days later you get one item to reconnect.
+Press **Připojit LinkedIn** (Čeká na tebe, the e-mail mode card or Konektory). Content & Brand gets one task
+(`linkedin:connect`, the playbook is in its notes, `pos.outbound_linkedin.connect_notes`) and does it in its own
+browser:
+
+1. opens the developer portal; if LinkedIn wants your login it hands you its live browser
+   (`browser_request_owner_handoff`, docs/BROWSER.md): you log in (and 2FA) and press **Hotovo**;
+2. creates or finds the "PersonalOS" app with everything filled in (company page, privacy URL, logo); you only
+   tick LinkedIn's terms and press **Create app** in the handoff; the same for the products **Share on LinkedIn**
+   and **Sign In with LinkedIn using OpenID Connect**;
+3. adds the redirect URL `https://<POS_PUBLIC_URL>/api/integrations/linkedin/callback` and takes the client id and
+   secret off the page with `browser_capture_secret`: they go straight into PersonalOS, encrypted
+   (`<data>/secrets/linkedin-app.bin`); the model never sees them;
+4. opens the consent (`linkedin_connect(action="authorize_url")`, a one-time state); you press **Allow** in the
+   handoff; the callback stores the token encrypted in `<data>/secrets/linkedin.bin`.
+
+About 53 days later the same task comes back for a renewal (usually no click at all: the agent kept its login).
+Why not posting through the browser: LinkedIn's User Agreement forbids automated access; the official API with
+your consent is the sanctioned way. `POS_LINKEDIN_CLIENT_ID` / `POS_LINKEDIN_CLIENT_SECRET` in `.env` still work
+and take precedence.
 
 | Other | Settings |
 |---|---|
@@ -72,6 +83,6 @@ DEV_AGENT_CODEX_CONFIG=mcp_servers.github.url="https://api.githubcopilot.com/mcp
 DEV_GITHUB_TOKEN=<fine-grained token for the ObseumEU repos>
 ```
 
-Things only the owner can provide: the Gmail consents, the LinkedIn app, GitHub
-tokens and the webhook secret, the Discord webhook or bot token, and the
-per-agent KB keys on the knowlage server.
+Things only the owner can provide: the Gmail consents, GitHub tokens and the
+webhook secret, the Discord webhook or bot token, and the per-agent KB keys on
+the knowlage server (LinkedIn: one click, see above).

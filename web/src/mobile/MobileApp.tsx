@@ -27,6 +27,8 @@ const ReportPage = lazy(() => import("../pages/ReportPage"));
 const Company = lazy(() => import("../pages/Company"));
 // Cíle: the goals screen (loads on first open).
 const Goals = lazy(() => import("../pages/Goals"));
+// The owner in an agent's live browser (opened from a push or "Čeká na tebe"): loads on first open.
+const MobileHandoff = lazy(() => import("./Handoff"));
 const RefPreviewHost = lazy(() => import("../components/RefPreview").then((m) => ({ default: m.RefPreviewHost })));
 
 /** The reference preview (a note, a message, a source) loads the first time one is opened. */
@@ -245,6 +247,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <Route path="/m/company" element={<Company />} />
           <Route path="/m/goals" element={<Goals />} />
           <Route path="/m/report/:ref" element={<Suspense fallback={null}><ReportPage /></Suspense>} />
+          <Route path="/m/handoff/:id" element={<MobileHandoff />} />
           <Route path="/m/*" element={<Navigate to="/m" replace />} />
           <Route path="*" element={<Outside />} />
         </Routes>

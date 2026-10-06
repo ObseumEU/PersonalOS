@@ -6,7 +6,8 @@ What notifies a member who subscribed a device (the owner, in practice):
   message that @mentions them or answers their thread. Never #system (the
   automated notices), never what they have read already, never a chat ping
   that only announces an ask or an approval (the "needs" item covers it);
-- needs: a new "Čeká na tebe" item (pos.needs_me: an approval, an access
+- needs: a new "Čeká na tebe" item (pos.needs_me: an agent's browser waiting
+  for him (a handoff: it opens the live browser at /m/handoff/<id>), an approval, an access
   request only the owner decides, an approved LinkedIn post to publish, a
   Gmail draft, an ask, a result to review) that was not there before;
 - urgent: an agent's message with priority stop or change_plan (the CEO's
@@ -416,6 +417,12 @@ _NEEDS_TITLE = {"approval": "Ke schválení", "access": "Žádost o přístup", 
 
 
 def _needs_payload(item: dict, p: dict) -> dict:
+    if item["kind"] == "handoff":  # the agent's own words: "Přihlas se do LinkedIn – zbytek udělám já"
+        who = f"{item['from_name']}: " if item.get("from_name") else ""
+        return {"title": str(item.get("title") or "Čeká na tebe v prohlížeči")[:120],
+                "body": preview(who + (item.get("detail") or "Otevři prohlížeč agenta a dokonči krok."))
+                if p.get("preview") else "Agent čeká v prohlížeči",
+                "tag": f"needs-{item['key']}", "url": item.get("m_link") or "/m/needs", "kind": "needs"}
     head = _NEEDS_TITLE.get(item["kind"], "Čeká na tebe")
     who = f" · {item['from_name']}" if item.get("from_name") else ""
     text = str(item.get("title") or "").replace("_", " ")

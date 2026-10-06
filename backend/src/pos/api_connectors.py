@@ -93,7 +93,7 @@ def outbound_policy(conn=Depends(get_db)):
     """How e-mail goes out (draft for the owner | auto) and which mailboxes can draft or send."""
     from . import outbound_gmail, outbound_linkedin
 
-    return {**outbound_gmail.policy(conn), "linkedin": outbound_linkedin.status()}
+    return {**outbound_gmail.policy(conn), "linkedin": outbound_linkedin.status(conn)}
 
 
 class EmailPolicyIn(BaseModel):

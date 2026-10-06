@@ -69,6 +69,41 @@ desktop, for `tool:computer`) sends a frame every 2.5 s: **Prohlížeč živě**
 **Desktop živě** (`/api/runs/<id>/live`, polled; the guard asks
 `/api/worker/browser/live` whether anyone watches and sends nothing otherwise).
 
+## Předání majiteli (owner handoff)
+
+When a step is only the owner's (his login, a 2FA code, a CAPTCHA, terms only he may accept, "Allow" on a
+consent screen) the agent never sends him hunting for anything. It gets the page ready (navigates there, fills in
+everything else), then calls `browser_request_owner_handoff(title, reason, done_url_contains | done_text |
+done_selector, minutes)`:
+
+- PersonalOS (`pos.handoff`) creates the handoff, the task goes to `waiting` (a pause, not a failure) and the
+  owner gets one **Čeká na tebe** item (kind `handoff`) with a push: the agent's own line, e.g. "Přihlas se do
+  LinkedIn – zbytek udělám já", opening `/m/handoff/<id>` (desktop: `/handoff/<id>`);
+- the run and its browser stay alive; the guard relays the page (a JPEG every 1.5 s while he watches, at once
+  after his input) and his clicks, taps, scrolling, keys and typing into the same page (`/api/handoffs/<id>/frame`
+  long-poll, `/input`; the guard long-polls `/api/worker/browser/handoff/<id>/poll`). Coordinates are 0..1 of
+  the viewport; events are validated (`pos.handoff.clean_event`);
+- it ends with **Hotovo** (by default he also keeps the agent's login: `browser:profile` is granted and the
+  cookies are saved encrypted, so the next run is logged in), the `done_*` hint coming true, **Zrušit**, or the
+  timeout (30 min default, at most 45; one reminder push after 10 min if unopened; a run that ends expires it).
+  An expired one stays in Čeká na tebe as **Pokračovat** (the task goes back to the agent, which prepares the
+  page again) / **Zahodit**;
+- the agent's call returns how it ended and it continues in the same browser.
+
+Security: only the signed-in owner opens a handoff (owner session; members get 403, nothing is public). Frames and
+typed text live only in the api process's memory, never in the database, a file or a log; the audit log keeps
+`handoff_requested`, `handoff_opened` (who, when, which app and device), `handoff_done|cancelled|expired` with
+counts of clicks, keys and characters, never what was typed, and the page URL without its query. The guard
+redacts what he typed from everything the agent reads afterwards, and password fields are masked
+(`-webkit-text-security: disc`, also after a "show password" toggle) in every frame and stored screenshot. The
+browser is the pool's isolated headless Chromium as before.
+
+`browser_capture_secret(target, ref, reveal_ref)` is the other half of "never send him hunting": a value on a
+page (a developer portal's client id or secret) goes from the guard straight into PersonalOS
+(`/api/worker/browser/capture`, known targets on their own HTTPS host only, for the agent's running run),
+encrypted; the model never sees it and it is redacted from later reads. Targets: `linkedin.client_id`,
+`linkedin.client_secret` (pos.outbound_linkedin.CAPTURE_TARGETS).
+
 ## Kept logins (`browser:profile`)
 
 The default is a fresh profile per run. For sites an agent logs into again and

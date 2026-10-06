@@ -29,7 +29,10 @@ version silently and has it on the next launch.
   the message) and actions on a message: reply in thread, **Vytvoř úkol**, **Schval**
   (decides the approval the message names, `schválení #N`, else replies "Schvaluji"),
   👍, copy.
-- **Čeká na tebe** with inline Schválit / Zamítnout / Odpovědět / Vrátit.
+- **Čeká na tebe** with inline Schválit / Zamítnout / Odpovědět / Vrátit, and **Otevřít prohlížeč** for an
+  agent's live browser waiting for one step of yours (`/m/handoff/<id>`, also straight from the push): tap into
+  the page, type in the field under it, Enter / Tab / scroll / zoom buttons, then **Hotovo** (docs/BROWSER.md,
+  "Předání majiteli"). Loaded on first use, outside the /m budget.
 - **Úkoly**: Dnes, Další, Agenti, Čeká, K revizi; quick capture; a tap opens the
   full task panel (loaded on demand).
 - **Víc**: the settings below and a link to the full app.

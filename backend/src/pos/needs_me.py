@@ -23,7 +23,11 @@ For the owner also:
   for the connection, or publishing failed): one click publishes it;
 - draft: a Gmail draft an agent made that waits for him (pos.outbound_drafts).
   Drafts whose campaign item is already an ask are listed on that ask
-  (`drafts`) instead of twice.
+  (`drafts`) instead of twice;
+- handoff: an agent's live browser waits for one step only he can do (a login,
+  a 2FA code, "Allow"): the page is ready, he opens it and finishes it
+  (pos.handoff); an expired one stays as "Pokračovat" until he resumes or
+  dismisses it.
 """
 
 import json
@@ -33,7 +37,7 @@ import sqlite3
 from . import actors, asks, tasks
 from .core import Ctx
 
-KINDS = ("approval", "access", "publish", "draft", "ask", "review", "mention")
+KINDS = ("handoff", "approval", "access", "publish", "draft", "ask", "review", "mention")
 # Chat pings that only announce an item listed here (an approval, an owner-only access request).
 _APPROVAL_PING = re.compile(r"schválení #\d+|[Žž]ádost o přístup #\d+")
 MENTION_LIMIT = 30
@@ -95,6 +99,15 @@ def _access(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
             "link": f"/credentials?request={r['id']}" if cred else f"/agents/{r['agent_id']}",
         })
     return out
+
+
+def _handoffs(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    """The agents' browsers that wait for the owner (pos.handoff): only he opens them."""
+    if not viewer["is_owner"]:
+        return []
+    from . import handoff
+
+    return handoff.needs_items(conn)
 
 
 def _linkedin_connected() -> bool:
@@ -313,7 +326,7 @@ def collect(conn: sqlite3.Connection, ctx: Ctx) -> dict:
         skip = {r["message_id"] for r in conn.execute(
             "SELECT message_id FROM owner_asks WHERE message_id IS NOT NULL")}
     drafts = _drafts(_waiting_drafts(conn, viewer), asks_)
-    items = [*_approvals(conn, viewer), *_access(conn, viewer), *_publish(conn, viewer), *drafts, *asks_, *reviews,
+    items = [*_handoffs(conn, viewer), *_approvals(conn, viewer), *_access(conn, viewer), *_publish(conn, viewer), *drafts, *asks_, *reviews,
              *_mentions(conn, viewer, skip)]
     counts = {k: sum(1 for i in items if i["kind"] == k) for k in KINDS}
     return {"count": len(items), "counts": counts, "items": items}

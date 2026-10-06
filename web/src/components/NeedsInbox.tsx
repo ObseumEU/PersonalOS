@@ -211,6 +211,7 @@ export default function NeedsInbox() {
             {needs.count === 0
               ? t("needs.none_short")
               : [
+                  c!.handoff && `${t("needs.kind.handoff")} ${c!.handoff}`,
                   c!.approval && `${c!.approval} ${plural(c!.approval, t("needs.count.approval.one"), t("needs.count.approval.few"), t("needs.count.approval.many"))}`,
                   c!.ask && `${c!.ask} ${plural(c!.ask, t("needs.count.ask.one"), t("needs.count.ask.few"), t("needs.count.ask.many"))}`,
                   c!.review && `${c!.review} ${plural(c!.review, t("needs.count.review.one"), t("needs.count.review.few"), t("needs.count.review.many"))}`,

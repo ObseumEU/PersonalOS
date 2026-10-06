@@ -8,7 +8,15 @@ export type EmailPolicy = {
 };
 
 /** GET /api/integrations/linkedin/status (also inside the outbound policy). */
-export type LinkedInStatus = { app: boolean; connected: boolean; name?: string | null; expires_at?: number | null; redirect_uri: string };
+export type LinkedInStatus = {
+  app: boolean;
+  connected: boolean;
+  name?: string | null;
+  expires_at?: number | null;
+  redirect_uri: string;
+  /** The agent's connect task while it runs ("Připojit LinkedIn"): the owner only logs in and confirms. */
+  flow?: { task_ref: string; agent: string | null; status: string } | null;
+};
 
 export type DraftTrust = {
   drafted: number;

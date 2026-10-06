@@ -151,6 +151,31 @@ TOOLS: dict[str, tuple[str, dict]] = {
                  "ref": REF, "element": ELEMENT,
                  "submit": {"type": "boolean", "description": "press Enter afterwards (default false)"}},
                 ["credential", "ref"])),
+    "browser_request_owner_handoff": (
+        "Hand the owner this browser for one step only he can do: log in, a 2FA code, a CAPTCHA, accept terms, "
+        "'Allow' on a consent screen. FIRST get the page ready: navigate to the exact page and fill in everything "
+        "you can, so he only does that one step (never send him to look for a key, an ID or a setting). He gets "
+        "a push and 'Čeká na tebe', opens your live browser (phone or desktop), acts and presses Hotovo. This call "
+        "waits for that (up to `minutes`, default 30) and returns how it ended; then continue in the same browser "
+        "(read the page again first: it changed). done_* (optional): when the page reaches this, the step counts as "
+        "done even before he presses Hotovo. title: one line in Czech for his notification, saying what he does "
+        "and that you do the rest, e.g. 'Přihlas se do LinkedIn – zbytek udělám já'.",
+        _schema({"title": {"type": "string", "description": "the owner's one line (Czech), e.g. 'Přihlas se do "
+                                                            "LinkedIn – zbytek udělám já'"},
+                 "reason": {"type": "string", "description": "one or two sentences: why, and what you do after"},
+                 "done_url_contains": {"type": "string", "description": "done when the page URL contains this"},
+                 "done_text": {"type": "string", "description": "done when the page shows this text"},
+                 "done_selector": {"type": "string", "description": "done when this CSS selector exists"},
+                 "minutes": {"type": "number", "minimum": 2, "maximum": 45,
+                             "description": "how long to wait (default 30)"}}, ["title"])),
+    "browser_capture_secret": (
+        "Store a value shown on the page (a client ID or client secret in a developer portal) straight into "
+        "PersonalOS, encrypted, without you ever seeing it; it is redacted from everything you read afterwards. "
+        "Only for known targets (linkedin.client_id, linkedin.client_secret) on their own site. reveal_ref: the "
+        "'show' / eye button to press first when the value is masked. Never read a secret any other way.",
+        _schema({"target": {"type": "string", "enum": ["linkedin.client_id", "linkedin.client_secret"]},
+                 "ref": REF, "reveal_ref": {"type": "string", "description": "the ref of a 'show' button, if masked"},
+                 "element": ELEMENT}, ["target", "ref"])),
 }
 
 # Older names (Playwright MCP's, the guard before 2026-09-29) still work when an agent remembers them.
@@ -311,13 +336,15 @@ def drag_xy_js(start: list, end: list) -> str:
                               "await page.mouse.up(); return true;")
 
 
-def screenshot_js(full_page: bool = False, clip: list | None = None, ref: str | None = None, quality: int = 70) -> str:
+def screenshot_js(full_page: bool = False, clip: list | None = None, ref: str | None = None, quality: int = 70,
+                  mask: bool = False) -> str:
+    """mask: password fields show dots first (every picture that is stored: the trace, approvals)."""
     opts = f"type: 'jpeg', quality: {int(quality)}, fullPage: {'true' if full_page and not clip else 'false'}"
     if clip:
         x0, y0, x1, y1 = (float(v) for v in clip)
         opts += f", clip: {{x: {min(x0, x1)}, y: {min(y0, y1)}, width: {max(1.0, abs(x1 - x0))}, height: {max(1.0, abs(y1 - y0))}}}"
     target = f"{locator_js(ref)}" if ref else "page"
-    return snippet("screenshot", f"const b = await {target}.screenshot({{{opts}, timeout: 15000}}); "
+    return snippet("screenshot", (MASK_PASSWORDS if mask else "") + f"const b = await {target}.screenshot({{{opts}, timeout: 15000}}); "
                                  "const v = page.viewportSize() || {width: 0, height: 0}; "
                                  "return {data: b.toString('base64'), vw: v.width, vh: v.height, url: page.url(), "
                                  "title: await page.title().catch(() => ''), tabs: page.context().pages().length};")
@@ -340,6 +367,55 @@ def mask_ref_js(ref: str) -> str:
     """The field browser_login filled shows dots in every screenshot from now on."""
     return snippet("mask", f"await {locator_js(ref)}.evaluate((el) => {{ el.style.webkitTextSecurity = 'disc'; "
                            "el.style.textSecurity = 'disc'; }); return true;")
+
+
+# ------------------------------------------------------------------ the owner handoff (pos.handoff)
+
+# Password fields show dots in every picture, also after a "show password" toggle made them plain text.
+MASK_PASSWORDS = ("await page.evaluate(() => { for (const el of document.querySelectorAll("
+                  "'input[type=password], input[autocomplete=current-password], input[autocomplete=new-password], "
+                  "input[data-pos-masked]')) { el.setAttribute('data-pos-masked', '1'); "
+                  "el.style.webkitTextSecurity = 'disc'; el.style.textSecurity = 'disc'; } }).catch(() => null); ")
+
+
+def handoff_frame_js(quality: int = 60) -> str:
+    """The page for the owner's live view: password fields masked first, then a JPEG and where it is."""
+    return snippet("hframe", MASK_PASSWORDS + f"const b = await page.screenshot({{type: 'jpeg', quality: {int(quality)}, "
+                             "timeout: 15000}); const v = page.viewportSize() || {width: 0, height: 0}; "
+                             "return {data: b.toString('base64'), vw: v.width, vh: v.height, url: page.url(), "
+                             "title: await page.title().catch(() => '')};")
+
+
+def handoff_input_js(events: list[dict]) -> str:
+    """The owner's input (pos.handoff.clean_event, coordinates 0..1 of the viewport) into the page."""
+    body = (f"const ev = {json.dumps(events)}; const v = page.viewportSize() || {{width: 1280, height: 800}}; "
+            "for (const e of ev) { const X = (e.x || 0) * v.width, Y = (e.y || 0) * v.height; "
+            "if (e.t === 'click') await page.mouse.click(X, Y, {button: e.button, clickCount: e.n || 1}); "
+            "else if (e.t === 'move') await page.mouse.move(X, Y); "
+            "else if (e.t === 'down') { await page.mouse.move(X, Y); await page.mouse.down({button: e.button}); } "
+            "else if (e.t === 'up') { await page.mouse.move(X, Y); await page.mouse.up({button: e.button}); } "
+            "else if (e.t === 'wheel') { if (e.x !== undefined) await page.mouse.move(X, Y); "
+            "await page.mouse.wheel(e.dx, e.dy); } "
+            "else if (e.t === 'key') await page.keyboard.press(e.key); "
+            "else if (e.t === 'text') await page.keyboard.insertText(e.text); } return true;")
+    return snippet("hinput", body)
+
+
+def done_check_js(hint: dict) -> str:
+    """Whether the handoff's done_hint holds on the page now (a URL part, a text, a selector)."""
+    return snippet("hdone", f"const h = {json.dumps(hint or {})}; "
+                            "if (h.url_contains && !page.url().includes(h.url_contains)) return false; "
+                            "if (h.selector && !(await page.locator(h.selector).count().catch(() => 0))) return false; "
+                            "if (h.text && !(await page.evaluate((t) => (document.body && document.body.innerText || '')"
+                            ".includes(t), h.text).catch(() => false))) return false; "
+                            "return !!(h.url_contains || h.selector || h.text);")
+
+
+def capture_js(ref: str) -> str:
+    """A field's value or an element's text (browser_capture_secret): goes to PersonalOS, never to the model."""
+    return snippet("capture", f"return await {locator_js(ref)}.evaluate((el) => (el.value !== undefined && el.value "
+                              "!== '' ? el.value : (el.innerText || el.textContent || '')).trim(), null, "
+                              "{timeout: 5000});")
 
 
 # Consent banners: the privacy-preserving choice (only the necessary cookies), as the owner wants.

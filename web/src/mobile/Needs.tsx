@@ -27,6 +27,7 @@ type Mode = null | "reply" | "reject" | "return";
 /** Where tapping the item goes inside the app: the task panel, or the conversation. */
 function openHref(it: NeedsItem): string {
   if (it.kind === "mention" && it.channel_id) return `/m/chat/${it.channel_id}${it.thread && it.thread !== it.id ? `?thread=${it.thread}` : ""}`;
+  if (it.kind === "handoff") return it.m_link ?? `/m/handoff/${it.id}`;
   if (it.ref) return `/m/needs?task=${it.ref}&focus=needs`;
   if (it.kind === "approval") return `/m/needs?approval=${it.id}`;
   if (it.kind === "access" || it.kind === "publish" || it.kind === "draft") return `/m/needs?item=${it.key}`;

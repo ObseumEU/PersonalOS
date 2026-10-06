@@ -203,6 +203,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from . import outbound_linkedin
 
     app.include_router(outbound_linkedin.router)  # the owner's LinkedIn: connect, publish an approved post
+    app.include_router(outbound_linkedin.callback_router)  # LinkedIn's redirect back (state-checked)
+    from . import api_handoff
+
+    app.include_router(api_handoff.router)  # the owner in an agent's live browser (pos.handoff)
+    app.include_router(api_handoff.worker)
     app.include_router(a2a.router)
     app.include_router(api_deploys.router)
     app.include_router(api_tools.router)

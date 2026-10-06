@@ -56,8 +56,8 @@ def test_collects_approvals_asks_reviews_and_mentions_once(tmp_path):
     approvals.decide(conn, me, ap["id"], True)
     conn.commit()
     left = needs_me.collect(conn, me)
-    assert left["counts"] == {"approval": 0, "access": 0, "publish": 0, "draft": 0, "ask": 0, "review": 1,
-                              "mention": 0}
+    assert left["counts"] == {"handoff": 0, "approval": 0, "access": 0, "publish": 0, "draft": 0, "ask": 0,
+                              "review": 1, "mention": 0}
     conn.close()
 
 
