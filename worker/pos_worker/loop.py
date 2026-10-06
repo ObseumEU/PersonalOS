@@ -474,9 +474,15 @@ class Worker:
             log.info("%s: reassigned to %s, not handing anything in", ref, now.get("assignee_name"))
             return "reassigned"
         if outcome == "ok":
-            # The agent may have handed it in itself (complete_task over MCP).
+            # The agent may have handed it in itself (complete_task over MCP). Without that, PersonalOS
+            # sets the task back to `next` (T-107); only a chat answer or a meeting turn stays `working`
+            # and is handed in here, its reply being the result.
             if now["status"] == "working":
                 self._call(self.client.complete, ref, session.last_message[:2000] or "Done.")
+            elif now["status"] == "next" and session.last_message:
+                state = pseudo_tools.clean(session.last_message)[:400]
+                self._call(self.client.progress, ref, int(now.get("progress") or 0),
+                           f"The run ended without complete_task; state: {state}")
         elif outcome == "error":
             self._call(self.client.handback, ref, session.failed[:400])
         elif outcome == "budget" and now["status"] == "working":
