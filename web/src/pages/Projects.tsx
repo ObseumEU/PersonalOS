@@ -36,10 +36,12 @@ import { LOCALE, t } from "../i18n";
 import {
   type ActivityItem,
   type AskAnswer,
+  type Capability,
   type KbDoc,
   type Project,
   type ProjectFiles,
   type ProjectStatus,
+  type Reality,
   type Summary,
   missing,
   projectsApi,
@@ -253,6 +255,104 @@ function SummaryBox({ summary, loading, onRefresh, mine = [] }: { summary: Summa
               <span className="font-mono text-xs text-ink-2">{x.ref}</span>
               <span className="min-w-0 truncate">{x.title}</span>
             </TaskLink>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ "Co je živé" (pos.reality) */
+
+const REALITY_TONE: Record<Capability["status"], string> = {
+  live: "bg-emerald-400/10 text-emerald-200 ring-emerald-400/30",
+  unverified: "bg-amber-400/10 text-amber-200 ring-amber-400/30",
+  test_only: "bg-zinc-400/10 text-zinc-300 ring-zinc-400/25",
+  mock: "bg-zinc-400/10 text-zinc-300 ring-zinc-400/25",
+  missing: "bg-red-400/10 text-red-200 ring-red-400/30",
+};
+const REALITY_LABEL: Record<Capability["status"], () => string> = {
+  live: () => t("pj.reality.live"),
+  unverified: () => t("pj.reality.unverified"),
+  test_only: () => t("pj.reality.test_only"),
+  mock: () => t("pj.reality.mock"),
+  missing: () => t("pj.reality.missing"),
+};
+const ACCESS_LABEL: Record<Capability["access"], () => string> = {
+  public: () => t("pj.reality.public"),
+  password: () => t("pj.reality.password"),
+  internal: () => t("pj.reality.internal"),
+};
+
+function RealityBox({ slug }: { slug: string }) {
+  const [data, setData] = useState<Reality | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => {
+    projectsApi.reality(slug).then(setData).catch(() => setData(null));
+  }, [slug]);
+  useEffect(load, [load]);
+  if (!data || data.capabilities.length === 0) return null;
+  const probe = () => {
+    setBusy(true);
+    projectsApi
+      .probe(slug)
+      .then(load)
+      .finally(() => setBusy(false));
+  };
+  const override = async (id: number) => {
+    const reason = await confirmDialog({ title: t("pj.reality_override"), confirm: t("pj.reality_override"), reason: t("pj.reality_override_reason") });
+    if (reason === null) return;
+    await projectsApi.override(id, reason);
+    toast(t("pj.reality_override_done"));
+    load();
+  };
+  return (
+    <section aria-labelledby="pj-reality" className="rounded-lg border border-line px-4 py-3.5">
+      <h3 id="pj-reality" className="flex items-center gap-2 pb-1 text-xs font-medium tracking-wide text-ink-2 uppercase">
+        <Globe size={12} aria-hidden /> {t("pj.reality")}
+        <button type="button" onClick={probe} disabled={busy} className="ml-auto text-xs font-normal tracking-normal text-ink-2 normal-case hover:text-accent">
+          {busy ? t("pj.reality_checking") : t("pj.reality_check")}
+        </button>
+      </h3>
+      <p className="pb-2 text-xs text-ink-2">{t("pj.reality_hint", { hours: Math.round(data.expiry_hours) })}</p>
+      <ul className="flex flex-col divide-y divide-line">
+        {data.capabilities.map((c) => (
+          <li key={c.key} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5 text-[14px]">
+            <span className={`shrink-0 rounded px-1.5 text-xs ring-1 ${REALITY_TONE[c.status]}`}>{REALITY_LABEL[c.status]()}</span>
+            <span className="min-w-0 flex-1">{c.name}</span>
+            <span className="text-xs text-ink-2">
+              {ACCESS_LABEL[c.access]()}
+              {" · "}
+              {c.expired ? t("pj.reality_expired") : c.verified_at ? t("pj.reality_verified", { age: shortAge(c.verified_at) }) : t("pj.reality_never")}
+            </span>
+            {c.url && (
+              <a href={c.url} target="_blank" rel="noreferrer" className="basis-full truncate text-xs text-ink-2 hover:text-accent">
+                {c.url}
+              </a>
+            )}
+            {c.last_check_detail && c.last_check_ok === false && <span className="basis-full text-xs text-amber-200">{c.last_check_detail}</span>}
+          </li>
+        ))}
+      </ul>
+      {data.blocked.length > 0 && (
+        <div className="mt-2.5 flex flex-col gap-1.5 border-t border-line pt-2">
+          <span className="text-xs text-amber-200">{t("pj.reality_blocked")}</span>
+          <span className="text-xs text-ink-2">{t("pj.reality_blocked_hint")}</span>
+          {data.blocked.slice(0, 5).map((b) => (
+            <div key={b.id} className="flex min-w-0 flex-col gap-0.5 text-[13px]">
+              <span className="min-w-0">
+                <span className="text-ink-2">{b.agent ?? "?"} · {shortAge(b.at)} · </span>
+                {b.reasons.join("; ")}
+              </span>
+              {data.can_override &&
+                (b.overridden ? (
+                  <span className="text-xs text-ink-2">{t("pj.reality_overridden")}</span>
+                ) : (
+                  <button type="button" onClick={() => override(b.id)} className="self-start text-xs text-ink-2 hover:text-accent">
+                    {t("pj.reality_override")}
+                  </button>
+                ))}
+            </div>
           ))}
         </div>
       )}
@@ -1228,6 +1328,7 @@ function ProjectDetail({ slug }: { slug: string }) {
             onRefresh={() => refreshSummary(true)}
             mine={(p.tasks ?? []).filter((x) => x.status !== "done" && (x.assignee_name === "Owner" || (x.status === "review" && x.reviewer_name === "Owner")))}
           />
+          <RealityBox slug={p.slug} />
           <div className="flex min-w-0 flex-col">
             <div
               role="tablist"
