@@ -15,7 +15,7 @@ name: obs-platform
 
 services:
   prometheus:
-    image: prom/prometheus:v3.5.5
+    image: prom/prometheus:v3.15.0
     container_name: obs-prometheus
     restart: unless-stopped
     command:
