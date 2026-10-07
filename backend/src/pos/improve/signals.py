@@ -455,7 +455,17 @@ def snapshot(conn: sqlite3.Connection, now: datetime) -> dict[str, dict]:
         from .. import owner_fallback
 
         owner = conn.execute("SELECT id FROM actors WHERE is_owner = 1 ORDER BY id LIMIT 1").fetchone()
-        if owner and not owner_fallback.push_reaches_owner(conn):
+        # Only where it matters: he installed the app, or something waiting for him had to go by e-mail.
+        app = _has(conn, "auth_devices") and conn.execute(
+            "SELECT 1 FROM auth_devices WHERE actor_id = ? AND app = 1 AND revoked_at IS NULL LIMIT 1",
+            (owner["id"] if owner else -1,)).fetchone() is not None
+        try:
+            mailed = _has(conn, "browser_handoffs") and conn.execute(
+                "SELECT 1 FROM browser_handoffs WHERE notified_via IS NOT NULL AND notified_via != 'push' LIMIT 1"
+            ).fetchone() is not None
+        except sqlite3.OperationalError:  # a table from before the notice columns
+            mailed = False
+        if owner and (app or mailed) and not owner_fallback.push_reaches_owner(conn):
             acc.set("push:owner_no_device", "push", "the owner has no device that receives notifications", 1, [],
                     "Čeká na tebe → Zapnout notifikace v telefonu (/m/settings)")
     return acc.items
