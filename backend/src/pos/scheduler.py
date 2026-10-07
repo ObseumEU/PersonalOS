@@ -238,6 +238,19 @@ def _escalate_silent(conn: sqlite3.Connection, r: sqlite3.Row, deaths: int) -> i
     return lead
 
 
+HANDOFF_GONE_DETAIL = "the worker stopped while the run waited for the owner (handoff parked)"
+
+
+def _holds_owner_handoff(conn: sqlite3.Connection, run_id: int) -> bool:
+    from . import handoff
+
+    try:
+        return conn.execute(f"SELECT 1 FROM browser_handoffs WHERE run_id = ? AND status IN {handoff.OPEN} LIMIT 1",
+                            (run_id,)).fetchone() is not None
+    except sqlite3.OperationalError:  # no handoff table yet
+        return False
+
+
 def reap_runs(conn: sqlite3.Connection, silent_minutes: int = SILENT_MINUTES) -> dict:
     """Release runs whose worker went silent (crashed, PC restarted, the API restarted under it):
     no heartbeat and no alive tick for `silent_minutes` (the worker ticks /alive every 10 s, also
@@ -251,6 +264,13 @@ def reap_runs(conn: sqlite3.Connection, silent_minutes: int = SILENT_MINUTES) ->
     ).fetchall()
     released, requeued, escalated = [], [], []
     for r in stale:
+        if _holds_owner_handoff(conn, r["id"]):
+            # Its worker went away (a restart) while the run waited for the owner: not the task's fault, so it does
+            # not count toward the escalation; the handoff is parked below and opening it wakes the agent.
+            conn.execute("UPDATE runs SET status = 'error', ended_at = ?, detail = ? WHERE id = ? "
+                         "AND status = 'running'", (now_iso(), HANDOFF_GONE_DETAIL, r["id"]))
+            released.append(r["id"])
+            continue
         conn.execute("UPDATE runs SET status = 'error', ended_at = ?, detail = ? WHERE id = ? AND status = 'running'",
                      (now_iso(), f"{SILENT_DETAIL} {silent_minutes} min", r["id"]))
         released.append(r["id"])

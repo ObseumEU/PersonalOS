@@ -600,7 +600,9 @@ def sweep(conn: sqlite3.Connection, settings=None, now: datetime | None = None) 
             conn.commit()
             reminded.append(h["id"])
             _remind(conn, settings, h, now)
-        if h["status"] in LISTED and not h.get("notified_at"):
+        # Only once it is parked: while live, the "Čeká na tebe" push and the live page are the notice, and an
+        # e-mail sent then is stale minutes later (prod 2026-10-07: T-992's went at 10:27, it parked at 10:31).
+        if h["status"] == "parked" and not h.get("notified_at"):
             via = _notify_fallback(conn, h, now)
             if via:
                 notified.append({"id": h["id"], "via": via})
@@ -614,18 +616,17 @@ def sweep(conn: sqlite3.Connection, settings=None, now: datetime | None = None) 
 
 
 def _notify_fallback(conn: sqlite3.Connection, h: dict, now: datetime) -> str | None:
-    """At most once per handoff: push reaches the owner (the "Čeká na tebe" push covers it), or one e-mail to his
-    work mailbox (pos.owner_fallback). Marked before the network call, so a crash never sends it twice."""
+    """At most once per handoff, once it is parked: push reaches the owner (the "Čeká na tebe" push covers it), or
+    one e-mail to his work mailbox (pos.owner_fallback). Claimed before the network call (only the caller whose
+    UPDATE took the row sends), so a crash or a second sweep never sends it twice."""
     from . import owner_fallback
 
-    if owner_fallback.push_reaches_owner(conn):
-        conn.execute("UPDATE browser_handoffs SET notified_at = ?, notified_via = 'push' WHERE id = ?",
-                     (_iso(now), h["id"]))
-        conn.commit()
-        return None
-    conn.execute("UPDATE browser_handoffs SET notified_at = ?, notified_via = 'email…' WHERE id = ? "
-                 "AND notified_at IS NULL", (_iso(now), h["id"]))
+    via = "push" if owner_fallback.push_reaches_owner(conn) else "email…"
+    took = conn.execute("UPDATE browser_handoffs SET notified_at = ?, notified_via = ? WHERE id = ? "
+                        "AND notified_at IS NULL AND status = 'parked'", (_iso(now), via, h["id"])).rowcount
     conn.commit()
+    if not took or via == "push":
+        return None
     agent = actors.get(conn, h["actor_id"])["name"]
     from . import tasks
 
@@ -667,6 +668,18 @@ def _remind(conn: sqlite3.Connection, settings, h: dict, now: datetime) -> None:
 
 # ------------------------------------------------------------------ what the guard and the owner see
 
+BEAT_WRITE_S = 60  # the guard polls every second or so; the run's heartbeat column moves at most this often
+
+
+def _beat(conn: sqlite3.Connection, run_id: int) -> None:
+    """The guard's poll is the waiting run's heartbeat too: a run waiting for the owner is never taken for a silent
+    one (pos.scheduler.reap_runs), even if the worker's own alive tick lags. Commits when it writes."""
+    stale = _iso(_now() - timedelta(seconds=BEAT_WRITE_S))
+    if conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running' AND (heartbeat_at IS NULL "
+                    "OR heartbeat_at < ?)", (now_iso(), run_id, stale)).rowcount:
+        conn.commit()
+
+
 def worker_poll(conn: sqlite3.Connection, ctx: Ctx, hid: int, wait: float) -> dict:
     """The guard's loop: the owner's input since the last poll, whether he watches, and the status."""
     from . import browser
@@ -675,6 +688,8 @@ def worker_poll(conn: sqlite3.Connection, ctx: Ctx, hid: int, wait: float) -> di
     if h["actor_id"] != ctx.actor_id:
         raise HandoffError("not this agent's handoff", 404)
     h = check_expiry(conn, h)
+    if h["status"] in OPEN and h["run_id"]:
+        _beat(conn, h["run_id"])
     events = take_events(h["id"], wait) if h["status"] in OPEN else []
     if events:  # the status may have changed while it waited
         h = get(conn, hid)

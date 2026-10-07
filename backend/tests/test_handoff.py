@@ -3,7 +3,7 @@ open it, the relay of frames and input, timeouts and reminders, and the LinkedIn
 import base64
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -275,7 +275,12 @@ def test_without_a_push_device_the_owner_gets_one_email_per_handoff(world, monke
     mails = []
     monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: mails.append((subject, text)) or "m1")
     h = ask(w)
-    out = handoff.sweep(w.conn, w.settings)
+    t0 = datetime.fromisoformat(handoff.get(w.conn, h["id"])["created_at"])
+    # While it is live nothing goes out (prod 2026-10-07: T-992's e-mail went 4 min before it parked).
+    assert "notified" not in handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=3))
+    assert mails == [] and handoff.get(w.conn, h["id"])["notified_at"] is None
+    out = handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=handoff.MAX_MINUTES + 1))
+    assert handoff.get(w.conn, h["id"])["status"] == "parked"
     assert out["notified"] == [{"id": h["id"], "via": "email"}]
     subject, text = mails[0]
     assert subject == "Čeká na tebe: Přihlas se do LinkedIn – zbytek udělám já"
@@ -283,8 +288,14 @@ def test_without_a_push_device_the_owner_gets_one_email_per_handoff(world, monke
     got = handoff.get(w.conn, h["id"])
     assert got["notified_via"] == "email" and got["notified_at"]
     handoff.sweep(w.conn, w.settings)
-    t0 = datetime.fromisoformat(got["created_at"])
     handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=30))  # parked: still the same handoff
+    # Opened, not prepared in time, parked again: still no second e-mail.
+    w.conn.execute("UPDATE runs SET status = 'ok' WHERE id = ?", (w.run_id,))
+    w.conn.commit()
+    w.client.post(f"/api/handoffs/{h['id']}/open", json={})
+    handoff.sweep(w.conn, w.settings, now=datetime.now().astimezone() + timedelta(minutes=handoff.PREPARE_MINUTES + 1))
+    assert handoff.get(w.conn, h["id"])["status"] == "parked"
+    assert handoff._notify_fallback(w.conn, handoff.get(w.conn, h["id"]), t0) is None  # a second sweep racing it
     assert len(mails) == 1  # at most once per handoff
     # With a working push device there is no e-mail (the "Čeká na tebe" push covers it).
     push.ensure_schema(w.conn)
@@ -295,7 +306,9 @@ def test_without_a_push_device_the_owner_gets_one_email_per_handoff(world, monke
     w.run_id = _new_run(w)
     h2 = ask(w)
     assert h2["id"] != h["id"]
-    handoff.sweep(w.conn, w.settings)
+    w.conn.execute("UPDATE runs SET status = 'ok' WHERE id = ?", (w.run_id,))
+    w.conn.commit()
+    handoff.sweep(w.conn, w.settings)  # its run ended: parked
     assert len(mails) == 1 and handoff.get(w.conn, h2["id"])["notified_via"] == "push"
 
 
@@ -311,6 +324,8 @@ def test_a_failed_email_is_recorded_and_not_retried(world, monkeypatch):
 
     monkeypatch.setattr(owner_fallback, "SENDER", boom)
     h = ask(w)
+    w.conn.execute("UPDATE runs SET status = 'ok' WHERE id = ?", (w.run_id,))
+    w.conn.commit()
     handoff.sweep(w.conn, w.settings)
     handoff.sweep(w.conn, w.settings)
     assert calls == [1] and handoff.get(w.conn, h["id"])["notified_via"].startswith("failed:")
@@ -324,7 +339,9 @@ def test_owner_without_push_sees_one_setup_item_until_he_hides_it(world, monkeyp
     assert not [i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "setup"]
     monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: "m1")
     ask(w)
-    handoff.sweep(w.conn, w.settings)  # it mattered: a handoff had to go by e-mail
+    w.conn.execute("UPDATE runs SET status = 'ok' WHERE id = ?", (w.run_id,))
+    w.conn.commit()
+    handoff.sweep(w.conn, w.settings)  # it mattered: a parked handoff had to go by e-mail
     items = w.client.get("/api/needs-me").json()["items"]
     setup = [i for i in items if i["kind"] == "setup"]
     assert len(setup) == 1 and setup[0]["title"] == "Zapnout notifikace v telefonu"
@@ -498,3 +515,26 @@ def test_a_temporary_1password_write_token_is_taken_off_the_console_only_for_its
     op_write.discard()
     assert op_write.token() is None and not op_write.present()
     assert op_write.host_ok("my.1password.com") and not op_write.host_ok("1password.com.evil.example")
+
+
+def test_a_waiting_run_is_kept_alive_by_the_guards_poll_and_a_dead_worker_does_not_count_as_a_silent_death(world):
+    """prod 2026-10-07 run 1696 (T-992): the run waiting for the owner was reaped as 'worker went silent'. The guard's
+    poll is the run's heartbeat; when the worker really goes away (a restart), the run ends without counting as a
+    silent death and the handoff parks."""
+    w = world
+    h = ask(w)
+    old = (datetime.now(timezone.utc) - timedelta(minutes=scheduler.SILENT_MINUTES + 1)).isoformat(timespec="seconds")
+    w.conn.execute("UPDATE runs SET engine = 'claude', started_at = ?, heartbeat_at = ? WHERE id = ?",
+                   (old, old, w.run_id))
+    w.conn.commit()
+    assert w.client.get(f"/api/worker/browser/handoff/{h['id']}/poll", params={"wait": 0},
+                        headers=w.h).json()["status"] == "waiting"
+    assert scheduler.reap_runs(w.conn)["released"] == []
+    assert w.conn.execute("SELECT status FROM runs WHERE id = ?", (w.run_id,)).fetchone()[0] == "running"
+    # The worker is gone: no poll, no alive tick.
+    w.conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ?", (old, w.run_id))
+    w.conn.commit()
+    assert scheduler.reap_runs(w.conn)["released"] == [w.run_id]
+    run = w.conn.execute("SELECT status, detail FROM runs WHERE id = ?", (w.run_id,)).fetchone()
+    assert run["status"] == "error" and not run["detail"].startswith(scheduler.SILENT_DETAIL)
+    assert handoff.get(w.conn, h["id"])["status"] == "parked" and task_status(w) == "waiting"
