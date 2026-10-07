@@ -565,6 +565,20 @@ CRED_CONTEXT_RE = re.compile(r"(?<![a-z])(?:1password|1pass|polozk|credential|tr
 CRED_TOKEN_RE = re.compile(r"(?<![\w{])cred:([a-z0-9][a-z0-9_.-]*[a-z0-9])", re.IGNORECASE)
 QUOTED_TOKEN_RE = re.compile(r"[`„“\"']([A-Za-z0-9][A-Za-z0-9_.-]{2,62})[`“”\"']")
 QUOTED_OP_RE = re.compile(r"`(op://[^`\n]+)`")
+# prod 2026-10-06 (check #2): "vrací 200 bez hesla … hlasový rozhovor: `hovor-start` 200" read the voice endpoint as
+# a credential, because the sentence said "hesla" somewhere. A quoted name is a credential pointer only when a
+# credential word stands right before it ("heslo/přihlášení/credential/klíč/položka … `name`") or the name itself
+# is shaped like one (its last part auth/token/key/ssh/admin…) in a sentence about logins. Endpoints, task slugs
+# and branch names are neither; explicit cred:/op:// references and registered names always count.
+CRED_NEAR_RE = re.compile(r"(?:1password|1pass|poloz[kc]|credential|cred|trezor|vault|prihlasovaci|prihlaseni|login|"
+                          r"hesl|secret|klic|token|item)\w*")
+CRED_NEAR_WORDS = 6
+# what may stand between the credential word and the name: "heslo je v 1Password v položce `x`"
+CRED_FILLER = {"je", "jsou", "v", "ve", "do", "na", "pod", "z", "ze", "k", "u", "s", "se", "pro", "tam", "najdes",
+               "najdete", "ulozen", "ulozeny", "ulozena", "ulozene", "ulozeno", "nazev", "nazvem", "jmenem", "is",
+               "in", "the", "named", "under", "at", "a", "an"}
+CRED_NAME_TAIL = {"auth", "token", "key", "apikey", "ssh", "password", "passwd", "pass", "heslo", "secret", "creds",
+                  "credential", "credentials", "login", "admin", "smtp", "oauth", "pat"}
 # A sentence asking for the item to be made ("doplň položku X do 1Password") points to nothing yet.
 CRED_CREATE_RE = re.compile(r"(?<![a-z])(?:dopln|vytvor|zaloz|pridej|pridat|pridejte|nastav|vloz|uloz|create|add|"
                             r"set up)")
@@ -594,6 +608,29 @@ def _cred_state(conn: sqlite3.Connection, *, name: str | None = None, ref: str |
     return got
 
 
+def _quoted_credential_names(s: str, *, context: bool) -> list[str]:
+    """The quoted names in one sentence that point to a credential: a credential word right before the name, or a
+    name whose last part says credential in a sentence about logins. Never a mere kebab-case token."""
+    from .credentials import service as creds
+
+    out = []
+    for m in QUOTED_TOKEN_RE.finditer(s):
+        t = m.group(1)
+        if not ("-" in t or "_" in t) or "." in t or "/" in t or not creds.NAME_RE.match(t.lower()):
+            continue
+        before = re.sub(r"`[^`]*`", " ", s[:m.start()])
+        before = re.split(r"[;!?…\n]|\.\s", before)[-1]
+        words = [w.strip(":,=*„“\"'()[]-–") for w in reality.norm(before).split()][-CRED_NEAR_WORDS:]
+        words = [w for w in words if w]
+        hit = max((i for i, w in enumerate(words) if CRED_NEAR_RE.fullmatch(w)), default=None)
+        pointed = hit is not None and not (hit > 0 and words[hit - 1] == "bez") \
+            and all(w in CRED_FILLER for w in words[hit + 1:])
+        tail = re.split(r"[-_]", t.lower())[-1]
+        if pointed or (context and tail in CRED_NAME_TAIL):
+            out.append(t.lower())
+    return out
+
+
 def credential_findings(conn: sqlite3.Connection, text: str) -> list[Finding]:
     """Credentials and 1Password references the text presents as usable that do not resolve. A sentence that says
     one is missing is a blocker claim (blocker_findings), not a pointer."""
@@ -610,9 +647,7 @@ def credential_findings(conn: sqlite3.Connection, text: str) -> list[Finding]:
         low = s.lower()
         found = [m.lower() for m in CRED_TOKEN_RE.findall(s)]
         found += [nm for nm in names if re.search(r"(?<![\w.-])" + re.escape(nm) + r"(?![\w-])", low)]
-        if CRED_CONTEXT_RE.search(n):
-            found += [t.lower() for t in QUOTED_TOKEN_RE.findall(s)
-                      if ("-" in t or "_" in t) and "." not in t and "/" not in t]
+        found += _quoted_credential_names(s, context=bool(CRED_CONTEXT_RE.search(n)))
         for ref in refs:
             ref = ref.strip().rstrip(".,;:!?)")
             if ref in seen:

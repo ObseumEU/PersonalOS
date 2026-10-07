@@ -730,6 +730,38 @@ def test_an_owner_message_pointing_to_a_1password_item_that_does_not_exist_is_bl
     assert not c.execute("SELECT 1 FROM credential_uses").fetchone()
 
 
+M1_NOTE = ("- Ověřeno zvenku: `https://kniha-test.obseum.cz/r/<token>` vrací 200 bez hesla, `/api/r/<token>/stav` "
+           "vrací jméno „Ukázka pro Davida“ a první otázku; hlasový rozhovor na zkušební objednávce: `hovor-start` "
+           "200, hlas 200 audio/mpeg. `/healthz` 200, nasazený main `7aa449f` (kniha-deployer).")
+
+
+@pytest.mark.parametrize("text", [
+    M1_NOTE,  # prod 2026-10-06, check #2: the voice endpoint read as a credential
+    "Přihlášení do adminu funguje, endpoint `hovor-start` vrací 200 a `hlas-stav` taky.",
+    "Heslo pro test je hotové v T-918; větev `fix-login-form` je nasazená a `t-882-platba-qr` čeká na review.",
+    "Login stránka i `order-create` jsou za basic auth; úkol `kniha-m2-platby` pokračuje.",
+    "Credential se ověřuje přes deploy, změna je ve větvi `feat-credential-check` (`pos-worker` restartován).",
+    "Bez hesla odpovídá `api-health` i `hovor-start` 200.",
+])
+def test_endpoint_task_and_branch_names_are_not_credential_pointers(env, op, text):
+    """A kebab-case token in a sentence that mentions a password is not a credential name: only cred:/op://
+    references, registered names, and names a credential word points to (or shaped like a credential)."""
+    assert grounding.credential_findings(env["conn"], text) == []
+    grounding.owner_message_gate(env["conn"], env["Lead"], "relay_owner:delivery", text)
+
+
+@pytest.mark.parametrize("text, name", [
+    ("Heslo je v 1Password v položce `kniha-neni-tu`.", "kniha-neni-tu"),
+    ("Přihlášení: credential `kniha-staging-login` (trezor PersonalOS).", "kniha-staging-login"),
+    ("Klíč `smtp-relay-key` najdeš v trezoru.", "smtp-relay-key"),
+    ("Přihlášení do adminu: `kniha-test-admin`.", "kniha-test-admin"),
+    ("Pro test použij cred:nikde-nic.", "nikde-nic"),
+])
+def test_names_a_credential_word_points_to_are_still_checked(env, op, text, name):
+    found = grounding.credential_findings(env["conn"], text)
+    assert [(f.kind, f.ref) for f in found] == [("credential", name)]
+
+
 def test_a_credential_check_that_cannot_reach_1password_does_not_block(env, op):
     op.down = True
     grounding.owner_message_gate(env["conn"], env["Lead"], "chat_owner", T767.replace("kniha-test-admin", "x"))
