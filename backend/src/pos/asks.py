@@ -266,6 +266,7 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, *, title: str, why: str, details: st
         "source": "ask_owner",
     }
     if source:
+        fields["on_behalf_of"] = source["id"]  # the question is the source task's work (business or not)
         fields["visibility"] = source["visibility"]
         if source.get("topic"):
             fields["topic"] = source["topic"]

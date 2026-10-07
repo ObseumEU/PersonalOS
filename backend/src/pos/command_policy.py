@@ -60,8 +60,6 @@ READERS = {"ls", "pwd", "echo", "cat"}
 
 _CTO_PATTERNS = [
     (r"\bgit\s+push\b", "pushes to a remote (the deployer promotes agent/dev; a push is outside that flow)"),
-    (r"\b(curl|wget|http|https)\b[^\n;&|]*(\s-X\s*(POST|PUT|PATCH|DELETE)\b|\s--request\s+(POST|PUT|PATCH|DELETE)\b"
-     r"|\s(-d|--data\S*|-F|--form|--upload-file|-T|--post-data|--post-file)\b)", "writes to a network service"),
     (r"\b(scp|rsync|sftp)\b[^\n;&|]*\S+:\S*", "copies to another host"),
     (r"(^|[;&|]\s*)ssh\s", "opens a shell on another host"),
     (r"\b(npm|pnpm|yarn)\s+publish\b|\bdocker\s+push\b|\btwine\s+upload\b", "publishes a package or image"),
@@ -240,8 +238,115 @@ def auto_allow(command: str, cwd: str | None, workdir: str | None) -> bool:
     return True
 
 
+# ------------------------------------------------------------------ network writes (curl, wget, httpie)
+# Read from their options, case-sensitively (prod 2026-10: approval #2 held the Kniha Developer's
+# `curl -f -I` (a HEAD) for the CTO because a case-blind pattern read -f as -F (a form upload); #1
+# held `curl -D -` (dump headers) as -d (data)).
+
+NET_WRITE = "writes to a network service"
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# curl short options that take an argument (the rest of the cluster, or the next word, is that argument).
+_CURL_ARG_SHORT = set("AbcCdDeEFHKmoPQrtTuUwxXyYz")
+_CURL_WRITE_SHORT = set("dFT")
+_CURL_WRITE_LONG = ("--data", "--json", "--form", "--upload-file")
+_WGET_WRITE_LONG = ("--post-data", "--post-file", "--body-data", "--body-file")
+_HTTPIE = {"http", "https", "xh", "xhs"}
+_HTTPIE_ITEM = re.compile(r"^([^=:@\s-][^=:@\s]*)(:=@?|=(?!=)@?|@)")  # key=value, key:=json, field@file
+
+
+def _words(text: str) -> list[str]:
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return text.split()
+
+
+def _curl_writes(args: list[str]) -> bool:
+    method, data, get = None, False, False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--"):
+            name, eq, val = a.partition("=")
+            if name == "--request":
+                if not eq:
+                    val = args[i + 1] if i + 1 < len(args) else ""
+                    i += 1
+                method = val
+            elif name.startswith(_CURL_WRITE_LONG):
+                data = True
+            elif name == "--get":
+                get = True
+        elif a.startswith("-") and len(a) > 1:
+            for k, ch in enumerate(a[1:], start=1):
+                if ch == "G":
+                    get = True
+                if ch in _CURL_WRITE_SHORT:
+                    data = True
+                if ch in _CURL_ARG_SHORT:
+                    rest = a[k + 1:]
+                    if not rest:
+                        rest = args[i + 1] if i + 1 < len(args) else ""
+                        i += 1  # the next word is this option's argument
+                    if ch == "X":
+                        method = rest
+                    break
+        i += 1
+    if method is not None and method.strip().upper() in WRITE_METHODS:
+        return True
+    return data and not get  # -G sends the -d data as a GET query string
+
+
+def _wget_writes(args: list[str]) -> bool:
+    for i, a in enumerate(args):
+        name, eq, val = a.partition("=")
+        if name.startswith(_WGET_WRITE_LONG):
+            return True
+        if name == "--method":
+            m = val if eq else (args[i + 1] if i + 1 < len(args) else "")
+            if m.strip().upper() in WRITE_METHODS:
+                return True
+    return False
+
+
+def _httpie_writes(args: list[str]) -> bool:
+    if any(a in ("-f", "--form", "--multipart") or a.startswith("--raw") for a in args):
+        return True
+    plain = [a for a in args if not a.startswith("-")]
+    if plain and plain[0].upper() in WRITE_METHODS:
+        return True
+    for a in plain[1:]:
+        m = _HTTPIE_ITEM.match(a)
+        if m and "/" not in m[1]:  # a request data item (not a URL with a query string)
+            return True
+    return False
+
+
+def network_write(command: str, depth: int = 0) -> bool:
+    """Does a curl / wget / httpie call in this command send data or use a writing method? A HEAD, a
+    plain GET, `wget --spider` or `curl -G -d` is read-only. A quoted inner command (bash -c '...') is
+    read too."""
+    for part in _SEPARATORS.split(command):
+        words = _words(part)
+        for i, w in enumerate(words):
+            base = posixpath.basename(w)
+            rest = words[i + 1:]
+            if base == "curl" and _curl_writes(rest):
+                return True
+            if base == "wget" and _wget_writes(rest):
+                return True
+            if base in _HTTPIE and _httpie_writes(rest):
+                return True
+            if depth < 3 and re.search(r"\s", w) and re.search(r"\b(curl|wget|https?|xhs?)\b", w):
+                if network_write(w, depth + 1):
+                    return True
+    return False
+
+
 def needs_cto(command: str) -> str | None:
     """Why this command needs the CTO's approval (a push or network write), or None."""
+    if network_write(command):
+        return NET_WRITE
     for pattern, reason in _CTO_PATTERNS:
         if re.search(pattern, command, re.IGNORECASE | re.MULTILINE):
             return reason
@@ -277,6 +382,17 @@ def approved(conn: sqlite3.Connection, actor_id: int, command: str) -> bool:
                         (actor_id, fingerprint(command), now_iso())).fetchone() is not None
 
 
+def run_task(conn: sqlite3.Connection, run_id: int | None) -> int | None:
+    """The task an agent's run works on (what a task spawned from that run is on behalf of)."""
+    if not run_id:
+        return None
+    try:
+        r = conn.execute("SELECT task_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return r["task_id"] if r is not None and r["task_id"] else None
+
+
 def request(conn: sqlite3.Connection, ctx: Ctx, command: str, why: str = "", reason: str = "") -> dict:
     """One pending approval (and one task for the approver) per agent and command."""
     ensure_schema(conn)
@@ -298,6 +414,7 @@ def request(conn: sqlite3.Connection, ctx: Ctx, command: str, why: str = "", rea
     from . import tasks
 
     system = Ctx(actors.owner_id(conn), via="system")
+    origin = run_task(conn, ctx.run_id)
     t = tasks.create(conn, system, {
         "title": f"Approve a command for {me['name']}: {command[:70]}",
         "notes": (f"Purpose: {me['name']} needs a shell command its guard does not run on its own. "
@@ -308,6 +425,7 @@ def request(conn: sqlite3.Connection, ctx: Ctx, command: str, why: str = "", rea
                   f"Approved, exactly this command runs for {me['name']} for {APPROVAL_DAYS} days."),
         "definition_of_done": "The approval is decided (approved or refused with a reason); the agent hears it.",
         "priority": 2, "status": "next", "assignee": {"type": who["kind"], "id": who["id"]},
+        **({"on_behalf_of": origin} if origin else {}),  # a business task's approval is business work
     })
     conn.execute("UPDATE command_approvals SET task_id = ? WHERE id = ?", (t["id"], aid))
     audit.log(conn, ctx, "command_approval_request", "task", t["id"], approval=aid, approver=who["name"],

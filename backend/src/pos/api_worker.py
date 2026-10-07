@@ -832,6 +832,7 @@ def check_command(body: CommandIn, conn=Depends(get_db), ctx: Ctx = Depends(work
                      f"Constitution {d.rule}: {d.reason}",
             "definition_of_done": "The owner ran the command (or decided not to) and told the agent.",
             "priority": 1, "assignee": "me", "status": "next",
+            **({"on_behalf_of": o} if (o := command_policy.run_task(conn, body.run_id)) else {}),
         })
         out["owner_task"] = t["ref"]
     _record_denial(conn, ctx, body, out)

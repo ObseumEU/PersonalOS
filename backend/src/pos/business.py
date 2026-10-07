@@ -54,11 +54,29 @@ VALUE_KINDS = ("business", "platform", "demo")
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
-    """tasks.value_kind (the owner's override of the automatic label; NULL = automatic)."""
+    """tasks.value_kind (the owner's override of the automatic label; NULL = automatic) and
+    tasks.on_behalf_of (the task a spawned approval, ask or check works for; it inherits its label)."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if cols and "value_kind" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN value_kind TEXT")
         conn.commit()
+    if cols and "on_behalf_of" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN on_behalf_of INTEGER")
+        _backfill_on_behalf_of(conn)
+        conn.commit()
+
+
+def _backfill_on_behalf_of(conn: sqlite3.Connection) -> None:
+    """Command approvals made before the column: the task the agent's run was working on."""
+    try:
+        conn.execute("""UPDATE tasks SET on_behalf_of = (
+                            SELECT r.task_id FROM command_approvals ca JOIN runs r ON r.id = ca.run_id
+                            WHERE ca.task_id = tasks.id AND r.task_id IS NOT NULL AND r.task_id != tasks.id
+                            ORDER BY ca.id LIMIT 1)
+                        WHERE on_behalf_of IS NULL AND id IN (SELECT task_id FROM command_approvals
+                                                              WHERE task_id IS NOT NULL)""")
+    except sqlite3.OperationalError:
+        pass  # no approvals or runs table yet
 
 
 # ------------------------------------------------------------------ who is who
@@ -154,13 +172,22 @@ def is_demo(row) -> bool:
     return title in DEMO_TITLES or bool(DEMO_RE.search(row["title"] or "")) or (row["topic"] or "") == "acme"
 
 
-def classify(conn: sqlite3.Connection, row, roles: dict[int, str | None] | None = None) -> str:
+def classify(conn: sqlite3.Connection, row, roles: dict[int, str | None] | None = None,
+             _seen: frozenset = frozenset()) -> str:
     """business | platform | demo for one task row (value_kind wins when set)."""
     keys = row.keys() if hasattr(row, "keys") else row
     if "value_kind" in keys and row["value_kind"] in VALUE_KINDS:
         return row["value_kind"]
     if is_demo(row):
         return "demo"
+    # Work spawned on behalf of a task (a command approval, an owner question, a guard escalation) is
+    # that task's work: prod 2026-10, T-397 (a paying customer) waited on three approvals the CTO could
+    # not start under the business reserve because an approval task alone looked like platform.
+    origin = row["on_behalf_of"] if "on_behalf_of" in keys else None
+    if origin and origin != row["id"] and origin not in _seen and len(_seen) < 6:
+        parent = conn.execute("SELECT * FROM tasks WHERE id = ?", (origin,)).fetchone()
+        if parent is not None and classify(conn, parent, roles, _seen | {row["id"], origin}) == "business":
+            return "business"
     source = (row["source"] or "").lower()
     topic = (row["topic"] or "").lower()
     if source == "event:github" or source.startswith("event:github"):

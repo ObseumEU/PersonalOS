@@ -242,3 +242,32 @@ def test_every_narrow_tool_list_has_the_tools_its_instructions_use():
             assert "note_get" in shown, d.name  # the owner-report line needs it
         checked += 1
     assert checked >= 10
+
+
+@pytest.mark.parametrize("command", [
+    # prod 2026-10, approval #2: a HEAD with -f (fail) read case-blind as -F (form)
+    'curl -s -f -I -o /dev/null -w "%{http_code}" --retry 30 --retry-delay 15 --retry-all-errors '
+    "https://kniha-test.obseum.cz/o/abc",
+    "curl -s -D - -o /dev/null https://kniha-test.obseum.cz/o/x",  # approval #1: -D dumps headers
+    "curl -I https://example.com", "curl --head https://example.com", "curl -sSfL https://example.com/a.json",
+    "curl -X GET https://example.com", "curl --request HEAD https://example.com", "curl -XGET https://x.cz",
+    "curl -G -d q=1 https://example.com/search", "curl -o -d.txt https://example.com",
+    "curl -H 'X-Data: -d' https://example.com", "wget --spider https://example.com", "wget -q -O- https://x.cz",
+    "http GET example.com", "http example.com q==1 Accept:application/json", "http https://x.cz/a?b=c",
+    "curl -s https://x.cz | grep -c ok",
+])
+def test_read_only_http_is_not_a_network_write(command):
+    assert command_policy.needs_cto(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "curl -d '{}' https://example.com", "curl --data-binary @f https://x.cz", "curl -sd x=1 https://x.cz",
+    "curl -X POST https://x.cz", "curl -XDELETE https://x.cz/1", "curl --request=PUT https://x.cz",
+    "curl --request patch https://x.cz", "curl -F file=@a.txt https://x.cz", "curl -T a.txt https://x.cz",
+    "curl --upload-file a https://x.cz", "curl --json '{}' https://x.cz", "curl -I -X POST https://x.cz",
+    "wget --post-data=a=1 https://x.cz", "wget --method=DELETE https://x.cz", "wget --body-file f https://x.cz",
+    "http POST example.com a=1", "http example.com name=x", "http -f example.com a=1", "xh PUT x.cz",
+    "bash -c 'curl -d x https://x.cz'", "echo ok && curl -X POST https://x.cz", "/usr/bin/curl -d x https://x.cz",
+])
+def test_network_writes_still_need_the_cto(command):
+    assert command_policy.needs_cto(command) == "writes to a network service"

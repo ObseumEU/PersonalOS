@@ -309,6 +309,7 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     owner = fields.pop("owner_id", None)
     goal = fields.pop("goal", None)
     source = fields.pop("source", ctx.via)
+    on_behalf_of = fields.pop("on_behalf_of", None)  # the task this one works for (pos.business.classify)
     unknown = set(fields) - EDITABLE
     if unknown:
         raise Invalid(f"unknown fields: {sorted(unknown)}")
@@ -346,6 +347,11 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
         **({"reviewer_id": resolve_reviewer(conn, ctx, reviewer)} if reviewer not in (None, "") else {}),
         **({"project_id": resolve_project(conn, ctx, project)} if project not in (None, "") else {}),
     }
+    if on_behalf_of not in (None, ""):
+        from . import business
+
+        business.ensure_schema(conn)
+        values["on_behalf_of"] = parse_id(on_behalf_of)
     if values.get("project_id") is None and parent_id is not None:
         values["project_id"] = parent["project_id"]  # a step belongs to its task's project
     if values.get("topic"):

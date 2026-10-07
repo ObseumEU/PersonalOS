@@ -698,3 +698,44 @@ def test_a_business_teams_reviews_and_system_tasks_count_as_business(conn, owner
     odd = tasks.create(conn, owner, {"title": "Review ?", "source": "review:x",
                                      "assignee": {"type": "agent", "id": qa.actor_id}})
     assert kind(odd) == "platform"
+
+
+def test_approvals_spawned_for_a_business_task_inherit_business(conn, owner, company):
+    """Prod 2026-10: T-397 (a paying customer) waited on three command approvals (T-1014..T-1016) the CTO
+    could not start under the business reserve: an approval task alone (source system, the CTO's queue)
+    looked like platform. Work spawned on behalf of a task now inherits its label."""
+    from pos import command_policy
+
+    se = company["se"].actor_id
+    conn.execute("UPDATE actors SET team = 'engineering' WHERE id IN (?, ?)", (se, company["cto"].actor_id))
+    customer = tasks.create(conn, owner, {"title": "Zákaznický problém: AI analýza měla výpadek",
+                                          "source": "support:issue", "value_kind": "business",
+                                          "assignee": {"type": "agent", "id": se}})
+    internal = tasks.create(conn, owner, {"title": "Fix the worker", "topic": "dev",
+                                          "assignee": {"type": "agent", "id": se}})
+
+    def run_on(task_id):
+        return conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', "
+                            "'running', ?)", (se, task_id, now_iso())).lastrowid
+
+    kind = lambda ref: tasks.get(conn, owner, tasks.parse_id(ref))["value_kind_effective"]  # noqa: E731
+    biz = command_policy.request(conn, Ctx(se, via="worker", run_id=run_on(customer["id"])),
+                                 "git -C /work/x apply p.patch", why="the fix")
+    plat = command_policy.request(conn, Ctx(se, via="worker", run_id=run_on(internal["id"])),
+                                  "git -C /work/y apply p.patch", why="the fix")
+    loose = command_policy.request(conn, Ctx(se, via="worker"), "git -C /work/z apply p.patch", why="?")
+    assert tasks.get(conn, owner, tasks.parse_id(biz["task"]))["assignee_id"] == company["cto"].actor_id
+    assert kind(biz["task"]) == "business"   # the customer's task decides
+    assert kind(plat["task"]) == "platform"  # platform work's approval stays platform
+    assert kind(loose["task"]) == "platform"  # no run, no origin: as before
+    # Any task can be created on behalf of another; a chain or a loop stays bounded.
+    a = tasks.create(conn, owner, {"title": "Check A", "source": "system", "on_behalf_of": biz["task"],
+                                   "assignee": {"type": "agent", "id": company["cto"].actor_id}})
+    assert kind(a["ref"]) == "business"
+    conn.execute("UPDATE tasks SET on_behalf_of = ? WHERE id = ?", (a["id"], tasks.parse_id(loose["task"])))
+    conn.execute("UPDATE tasks SET on_behalf_of = ? WHERE id = ?", (tasks.parse_id(loose["task"]), a["id"]))
+    assert kind(loose["task"]) == "platform"
+    # Approvals from before the column get their origin from the run (the migration's backfill).
+    conn.execute("UPDATE tasks SET on_behalf_of = NULL")
+    business._backfill_on_behalf_of(conn)
+    assert kind(biz["task"]) == "business" and kind(plat["task"]) == "platform"
