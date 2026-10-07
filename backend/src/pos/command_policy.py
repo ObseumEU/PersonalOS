@@ -68,6 +68,128 @@ _CTO_PATTERNS = [
 
 # ------------------------------------------------------------------ classification
 
+def split_commands(command: str) -> list[str]:
+    """The simple commands of a command line, split at &&, ||, ; and | outside quotes (prod 2026-10-07 18:06: the
+    `;` inside `node -e "const fs=require('fs');..."` split the script into "commands" and it was refused)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    quote = None
+    i = 0
+    while i < len(command):
+        c = command[i]
+        if quote:
+            cur.append(c)
+            if c == "\\" and quote == '"' and i + 1 < len(command):
+                cur.append(command[i + 1])
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+            cur.append(c)
+        elif c == "\\" and i + 1 < len(command):
+            cur.append(c + command[i + 1])
+            i += 1
+        elif command.startswith(("&&", "||"), i):
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+        elif c in ";|":
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return [p.strip() for p in parts if p.strip()]
+
+
+# A read-only `node -e` / `--eval` / `-p` / `--print` (prod 2026-10-07: the Kniha Developer's look into a test file
+# was refused). Allowed only when the script can do nothing but read files and print: the modules it requires are
+# fs and path (literally), fs only through its read functions, `process` only for argv/cwd/exit/stdout, no way to
+# build a name at run time (computed member access other than a number, computed keys, escapes, eval/Function,
+# constructor, globals), no template strings or shell expansion. Anything else goes to the CLI's allow-list as before.
+NODE_EVAL_FLAGS = ("-e", "--eval", "-p", "--print")
+_JS_MODULES = {"fs", "node:fs", "path", "node:path"}
+_JS_FS_READS = {"readFileSync", "readdirSync", "statSync", "lstatSync", "existsSync", "realpathSync"}
+_JS_BANNED = re.compile(
+    r"\b(eval|Function|constructor|__proto__|prototype|globalThis|global|window|self|Reflect|Proxy|import|"
+    r"fetch|XMLHttpRequest|WebSocket|EventSource|Worker|WebAssembly|module|exports|Object|Buffer|"
+    r"atob|btoa|fromCharCode|fromCodePoint|setTimeout|setInterval|setImmediate|this|arguments|Symbol|"
+    r"defineProperty|bind|call|apply|with|new|child_process|spawn|exec|execSync|fork)\b")
+_JS_PROCESS_OK = re.compile(r"\bprocess\s*\.\s*(argv\b|cwd\s*\(|exit\s*\(|stdout\s*\.\s*write\s*\()")
+_JS_REQUIRE = re.compile(r"\brequire\s*\(\s*(['\"])([\w:]+)\1\s*\)")
+_JS_ESCAPES = ("`", "$", "\\u", "\\x", "\\0", "\\1", "\\2", "\\3")
+
+
+def node_eval_read_only(args: list[str]) -> bool:
+    """`node -e SCRIPT [args]` (the words after `node`) whose script only reads files and prints."""
+    if not args:
+        return False
+    flag, script, rest = args[0], None, []
+    if flag in NODE_EVAL_FLAGS and len(args) >= 2:
+        script, rest = args[1], args[2:]
+    elif flag.startswith(("--eval=", "--print=")):
+        script, rest = flag.split("=", 1)[1], args[1:]
+    if script is None or any(a.startswith("-") for a in rest):
+        return False
+    return js_read_only(script)
+
+
+def js_read_only(js: str) -> bool:
+    """Can this script do nothing but read files (fs read functions) and print? Errs towards no."""
+    if any(x in js for x in _JS_ESCAPES) or _JS_BANNED.search(js):
+        return False
+    # `process` only for argv / cwd() / exit() / stdout.write(): never env, binding, mainModule, or passed around.
+    if len(re.findall(r"\bprocess\b", js)) != len(_JS_PROCESS_OK.findall(js)):
+        return False
+    requires = list(_JS_REQUIRE.finditer(js))
+    if len(requires) != len(re.findall(r"\brequire\b", js)) or any(m[2] not in _JS_MODULES for m in requires):
+        return False
+    # Computed access only with a number (s[0]); computed keys never ({[k]: v}, {a, [k]: v}).
+    if re.search(r"\]\s*:", js):
+        return False
+    for m in re.finditer(r"\[", js):
+        before = js[:m.start()].rstrip()
+        if before.endswith(("{", ",")) and "{" in before:
+            return False  # possibly a computed key in an object or a destructuring
+        if before and (before[-1].isalnum() or before[-1] in "_)]'\".?"):
+            if not re.match(r"\[\s*\d+\s*\]", js[m.start():]):
+                return False
+    # fs: bound by name (const fs = require('fs')), destructured ({readFileSync} = require('fs')) or used inline;
+    # every use of it is one of its read functions.
+    fs_names = set()
+    for m in requires:
+        if m[2] not in ("fs", "node:fs"):
+            continue
+        before, after = js[:m.start()], js[m.end():]
+        bound = re.search(r"\b(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*$", before)
+        destructured = re.search(r"\b(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*$", before)
+        if bound:
+            fs_names.add(bound[1])
+        elif destructured:
+            for item in destructured[1].split(","):
+                name = item.split(":")[0].strip()
+                if name and name not in _JS_FS_READS:
+                    return False
+        else:
+            use = re.match(r"\s*\.\s*(\w+)\s*\(", after)
+            if not use or use[1] not in _JS_FS_READS:
+                return False
+    spans = [(m.start(), m.end()) for m in requires]
+    for name in fs_names:
+        for m in re.finditer(rf"(?<![\w.]){re.escape(name)}\b", js):
+            if any(a <= m.start() < b for a, b in spans):
+                continue  # the module name in require('fs')
+            tail = js[m.end():]
+            if re.match(r"\s*=\s*require\s*\(", tail):
+                continue
+            use = re.match(r"\s*\.\s*(\w+)\s*\(", tail)
+            if not use or use[1] not in _JS_FS_READS:
+                return False
+    return True
+
+
 def _inside(path: str, cwd: str, workdir: str) -> bool:
     full = posixpath.normpath(posixpath.join(cwd, path))
     root = posixpath.normpath(workdir)
@@ -207,6 +329,8 @@ def _segment(words: list[str], cwd: str, workdir: str, first: bool) -> tuple[boo
         if rest[0] in NPM_SAFE:
             return True, cwd
         return rest[0] == "run" and len(rest) >= 2 and rest[1] in NPM_RUN_SAFE, cwd
+    if posixpath.basename(cmd) == "node":
+        return node_eval_read_only(args), cwd
     if cmd == "npx":
         rest = [a for a in args if a not in ("--no-install",)]
         return rest[:2] == ["vite", "build"] or rest[:1] == ["tsc"], cwd
@@ -220,7 +344,7 @@ def auto_allow(command: str, cwd: str | None, workdir: str | None) -> bool:
     here = posixpath.normpath(cwd or workdir)
     if not _inside(here, here, workdir):
         return False
-    for i, part in enumerate(p for p in _SEPARATORS.split(command.strip()) if p.strip()):
+    for i, part in enumerate(split_commands(command)):
         try:
             words = shlex.split(part)
         except ValueError:
@@ -421,9 +545,11 @@ def request(conn: sqlite3.Connection, ctx: Ctx, command: str, why: str = "", rea
                   f"Source: the command policy (pos.command_policy), approval #{aid}.\n\n"
                   f"**Command**\n\n```\n{command[:2000]}\n```\n\n**Why it needs approval:** "
                   f"{reason or 'not on the agent allow-list'}\n\n**The agent's reason:** {why or '(none given)'}\n\n"
-                  f"Decide with command_approval_decide(approval={aid}, approve=true|false, reason=...). "
-                  f"Approved, exactly this command runs for {me['name']} for {APPROVAL_DAYS} days."),
-        "definition_of_done": "The approval is decided (approved or refused with a reason); the agent hears it.",
+                  f"Decide with command_approval_decide(approval={aid}, approve=true|false, reason=...): that "
+                  f"closes this task by itself (no complete_task, no review). Approved, exactly this command runs "
+                  f"for {me['name']} for {APPROVAL_DAYS} days."),
+        "definition_of_done": (f"command_approval_decide(approval={aid}) called: approved, or refused with a reason. "
+                               "It closes this task and tells the agent; nothing else to hand in."),
         "priority": 2, "status": "next", "assignee": {"type": who["kind"], "id": who["id"]},
         **({"on_behalf_of": origin} if origin else {}),  # a business task's approval is business work
     })
@@ -465,13 +591,15 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, approval_id: int, approve: bool, 
                      f"Command approval #{approval_id} {verdict}.\n\n`{row['command'][:300]}`")
     except Exception:  # noqa: BLE001 - the decision stands; the agent sees it in its next check
         pass
-    if row["task_id"]:
-        from . import tasks
+    # The decision closes its task (no hand-in, no review) and wakes the task that waited for it (pos.decision_tasks).
+    from . import decision_tasks
 
-        try:
-            tasks.complete(conn, ctx, row["task_id"], f"{'Approved' if approve else 'Refused'}: {reason}".strip())
-        except Exception:  # noqa: BLE001 - a task someone moved on already
-            pass
+    note = f"{'Approved' if approve else 'Refused'}: {reason}".strip().rstrip(":")
+    origin = run_task(conn, row["run_id"])
+    if row["task_id"]:
+        decision_tasks.close(conn, ctx, row["task_id"], note, origin=origin)
+    else:
+        decision_tasks.resolved(conn, ctx, origin, why=note)
     return _out(conn, conn.execute("SELECT * FROM command_approvals WHERE id = ?", (approval_id,)).fetchone())
 
 

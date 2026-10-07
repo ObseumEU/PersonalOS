@@ -21,7 +21,6 @@ POS_URL / POS_AGENT_KEY from the environment.
 import fnmatch
 import json
 import os
-import re
 import sys
 
 import httpx
@@ -76,7 +75,6 @@ APPROVAL_HINT = ("Tento příkaz není na tvém allow-listu ani mezi automaticky
 CLI_READ_ONLY = {"ls", "pwd", "echo", "cat", "head", "tail", "grep", "rg", "wc", "sort", "uniq", "cut", "tr",
                  "true", "false", "cd", "find", "file", "stat", "diff", "which", "date", "basename", "dirname",
                  "realpath", "tree", "du", "df", "env"}
-_SEPARATORS = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
 
 
 def bash_patterns(allowed_tools: list[str]) -> list[str]:
@@ -112,12 +110,47 @@ def _matches(part: str, pattern: str) -> bool:
     return part == pattern
 
 
+def split_commands(command: str) -> list[str]:
+    """The simple commands of a command line, split at &&, ||, ; and | outside quotes (prod 2026-10-07 18:06: the
+    `;` inside `node -e "const fs=require('fs');..."` made "commands" of the script, and the allow-list's
+    `node:*` was read as refusing it). The same as pos.command_policy.split_commands."""
+    parts: list[str] = []
+    cur: list[str] = []
+    quote = None
+    i = 0
+    while i < len(command):
+        c = command[i]
+        if quote:
+            cur.append(c)
+            if c == "\\" and quote == '"' and i + 1 < len(command):
+                cur.append(command[i + 1])
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+            cur.append(c)
+        elif c == "\\" and i + 1 < len(command):
+            cur.append(c + command[i + 1])
+            i += 1
+        elif command.startswith(("&&", "||"), i):
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+        elif c in ";|":
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(c)
+        i += 1
+    parts.append("".join(cur))
+    return [p.strip() for p in parts if p.strip()]
+
+
 def cli_allows(command: str, patterns: list[str]) -> bool:
     """Would the CLI's allow-list run this command (every part of a compound command allowed)? An
     approximation erring towards "yes": an unsure answer leaves the decision to the CLI."""
-    for part in (p.strip() for p in _SEPARATORS.split(command.strip())):
-        if not part:
-            continue
+    for part in split_commands(command):
         first = part.split()[0]
         if "=" in first or first in CLI_READ_ONLY:
             continue

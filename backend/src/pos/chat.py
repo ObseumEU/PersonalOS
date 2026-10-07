@@ -1350,7 +1350,8 @@ INBOX_TASK_TITLE = "Chat: nepřečtené zprávy"
 
 
 def ensure_inbox_task(conn: sqlite3.Connection, actor_id: int) -> int | None:
-    """An agent with unread messages and no work that would deliver them: one task that does.
+    """An agent with unread messages and no work that would deliver them (an empty queue, or one the business
+    reserve holds back): one task that does.
 
     Messages reach an agent inside a run (check_inbox with the run's id, at its start and at every
     step). An idle agent's worker used to read them into its memory and mark them read; the pool's
@@ -1365,16 +1366,23 @@ def ensure_inbox_task(conn: sqlite3.Connection, actor_id: int) -> int | None:
         return None  # informational notices alone wait for real work (pos.notice_digest)
     if conn.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (actor_id,)).fetchone():
         return None  # the live run takes them at its next step
-    open_ = conn.execute("""SELECT id FROM tasks WHERE title = ? AND assignee_id = ? AND archived_at IS NULL
+    from .business import owner_unread
+
+    # The owner's message is business priority (pos.business.owner_reply_task): the task goes first in the queue.
+    priority = 1 if owner_unread(conn, actor_id) else 2
+    open_ = conn.execute("""SELECT id, priority FROM tasks WHERE title = ? AND assignee_id = ? AND archived_at IS NULL
                             AND status IN ('inbox', 'next', 'working')""", (INBOX_TASK_TITLE, actor_id)).fetchone()
     if open_:
+        if priority < (open_["priority"] or 4):
+            conn.execute("UPDATE tasks SET priority = ? WHERE id = ?", (priority, open_["id"]))
+            conn.commit()
         return open_["id"]
     from .notices import system_ctx
 
     ctx = system_ctx(conn)
     t = tasks.create(conn, ctx, {
         "title": INBOX_TASK_TITLE, "assignee": {"type": me["kind"], "id": actor_id}, "status": "next",
-        "priority": 2, "topic": "chat",
+        "priority": priority, "topic": "chat",
         "notes": ("Účel: máš nepřečtené zprávy (DM, zmínky, odpovědi) a žádnou jinou práci, která by ti je "
                   "doručila. Jsou v tomto promptu níže. Vyřiď je: odpověz tam, kde se čeká odpověď "
                   "(chat_send do stejného kanálu), založ nebo uprav úkoly, o které jde, a co patří někomu "

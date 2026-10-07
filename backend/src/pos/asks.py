@@ -317,16 +317,13 @@ def _asks_for(conn: sqlite3.Connection, ticket_id: int) -> list[sqlite3.Row]:
 
 
 def _resume(conn: sqlite3.Connection, ctx: Ctx, a: sqlite3.Row, why: str) -> None:
-    from . import tasks, versioning
+    """The answer is what the source task waited for: a `waiting` one goes on at once, with no back-off (a failed
+    run's, T-167), and its agent is woken (pos.decision_tasks). Also after a non-blocking ask: a task parked
+    waiting for the owner's decision waits for it all the same."""
+    from . import decision_tasks
 
-    if not a["blocking"] or not a["source_task_id"]:
-        return
-    src = conn.execute("SELECT status FROM tasks WHERE id = ?", (a["source_task_id"],)).fetchone()
-    if src and src["status"] == "waiting":
-        versioning.update(conn, ctx, tasks.ENTITY, a["source_task_id"],
-                          {"status": "next", "progress_note": why[:500]}, action="resume")
-        # The answer is what it waited for: an old back-off (a failed run, T-167) must not hold it a day.
-        conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (a["source_task_id"],))
+    if a["source_task_id"]:
+        decision_tasks.resume_waiting(conn, ctx, a["source_task_id"], why)
 
 
 def _tell(conn: sqlite3.Connection, ctx: Ctx, a: sqlite3.Row, body: str) -> None:

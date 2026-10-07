@@ -251,6 +251,74 @@ def _roles(conn: sqlite3.Connection) -> dict[int, str | None]:
     return {r["id"]: r["role"] for r in conn.execute("SELECT id, role FROM actors")}
 
 
+# ------------------------------------------------------------------ the owner's messages under the reserve
+#
+# prod 2026-10-07 20:18: the owner wrote the CEO five times (an Android notification error, "make sure this never
+# happens again") and got only the automatic reply. His "Chat: answer Owner" tasks are topic chat, platform, and
+# the business reserve (pos.access.business_only) held them for hours. What the owner writes is always answered:
+# his chat tasks, and an agent's inbox task while it holds an unread message of his, start under the reserve too,
+# within a small hard daily budget of their own (a loop answering him can never eat the reserve).
+
+OWNER_REPLY_RUNS_DAY = 12    # runs started under the reserve for the owner's messages, company-wide, rolling 24 h
+OWNER_REPLY_USD_DAY = 5.0    # ... and what those runs cost (an unfinished run counts at RUN_EST_FLOOR_USD)
+OWNER_REPLY_AUDIT = "owner_reply_reserve"
+
+
+def owner_unread(conn: sqlite3.Connection, actor_id: int) -> int:
+    """Unread inbox items (not informational notices) the owner wrote to this agent."""
+    return conn.execute(
+        """SELECT COUNT(*) FROM chat_inbox i JOIN chat_messages m ON m.id = i.message_id
+           JOIN actors a ON a.id = m.author_id
+           WHERE i.actor_id = ? AND i.read_at IS NULL AND m.archived_at IS NULL AND COALESCE(i.info, 0) = 0
+           AND a.is_owner = 1""", (actor_id,)).fetchone()[0]
+
+
+def owner_reply_task(conn: sqlite3.Connection, row) -> bool:
+    """A task whose run answers the owner: his "Chat: answer" task, or the agent's inbox task while it holds an
+    unread message of his (pos.chat.ensure_inbox_task)."""
+    from .chat import INBOX_TASK_TITLE
+
+    if (row["topic"] or "") != "chat" or row["status"] not in ("next", "working"):
+        return False
+    title = row["title"] or ""
+    if title.startswith("Chat: answer "):
+        creator = row["created_by"]
+        return bool(creator) and conn.execute("SELECT 1 FROM actors WHERE id = ? AND is_owner = 1",
+                                              (creator,)).fetchone() is not None
+    if title == INBOX_TASK_TITLE and row["assignee_id"]:
+        return owner_unread(conn, row["assignee_id"]) > 0
+    return False
+
+
+def owner_reply_budget(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """The owner-reply runs started under the reserve in the last 24 h: {runs, usd, left}."""
+    from .access.service import RUN_EST_FLOOR_USD
+
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(days=1)).isoformat(timespec="seconds")
+    rows = conn.execute("""SELECT r.status, r.cost_usd FROM audit_log l
+                           LEFT JOIN runs r ON r.id = CAST(json_extract(l.detail, '$.run') AS INTEGER)
+                           WHERE l.action = ? AND l.at >= ?""", (OWNER_REPLY_AUDIT, since)).fetchall()
+    usd = 0.0
+    for r in rows:
+        if r["cost_usd"] is not None:
+            usd += float(r["cost_usd"])
+        elif r["status"] in (None, "running"):
+            usd += RUN_EST_FLOOR_USD
+    left = len(rows) < OWNER_REPLY_RUNS_DAY and usd < OWNER_REPLY_USD_DAY
+    return {"runs": len(rows), "usd": round(usd, 4), "left": left}
+
+
+def owner_reply_exempt(conn: sqlite3.Connection, row) -> bool:
+    """Does this task start under the business reserve because it answers the owner (within the daily budget)?"""
+    return owner_reply_task(conn, row) and owner_reply_budget(conn)["left"]
+
+
+def record_owner_reply_run(conn: sqlite3.Connection, ctx: Ctx, task_id: int, run_id: int) -> None:
+    """A run answering the owner started under the reserve: it counts against the owner-reply budget."""
+    audit.log(conn, ctx, OWNER_REPLY_AUDIT, "task", task_id, run=run_id)
+
+
 # ------------------------------------------------------------------ interventions (the owner's time)
 
 # Minutes of the owner's attention each intervention takes (an estimate, shown as such).

@@ -72,7 +72,12 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, approval_id: int, approve: bool, 
         for fn in _on_approved:
             fn(conn, get(conn, approval_id))
     out = get(conn, approval_id)
-    from . import asks
+    from . import asks, decision_tasks
 
     asks.tell_decision(conn, ctx, out)  # the requester gets the decision in its inbox
+    if row["task_id"]:  # the task that waited for the decision goes on at once (pos.decision_tasks)
+        word = "schválil" if approve else "zamítl"
+        decision_tasks.resume_waiting(conn, ctx, row["task_id"],
+                                      f"Majitel {word} žádost #{approval_id} ({row['action']})"
+                                      + (f": {comment}" if comment else ""))
     return out

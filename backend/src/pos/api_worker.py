@@ -175,25 +175,31 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
         if review_work.stale(conn, cand):
             conn.commit()
             continue
+        if _decided_approval(conn, cand):  # an approval task whose approval is decided: closed, not work
+            conn.commit()
+            continue
         if capped:
             if (cand["topic"] or "") == "chat":
                 _tell_chat_capped(conn, cand["id"], capped)  # the person waiting hears why (once per message)
             elif capped["spent"] and access.cap_notice(conn, capped):  # work waits: the owner hears it (once a day)
                 conn.commit()
             continue
-        if reserve and cand["status"] != "working" and business.classify(conn, cand) != "business":
+        if reserve and not _reserve_admits(conn, cand, st):
             st.setdefault("business_only_until", access.business_only_until(conn))
             continue
         row = cand
         break
-    if row is None and not candidates and unread and not capped:
+    if row is None and unread and not capped:
         # Unread messages and nothing that would deliver them: a task whose run does (pos.chat.ensure_inbox_task).
-        # Without it they waited for a run that never came, or an idle worker read them and lost them.
+        # Without it they waited for a run that never came, or an idle worker read them and lost them. Also when
+        # the queue holds only tasks the reserve holds back (prod 10-07: the CEO's and the Software Engineer's
+        # messages waited for hours behind platform tasks): the inbox task is there, and starts when it answers
+        # the owner (pos.business.owner_reply_exempt) or once the reserve lifts.
         tid = chat.ensure_inbox_task(conn, ctx.actor_id)
         if tid is not None:
             cand = conn.execute(f"SELECT * FROM tasks WHERE id = ? AND status IN ('next', 'working') AND NOT {live}",
                                 (tid, cutoff, None)).fetchone()
-            if cand is not None and not (reserve and business.classify(conn, cand) != "business"):
+            if cand is not None and not (reserve and not _reserve_admits(conn, cand, st)):
                 row = cand
     out: dict = {"state": st, "unread_messages": unread}
     if row:
@@ -211,10 +217,40 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             from . import review_packet
 
             out["task"] = review_packet.serve(conn, row, out["task"], live, (cutoff, None))
+        from . import decision_tasks
+
+        appr = decision_tasks.command_approval(conn, row["id"])
+        if appr is not None:  # a decision, not work to hand in: the decide call closes it (pos.decision_tasks)
+            out["task"]["definition_of_done"] = decision_tasks.how_to_resolve(appr)
         # The owner asked for this himself: the worker allows the profile's higher step cap (max_steps_owner).
         out["task"]["owner_request"] = business.owner_request(conn, conn.execute(
             "SELECT * FROM tasks WHERE id = ?", (row["id"],)).fetchone())
     return out
+
+
+def _decided_approval(conn: sqlite3.Connection, cand) -> bool:
+    """An approval task whose approval was decided elsewhere (or expired): closed now, never offered as work."""
+    from . import decision_tasks
+
+    appr = decision_tasks.command_approval(conn, cand["id"])
+    if appr is None or appr["status"] == "pending":
+        return False
+    decision_tasks.close(conn, Ctx(cand["assignee_id"], via="system"), cand["id"],
+                         f"{appr['status'].capitalize()}: {appr['decision'] or ''}".strip().rstrip(":"))
+    return True
+
+
+def _reserve_admits(conn: sqlite3.Connection, cand, st: dict) -> bool:
+    """Under the business reserve: a task already being worked on, business work, and what answers the owner (within
+    its own daily budget, pos.business.owner_reply_exempt) start; the rest waits for the reserve to lift."""
+    from . import business
+
+    if cand["status"] == "working" or business.classify(conn, cand) == "business":
+        return True
+    if business.owner_reply_exempt(conn, cand):
+        st["owner_reply"] = True
+        return True
+    return False
 
 
 POLL_FALLBACK_S = 2.0  # re-check the database this often even without a wake (other processes)
@@ -630,6 +666,8 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
         if head_alerts.run_ended(conn, ctx.actor_id, tid, "blocked", res.error or ""):
             conn.commit()
         raise HTTPException(409, res.error)
+    if tid is not None:
+        _count_owner_reply(conn, ctx, tid, res.run_id)
     # A run on a chat answer: the agent shows as typing there (no tool call, no tokens).
     chat.typing_on_run_start(conn, ctx.actor_id, res.run_id, tid)
     # Its question is in the prompt: not injected again at the first step (a double answer).
@@ -640,6 +678,23 @@ def start_run(body: RunIn, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx))
     if tid is not None:
         out.update(_run_context(conn, ctx, tid, res.run_id))
     return out
+
+
+def _count_owner_reply(conn: sqlite3.Connection, ctx: Ctx, tid: int, run_id: int) -> None:
+    """A run answering the owner that started under the business reserve counts against its own daily budget."""
+    from . import business
+    from .access import service as access
+
+    try:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
+        if row is None or business.classify(conn, row) == "business" or not access.business_only(conn):
+            return
+        if business.owner_reply_task(conn, row):
+            business.record_owner_reply_run(conn, ctx, tid, run_id)
+            conn.commit()
+    except Exception:  # noqa: BLE001 - the run goes on either way
+        log.exception("owner-reply budget for T-%s", tid)
+        conn.rollback()
 
 
 def _run_context(conn: sqlite3.Connection, ctx: Ctx, tid: int, run_id: int) -> dict:

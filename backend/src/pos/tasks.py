@@ -466,6 +466,11 @@ def capture(conn: sqlite3.Connection, ctx: Ctx, text: str, source: str | None = 
 def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> dict:
     changes = dict(changes)
     row = _row(conn, ctx, task_id)
+    if changes.get("status") in ("review", "done") and row["status"] != "done":
+        # An approval task is finished only by its decision (pos.decision_tasks): never handed in or reviewed.
+        settled = _decision_settled(conn, ctx, row)
+        if settled is not None:
+            return settled
     if set(changes) - {"progress", "progress_note", "status"} or changes.get("status") not in (None, "done", "review"):
         # Handing work in or reporting on it is the assignee's; everything else needs the right to write.
         check_write(conn, ENTITY, row, ctx.actor_id)
@@ -596,9 +601,10 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
         schedules.after_check(conn, ctx, task_id, changes.get("progress_note") or row["progress_note"])
     out = get(conn, ctx, task_id)
     if out["status"] == "done" and row["status"] != "done":
-        from . import asks
+        from . import asks, decision_tasks
 
         asks.on_task_changed(conn, ctx, row, out)  # an answered ask_owner ticket reaches the asker
+        decision_tasks.on_done(conn, ctx, row)  # a decision made on a waiting task's behalf wakes it
         if (row["source"] or "").startswith("promise:"):
             from . import promises
 
@@ -895,6 +901,10 @@ def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None 
     completing a task that waits for review accepts it."""
     row = _row(conn, ctx, task_id)
     _no_pseudo_tools(conn, ctx, note)
+    if row["status"] == "done" or row["status"] == "review":
+        settled = _decision_settled(conn, ctx, row)  # an approval task: its decision finishes it, nothing else
+        if settled is not None:
+            return settled
     if row["status"] == "review" and may_review(conn, ctx, row)[0]:
         return review(conn, ctx, task_id, True, note)
     changes: dict = {"progress": 100, "status": "done"}  # update() turns it into a hand-in when needed
@@ -912,8 +922,23 @@ def complete(conn: sqlite3.Connection, ctx: Ctx, task_id: int, note: str | None 
     return out
 
 
+def _decision_settled(conn: sqlite3.Connection, ctx: Ctx, row) -> dict | None:
+    """pos.decision_tasks.guard_finish for this actor: the task's state when its decision settles it (a done
+    approval task is a no-op); raises while an agent tries to finish one whose approval is pending."""
+    from . import decision_tasks
+
+    if row["status"] == "done":
+        return get(conn, ctx, row["id"]) if decision_tasks.is_decision(conn, row["id"]) else None
+    return decision_tasks.guard_finish(conn, ctx, row, actors.get(conn, ctx.actor_id)["kind"] == "human")
+
+
 def review(conn: sqlite3.Connection, ctx: Ctx, task_id: int, accept: bool, comment: str | None = None) -> dict:
     row = _row(conn, ctx, task_id)
+    # An approval task is not reviewed: its decision closes it (pos.decision_tasks; prod 10-07 the COO returned
+    # four of them for a missing "Ověřeno" line).
+    settled = _decision_settled(conn, ctx, row)
+    if settled is not None:
+        return settled
     if row["status"] != "review":
         raise Invalid(f"{display_id(task_id)} is not waiting for review")
     ok, why = may_review(conn, ctx, row)

@@ -190,19 +190,46 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 
 const postSubscription = (sub: PushSubscription) => api("/api/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) });
 
+/** Ask for the permission, timed: a prompt the person answers takes seconds; a "default" within a moment means no
+ * prompt was shown at all (prod 2026-10-07 20:19, the owner's Android app: "permission: default" twice, and he saw
+ * only an error). Chrome on Android answers so when notifications are off for Chrome or the app in Android itself,
+ * or Chrome muted the site's prompt. */
+async function askPermission(): Promise<{ permission: NotificationPermission; ms: number }> {
+  const t0 = performance.now();
+  const permission = await step("permission", "Oprávnění k oznámením se nepodařilo získat", () => Notification.requestPermission());
+  return { permission, ms: Math.round(performance.now() - t0) };
+}
+
+const NO_PROMPT_MS = 1500;
+
+function permissionError(permission: NotificationPermission, ms: number): Error {
+  if (permission === "denied")
+    return new Error(
+      isAndroid()
+        ? "Oznámení jsou zakázaná. Android: podrž ikonu PersonalOS → Informace o aplikaci → Oznámení → Povolit (případně Nastavení → Aplikace → Chrome → Oznámení), pak aplikaci otevři znovu."
+        : "Oznámení jsou v prohlížeči zakázaná. Povol je v nastavení webu (ikona zámku vedle adresy) a zkus to znovu.",
+    );
+  if (ms < NO_PROMPT_MS && isAndroid())
+    return new Error(
+      "Telefon dotaz na oznámení vůbec nezobrazil: Android má oznámení pro Chrome nebo pro aplikaci PersonalOS vypnutá. " +
+        "Zapni je: Nastavení → Aplikace → Chrome → Oznámení → Povolit (a stejně u aplikace PersonalOS, pokud tam je). " +
+        "Pak PersonalOS otevři znovu: oznámení se zapnou sama, bez dalšího klikání.",
+    );
+  if (ms < NO_PROMPT_MS)
+    return new Error("Prohlížeč dotaz na oznámení nezobrazil (ztlumil ho). Povol oznámení v nastavení webu (ikona zámku vedle adresy) a zkus to znovu.");
+  return new Error("Oznámení nebyla povolena (dialog zavřen). Zkus to znovu a zvol Povolit.");
+}
+
 /** "Zapnout oznámení" (a click: iOS and Chrome ask for the permission only from a user gesture). Each step that
- * fails says which one and is reported to the server. */
-export async function enablePush(publicKey: string): Promise<void> {
+ * fails says which one and is reported to the server. `asked`: the permission was already requested from this
+ * click (enablePushFromClick); it is not asked twice. */
+export async function enablePush(publicKey: string, asked?: { permission: NotificationPermission; ms: number }): Promise<void> {
   if (isIOS() && !isStandalone()) throw new Error("Na iPhonu fungují oznámení jen v aplikaci přidané na plochu: Sdílet → Přidat na plochu, pak ji otevři z plochy.");
   // requestPermission first and directly from the click: Safari refuses it after another await.
-  const permission = await step("permission", "Oprávnění k oznámením se nepodařilo získat", () => Notification.requestPermission());
+  const { permission, ms } = asked ?? (await askPermission());
   if (permission !== "granted") {
-    reportPushError("permission", new Error(permission));
-    throw new Error(
-      permission === "denied"
-        ? "Oznámení jsou zakázaná. Povol je v nastavení telefonu (Android: Nastavení → Aplikace → PersonalOS nebo Chrome → Oznámení) a zkus to znovu."
-        : "Oznámení nebyla povolena (dialog zavřen). Zkus to znovu a zvol Povolit.",
-    );
+    reportPushError("permission", new Error(permission === "default" && ms < NO_PROMPT_MS ? `default, no prompt (${ms} ms)` : `${permission} (${ms} ms)`));
+    throw permissionError(permission, ms);
   }
   const reg = await step("service_worker", "Aplikace se nepřipravila (service worker)", pushRegistration);
   let sub = await reg.pushManager.getSubscription();
@@ -215,14 +242,15 @@ export async function enablePush(publicKey: string): Promise<void> {
 }
 
 /** "Zapnout notifikace v telefonu" on the owner's item in "Čeká na tebe": the permission straight from the click
- * (Safari refuses it after another await), then the server's key, then the same steps as Settings. */
+ * (Safari refuses it after another await), then the server's key, then the same steps as Settings. The permission
+ * is asked once (it used to be asked again after the key, outside the click). */
 export async function enablePushFromClick(): Promise<void> {
   if (!pushSupported()) throw new Error("Tady oznámení zapnout nejdou. Otevři PersonalOS v telefonu (/m) a stiskni to tam.");
   if (isIOS() && !isStandalone()) throw new Error("Na iPhonu fungují oznámení jen v aplikaci přidané na plochu: Sdílet → Přidat na plochu, pak ji otevři z plochy.");
-  await Notification.requestPermission();
+  const asked = await askPermission();
   const cfg = await pushApi.config();
   if (!cfg.enabled || !cfg.public_key) throw new Error("Oznámení nejsou na serveru zapnutá.");
-  await enablePush(cfg.public_key);
+  await enablePush(cfg.public_key, asked);
 }
 
 /** On every start of the app (and on opening Settings): a subscription the browser has but the server does not
