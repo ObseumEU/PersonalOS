@@ -130,7 +130,8 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
     st = _state(conn, ctx.actor_id)
     if st["frozen"] or st["paused"] or st["archived"]:
         return {"state": st}
-    unread = chat.inbox_unread(conn, ctx.actor_id)
+    # Informational notices (pos.notice_digest) ride along with real work: they neither rank nor start a run.
+    unread = chat.inbox_unread(conn, ctx.actor_id, include_info=False)
     # A task with a live run is never offered, whatever its status: a "working" one, and a "next"
     # one too (a run between its start and its claim, or a task set back to `next` while its run
     # goes on: a hand-back, an owner's comment). Offering those was the race behind 142 refused

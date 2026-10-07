@@ -997,7 +997,8 @@ def _settle(conn: sqlite3.Connection, agent_id: int, rid: int, metric: str, note
     conn.execute("""UPDATE access_requests SET status = 'denied', decided_by = NULL, decided_at = ?,
                     decision_note = ? WHERE id = ?""", (now_iso(), note[:1000], rid))
     audit.log(conn, ctx, "access_deny_auto", "actor", agent_id, request=rid, metric=metric, note=note[:300])
-    _tell(conn, ctx, agent_id, f"Žádost #{rid} (limit {METRICS[metric]}) zamítnuta v kódu: {note}")
+    _tell(conn, ctx, agent_id, f"Žádost #{rid} (limit {METRICS[metric]}) zamítnuta v kódu: {note}",
+          notice=f"access_denied:{metric}")
 
 
 # ------------------------------------------------------------------ requests (every agent)
@@ -1351,7 +1352,8 @@ def decide(conn: sqlite3.Connection, ctx: Ctx, request_id: int, decision: str, n
         _post_team(conn, ctx, f"žádost #{request_id} (`{label}`) patří majiteli. {note}", subject=name)
     word = {"grant": "schválil", "deny": "zamítl", "escalate": "předal majiteli"}[decision]
     _tell(conn, ctx, r["agent_id"], f"{me['name']} {word} tvou žádost o přístup #{request_id} (`{label}`): {note}"
-          + (" Pokračuj." if decision == "grant" else ""))
+          + (" Pokračuj." if decision == "grant" else ""),
+          notice=None if decision == "grant" else f"access_{decision}:{r['metric'] or r['capability'] or 'review'}")
     if decision != "escalate":
         _resume_task(conn, ctx, r, f"Access request #{request_id} {sets['status']}")
     conn.commit()
@@ -1714,7 +1716,8 @@ def _dm_ceo(conn: sqlite3.Connection, body: str) -> None:
         _dm_owner(conn, body)
         return
     try:
-        chat.send_dm(conn, Ctx(am, via="system"), ceo["id"], body[:3900], priority="fyi", system=True)
+        chat.send_dm(conn, Ctx(am, via="system"), ceo["id"], body[:3900], priority="fyi", system=True,
+                     notice="company_cap")  # the cap's state: once a day in the digest, no run of its own
     except Exception:  # noqa: BLE001
         audit.log(conn, Ctx(am, via="system"), "access_post_failed", None, None)
 
@@ -1733,13 +1736,18 @@ def _dm_owner(conn: sqlite3.Connection, body: str) -> None:
         audit.log(conn, Ctx(owner, via="system"), "access_post_failed", None, None)
 
 
-def _tell(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, body: str) -> None:
-    """The decision into the agent's inbox, and wake its worker."""
+def _tell(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, body: str, notice: str | None = None) -> None:
+    """The decision into the agent's inbox, and wake its worker. With `notice` (a refusal: nothing for the
+    agent to do now) it is an informational notice: today's digest, at most once per subject, no run of its
+    own (pos.notice_digest; prod 30. 9.–6. 10.: 176 denials to Kniha Growth & Sales, each a DM)."""
     from .. import chat, wake
 
     if agent_id == ctx.actor_id or actors.get(conn, agent_id)["archived_at"]:
         return
     try:
+        if notice:
+            chat.send_dm(conn, ctx, agent_id, body[:3900], priority="fyi", system=True, notice=notice)
+            return
         chat.send_dm(conn, ctx, agent_id, body[:3900], priority="change_plan", system=True)
     except Exception:  # noqa: BLE001
         return

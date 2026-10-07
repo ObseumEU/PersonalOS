@@ -704,8 +704,9 @@ def relay_gate(conn: sqlite3.Connection, ctx: Ctx, surface: str, body: str) -> b
     """Before an agent asks another agent to pass content on to the owner: the same gate as a direct message to
     him (owner_message_gate), on the message and the comments it points to. A relay is not a way around it.
     Returns whether it was a relay request."""
-    if not enabled() or _is_person(conn, ctx.actor_id) or not is_relay_request(conn, body):
-        return False
+    if (not enabled() or _is_person(conn, ctx.actor_id) or actors.is_system(conn, ctx.actor_id)
+            or not is_relay_request(conn, body)):
+        return False  # people, and the platform's own notices, never ask an agent to relay anything
     owner_message_gate(conn, ctx, f"relay_owner:{surface}", body)
     audit.log(conn, ctx, "owner_relay_checked", None, None, surface=surface,
               verbatim=bool(VERBATIM_RE.search(reality.norm(body or ""))))

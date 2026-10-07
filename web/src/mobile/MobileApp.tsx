@@ -8,7 +8,7 @@ import { t } from "../i18n/core";
 import { useNeedsMe } from "../needsMeApi";
 import ChatList from "./ChatList";
 import { FreezeRow, FrozenBanner } from "./Freeze";
-import { applyUpdate, isStandalone, setBadge, useUpdateReady } from "./pwa";
+import { applyUpdate, isStandalone, setBadge, syncPush, useUpdateReady } from "./pwa";
 import { TopBar } from "./ui";
 
 // Loaded when used: the full task panel (Markdown and all) and the settings (the QR code).
@@ -291,6 +291,9 @@ export default function MobileApp() {
   // The installed app keeps its device signed in for long (pos.devices).
   useEffect(() => {
     if (me?.authenticated && me.login_required && isStandalone()) api("/api/auth/devices/current/app", { method: "POST" }).catch(() => undefined);
+    // Notifications allowed on this device: make sure the server has its subscription (pos.push; the phone's
+    // never arrived and nothing noticed, 29. 9.–6. 10.).
+    if (me?.authenticated) syncPush().catch(() => undefined);
   }, [me]);
 
   if (offline && !me) return <Offline onRetry={load} busy={busy} />;

@@ -786,8 +786,14 @@ def run_stats(conn: sqlite3.Connection) -> dict:
     rows = conn.execute("""SELECT a.name, COUNT(*) AS n, SUM(r.status = 'error') AS failed FROM runs r
                            JOIN actors a ON a.id = r.actor_id WHERE r.started_at >= ? AND r.status IN ('ok', 'error')
                            GROUP BY a.name ORDER BY failed DESC""", (since,)).fetchall()
+    from . import push
+
+    try:
+        ph = push.health(conn)  # the sentinel's push rule: failed sends, the owner's devices
+    except sqlite3.Error:
+        ph = None
     return {"runs_hour": sum(r["n"] for r in rows), "failed_hour": sum(r["failed"] or 0 for r in rows),
-            "by_agent": {r["name"]: [r["failed"] or 0, r["n"]] for r in rows[:8]}}
+            "by_agent": {r["name"]: [r["failed"] or 0, r["n"]] for r in rows[:8]}, "push": ph}
 
 
 def watch(conn: sqlite3.Connection) -> dict:

@@ -197,8 +197,9 @@ def reassign(conn: sqlite3.Connection, ctx: Ctx, task_id: int, to, note: str = "
         body = f"{me['name']} assigned you {ref} '{row['title']}'." + (f" Note: {note}" if note else "")
         body += f"\n\n{desc[:3000]}" if desc else ""
         body += f"\n\nDone when: {dod}" if dod else ""
+        # The task itself starts the assignee's run: the message is information (pos.notice_digest).
         message_id = chat.send_dm(conn, ctx, target["id"], body[:chat.MAX_BODY], priority="fyi",
-                                  attachments=[{"type": "task", "id": task_id}], system=True)["id"]
+                                  attachments=[{"type": "task", "id": task_id}], system=True, notice="assigned")["id"]
     from . import comments
 
     comments.log(conn, ctx, task_id, f"Reassigned from {prev_name or 'nobody'} to {target['name']}"

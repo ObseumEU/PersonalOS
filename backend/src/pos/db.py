@@ -795,6 +795,20 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_html_reports_created ON html_reports(created_at);
     """,
+    # Informational notices to agents (pos.notice_digest): their inbox rows ride along with the next real
+    # run and never start one by themselves.
+    """
+    ALTER TABLE chat_inbox ADD COLUMN info INTEGER NOT NULL DEFAULT 0;
+    """,
+    # The 2026-10-05 audit flood began at 19:44, a minute before the window the migration above cleared:
+    # the owner's device list still showed 12 "Neznámé zařízení" from 19:44:40–19:44:50 that never came back
+    # and never registered push. The same rule for that minute.
+    """
+    DELETE FROM auth_devices
+     WHERE created_at >= '2026-10-05T19:44:00' AND created_at < '2026-10-05T19:45:00'
+       AND last_seen_at = created_at AND label = 'Neznámé zařízení'
+       AND NOT EXISTS (SELECT 1 FROM push_subscriptions s WHERE s.device_id = auth_devices.id);
+    """,
 ]
 
 

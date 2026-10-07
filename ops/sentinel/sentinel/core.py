@@ -170,6 +170,7 @@ class Sentinel:
         self.apps = {k: v for k, v in stats.items() if v is not None}
         for app, st in stats.items():
             out += detect.runs(self.t, app, st)
+        out += detect.push(self.t, stats["personalos"])
         b = checks.litellm_budgets(self.cfg["litellm_url"], self.cfg["litellm_key"])
         if b is not None:
             self.apps["litellm_budgets"] = len(b)

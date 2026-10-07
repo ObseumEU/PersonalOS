@@ -83,6 +83,18 @@ def test_run_failure_ratio_needs_enough_runs_and_more_than_half(cfg):
     assert detect.runs(t, "nexus", {"total": 59, "failed": 59})[0].severity == "critical"
 
 
+def test_push_failures_open_an_incident_only_when_nothing_gets_through(cfg):
+    t = cfg["thresholds"]
+    assert detect.push(t, None) == [] and detect.push(t, {"push": None}) == []
+    ok = {"failed_24h": 5, "client_errors_24h": 0, "ok_devices_24h": 1, "owner_devices": 2}
+    assert detect.push(t, {"push": ok}) == []                                   # one device still gets them
+    obs = detect.push(t, {"push": {**ok, "ok_devices_24h": 0}})
+    assert obs[0].kind == "push_failures" and obs[0].severity == "high" and obs[0].detail["failed_24h"] == 5
+    assert detect.push(t, {"push": {**ok, "failed_24h": 2, "ok_devices_24h": 0}}) == []   # below the minimum
+    sub = detect.push(t, {"push": {"failed_24h": 0, "client_errors_24h": 1, "ok_devices_24h": 0, "owner_devices": 0}})
+    assert sub[0].key == "subscribe" and sub[0].severity == "medium"
+
+
 def test_new_fingerprint_needs_a_meaningful_rate_and_spike_needs_baseline(cfg, clock):
     s, t = Store(":memory:"), cfg["thresholds"]
     now = clock()

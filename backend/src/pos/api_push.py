@@ -4,7 +4,7 @@ and the approve/reject buttons on an approval notification."""
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import approvals, push
 from .api_tasks import get_ctx, get_db
@@ -35,8 +35,12 @@ def config(request: Request, conn=Depends(get_db), ctx=Depends(get_ctx), setting
     """The VAPID public key (the browser subscribes with it), whether push is on, the member's
     settings and how many devices get notifications."""
     push.ensure_schema(conn)
+    sid = request.session.get("sid")
+    subs = push.subscriptions(conn, ctx.actor_id)
     return {"enabled": push.configured(settings), "public_key": settings.vapid_public_key or None,
-            "prefs": push.prefs(conn, ctx.actor_id), "devices": len(push.subscriptions(conn, ctx.actor_id))}
+            "prefs": push.prefs(conn, ctx.actor_id), "devices": len(subs),
+            # whether the server has a subscription of this very device (the app re-registers when not)
+            "this_device": bool(sid) and any(s["device_id"] == sid for s in subs)}
 
 
 @router.post("/subscribe", status_code=201)
@@ -75,11 +79,22 @@ def put_prefs(body: dict, conn=Depends(get_db), ctx=Depends(get_ctx)):
     return out
 
 
+class TestIn(BaseModel):
+    all: bool = False
+
+
 @router.post("/test")
-def test(request: Request, conn=Depends(get_db), ctx=Depends(get_ctx), settings: Settings = Depends(get_settings)):
-    """A test notification to this device (every device of the member when the session has no device)."""
+def test(request: Request, body: TestIn | None = None, conn=Depends(get_db), ctx=Depends(get_ctx),
+         settings: Settings = Depends(get_settings)):
+    """A test notification. `{"all": true}` (Settings → "Poslat testovací notifikaci"): one labelled test to
+    each of the member's subscribed devices, with the result per device. Without it: this device (every
+    device of the member when the session has no subscription of its own)."""
     if not push.configured(settings):
         raise HTTPException(503, "push is not configured on the server")
+    if body is not None and body.all:
+        out = push.send_test(conn, settings, ctx.actor_id)
+        conn.commit()
+        return out
     sid = request.session.get("sid")
     has_device_sub = sid and any(s["device_id"] == sid for s in push.subscriptions(conn, ctx.actor_id))
     n = push.send(conn, settings, ctx.actor_id,
@@ -87,6 +102,21 @@ def test(request: Request, conn=Depends(get_db), ctx=Depends(get_ctx), settings:
                   device_id=sid if has_device_sub else None)
     conn.commit()
     return {"sent": n}
+
+
+class ClientErrorIn(BaseModel):
+    step: str = Field(max_length=40)
+    error: str = Field(max_length=300)
+    standalone: bool | None = None
+
+
+@router.post("/client-error", status_code=204)
+def client_error(body: ClientErrorIn, request: Request, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """The browser could not turn notifications on (permission, service worker, the push service): recorded,
+    so a phone that never subscribes is visible in the push health signal instead of failing silently."""
+    push.client_error(conn, ctx.actor_id, request.session.get("sid"), step=body.step, error=body.error,
+                      user_agent=request.headers.get("user-agent", ""), standalone=body.standalone)
+    conn.commit()
 
 
 class ActionIn(BaseModel):

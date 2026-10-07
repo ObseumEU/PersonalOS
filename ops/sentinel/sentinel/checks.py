@@ -130,7 +130,8 @@ def pos_runs(pos_url: str, token: str) -> dict | None:
     """PersonalOS: finished runs and failed runs in the last hour (/api/sentinel/stats)."""
     try:
         d = _get_json(f"{pos_url}/api/sentinel/stats", token)
-        return {"total": int(d["runs_hour"]), "failed": int(d["failed_hour"]), "detail": d.get("by_agent")}
+        return {"total": int(d["runs_hour"]), "failed": int(d["failed_hour"]), "detail": d.get("by_agent"),
+                "push": d.get("push")}
     except (OSError, ValueError, KeyError):
         return None
 

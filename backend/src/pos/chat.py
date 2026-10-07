@@ -669,9 +669,15 @@ def _escalate_loop(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, other: s
 
 def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, reply_to: int | None = None,
          priority: str | None = None, mentions: list[int | str] | None = None,
-         attachments: list[dict] | None = None, system: bool = False) -> dict:
+         attachments: list[dict] | None = None, system: bool = False, notice: str | None = None,
+         info: bool = False) -> dict:
     """Post a message. Returns it (as the author sees it) plus `delivered_to_run`
-    (the DM recipient's running run, if any) and `inbox` (who got it)."""
+    (the DM recipient's running run, if any) and `inbox` (who got it).
+
+    `notice` ("<type>" or "<type>:<subject>") marks a system DM as an informational notice: to an agent
+    it goes into that agent's daily digest (pos.notice_digest), deduplicated per subject, and starts no
+    run. `info` (the digest itself): the inbox rows are informational, delivered with the recipient's
+    next real run, nobody is woken."""
     from . import meetings
 
     body = (body or "").strip()
@@ -694,6 +700,12 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
     ch = _channel(conn, channel_id)
     if ch["archived_at"]:
         raise ChatError("this channel is archived")
+    if notice and system and not info and ch["kind"] == "dm" and priority not in ("stop", "change_plan"):
+        from . import notice_digest
+
+        to = notice_digest.recipient(conn, ch, ctx.actor_id)
+        if to is not None:  # an agent: today's digest, no run of its own (a person gets it as it is)
+            return notice_digest.add(conn, ctx, to, body, notice, attachments)
     from . import owner_channel
 
     rerouted = None
@@ -849,8 +861,8 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         run = conn.execute("SELECT id FROM runs WHERE actor_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1",
                            (aid,)).fetchone()
         runs[aid] = run["id"] if run else None
-        conn.execute("INSERT INTO chat_inbox (message_id, actor_id, reason, run_id, read_at) VALUES (?, ?, ?, ?, ?)",
-                     (mid, aid, reason, runs[aid], now if quiet else None))
+        conn.execute("INSERT INTO chat_inbox (message_id, actor_id, reason, run_id, read_at, info) VALUES (?, ?, ?, ?, ?, ?)",
+                     (mid, aid, reason, runs[aid], now if quiet else None, int(info)))
     conn.execute("UPDATE channel_members SET last_read_message_id = ? WHERE channel_id = ? AND actor_id = ?",
                  (mid, channel_id, ctx.actor_id))
     if reply_to is not None and author["kind"] == "human":  # he wrote in the thread: he has read it
@@ -915,12 +927,12 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
         meetings.on_message(conn, meeting, ctx.actor_id, mid, system)  # a turn posted: the next one speaks
     from . import wake
 
-    if not quiet:
+    if not quiet and not info:
         for aid in inbox:  # a waiting worker reads it now, not at its next poll
             wake.wake(aid)
     out = message_view(conn, mid, ctx.actor_id)
     dm_target = others[0] if ch["kind"] == "dm" and others else None
-    out["delivered_to_run"] = runs.get(dm_target) if dm_target and not quiet else None
+    out["delivered_to_run"] = runs.get(dm_target) if dm_target and not quiet and not info else None
     out["inbox"] = sorted(inbox)
     notes = [platform_note] if platform_note else []
     if owner_warnings:
@@ -1213,10 +1225,13 @@ def mark_read(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, message_id: i
 
 # ------------------------------------------------------------------ inbox (for workers)
 
-def inbox_unread(conn: sqlite3.Connection, actor_id: int) -> int:
+def inbox_unread(conn: sqlite3.Connection, actor_id: int, include_info: bool = True) -> int:
+    """Unread inbox items. `include_info=False`: only those worth a run of their own (not the informational
+    notices, pos.notice_digest, which ride along with the next real run)."""
     return conn.execute(
         "SELECT COUNT(*) FROM chat_inbox i JOIN chat_messages m ON m.id = i.message_id "
-        "WHERE i.actor_id = ? AND i.read_at IS NULL AND m.archived_at IS NULL", (actor_id,)).fetchone()[0]
+        "WHERE i.actor_id = ? AND i.read_at IS NULL AND m.archived_at IS NULL"
+        + ("" if include_info else " AND COALESCE(i.info, 0) = 0"), (actor_id,)).fetchone()[0]
 
 
 def _wrap_for_agent(row, body: str) -> tuple[str, str]:
@@ -1275,6 +1290,16 @@ def check_inbox(conn: sqlite3.Connection, actor_id: int, mark_read: bool = True,
     return out
 
 
+def system_notice(conn: sqlite3.Connection, message_id: int) -> bool:
+    """Was the message posted as a platform notice (send(system=True), whoever signs it)?"""
+    row = conn.execute("""SELECT detail FROM audit_log WHERE entity = 'chat_message' AND entity_id = ?
+                          AND action = 'chat_send' ORDER BY id LIMIT 1""", (message_id,)).fetchone()
+    try:
+        return bool(row and json.loads(row["detail"] or "{}").get("system"))
+    except (TypeError, ValueError):
+        return False
+
+
 RELAY_REFUSED_NOTE = ("[PersonalOS] Tento požadavek přeposlat obsah majiteli neprošel kontrolou pravdivosti, "
                       "majiteli ho nepřeposílej. Autor dostal důvod: {why}")
 
@@ -1287,13 +1312,19 @@ def _relay_refusals(conn: sqlite3.Connection, rows) -> dict[int, str]:
     not to forward it, and its author gets the reason once, never silence. Never raises."""
     out: dict[int, str] = {}
     for r in rows:
-        if r["trust"] != "agent":
+        if r["trust"] != "agent" or r["from_kind"] != "agent":
             continue
         try:
             from . import grounding, tasks
             from .notices import system_ctx
 
             author = conn.execute("SELECT author_id FROM chat_messages WHERE id = ?", (r["id"],)).fetchone()[0]
+            if actors.is_system(conn, author) or system_notice(conn, r["id"]):
+                # The platform's own notices (an owner's comment passed on, a digest) are never a request to
+                # forward something to the owner (prod 2026-10-07, msgs 2255/2256: "Owner commented on T-776"
+                # quoted his words about a message to him, was refused as a relay, and the "author" told was
+                # PersonalOS itself, a DM to itself that failed).
+                continue
             try:
                 if not grounding.relay_gate(conn, Ctx(author, via="system"), "delivery", r["body"]):
                     continue
@@ -1330,8 +1361,8 @@ def ensure_inbox_task(conn: sqlite3.Connection, actor_id: int) -> int | None:
     from . import tasks
 
     me = actors.get(conn, actor_id)
-    if me["kind"] == "human" or me["archived_at"] or not inbox_unread(conn, actor_id):
-        return None
+    if me["kind"] == "human" or me["archived_at"] or not inbox_unread(conn, actor_id, include_info=False):
+        return None  # informational notices alone wait for real work (pos.notice_digest)
     if conn.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (actor_id,)).fetchone():
         return None  # the live run takes them at its next step
     open_ = conn.execute("""SELECT id FROM tasks WHERE title = ? AND assignee_id = ? AND archived_at IS NULL

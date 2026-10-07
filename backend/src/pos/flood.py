@@ -102,7 +102,9 @@ def merge(conn: sqlite3.Connection, ctx: Ctx, message_id: int, body: str, attach
         changes["body"] = merged
     versioning.update(conn, ctx, "chat_message", message_id, changes, action="flood_merge")
     if not full:
-        conn.execute("UPDATE chat_inbox SET read_at = NULL, delivered_in_run = NULL WHERE message_id = ? "
+        # Unread again, but informational: delivered with the recipient's next real run, never a run of its
+        # own (an unread message now starts an inbox run, pos.chat.ensure_inbox_task; the digest wakes nobody).
+        conn.execute("UPDATE chat_inbox SET read_at = NULL, delivered_in_run = NULL, info = 1 WHERE message_id = ? "
                      "AND actor_id != ?", (message_id, ctx.actor_id))
     audit.log(conn, ctx, "chat_flood_merge", "chat_message", message_id, why=why, full=full, chars=len(body))
     return not full

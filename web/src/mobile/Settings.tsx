@@ -1,4 +1,4 @@
-import { Bell, BellOff, Download, LogOut, Monitor, Smartphone } from "lucide-react";
+import { Bell, BellOff, Download, LogOut, Monitor, Send, Smartphone } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { confirmDialog, toast } from "../components/overlay";
@@ -6,13 +6,17 @@ import { ago, t } from "../i18n/core";
 import {
   type PushConfig,
   type PushPrefs,
+  type PushTestResult,
   currentSubscription,
   disablePush,
   enablePush,
+  isAndroid,
+  isIOS,
   isStandalone,
   promptInstall,
   pushApi,
   pushSupported,
+  syncPush,
   useInstallable,
 } from "./pwa";
 import { LoadError, errText } from "./ui";
@@ -100,6 +104,14 @@ export function InstallSection() {
             </ol>
           </div>
           <div>
+            <h3 className="flex items-center gap-1.5 font-medium"><Smartphone size={15} /> {t("m.install.ios")}</h3>
+            <ol className="list-decimal pl-5 text-ink-2">
+              <li>{t("m.install.ios.1", { url })}</li>
+              <li>{t("m.install.ios.2")}</li>
+              <li>{t("m.install.ios.3")}</li>
+            </ol>
+          </div>
+          <div>
             <h3 className="flex items-center gap-1.5 font-medium"><Monitor size={15} /> {t("m.install.pc")}</h3>
             <ol className="list-decimal pl-5 text-ink-2">
               <li>{t("m.install.pc.1", { url })}</li>
@@ -119,17 +131,21 @@ export function PushSection() {
   const [subscribed, setSubscribed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const [results, setResults] = useState<PushTestResult[] | null>(null);
   const supported = pushSupported();
   const permission = supported ? Notification.permission : "denied";
+  const ios = isIOS();
   const load = useCallback(() => {
     pushApi.config().then(
-      (c) => {
+      async (c) => {
         setCfg(c);
         setFailed(null);
+        // The browser has a subscription the server does not know (or may make one): register it again.
+        if (await syncPush(c)) setCfg(await pushApi.config());
+        currentSubscription().then((s) => setSubscribed(!!s), () => undefined);
       },
       (e) => setFailed(errText(e)),
     );
-    currentSubscription().then((s) => setSubscribed(!!s), () => undefined);
   }, []);
   useEffect(load, [load]);
 
@@ -149,16 +165,30 @@ export function PushSection() {
       load();
     }
   };
+  const testAll = () =>
+    wrap(async () => {
+      const r = await pushApi.testAll();
+      setResults(r.results);
+      toast(r.devices === 0 ? t("m.push.test_no_devices") : t("m.push.test_result", { ok: r.sent, n: r.devices }), { error: r.sent < r.devices });
+    });
   const p = cfg?.prefs;
   const status = !supported
-    ? t("m.push.unsupported")
+    ? ios
+      ? t("m.push.ios_install")
+      : t("m.push.unsupported")
     : cfg && !cfg.enabled
       ? t("m.push.server_off")
       : permission === "denied"
-        ? t("m.push.blocked")
+        ? isAndroid()
+          ? t("m.push.blocked_android")
+          : t("m.push.blocked")
         : subscribed
-          ? t("m.push.on")
-          : t("m.push.off");
+          ? cfg?.this_device === false
+            ? t("m.push.on_unsynced")
+            : t("m.push.on")
+          : ios && !isStandalone()
+            ? t("m.push.ios_install")
+            : t("m.push.off");
 
   return (
     <Section title={t("m.push.title")} icon={<Bell size={18} />}>
@@ -167,28 +197,40 @@ export function PushSection() {
       ) : (
         <p className="text-sm text-ink-2">
           {status}
-          {cfg && cfg.devices > 0 ? ` · ${t("m.push.devices", { n: cfg.devices })}` : ""}
+          {cfg ? ` · ${t("m.push.devices", { n: cfg.devices })}` : ""}
         </p>
       )}
       {supported && cfg?.enabled && permission !== "denied" && (
         <div className="flex flex-wrap gap-2">
           {subscribed ? (
-            <>
-              <button className="btn h-11! text-[15px]!" disabled={busy} onClick={() => wrap(disablePush)}>
-                <BellOff size={16} /> {t("m.push.disable")}
-              </button>
-              <button
-                className="btn h-11! text-[15px]!"
-                disabled={busy}
-                onClick={() => wrap(async () => toast((await pushApi.test()).sent ? t("m.push.test_sent") : t("m.push.test_none")))}
-              >
-                {t("m.push.test")}
-              </button>
-            </>
+            <button className="btn h-11! text-[15px]!" disabled={busy} onClick={() => wrap(disablePush)}>
+              <BellOff size={16} /> {t("m.push.disable")}
+            </button>
           ) : (
             <button className="btn-accent h-11! text-[15px]!" disabled={busy} onClick={() => wrap(() => enablePush(cfg.public_key!))}>
               <Bell size={16} /> {t("m.push.enable")}
             </button>
+          )}
+        </div>
+      )}
+      {cfg?.enabled && (
+        <div className="flex flex-col gap-2">
+          <button className="btn h-11! self-start text-[15px]!" disabled={busy || cfg.devices === 0} onClick={testAll}>
+            <Send size={16} /> {t("m.push.test_all")}
+          </button>
+          {cfg.devices === 0 && <p className="text-[12px] text-ink-2">{t("m.push.test_needs_device")}</p>}
+          {results && (
+            <ul className="flex flex-col gap-1 text-[13px]" aria-live="polite">
+              {results.map((r) => (
+                <li key={r.sub_id} className="flex flex-wrap items-baseline gap-x-2">
+                  <span className={r.ok ? "text-accent" : "text-red-400"}>{r.ok ? "✓" : "✗"}</span>
+                  <span>{r.label}</span>
+                  <span className="text-ink-2">
+                    {r.ok ? t("m.push.test_ok") : r.removed ? t("m.push.test_removed") : r.error || t("m.push.test_failed")}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

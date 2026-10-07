@@ -81,6 +81,7 @@ DEFAULTS: dict = {
         "quota_min": 3,
         "auth_401_min": 100,
         "budget_ratio": 0.9,
+        "push_fail_min": 3,            # PersonalOS push sends refused / unreachable in 24 h, none accepted
         "backup_warn_h": 26, "backup_fail_h": 48,   # age of the newest file in a backup directory
         "warmup_min": 30,              # learn fingerprints without opening incidents after a fresh start
         "quiet_min": 30,               # auto-resolve after this long without a new observation

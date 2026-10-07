@@ -769,7 +769,7 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
                      f"Review digest: {len(fresh)} result(s) wait for your review{total}.{work} Accept each or "
                      "return it with what should change (review_task); hand the owner only what truly needs him "
                      "(request_review reviewer=Owner).\n" + "\n".join(lines) + more,
-                     priority="fyi", system=True)
+                     priority="fyi", system=True, notice="review_digest")
         audit.log(conn, sys_ctx, "review_digest", "actor", reviewer, tasks=len(fresh),
                   ids=[i["id"] for i in fresh])
         if r["kind"] != "human":

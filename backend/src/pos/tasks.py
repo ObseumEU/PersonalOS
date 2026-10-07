@@ -669,7 +669,7 @@ def notify_reviewer(conn: sqlite3.Connection, ctx: Ctx, task_id: int, why: str) 
     chat.send_dm(conn, _not_owner(conn, ctx), rid,
                  f"{display_id(task_id)} '{row['title']}' waits for your review ({why}). "
                  "Accept it or return it with what should change (review_task).",
-                 priority="fyi", attachments=[{"type": "task", "id": task_id}], system=True)
+                 priority="fyi", attachments=[{"type": "task", "id": task_id}], system=True, notice="review_waits")
     return True
 
 
@@ -867,7 +867,7 @@ def _ask_reviewer(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> None:
     chat.send_dm(conn, ctx, rid, f"{by} handed in {task['ref']} '{task['title']}' for your review. "
                                  "Accept it or return it with what should change (review_task). "
                                  f"Report: /report/{task['ref']}",
-                 priority="fyi", attachments=[{"type": "task", "id": task["id"]}], system=True)
+                 priority="fyi", attachments=[{"type": "task", "id": task["id"]}], system=True, notice="handed_in")
 
 
 def _no_pseudo_tools(conn: sqlite3.Connection, ctx: Ctx, text: str | None) -> None:

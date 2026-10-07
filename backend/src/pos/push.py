@@ -24,6 +24,13 @@ payload carries a title, a short redacted preview and the /m address to open;
 the app loads the content itself on click. A subscription the push service
 reports as gone (404/410) is deleted.
 
+Every failed delivery and every failure the browser reports while subscribing (permission, the service
+worker, the push service) is kept in `push_failures`: `health()` feeds the sentinel's push rule
+(/api/sentinel/stats) and the improve loop's `push:*` signals. Settings → Oznámení has "Poslat testovací
+notifikaci": one labelled test to each subscribed device, with the result per device (`send_test`).
+The installed app re-registers its subscription with the server on every start (pwa.ts syncPush), so a
+subscription the server lost (or never got) comes back without the owner doing anything.
+
 Approval notifications carry "Schválit" / "Zamítnout" buttons. Each device's
 copy carries its own action token (random, stored only as a hash): bound to
 the approval, the subscription and the device (its session id), valid for
@@ -95,6 +102,22 @@ CREATE TABLE IF NOT EXISTS push_actions (
 );
 CREATE INDEX IF NOT EXISTS push_subscriptions_actor ON push_subscriptions(actor_id);
 CREATE TABLE IF NOT EXISTS push_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Every failed delivery (a send the push service refused or that did not reach it) and every failure the
+-- browser reported while subscribing (source 'client'): the history behind the health signal
+-- (pos.improve.signals push:*, the sentinel's push rule) and the Settings test.
+CREATE TABLE IF NOT EXISTS push_failures (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    actor_id INTEGER,
+    sub_id INTEGER,
+    device_id TEXT,
+    host TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'send',
+    status INTEGER,
+    error TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS push_failures_at ON push_failures(at);
 CREATE TABLE IF NOT EXISTS push_sent (
     actor_id INTEGER NOT NULL,
     key TEXT NOT NULL,
@@ -162,6 +185,11 @@ def subscribe(conn: sqlite3.Connection, actor_id: int, sub: dict, *, device_id: 
                       failures = 0, last_error = NULL""",
                  (actor_id, device_id, endpoint, str(keys["p256dh"]), str(keys["auth"]), (user_agent or "")[:300],
                   now_iso()))
+    if device_id:
+        # One browser profile has one subscription: an older endpoint of the same device is dead (the browser
+        # renewed it or the app was reinstalled) and would only collect failures.
+        conn.execute("DELETE FROM push_subscriptions WHERE device_id = ? AND actor_id = ? AND endpoint != ?",
+                     (device_id, actor_id, endpoint))
     _seed_needs(conn, actor_id)
     row = conn.execute("SELECT id FROM push_subscriptions WHERE endpoint = ?", (endpoint,)).fetchone()
     return {"id": row["id"], "ok": True}
@@ -261,20 +289,39 @@ def _webpush(sub: sqlite3.Row, data: str, *, urgency: str, ttl: int, settings) -
 TRANSPORT = _webpush  # tests replace this (no real push service)
 
 
-def send(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, urgent: bool = False,
-         device_id: str | None = None, approval_id: int | None = None) -> int:
-    """Send to every device of the member (or one device); returns how many accepted it.
-    Gone subscriptions (404/410) are deleted. With `approval_id`, each device's copy carries
+def _host(endpoint: str) -> str:
+    return (urlparse(endpoint or "").hostname or "").lower()
+
+
+def _failure(conn: sqlite3.Connection, s: sqlite3.Row | None, *, status: int | None, error: str, kind: str = "",
+             source: str = "send", actor_id: int | None = None, device_id: str | None = None, host: str = "") -> None:
+    conn.execute("""INSERT INTO push_failures (at, actor_id, sub_id, device_id, host, source, status, error, kind)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 (now_iso(), s["actor_id"] if s is not None else actor_id, s["id"] if s is not None else None,
+                  s["device_id"] if s is not None else device_id, _host(s["endpoint"]) if s is not None else host,
+                  source, status, (error or "")[:300], (kind or "")[:20]))
+    log.warning("push %s failed: %s %s (%s)", source, status if status is not None else "-", (error or "")[:120],
+                _host(s["endpoint"]) if s is not None else host)
+
+
+def send_each(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, urgent: bool = False,
+              device_id: str | None = None, approval_id: int | None = None) -> list[dict]:
+    """Send to every device of the member (or one device); one result per device:
+    {sub_id, device_id, host, status, ok, error, removed}. Gone subscriptions (404/410) are deleted; every
+    failure is logged in push_failures (the health signal). With `approval_id`, each device's copy carries
     the approve/reject buttons and that device's own action token. The caller commits."""
     ensure_schema(conn)
     if not configured(settings):
-        return 0
+        return []
     data = json.dumps(payload, ensure_ascii=False)
     subs = subscriptions(conn, actor_id)
     if device_id:
         subs = [s for s in subs if s["device_id"] == device_id]
-    ok = 0
+    kind = str(payload.get("kind") or "")
+    out: list[dict] = []
     for s in subs:
+        res = {"sub_id": s["id"], "device_id": s["device_id"], "host": _host(s["endpoint"]), "status": None,
+               "ok": False, "error": None, "removed": False}
         body = data
         if approval_id is not None and s["device_id"]:
             body = json.dumps({**payload, "approval_id": approval_id, "action_token": action_token(conn, s, approval_id),
@@ -285,19 +332,89 @@ def send(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, ur
         except Exception as e:  # noqa: BLE001 - one bad device never stops the others
             conn.execute("UPDATE push_subscriptions SET failures = failures + 1, last_error = ? WHERE id = ?",
                          (str(e)[:200], s["id"]))
+            res["error"] = f"{type(e).__name__}: {e}"[:200]
+            _failure(conn, s, status=None, error=res["error"], kind=kind)
+            out.append(res)
             continue
+        res["status"] = status
         if status in (404, 410):
             conn.execute("DELETE FROM push_subscriptions WHERE id = ?", (s["id"],))
+            res.update(removed=True, error=f"HTTP {status}: prohlížeč toto přihlášení k oznámením zrušil")
+            _failure(conn, s, status=status, error="gone: subscription deleted", kind=kind)
         elif 200 <= status < 300:
-            ok += 1
+            res["ok"] = True
             conn.execute("UPDATE push_subscriptions SET last_ok_at = ?, failures = 0, last_error = NULL WHERE id = ?",
                          (now_iso(), s["id"]))
         else:
-            conn.execute("""UPDATE push_subscriptions SET failures = failures + 1, last_error = ? WHERE id = ?""",
-                         (f"HTTP {status}", s["id"]))
+            res["error"] = f"HTTP {status}" + (" (služba odmítla klíč VAPID)" if status in (401, 403) else "")
+            conn.execute("UPDATE push_subscriptions SET failures = failures + 1, last_error = ? WHERE id = ?",
+                         (res["error"], s["id"]))
+            _failure(conn, s, status=status, error=res["error"], kind=kind)
             # A subscription that keeps failing for days is dead too.
-            conn.execute("DELETE FROM push_subscriptions WHERE id = ? AND failures >= 50", (s["id"],))
-    return ok
+            if conn.execute("DELETE FROM push_subscriptions WHERE id = ? AND failures >= 50", (s["id"],)).rowcount:
+                res["removed"] = True
+        out.append(res)
+    return out
+
+
+def send(conn: sqlite3.Connection, settings, actor_id: int, payload: dict, *, urgent: bool = False,
+         device_id: str | None = None, approval_id: int | None = None) -> int:
+    """send_each, counted: how many devices accepted it. The caller commits."""
+    return sum(r["ok"] for r in send_each(conn, settings, actor_id, payload, urgent=urgent, device_id=device_id,
+                                          approval_id=approval_id))
+
+
+TEST_TITLE = "Test notifikací – PersonalOS"
+
+
+def send_test(conn: sqlite3.Connection, settings, actor_id: int) -> dict:
+    """The Settings button "Poslat testovací notifikaci": one clearly labelled test to each of the member's
+    subscribed devices, with the result per device (its label from the signed-in devices). The caller commits."""
+    from . import devices
+
+    devices.ensure_schema(conn)
+    payload = {"title": TEST_TITLE, "body": "Pokud tohle vidíš, oznámení na tomto zařízení fungují.",
+               "tag": "push-test", "url": "/m/settings", "kind": "test", "ts": now_iso()}
+    results = send_each(conn, settings, actor_id, payload)
+    for r in results:
+        d = (conn.execute("SELECT label, app, last_seen_at FROM auth_devices WHERE id = ?", (r["device_id"],)).fetchone()
+             if r["device_id"] else None)
+        r["label"] = (d["label"] + (" · aplikace" if d["app"] else "")) if d else "Zařízení (bez přihlášení)"
+        r["last_seen_at"] = d["last_seen_at"] if d else None
+    ok = sum(r["ok"] for r in results)
+    log.info("push test for actor %s: %s of %s devices accepted", actor_id, ok, len(results))
+    return {"sent": ok, "devices": len(results), "results": results}
+
+
+def client_error(conn: sqlite3.Connection, actor_id: int, device_id: str | None, *, step: str, error: str,
+                 user_agent: str = "", standalone: bool | None = None) -> None:
+    """A failure the browser hit while turning notifications on (permission, the service worker, the push
+    service's subscribe). Before this nothing of it reached the server (prod 2026-09-29: the owner pressed
+    "Zapnout oznámení" in the Android app, no subscription ever arrived and nobody knew why). The caller commits."""
+    ensure_schema(conn)
+    from .devices import label_for
+
+    where = "" if standalone is None else (" [aplikace]" if standalone else " [karta prohlížeče]")
+    _failure(conn, None, status=None, error=f"{(step or '?')[:40]}: {(error or '')[:200]}{where}", source="client",
+             actor_id=actor_id, device_id=device_id, host=label_for(user_agent)[:40])
+
+
+def health(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """Is push working (the sentinel's push rule, the improve loop): send failures and browser-side failures in
+    24 h, devices that accepted a notification in 24 h, the owner's subscribed devices and the last failure."""
+    ensure_schema(conn)
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(hours=24)).isoformat(timespec="seconds")
+    failed = conn.execute("SELECT COUNT(*) FROM push_failures WHERE source = 'send' AND at >= ?", (since,)).fetchone()[0]
+    client = conn.execute("SELECT COUNT(*) FROM push_failures WHERE source = 'client' AND at >= ?",
+                          (since,)).fetchone()[0]
+    ok = conn.execute("SELECT COUNT(*) FROM push_subscriptions WHERE last_ok_at >= ?", (since,)).fetchone()[0]
+    last = conn.execute("SELECT at, source, status, error FROM push_failures ORDER BY id DESC LIMIT 1").fetchone()
+    owner = conn.execute("SELECT id FROM actors WHERE is_owner = 1 ORDER BY id LIMIT 1").fetchone()
+    devs = conn.execute("SELECT COUNT(*), MAX(last_ok_at) FROM push_subscriptions WHERE actor_id = ?",
+                        (owner["id"] if owner else -1,)).fetchone()
+    return {"failed_24h": failed, "client_errors_24h": client, "ok_devices_24h": ok, "owner_devices": devs[0],
+            "owner_last_ok_at": devs[1], "last_error": dict(last) if last else None}
 
 
 # ------------------------------------------------------------------ actions on a notification

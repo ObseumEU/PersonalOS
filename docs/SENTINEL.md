@@ -28,6 +28,7 @@ only. Every minute:
 | Containers | state, `RestartCount`, `OOMKilled`, health | down 3 ticks (not a clean exit), ≥3 restarts in 15 min, OOM, unhealthy 3 ticks |
 | Host | `/proc` and the state volume's disk | disk ≥ 90 %, memory available < 5 %, **swap ≥ 90 %**, load5 ≥ 3 per CPU |
 | Runs | PersonalOS `/api/sentinel/stats`, Nexus `runs` + `workflow_runs` (read-only role), knowlage sync runs | > 50 % failed over ≥ 5 finished runs in the last hour |
+| Push | PersonalOS `/api/sentinel/stats` → `push` (pos.push.health) | ≥ 3 failed sends in 24 h and no device accepted one (high); a browser failed to subscribe while the owner has no subscribed device (medium) |
 | HTTP codes | access lines in the logs | 5xx ≥ 20 and ≥ 20 % (5 min), 429 ≥ 20, 401 ≥ 100, "usage limit"/quota lines ≥ 3 |
 | LiteLLM spend | `/key/list`, `/team/list` with a viewer key | spend ≥ 90 % of `max_budget` |
 | Log errors | docker logs since the last tick, fingerprinted | a new fingerprint ≥ 5 in 5 min; a known one > 10× its 24 h baseline and ≥ 5/min |

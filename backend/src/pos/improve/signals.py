@@ -26,7 +26,10 @@ Sources (all in the DB):
 - **owner:unanswered_2h**, **owner:frustration**, **owner:double_answer** (pos.frustration);
 - **agent_fail:<agent>**: failed runs per agent (with its success rate);
 - **spend:<category>**: USD by category (business, platform, demo, total) (pos.business.cost_split);
-- **ux:<kind>:<path>**: the web smoke's findings (pos.improve.smoke), when it ran today.
+- **ux:<kind>:<path>**: the web smoke's findings (pos.improve.smoke), when it ran today;
+- **push:send.<status>**, **push:client.<step>**: notifications the push service refused or never got, and
+  browsers that could not subscribe (pos.push); **push:owner_no_device** (a state): the owner installed the
+  app but no device of his is subscribed, so nothing reaches his phone.
 
 `daily(conn)` computes and stores the day's digest (`improve_signals`, one row per day and key,
 created on first use); `latest(conn)` reads the newest; `ranked()` orders by impact × trend.
@@ -47,7 +50,7 @@ log = logging.getLogger(__name__)
 EXAMPLES = 5
 LOOP_CLAIMS = 5  # claims of one task in the window that make a loop
 # How much one occurrence of a category hurts (the owner's pain first); 0 = information only.
-WEIGHTS = {"owner": 5.0, "grounding": 4.0, "deploy": 3.0, "run_error": 3.0, "loop": 3.0, "ux": 3.0,
+WEIGHTS = {"owner": 5.0, "grounding": 4.0, "push": 4.0, "deploy": 3.0, "run_error": 3.0, "loop": 3.0, "ux": 3.0,
            "tool_error": 2.0, "cost_cap": 2.0, "guard": 1.0, "stuck": 1.0, "agent_fail": 0.0, "spend": 0.0}
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS improve_signals (
@@ -395,7 +398,25 @@ def _grounding(conn, acc: _Acc, s: str, u: str) -> None:
                     r["action"].replace("_", " "), f"project:{r['entity_id']}", str(d.get("url") or ""))
 
 
-EVENT_COLLECTORS = (_runs, _tools, _guard, _loops, _deploys, _owner, _agents, _spend, _grounding)
+def _push(conn, acc: _Acc, s: str, u: str) -> None:
+    """Notifications that did not reach a phone (pos.push.push_failures): a send the push service refused or
+    never got (`push:send.<status>`), and a browser that could not subscribe (`push:client.<step>`). The
+    owner's notifications are his only signal from the agents (prod 2026-09-29..10-06: none reached him)."""
+    if not _has(conn, "push_failures"):
+        return
+    for r in conn.execute("""SELECT id, source, status, error, host FROM push_failures WHERE at >= ? AND at < ?
+                             ORDER BY id DESC""", (s, u)):
+        if r["source"] == "client":
+            step = slug((r["error"] or "unknown").split(":")[0], 1, cut=False)
+            acc.add(f"push:client.{step}", "push", "browser could not turn notifications on", f"push:{r['id']}",
+                    f"{r['host']}: {r['error']}")
+        else:
+            what = str(r["status"]) if r["status"] is not None else "unreachable"
+            acc.add(f"push:send.{what}", "push", "notification not delivered by the push service", f"push:{r['id']}",
+                    f"{r['host']}: {r['error']}")
+
+
+EVENT_COLLECTORS = (_runs, _tools, _guard, _loops, _deploys, _owner, _agents, _spend, _grounding, _push)
 
 
 def events(conn: sqlite3.Connection, s: str, u: str) -> dict[str, dict]:
@@ -427,6 +448,13 @@ def snapshot(conn: sqlite3.Connection, now: datetime) -> dict[str, dict]:
     if rows:
         acc.set("stuck:waiting_overdue", "stuck", "waiting tasks past follow-up or deadline", len(rows),
                 [_t(r["id"]) for r in rows], rows[0]["title"])
+    if _has(conn, "push_subscriptions") and _has(conn, "auth_devices"):
+        # The owner installed the app (a device signed in as the app) and no device of his gets notifications.
+        owner = conn.execute("""SELECT a.id FROM actors a WHERE a.is_owner = 1 AND EXISTS (SELECT 1 FROM auth_devices d
+                                WHERE d.actor_id = a.id AND d.app = 1 AND d.revoked_at IS NULL) ORDER BY a.id LIMIT 1""").fetchone()
+        if owner and not conn.execute("SELECT 1 FROM push_subscriptions WHERE actor_id = ?", (owner["id"],)).fetchone():
+            acc.set("push:owner_no_device", "push", "the owner has no device subscribed to notifications", 1, [],
+                    "Settings → Oznámení: Zapnout oznámení in the installed app (/m)")
     return acc.items
 
 

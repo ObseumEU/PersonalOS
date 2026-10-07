@@ -239,7 +239,7 @@ def notify(conn: sqlite3.Connection, agent_id: int, task_id: int | None, reason:
         # Signed by the platform (pos.notices), not by the agent that did not write it.
         ctx = notices.system_ctx(conn)
         out = chat.send_dm(conn, ctx, lead, _body(conn, agent_id, task_id, reason, why),
-                           attachments=[{"type": "task", "id": task_id}], system=True)
+                           attachments=[{"type": "task", "id": task_id}], system=True, notice=f"lead_alert_{reason}")
         if actors.get(conn, lead)["kind"] != "human":
             from . import wake
 
@@ -313,7 +313,7 @@ def _send_digest(conn: sqlite3.Connection, head: int, items: list[dict], title: 
                  f"{title}: {len(items)} úkol(ů) stojí.\n" + "\n".join(lines) + more
                  + "\nCo udělat: vyřeš sám (task_reassign, upřesnit komentářem, rozpočet přes request_access); "
                    "úkol u Ownera, který patří agentům, převezmi; co nejde, úkol pro COO, ne Davidovi.",
-                 priority="fyi", system=True)
+                 priority="fyi", system=True, notice="stuck_work")
     audit.log(conn, ctx, "head_digest", "actor", head, key=key, tasks=len(items))
     return True
 

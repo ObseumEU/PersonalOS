@@ -287,6 +287,26 @@ def runs(t: dict, app: str, stats: dict | None) -> list[Obs]:
                  **({"detail": stats["detail"]} if stats.get("detail") else {})})]
 
 
+def push(t: dict, stats: dict | None) -> list[Obs]:
+    """PersonalOS Web Push (the owner's phone): sends failing in the last 24 h while no device accepted one,
+    or browsers failing to subscribe. Notifications are how the owner hears the agents; prod 2026-09-29..10-06
+    none reached him and nothing noticed."""
+    p = (stats or {}).get("push") or None
+    if not p:
+        return []
+    failed, client, ok = int(p.get("failed_24h") or 0), int(p.get("client_errors_24h") or 0), int(p.get("ok_devices_24h") or 0)
+    detail = {"failed_24h": failed, "client_errors_24h": client, "ok_devices_24h": ok,
+              "owner_devices": p.get("owner_devices"), "last_error": p.get("last_error")}
+    if failed >= t.get("push_fail_min", 3) and ok == 0:
+        return [Obs("personalos", "push_failures", "send", "high",
+                    f"personalos: {failed} push notifications failed in 24 h and no device accepted one", 1, detail)]
+    if client >= 1 and not p.get("owner_devices"):
+        return [Obs("personalos", "push_failures", "subscribe", "medium",
+                    f"personalos: a browser could not turn notifications on ({client}× in 24 h), the owner has no "
+                    "subscribed device", 1, detail)]
+    return []
+
+
 def budgets(t: dict, items: list[dict] | None) -> list[Obs]:
     out = []
     for b in items or []:

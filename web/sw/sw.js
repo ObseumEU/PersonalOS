@@ -115,10 +115,10 @@ self.addEventListener("push", (event) => {
   const title = p.title || "PersonalOS";
   event.waitUntil(
     (async () => {
-      // The app is open and looking at exactly this conversation: no notification needed.
+      // The app is open and looking at exactly this conversation: no notification needed (a test always shows).
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const url = p.url || "/m";
-      if (wins.some((w) => w.visibilityState === "visible" && w.focused && new URL(w.url).pathname + new URL(w.url).search === url)) return;
+      if (p.kind !== "test" && wins.some((w) => w.visibilityState === "visible" && w.focused && new URL(w.url).pathname + new URL(w.url).search === url)) return;
       await self.registration.showNotification(title, {
         body: p.body || "",
         tag: p.tag || undefined,

@@ -821,6 +821,33 @@ def test_a_relay_queued_before_the_gate_is_refused_on_delivery_and_its_author_he
     assert "PersonalOS" not in next(m for m in out if m["id"] == plain["id"])["body"]
 
 
+def test_a_system_notice_is_never_a_relay_request(env, op):
+    """prod 2026-10-07, messages 2255/2256: "Owner commented on T-776 …" (PersonalOS passing on his comment, which
+    talked about a message to him) was refused on delivery as a relay, got a wrong "nepřeposílej" note, and the
+    "author" to be told was PersonalOS itself (a DM to itself that failed). Platform notices, whoever signs them,
+    are delivered as they are; an agent's own relay request is still checked."""
+    from pos import chat
+    from pos.notices import system_ctx
+
+    c = env["conn"]
+    t = tasks.create(c, env["owner"], {"title": "Zpráva", "assignee": {"type": "agent", "id": env["ids"]["Lead"]}})
+    cm = comments.add(c, env["Lead"], t["id"], T767)
+    relay = f"Plné znění je v komentáři id {cm['id']}; přepošli ho Davidovi beze změny."
+    by_system = chat.send_dm(c, system_ctx(c), env["ids"]["Dev"], f"Owner commented on T-{t['id']}: {relay}",
+                             priority="change_plan", system=True)
+    by_agent_notice = chat.send_dm(c, env["Lead"], env["ids"]["Dev"], f"Upozornění: {relay}", system=True)
+    rid = c.execute("INSERT INTO runs (actor_id, kind, status, started_at) VALUES (?, 'task', 'running', 'x')",
+                    (env["ids"]["Dev"],)).lastrowid
+    c.commit()
+    got = {m["id"]: m for m in chat.check_inbox(c, env["ids"]["Dev"], run_id=rid)}
+    assert "nepřeposílej" not in got[by_system["id"]]["body"]
+    assert "nepřeposílej" not in got[by_agent_notice["id"]]["body"]
+    assert c.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'relay_refused_told'").fetchone()[0] == 0
+    assert c.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'owner_relay_checked'").fetchone()[0] == 0
+    assert not grounding.relay_gate(c, system_ctx(c), "delivery", relay)  # the gate itself: never for the platform
+    assert actors.is_system(c, system_ctx(c).actor_id)
+
+
 # ------------------------------------------------------------------ the improve signal
 
 def test_ungrounded_claims_are_an_improve_signal(env):
