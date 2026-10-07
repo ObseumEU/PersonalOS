@@ -17,6 +17,26 @@ web page **Přístupy** (`/credentials`) and a panel on each agent's page.
 | Audit | `credential_uses` (agent, credential, run, task, tool, host, time, OK/refused with reason) plus `audit_log` (`cred_use`, `cred_refused`). More than `max_uses_hour` uses by one agent in an hour pause that grant (`end_kind = paused`) and DM the owner; one click resumes it. |
 | Fail safe | no `OP_SERVICE_ACCOUNT_TOKEN` or `POS_OP_VAULT`, SDK missing, 1Password down: every use is refused with a clear error. Nothing falls back to plain text. |
 
+## Second backend: the server store (secrets that exist only on svr03)
+
+Some secrets live only on the server (the kniha-test passwords in `/opt/server/kniha-test/.env`, the copy of
+its data key) and PersonalOS's 1Password service account is read-only. They go into the **server store**
+(`pos.credentials.serverstore`): one AES-GCM file per entry in `<data>/secrets/credentials/`, the key derived
+from `POS_SECRETS_KEY` (like the LinkedIn app's secret). An entry has fields (`username`, `password`,
+`authorization` = base64 "user:password"); a registry entry points to one with `pos://<entry>/<field>` instead
+of `op://…` and is then used exactly like a 1Password one (grants, hosts, audit, use limits, redaction; the
+grounding check accepts it). The redactor also removes the password inside a basic-auth value on its own.
+
+Only the operator writes entries, with the CLI in the api container; no agent tool or endpoint can:
+
+```
+docker exec -i personalos-api-1 python -m pos.credentials put kniha-test-admin     --from-env-file - --key ADMIN_HESLO --basic-user admin < /opt/server/kniha-test/.env
+docker exec personalos-api-1 python -m pos.credentials list      # names and fields, never values
+```
+
+`/opt/server/kniha-test/sync-credentials.sh` re-syncs the kniha-test entries after a password change
+(`rotate-passwords.sh` there calls it).
+
 ## How an agent uses a credential
 
 1. `credentials_list` (pos MCP) shows names, what they are for and which it holds.

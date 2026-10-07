@@ -1,6 +1,6 @@
-import { Check, ChevronDown, ChevronUp, CornerDownLeft, Delete, Lock, RotateCcw, X, ZoomIn } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, CornerDownLeft, Delete, Loader2, Lock, RotateCcw, X, ZoomIn } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Handoff, type HandoffEvent, handoffApi, isOpen, keyName, minutesLeft, pointAt } from "../handoffApi";
+import { type Handoff, type HandoffEvent, handoffApi, isOpen, isPending, keyName, minutesLeft, pointAt } from "../handoffApi";
 import { register, t } from "../i18n/core";
 import handoffDict from "../i18n/cs/handoff";
 import { refreshNeedsMe } from "../needsMeApi";
@@ -28,6 +28,7 @@ export default function HandoffView({ id, mobile = false, onClose }: { id: numbe
   const timer = useRef<number | null>(null);
   const lastMove = useRef(0);
   const open = h ? isOpen(h.status) : false;
+  const pending = h ? isPending(h.status) : false;
 
   // Load, and tell PersonalOS the owner opened it (audited: who, when, from which app).
   useEffect(() => {
@@ -36,15 +37,26 @@ export default function HandoffView({ id, mobile = false, onClose }: { id: numbe
       .open(id, mobile ? "m" : "web")
       .then((x) => alive && setH(x))
       .catch((e) => alive && setErr(e instanceof Error ? e.message : String(e)));
-    const poll = window.setInterval(() => {
-      handoffApi.get(id).then((x) => alive && setH(x), () => undefined);
-      tick((n) => n + 1);
-    }, 10000);
+    return () => {
+      alive = false;
+    };
+  }, [id, mobile]);
+
+  // The status: every 10 s while live; every 2 s while the agent prepares the page again (it goes live by itself).
+  useEffect(() => {
+    let alive = true;
+    const poll = window.setInterval(
+      () => {
+        handoffApi.get(id).then((x) => alive && setH(x), () => undefined);
+        tick((n) => n + 1);
+      },
+      pending ? 2000 : 10000,
+    );
     return () => {
       alive = false;
       window.clearInterval(poll);
     };
-  }, [id, mobile]);
+  }, [id, pending]);
 
   // The frames: long-poll for a newer picture while the handoff is open (kept in memory on the server only).
   useEffect(() => {
@@ -169,7 +181,7 @@ export default function HandoffView({ id, mobile = false, onClose }: { id: numbe
       setH(x);
       toast(t(how === "done" ? "ho.done_ok" : how === "resume" ? "ho.resume_ok" : "ho.cancel_ok"));
       refreshNeedsMe();
-      if (how !== "done") onClose?.();
+      if (how === "cancel" || how === "dismiss") onClose?.();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), { error: true });
     } finally {
@@ -199,7 +211,29 @@ export default function HandoffView({ id, mobile = false, onClose }: { id: numbe
         {h.reason && <p className="text-[13px] break-words text-ink-2">{h.reason}</p>}
       </div>
 
-      {open ? (
+      {pending ? (
+        <div className="flex flex-col gap-3 px-4 pb-4">
+          <p className="flex items-center gap-2 text-sm" role="status" aria-live="polite">
+            {h.status === "preparing" && <Loader2 size={16} className="shrink-0 animate-spin text-accent" />}
+            {t(`ho.state.${h.status}`)}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {h.status === "parked" && (
+              <button className={primary} disabled={busy} onClick={() => finish("resume")}>
+                <RotateCcw size={mobile ? 16 : 14} /> {t("ho.retry")}
+              </button>
+            )}
+            <button className={plain} disabled={busy} onClick={() => finish("cancel")}>
+              <X size={mobile ? 16 : 14} /> {t("ho.cancel")}
+            </button>
+            {onClose && (
+              <button className={plain} onClick={onClose}>
+                {t("ho.back")}
+              </button>
+            )}
+          </div>
+        </div>
+      ) : open ? (
         <>
           <div className="px-4 text-xs text-ink-2">
             {(h.page.url || h.url) && <span className="block truncate font-mono">{h.page.url || h.url}</span>}

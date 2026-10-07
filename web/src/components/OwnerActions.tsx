@@ -1,12 +1,14 @@
-import { Check, ExternalLink, KeyRound, Link2, Mail, MousePointerClick, RotateCcw, Send, Trash2, X } from "lucide-react";
+import { BellRing, Check, ExternalLink, KeyRound, Link2, Mail, MousePointerClick, RotateCcw, Send, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { t } from "../i18n/core";
 import { type NeedsItem, type WaitingDraft, ownerActions, refreshNeedsMe } from "../needsMeApi";
+import { enablePushFromClick } from "../mobile/pwa";
 import { toast } from "./overlay";
 
 /** Icons of the owner's one-click kinds in "Čeká na tebe" (the web Home and /m share them). */
 export const OWNER_KINDS = {
   handoff: { Icon: MousePointerClick, key: "needs.kind.handoff", cls: "text-amber-300" },
+  setup: { Icon: BellRing, key: "needs.kind.setup", cls: "text-amber-300" },
   access: { Icon: KeyRound, key: "needs.kind.access", cls: "text-amber-300" },
   publish: { Icon: Send, key: "needs.kind.publish", cls: "text-accent" },
   draft: { Icon: Mail, key: "needs.kind.draft", cls: "text-accent" },
@@ -80,9 +82,35 @@ export default function OwnerActions({ it, busy, run, cls }: { it: NeedsItem; bu
         </>
       );
     return (
-      <a href={(inApp ? it.m_link : it.link) ?? it.link} className={cls.primary}>
-        <MousePointerClick size={cls.size} /> {t("needs.act.open_browser")}
-      </a>
+      <>
+        <a href={(inApp ? it.m_link : it.link) ?? it.link} className={cls.primary}>
+          <MousePointerClick size={cls.size} /> {t("needs.act.open_browser")}
+        </a>
+        {it.parked && <span className="w-full text-xs text-ink-2">{t("needs.handoff.parked")}</span>}
+      </>
+    );
+  }
+  if (it.kind === "setup") {
+    const inApp = typeof location !== "undefined" && location.pathname.startsWith("/m");
+    const hide = it.hide_url;
+    return (
+      <>
+        {inApp ? (
+          <button className={cls.primary} disabled={busy} onClick={() => run(() => enablePushFromClick(), t("needs.done.push_on"))}>
+            <BellRing size={cls.size} /> {t("needs.act.push_on")}
+          </button>
+        ) : (
+          <a href="/m/settings" className={cls.primary}>
+            <BellRing size={cls.size} /> {t("needs.act.push_on")}
+          </a>
+        )}
+        {hide && (
+          <button className={cls.plain} disabled={busy} onClick={() => run(() => ownerActions.hide(hide), t("needs.done.hidden"))}>
+            <X size={cls.size} /> {t("needs.act.hide")}
+          </button>
+        )}
+        {!inApp && <span className="w-full text-xs text-ink-2">{t("needs.setup.phone")}</span>}
+      </>
     );
   }
   if (it.kind === "access" && it.decide_url) {

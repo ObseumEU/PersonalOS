@@ -214,6 +214,17 @@ export async function enablePush(publicKey: string): Promise<void> {
   await step("server", "Server přihlášení k oznámením nepřijal", () => postSubscription(sub));
 }
 
+/** "Zapnout notifikace v telefonu" on the owner's item in "Čeká na tebe": the permission straight from the click
+ * (Safari refuses it after another await), then the server's key, then the same steps as Settings. */
+export async function enablePushFromClick(): Promise<void> {
+  if (!pushSupported()) throw new Error("Tady oznámení zapnout nejdou. Otevři PersonalOS v telefonu (/m) a stiskni to tam.");
+  if (isIOS() && !isStandalone()) throw new Error("Na iPhonu fungují oznámení jen v aplikaci přidané na plochu: Sdílet → Přidat na plochu, pak ji otevři z plochy.");
+  await Notification.requestPermission();
+  const cfg = await pushApi.config();
+  if (!cfg.enabled || !cfg.public_key) throw new Error("Oznámení nejsou na serveru zapnutá.");
+  await enablePush(cfg.public_key);
+}
+
 /** On every start of the app (and on opening Settings): a subscription the browser has but the server does not
  * (a failed POST, a subscription the server dropped) is registered again; with the permission granted and no
  * subscription at all, one is made (no prompt is needed then). Silent; failures are reported. */

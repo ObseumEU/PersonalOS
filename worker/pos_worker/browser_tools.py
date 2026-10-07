@@ -156,8 +156,9 @@ TOOLS: dict[str, tuple[str, dict]] = {
         "'Allow' on a consent screen. FIRST get the page ready: navigate to the exact page and fill in everything "
         "you can, so he only does that one step (never send him to look for a key, an ID or a setting). He gets "
         "a push and 'Čeká na tebe', opens your live browser (phone or desktop), acts and presses Hotovo. This call "
-        "waits for that (up to `minutes`, default 30) and returns how it ended; then continue in the same browser "
-        "(read the page again first: it changed). done_* (optional): when the page reaches this, the step counts as "
+        "waits for that (up to `minutes`, default 5) and returns how it ended; then continue in the same browser "
+        "(read the page again first: it changed). If he does not come in time the handoff is parked: end your run; "
+        "when he opens it the task comes back to you, and calling this again on the same task continues it. done_* (optional): when the page reaches this, the step counts as "
         "done even before he presses Hotovo. title: one line in Czech for his notification, saying what he does "
         "and that you do the rest, e.g. 'Přihlas se do LinkedIn – zbytek udělám já'.",
         _schema({"title": {"type": "string", "description": "the owner's one line (Czech), e.g. 'Přihlas se do "
@@ -166,8 +167,8 @@ TOOLS: dict[str, tuple[str, dict]] = {
                  "done_url_contains": {"type": "string", "description": "done when the page URL contains this"},
                  "done_text": {"type": "string", "description": "done when the page shows this text"},
                  "done_selector": {"type": "string", "description": "done when this CSS selector exists"},
-                 "minutes": {"type": "number", "minimum": 2, "maximum": 45,
-                             "description": "how long to wait (default 30)"}}, ["title"])),
+                 "minutes": {"type": "number", "minimum": 2, "maximum": 10,
+                             "description": "how long to wait live before parking (default 5)"}}, ["title"])),
     "browser_capture_secret": (
         "Store a value shown on the page (a client ID or client secret in a developer portal) straight into "
         "PersonalOS, encrypted, without you ever seeing it; it is redacted from everything you read afterwards. "

@@ -469,10 +469,14 @@ def recent(conn: sqlite3.Connection, project_ids: list[int] | None = None, verdi
 # ------------------------------------------------------------------ grounded blockers
 
 def _credential_names(conn: sqlite3.Connection) -> list[str]:
+    """Registered credentials and the server store's entries (pos.credentials.serverstore): both are real."""
+    from .credentials import serverstore
+
     try:
-        return [r["name"] for r in conn.execute("SELECT name FROM credentials WHERE archived_at IS NULL")]
+        names = [r["name"] for r in conn.execute("SELECT name FROM credentials WHERE archived_at IS NULL")]
     except sqlite3.OperationalError:
-        return []
+        names = []
+    return list(dict.fromkeys(names + serverstore.names()))
 
 
 def blocker_findings(conn: sqlite3.Connection, text: str) -> list[Finding]:
@@ -560,11 +564,11 @@ def owner_message_gate(conn: sqlite3.Connection, ctx: Ctx, surface: str, text: s
 
 # prod 2026-10-06 (T-767, message 2226): a message for the owner said the logins were in the 1Password items
 # kniha-test-basic-auth and kniha-test-admin, which did not exist; it went to the CEO "to forward unchanged".
-CRED_CONTEXT_RE = re.compile(r"(?<![a-z])(?:1password|1pass|polozk|credential|trezor|vault|prihlasovaci|"
+CRED_CONTEXT_RE = re.compile(r"(?<![a-z])(?:1password|1pass|polozk|credential|trezor|vault|uloziste|prihlasovaci|"
                              r"prihlaseni|login|heslo|hesla|secret)")
 CRED_TOKEN_RE = re.compile(r"(?<![\w{])cred:([a-z0-9][a-z0-9_.-]*[a-z0-9])", re.IGNORECASE)
 QUOTED_TOKEN_RE = re.compile(r"[`„“\"']([A-Za-z0-9][A-Za-z0-9_.-]{2,62})[`“”\"']")
-QUOTED_OP_RE = re.compile(r"`(op://[^`\n]+)`")
+QUOTED_OP_RE = re.compile(r"`((?:op|pos)://[^`\n]+)`")
 # prod 2026-10-06 (check #2): "vrací 200 bez hesla … hlasový rozhovor: `hovor-start` 200" read the voice endpoint as
 # a credential, because the sentence said "hesla" somewhere. A quoted name is a credential pointer only when a
 # credential word stands right before it ("heslo/přihlášení/credential/klíč/položka … `name`") or the name itself

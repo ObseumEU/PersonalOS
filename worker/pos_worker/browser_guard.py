@@ -1101,9 +1101,12 @@ class Guard:
         if status == "cancelled":
             return text_result(f"Handoff #{hid}: the owner cancelled it. Now: {where}. Do not ask again for this; "
                                "finish without that step or report why it cannot be done.", True)
-        return text_result(f"Handoff #{hid} ended without the owner ({status}, {finished_by or 'no answer'}). Stop "
-                           "here with a short note: the task waits for him, and when he presses Pokračovat it comes "
-                           "back to you; then prepare the page again and hand it over.", True)
+        return text_result(f"Handoff #{hid} is parked: the owner has not come yet ({finished_by or status}). It stays "
+                           "in his 'Čeká na tebe' and he got a notice. Stop this run now with a one-line note (do not "
+                           "wait, do not do other work on this task): the task waits for him. When he opens the "
+                           "handoff, the task comes back to you at once: prepare the same page again and call "
+                           "browser_request_owner_handoff with the same title; it continues this handoff and he sees "
+                           "your live page.", True)
 
     # --- the live view
     async def live_loop(self) -> None:

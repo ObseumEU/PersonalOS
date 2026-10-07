@@ -26,8 +26,12 @@ For the owner also:
   (`drafts`) instead of twice;
 - handoff: an agent's live browser waits for one step only he can do (a login,
   a 2FA code, "Allow"): the page is ready, he opens it and finishes it
-  (pos.handoff); an expired one stays as "Pokračovat" until he resumes or
-  dismisses it.
+  (pos.handoff); it stays until it is done or cancelled: a parked one (the
+  agent's run ended) wakes the agent when he opens it;
+- setup: the owner has no working push device, so nothing reaches his phone
+  (the improve/sentinel signal push:owner_no_device): one item "Zapnout
+  notifikace v telefonu" until he turns them on or hides it (once: hidden
+  stays hidden).
 """
 
 import json
@@ -35,9 +39,9 @@ import re
 import sqlite3
 
 from . import actors, asks, tasks
-from .core import Ctx
+from .core import Ctx, now_iso
 
-KINDS = ("handoff", "approval", "access", "publish", "draft", "ask", "review", "mention")
+KINDS = ("handoff", "setup", "approval", "access", "publish", "draft", "ask", "review", "mention")
 # Chat pings that only announce an item listed here (an approval, an owner-only access request).
 _APPROVAL_PING = re.compile(r"schválení #\d+|[Žž]ádost o přístup #\d+")
 MENTION_LIMIT = 30
@@ -108,6 +112,44 @@ def _handoffs(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
     from . import handoff
 
     return handoff.needs_items(conn)
+
+
+PUSH_SETUP_HIDDEN = "needs.push_setup_hidden"
+
+
+def _push_setup(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
+    """The owner has no push device that works: handoffs and asks never reach his phone (prod 2026-10-07: the
+    T-957/T-958 handoffs expired unseen). Surfaced once, one click turns them on (in the app on his phone)."""
+    from . import owner_fallback, settings_store
+
+    if not viewer["is_owner"] or owner_fallback.push_reaches_owner(conn):
+        return []
+    if settings_store.get(conn, PUSH_SETUP_HIDDEN):
+        return []
+    # Only once it mattered: something waited for him and push could not reach him (a handoff went by e-mail).
+    if not _has_table(conn, "browser_handoffs") or conn.execute(
+            "SELECT 1 FROM browser_handoffs WHERE notified_via IS NOT NULL AND notified_via != 'push' LIMIT 1"
+    ).fetchone() is None:
+        return []
+    return [{"kind": "setup", "key": "setup:push", "id": 0, "ref": None,
+             "title": "Zapnout notifikace v telefonu",
+             "detail": "Žádné tvoje zařízení nedostává notifikace, takže ti do telefonu nepřijde, když na tebe agent "
+                       "čeká (třeba v prohlížeči). Zatím ti posílám e-mail. Otevři PersonalOS v telefonu a zapni je "
+                       "jedním klepnutím.",
+             "from_name": "PersonalOS", "from_kind": None, "at": now_iso(), "blocking": False,
+             "link": "/m/settings", "m_link": "/m/settings", "hide_url": "/api/needs-me/setup/push/hide"}]
+
+
+def hide_push_setup(conn: sqlite3.Connection, ctx: Ctx) -> dict:
+    """"Skrýt": the owner does not want the push item; it never comes back (the e-mail fallback stays)."""
+    from . import settings_store
+
+    viewer = actors.get(conn, ctx.actor_id)
+    if not viewer["is_owner"]:
+        return {"hidden": False}
+    settings_store.put(conn, ctx, PUSH_SETUP_HIDDEN, True)
+    conn.commit()
+    return {"hidden": True}
 
 
 def _linkedin_connected() -> bool:
@@ -326,7 +368,7 @@ def collect(conn: sqlite3.Connection, ctx: Ctx) -> dict:
         skip = {r["message_id"] for r in conn.execute(
             "SELECT message_id FROM owner_asks WHERE message_id IS NOT NULL")}
     drafts = _drafts(_waiting_drafts(conn, viewer), asks_)
-    items = [*_handoffs(conn, viewer), *_approvals(conn, viewer), *_access(conn, viewer), *_publish(conn, viewer), *drafts, *asks_, *reviews,
+    items = [*_handoffs(conn, viewer), *_push_setup(conn, viewer), *_approvals(conn, viewer), *_access(conn, viewer), *_publish(conn, viewer), *drafts, *asks_, *reviews,
              *_mentions(conn, viewer, skip)]
     counts = {k: sum(1 for i in items if i["kind"] == k) for k in KINDS}
     return {"count": len(items), "counts": counts, "items": items}

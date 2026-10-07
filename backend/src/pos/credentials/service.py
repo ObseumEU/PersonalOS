@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 from .. import actors, audit
 from ..core import Ctx, Forbidden, NotFound, now_iso
-from . import onepassword, store
+from . import onepassword, serverstore, store
 from .redact import Redactor
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{1,62}$")
@@ -214,8 +214,31 @@ def parse_capability(cap: str) -> tuple[str, str | None]:
 
 def status() -> dict:
     on, why = onepassword.configured()
+    local, _ = serverstore.configured()
     return {"enabled": on, "vault": onepassword.vault() or None, "reason": why or None,
-            "cache_seconds": onepassword.cache_seconds()}
+            "cache_seconds": onepassword.cache_seconds(), "server_store": local,
+            "server_entries": serverstore.names() if local else []}
+
+
+# ------------------------------------------------------------------ the two backends: 1Password and the server store
+
+def backend_configured(ref: str) -> tuple[bool, str]:
+    """(on, why not) for the backend a reference lives in: pos:// the server store, op:// 1Password."""
+    return serverstore.configured() if serverstore.is_ref(ref) else onepassword.configured()
+
+
+def backend_resolve(ref: str) -> str:
+    """The value behind a reference of either backend. Raises onepassword.Unavailable (serverstore's is a subclass)."""
+    return serverstore.resolve(ref) if serverstore.is_ref(ref) else onepassword.resolve(ref)
+
+
+def backend_forget(ref: str) -> None:
+    if not serverstore.is_ref(ref):
+        onepassword.forget(ref)
+
+
+def backend_label(ref: str) -> str:
+    return "the server credential store" if serverstore.is_ref(ref) else "1Password"
 
 
 def _require_owner(conn: sqlite3.Connection, ctx: Ctx) -> None:
@@ -272,9 +295,15 @@ def _clean(conn: sqlite3.Connection, data: dict, partial: bool = False) -> dict:
     if "op_ref" in data or not partial:
         ref = str(data.get("op_ref") or "").strip()
         vault = onepassword.vault()
-        if not ref.startswith("op://") or len(ref[5:].split("/")) < 3:
-            raise CredentialError("op_ref: a 1Password secret reference, op://<vault>/<item>/<field>")
-        if vault and ref[5:].split("/")[0] != vault:
+        if serverstore.is_ref(ref):
+            try:
+                serverstore.parse_ref(ref)
+            except ValueError as e:
+                raise CredentialError(f"op_ref: {e}") from None
+        elif not ref.startswith("op://") or len(ref[5:].split("/")) < 3:
+            raise CredentialError("op_ref: a 1Password secret reference, op://<vault>/<item>/<field>, or a "
+                                  "server-store one, pos://<entry>/<field>")
+        elif vault and ref[5:].split("/")[0] != vault:
             raise CredentialError(f"op_ref: only items of the vault {vault!r} (the service account's vault)")
         out["op_ref"] = ref
     if "env_var" in data or not partial:
@@ -352,7 +381,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, cid: int, data: dict) -> dict:
     conn.execute(f"UPDATE credentials SET {', '.join(f'{k} = ?' for k in f)}, updated_at = ? WHERE id = ?",
                  (*f.values(), now_iso(), cid))
     if "op_ref" in f:
-        onepassword.forget(before["op_ref"])
+        backend_forget(before["op_ref"])
     audit.log(conn, ctx, "cred_update", "credential", cid, name=before["name"], fields=sorted(f))
     conn.commit()
     return get(conn, cid)
@@ -370,7 +399,7 @@ def archive(conn: sqlite3.Connection, ctx: Ctx, cid: int, reason: str) -> dict:
         access.revoke(conn, ctx, g["agent_id"], g["capability"], reason)
         ended.append(g["id"])
     conn.execute("UPDATE credentials SET archived_at = ?, updated_at = ? WHERE id = ?", (now_iso(), now_iso(), cid))
-    onepassword.forget(c["op_ref"])
+    backend_forget(c["op_ref"])
     audit.log(conn, ctx, "cred_archive", "credential", cid, name=c["name"], grants=ended, reason=reason)
     conn.commit()
     return {"archived": c["name"], "grants_ended": ended}
@@ -655,12 +684,12 @@ def resolve_for(conn: sqlite3.Connection, ctx: Ctx, names: list[str], tool: str,
         conn.commit()
         raise CredentialError(f"{name}: {why}")
 
-    on, off_why = onepassword.configured()
     for name in names:
         try:
             c = get(conn, name)
         except NotFound:
             refuse(None, name, "no such credential in the registry")
+        on, off_why = backend_configured(c["op_ref"])
         if not on:
             refuse(c, name, f"credentials are disabled ({off_why}); nothing falls back to plain text")
         if c["archived_at"]:
@@ -696,9 +725,9 @@ def resolve_for(conn: sqlite3.Connection, ctx: Ctx, names: list[str], tool: str,
             refuse(c, name, f"used {used} times in the last hour (limit {c['max_uses_hour']}); the grant is paused "
                             "and the owner was told")
         try:
-            value = onepassword.resolve(c["op_ref"])
+            value = backend_resolve(c["op_ref"])
         except onepassword.Unavailable as e:
-            refuse(c, name, f"1Password unavailable, failing closed ({str(e)[:160]})")
+            refuse(c, name, f"{backend_label(c['op_ref'])} unavailable, failing closed ({str(e)[:160]})")
         out[name] = {"value": value, "env_var": c["env_var"] or _default_env(name), "header": c["header"],
                      "credential": c}
     for name, v in out.items():
@@ -725,7 +754,7 @@ def platform_header(conn: sqlite3.Connection, ctx: Ctx, name: str, host: str, pu
         c = get(conn, name)
     except NotFound:
         refuse("no such credential in the registry")
-    on, off_why = onepassword.configured()
+    on, off_why = backend_configured(c["op_ref"])
     if not on:
         refuse(f"credentials are disabled ({off_why})")
     if c["archived_at"]:
@@ -737,9 +766,9 @@ def platform_header(conn: sqlite3.Connection, ctx: Ctx, name: str, host: str, pu
     if not c["header"]:
         refuse("no header configured")
     try:
-        value = onepassword.resolve(c["op_ref"])
+        value = backend_resolve(c["op_ref"])
     except onepassword.Unavailable as e:
-        refuse(f"1Password unavailable, failing closed ({str(e)[:160]})")
+        refuse(f"{backend_label(c['op_ref'])} unavailable, failing closed ({str(e)[:160]})")
     _log_use(conn, ctx, c, name, None, "probe", host, True, None, None, None)
     key, _, tmpl = c["header"].partition(":")
     return key.strip(), tmpl.strip().replace("{value}", value)
@@ -750,15 +779,15 @@ def platform_header(conn: sqlite3.Connection, ctx: Ctx, name: str, host: str, pu
 MISSING_RE = re.compile(r"no item matched|no such item|item .*not found|no field|field .*not found|no vault|"
                         r"vault .*not found|not a valid secret reference|invalid secret reference|does not exist|"
                         r"returned no value|no section", re.I)
-OP_REF_RE = re.compile(r"op://[^\s`'\"<>()\[\]{}|,;]+")
+OP_REF_RE = re.compile(r"(?:op|pos)://[^\s`'\"<>()\[\]{}|,;]+")
 
 
 def _check_ref(ref: str) -> tuple[str, str]:
-    on, why = onepassword.configured()
+    on, why = backend_configured(ref)
     if not on:
         return "unknown", why
     try:
-        value = onepassword.resolve(ref)  # check only: the value stays in the resolver's short cache, never here
+        value = backend_resolve(ref)  # check only: the value stays in the resolver's short cache, never here
         del value
         return "ok", ""
     except onepassword.Unavailable as e:
@@ -777,13 +806,17 @@ def check_reference(conn: sqlite3.Connection, *, name: str | None = None, ref: s
     store.ensure_schema(conn)
     if ref:
         state, why = _check_ref(ref.rstrip(".,;:!?)"))
-        return {"state": state, "why": "reference v 1Password neexistuje (" + why + ")" if state == "missing"
+        where = "v úložišti na serveru" if serverstore.is_ref(ref) else "v 1Password"
+        return {"state": state, "why": f"reference {where} neexistuje (" + why + ")" if state == "missing"
                 else why}
     name = str(name or "").strip().lower()
     try:
         c = get(conn, name)
     except NotFound:
-        # Not in the registry: an item of that title in the vault still lets a person find it.
+        # Not in the registry: an entry of that name in the server store, or an item of that title in the vault,
+        # still lets a person (or the operator) find it.
+        if name in serverstore.names():
+            return {"state": "ok", "why": "položka existuje v úložišti na serveru (v registru credentials není)"}
         try:
             listed = onepassword.items()
             titles = {_slug(i.get("title", "")) for i in listed} | {(i.get("title") or "").strip().lower()
@@ -797,7 +830,8 @@ def check_reference(conn: sqlite3.Connection, *, name: str | None = None, ref: s
         return {"state": "missing", "why": "credential je v registru archivovaný"}
     state, why = _check_ref(c["op_ref"])
     if state == "missing":
-        return {"state": "missing", "why": "je v registru, ale jeho položka v 1Password neexistuje (resolve: "
+        where = "v úložišti na serveru" if serverstore.is_ref(c["op_ref"]) else "v 1Password"
+        return {"state": "missing", "why": f"je v registru, ale jeho položka {where} neexistuje (resolve: "
                                            + why[:120] + ")"}
     return {"state": state, "why": why}
 
@@ -811,8 +845,8 @@ def test(conn: sqlite3.Connection, ctx: Ctx, cid: int) -> dict:
     _require_owner(conn, ctx)
     c = get(conn, cid)
     try:
-        onepassword.forget(c["op_ref"])
-        onepassword.resolve(c["op_ref"])  # the value stays in the cache, never in the answer
+        backend_forget(c["op_ref"])
+        backend_resolve(c["op_ref"])  # the value stays in the cache, never in the answer
         ok, err = True, None
     except onepassword.Unavailable as e:
         ok, err = False, str(e)[:300]
@@ -1035,7 +1069,9 @@ def kind_of(c: dict) -> str:
 
 
 def item_of(op_ref: str) -> str:
-    """op://vault/ITEM/field -> ITEM (the 1Password item a credential comes from)."""
+    """op://vault/ITEM/field -> ITEM (the 1Password item a credential comes from); pos://ENTRY/field -> ENTRY."""
+    if serverstore.is_ref(op_ref):
+        return (op_ref or "")[len(serverstore.SCHEME):].split("/")[0]
     parts = (op_ref or "")[5:].split("/")
     return parts[1] if len(parts) > 1 else op_ref
 

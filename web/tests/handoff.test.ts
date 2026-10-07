@@ -6,7 +6,7 @@ import { register } from "node:module";
 import { test } from "node:test";
 
 register("./ts-resolve.mjs", import.meta.url);
-const { keyName, minutesLeft, pointAt } = await import("../src/handoffApi.ts");
+const { isOpen, isPending, keyName, minutesLeft, pointAt } = await import("../src/handoffApi.ts");
 
 const k = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean }> = {}) =>
   keyName({ key, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
@@ -41,4 +41,11 @@ test("minutes left round up and never go negative", () => {
   const now = Date.parse("2026-10-06T10:00:00Z");
   assert.equal(minutesLeft("2026-10-06T10:29:01Z", now), 30);
   assert.equal(minutesLeft("2026-10-06T09:59:00Z", now), 0);
+});
+
+test("a parked or preparing handoff has no live page yet, but is not over", () => {
+  assert.equal(isPending("parked"), true);
+  assert.equal(isPending("preparing"), true);
+  assert.equal(isOpen("preparing"), false);
+  assert.equal(isPending("active") || isPending("done"), false);
 });

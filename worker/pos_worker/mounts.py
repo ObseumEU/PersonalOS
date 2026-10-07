@@ -55,7 +55,7 @@ def claude_allowed(me: dict) -> list[str]:
 
 # Codex's MCP defaults (10 s to start, 60 s per call) are too short here: a browser action may wait
 # for the owner's approval (BROWSER_APPROVAL_WAIT, 900 s), the desktop for its turn (600 s), and an owner
-# handoff for him to log in (pos.handoff.MAX_MINUTES, 45 min).
+# handoff for him to log in (pos.handoff: at most 20 min live, then it parks).
 CODEX_TIMEOUTS = {"startup_timeout_sec": 60, "tool_timeout_sec": 3000}
 # `codex exec` never asks: without default_tools_approval_mode every call of a server whose tools do not
 # declare themselves read-only fails ("requires approval, but approval policy is never"); the guard is

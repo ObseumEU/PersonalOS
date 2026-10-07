@@ -121,6 +121,8 @@ BROWSER_GUIDE = """# Browser and computer use
   "Allow" on a consent screen: get the page ready (navigate there, fill in everything else), then
   browser_request_owner_handoff(title='Přihlas se do <site> – zbytek udělám já', reason, done_url_contains=...). He
   does just that step in your live browser and presses Hotovo; you continue there (read the page again first).
+  Not there in time: it parks; end the run. When he opens it you are woken on the task: prepare the page again
+  and call it again with the same title (it continues the same handoff).
   Never ask him to find or paste a key, an ID or a secret: take it off the page with browser_capture_secret.
 - Reading, searching, logging in, filling in, submitting, replying and posting are ordinary work (constitution Ú1):
   they go through, audited with a screenshot. Paying or buying, signing or accepting a binding offer, deleting or

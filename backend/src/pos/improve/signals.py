@@ -448,13 +448,16 @@ def snapshot(conn: sqlite3.Connection, now: datetime) -> dict[str, dict]:
     if rows:
         acc.set("stuck:waiting_overdue", "stuck", "waiting tasks past follow-up or deadline", len(rows),
                 [_t(r["id"]) for r in rows], rows[0]["title"])
-    if _has(conn, "push_subscriptions") and _has(conn, "auth_devices"):
-        # The owner installed the app (a device signed in as the app) and no device of his gets notifications.
-        owner = conn.execute("""SELECT a.id FROM actors a WHERE a.is_owner = 1 AND EXISTS (SELECT 1 FROM auth_devices d
-                                WHERE d.actor_id = a.id AND d.app = 1 AND d.revoked_at IS NULL) ORDER BY a.id LIMIT 1""").fetchone()
-        if owner and not conn.execute("SELECT 1 FROM push_subscriptions WHERE actor_id = ?", (owner["id"],)).fetchone():
-            acc.set("push:owner_no_device", "push", "the owner has no device subscribed to notifications", 1, [],
-                    "Settings → Oznámení: Zapnout oznámení in the installed app (/m)")
+    if _has(conn, "push_subscriptions"):
+        # No device of the owner gets notifications (none subscribed, or every one keeps failing): nothing reaches
+        # his phone, so handoffs and asks wait unseen (prod 2026-10-07, T-957/T-958). Surfaced to him once in
+        # "Čeká na tebe" (pos.needs_me kind setup); until then handoffs fall back to e-mail (pos.owner_fallback).
+        from .. import owner_fallback
+
+        owner = conn.execute("SELECT id FROM actors WHERE is_owner = 1 ORDER BY id LIMIT 1").fetchone()
+        if owner and not owner_fallback.push_reaches_owner(conn):
+            acc.set("push:owner_no_device", "push", "the owner has no device that receives notifications", 1, [],
+                    "Čeká na tebe → Zapnout notifikace v telefonu (/m/settings)")
     return acc.items
 
 

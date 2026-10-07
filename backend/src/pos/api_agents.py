@@ -384,6 +384,14 @@ def needs_me(conn=Depends(get_db), ctx=Depends(get_ctx)):
     return nm.collect(conn, ctx)
 
 
+@router.post("/needs-me/setup/push/hide")
+def hide_push_setup(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """"Skrýt" on the owner's "Zapnout notifikace v telefonu" item: it does not come back."""
+    from . import needs_me as nm
+
+    return nm.hide_push_setup(conn, ctx)
+
+
 class ChoiceIn(BaseModel):
     option: str
     note: str = ""

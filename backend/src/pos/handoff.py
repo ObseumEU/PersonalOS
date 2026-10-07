@@ -8,11 +8,23 @@ ready (it navigates to the right page and fills in whatever it can), then calls
 - creates a handoff here (`waiting`) and moves the task to `waiting` (a pause, not a failure);
 - puts one item in "Čeká na tebe" (pos.needs_me kind `handoff`), which pushes to the owner's phone
   ("Přihlas se do LinkedIn – zbytek udělám já");
-- keeps the agent's run and its browser alive: the guard relays the page to the owner and the owner's
-  clicks, taps, scrolls and typing back into the same page (this module's in-memory relay);
+- keeps the agent's run and its browser alive for a short live window (LIVE_MINUTES): the guard relays the
+  page to the owner and the owner's clicks, taps, scrolls and typing back into the same page (this module's
+  in-memory relay);
 - ends when the owner presses **Hotovo** (or the agent's `done_hint` comes true: a URL, a text, a
-  selector), when he cancels it, or after the timeout (DEFAULT_MINUTES; one reminder push before).
-  The agent then continues in the same browser, logged in.
+  selector) or when he cancels it. The agent then continues in the same browser, logged in.
+
+The ask itself never dies (prod 2026-10-07: the T-957/T-958 handoffs expired after 25-30 minutes and the owner,
+with no push device, never saw them). When the live window passes without him, the handoff is **parked**: the
+agent's run ends (no pool slot and no run wait for him), the task waits, and the item stays in "Čeká na tebe"
+until it is done or cancelled. When he opens a parked handoff it becomes **preparing**: the task goes back to
+the agent and wakes it; the agent prepares the page again and asks again with the same task, which re-attaches
+to this handoff (now `active`, the owner is there), and his view goes from "Agent připravuje stránku…" to the
+live page. If the agent has not attached within PREPARE_MINUTES, the handoff is parked again (opening it wakes
+the agent once more).
+
+Notice: the push of "Čeká na tebe" (pos.push); when the owner has no working push subscription, one e-mail to
+his work mailbox per handoff (pos.owner_fallback), sent by the minute sweep.
 
 Security:
 - Only the owner opens a handoff (signed-in session, owner only: pos.api_handoff); nothing is public.
@@ -38,11 +50,16 @@ from datetime import datetime, timedelta, timezone
 from . import actors, audit
 from .core import Ctx, now_iso
 
-DEFAULT_MINUTES = 30  # how long the agent's run waits for the owner (its browser stays open)
-MAX_MINUTES = 45  # Codex's tool timeout for the browser server is above this (pos_worker.mounts)
-REMIND_AFTER_MIN = 10  # one reminder push when the owner has not opened it by then
-OPEN = ("waiting", "active")
-FINAL = ("done", "cancelled", "expired")
+LIVE_MINUTES = 5  # how long the agent's run waits for the owner (its browser stays open), then it parks
+DEFAULT_MINUTES = LIVE_MINUTES
+MAX_MINUTES = 10  # the most an agent may ask to wait: a run never holds a pool slot for long
+OWNER_THERE_MINUTES = 20  # re-attached while the owner looks at it ("preparing"): he is there, give him time
+PREPARE_MINUTES = 15  # the owner opened a parked one: the agent has this long to prepare it again
+REMIND_AFTER_MIN = 60  # one reminder push for a parked handoff the owner has not opened by then
+OPEN = ("waiting", "active")  # live: an agent's run holds the browser
+PENDING = ("parked", "preparing")  # no run: waits for the owner (parked) or for the agent (preparing)
+LISTED = OPEN + PENDING  # in "Čeká na tebe" until done or cancelled
+FINAL = ("done", "cancelled", "expired")  # expired: only rows from before parking existed
 WATCH_S = 12  # the owner's view asked for a frame this recently: the guard keeps sending frames
 MAX_EVENTS = 60  # per input call
 MAX_QUEUE = 400
@@ -68,10 +85,16 @@ CREATE TABLE IF NOT EXISTS browser_handoffs (
     reminded_at TEXT,
     task_status_before TEXT,
     keep_login INTEGER NOT NULL DEFAULT 0,
-    closed_at TEXT
+    closed_at TEXT,
+    parked_at TEXT,
+    notified_at TEXT,
+    notified_via TEXT,
+    reattached INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS browser_handoffs_status ON browser_handoffs(status);
 """
+_COLUMNS = {"parked_at": "TEXT", "notified_at": "TEXT", "notified_via": "TEXT",
+            "reattached": "INTEGER NOT NULL DEFAULT 0"}
 _ready: set[str] = set()
 
 
@@ -88,6 +111,18 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     if key in _ready:
         return
     conn.executescript(_SCHEMA)
+    have = {r[1] for r in conn.execute("PRAGMA table_info(browser_handoffs)")}
+    for col, decl in _COLUMNS.items():
+        if col not in have:
+            conn.execute(f"ALTER TABLE browser_handoffs ADD COLUMN {col} {decl}")
+    # Before parking existed a handoff expired; one the owner never closed whose task still waits is parked now
+    # (it stays in "Čeká na tebe" and wakes the agent when he opens it), the rest is closed.
+    conn.execute("""UPDATE browser_handoffs SET status = 'parked', parked_at = COALESCE(finished_at, created_at),
+                    finished_at = NULL WHERE status = 'expired' AND closed_at IS NULL AND task_id IN
+                    (SELECT id FROM tasks WHERE status NOT IN ('done', 'cancelled') AND archived_at IS NULL)""")
+    conn.execute("UPDATE browser_handoffs SET closed_at = COALESCE(finished_at, created_at) "
+                 "WHERE status = 'expired' AND closed_at IS NULL")
+    conn.commit()
     _ready.add(key)
 
 
@@ -293,6 +328,13 @@ def create(conn: sqlite3.Connection, ctx: Ctx, *, run_id: int, title: str, reaso
     mins = max(2.0, min(float(minutes or DEFAULT_MINUTES), MAX_MINUTES))
     now = _now()
     task_id = run["task_id"]
+    if task_id:
+        # The same task asked before and the owner was not there: continue that handoff (one item for him).
+        for row in conn.execute(f"SELECT id FROM browser_handoffs WHERE task_id = ? AND actor_id = ? AND status IN "
+                                f"{LISTED} ORDER BY id DESC", (task_id, ctx.actor_id)).fetchall():
+            prev = check_expiry(conn, get(conn, row["id"]), now)
+            if prev["status"] in PENDING:
+                return _reattach(conn, ctx, prev, run, url, done_hint, reason, mins, now)
     before = None
     if task_id:
         t = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -310,6 +352,32 @@ def create(conn: sqlite3.Connection, ctx: Ctx, *, run_id: int, title: str, reaso
     conn.commit()
     relay(hid)
     return get(conn, hid)
+
+
+def _reattach(conn: sqlite3.Connection, ctx: Ctx, h: dict, run, url: str | None, done_hint: dict | None,
+              reason: str, mins: float, now: datetime) -> dict:
+    """A new run of the agent prepared the page again for a parked (or preparing) handoff: the same handoff goes
+    live with this run. The owner is there when it was 'preparing' (he opened it): active at once. Commits."""
+    there = h["status"] == "preparing"
+    status = "active" if there else "waiting"
+    until = now + timedelta(minutes=OWNER_THERE_MINUTES if there else mins)
+    hint = _clean_hint(done_hint) or h["done_hint"]
+    conn.execute("""UPDATE browser_handoffs SET run_id = ?, status = ?, expires_at = ?, url = COALESCE(?, url),
+                    done_hint = ?, reason = CASE WHEN ? != '' THEN ? ELSE reason END, reattached = reattached + 1,
+                    finished_at = NULL, finished_by = NULL WHERE id = ?""",
+                 (run["id"], status, _iso(until), _host_path(url), json.dumps(hint),
+                  " ".join(str(reason or "").split())[:600], " ".join(str(reason or "").split())[:600], h["id"]))
+    t = conn.execute("SELECT status FROM tasks WHERE id = ?", (h["task_id"],)).fetchone()
+    if t and t["status"] not in ("done", "waiting", "cancelled"):
+        if h["task_status_before"] is None or h["task_status_before"] == "waiting":
+            conn.execute("UPDATE browser_handoffs SET task_status_before = ? WHERE id = ?", (t["status"], h["id"]))
+        _task(conn, ctx, h["task_id"], "waiting", f"Čeká na majitele v prohlížeči: {h['title']}", action="wait")
+    audit.log(conn, Ctx(ctx.actor_id, via="worker", run_id=run["id"]), "handoff_reattached", "task", h["task_id"],
+              handoff_id=h["id"], owner_there=there, url=_host_path(url))
+    conn.commit()
+    relay(h["id"])
+    _wake(h["id"])
+    return get(conn, h["id"])
 
 
 def _host_path(url: str | None) -> str | None:
@@ -343,10 +411,37 @@ def open_(conn: sqlite3.Connection, ctx: Ctx, hid: int, *, device: str | None = 
         conn.execute("UPDATE browser_handoffs SET status = 'active', opened_at = ? WHERE id = ? AND status = 'waiting'",
                      (now_iso(), h["id"]))
         _wake(h["id"])
+    elif h["status"] == "parked":
+        _reprepare(conn, ctx, h)
     audit.log(conn, Ctx(ctx.actor_id, via=via), "handoff_opened", "task" if h["task_id"] else None, h["task_id"],
               handoff_id=h["id"], agent_id=h["actor_id"], device=(device or "")[:40] or None, status=h["status"])
     conn.commit()
     return get(conn, hid)
+
+
+def _reprepare(conn: sqlite3.Connection, ctx: Ctx, h: dict) -> None:
+    """The owner opened a parked handoff: the agent gets the task back, woken now, to prepare the page again and
+    ask with the same task (it re-attaches). The caller commits; the wake happens after the commit."""
+    from . import wake
+
+    now = _now()
+    conn.execute("""UPDATE browser_handoffs SET status = 'preparing', opened_at = ?, expires_at = ? WHERE id = ?
+                    AND status = 'parked'""", (_iso(now), _iso(now + timedelta(minutes=PREPARE_MINUTES)), h["id"]))
+    if h["task_id"]:
+        t = conn.execute("SELECT status FROM tasks WHERE id = ?", (h["task_id"],)).fetchone()
+        if t and t["status"] not in ("done", "cancelled"):
+            _task(conn, ctx, h["task_id"], "next",
+                  f"Majitel právě otevřel předání #{h['id']} ({h['title']}) a čeká: připrav stránku znovu (otevři ji, "
+                  "vyplň, co jde) a hned zavolej browser_request_owner_handoff se stejným názvem; připojí se k tomuto "
+                  "předání a majitel uvidí živou stránku.", action="resume")
+            conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (h["task_id"],))
+    audit.log(conn, Ctx(ctx.actor_id, via=ctx.via), "handoff_reprepare", "task" if h["task_id"] else None,
+              h["task_id"], handoff_id=h["id"], agent_id=h["actor_id"])
+    conn.commit()
+    try:
+        wake.wake(h["actor_id"])
+    except Exception:  # noqa: BLE001 - the task is in the agent's queue either way; the scheduler picks it up
+        pass
 
 
 def finish(conn: sqlite3.Connection, ctx: Ctx, hid: int, status: str, *, by: str, keep_login: bool = False) -> dict:
@@ -359,15 +454,24 @@ def finish(conn: sqlite3.Connection, ctx: Ctx, hid: int, status: str, *, by: str
         if h["status"] == status:
             return h
         raise HandoffError(f"the handoff is already {h['status']}", 409)
-    conn.execute("""UPDATE browser_handoffs SET status = ?, finished_at = ?, finished_by = ?, keep_login = ?
-                    WHERE id = ?""", (status, now_iso(), by, int(bool(keep_login)), h["id"]))
+    live = h["status"] in OPEN
+    conn.execute("""UPDATE browser_handoffs SET status = ?, finished_at = ?, finished_by = ?, keep_login = ?,
+                    closed_at = CASE WHEN ? THEN closed_at ELSE ? END WHERE id = ?""",
+                 (status, now_iso(), by, int(bool(keep_login)), live, now_iso(), h["id"]))
     if h["task_id"]:
         t = conn.execute("SELECT status FROM tasks WHERE id = ?", (h["task_id"],)).fetchone()
-        if t and t["status"] == "waiting":
+        if live and t and t["status"] == "waiting":
             back = h["task_status_before"] if h["task_status_before"] in ("next", "working") else "working"
             note = ("Majitel dokončil krok v prohlížeči, agent pokračuje." if status == "done"
                     else "Majitel předání v prohlížeči zrušil.")
             _task(conn, ctx, h["task_id"], back, note, action="resume")
+        elif not live and t and t["status"] not in ("done", "cancelled"):
+            # No run holds it: the task goes back to the agent's queue with what happened.
+            note = (f"Majitel krok „{h['title']}“ označil za hotový (udělal ho sám): pokračuj bez předání."
+                    if status == "done" else
+                    f"Majitel předání zrušil ({h['title']}): nežádej o ně znovu; dokonči bez něj, nebo úkol vrať.")
+            _task(conn, ctx, h["task_id"], "next", note, action="resume")
+            conn.execute("UPDATE tasks SET retry_after = NULL WHERE id = ?", (h["task_id"],))
     granted = False
     if status == "done" and keep_login:
         granted = grant_profile(conn, ctx, h["actor_id"], h["id"])
@@ -376,6 +480,13 @@ def finish(conn: sqlite3.Connection, ctx: Ctx, hid: int, status: str, *, by: str
               agent_id=h["actor_id"], by=by, keep_login=bool(keep_login), profile_granted=granted, **counts)
     conn.commit()
     _wake(h["id"])
+    if not live:
+        from . import wake
+
+        try:
+            wake.wake(h["actor_id"])
+        except Exception:  # noqa: BLE001 - the task is in its queue either way
+            pass
     return get(conn, hid)
 
 
@@ -397,8 +508,18 @@ def grant_profile(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, hid: int) -
 
 
 def check_expiry(conn: sqlite3.Connection, h: dict, now: datetime | None = None) -> dict:
-    """An open handoff past its time, or whose run ended, becomes expired: the task keeps waiting and the
-    owner's item turns into "Pokračovat" (resume). Commits when it changes."""
+    """A live handoff past its window, or whose run ended, is parked: the run ends, the task keeps waiting, the
+    owner's item stays (opening it wakes the agent). A 'preparing' one the agent did not pick up in time is parked
+    again. Commits when it changes."""
+    if h["status"] == "preparing":
+        now = now or _now()
+        if h["expires_at"] > _iso(now):
+            return h
+        conn.execute("UPDATE browser_handoffs SET status = 'parked' WHERE id = ? AND status = 'preparing'", (h["id"],))
+        audit.log(conn, Ctx(h["actor_id"], via="system"), "handoff_parked", "task" if h["task_id"] else None,
+                  h["task_id"], handoff_id=h["id"], why="not_prepared")
+        conn.commit()
+        return get(conn, h["id"])
     if h["status"] not in OPEN:
         return h
     now = now or _now()
@@ -410,16 +531,16 @@ def check_expiry(conn: sqlite3.Connection, h: dict, now: datetime | None = None)
         why = "run_ended"
     if why is None:
         return h
-    conn.execute("UPDATE browser_handoffs SET status = 'expired', finished_at = ?, finished_by = ? WHERE id = ? "
+    conn.execute("UPDATE browser_handoffs SET status = 'parked', parked_at = ?, finished_by = ? WHERE id = ? "
                  f"AND status IN {OPEN}", (_iso(now), why, h["id"]))
     if h["task_id"]:
         t = conn.execute("SELECT status FROM tasks WHERE id = ?", (h["task_id"],)).fetchone()
-        if t and t["status"] == "waiting":
+        if t and t["status"] in ("waiting", "working", "next"):
             from .business import system_ctx
 
             _task(conn, system_ctx(conn), h["task_id"], "waiting",
-                  f"Čeká na majitele: {h['title']} (předání vypršelo; pokračuje po „Pokračovat“).", action="wait")
-    audit.log(conn, Ctx(h["actor_id"], via="system", run_id=h["run_id"]), "handoff_expired",
+                  f"Čeká na majitele: {h['title']} (až předání otevře, agent stránku připraví znovu).", action="wait")
+    audit.log(conn, Ctx(h["actor_id"], via="system", run_id=h["run_id"]), "handoff_parked",
               "task" if h["task_id"] else None, h["task_id"], handoff_id=h["id"], why=why,
               **dict(relay(h["id"]).counts))
     conn.commit()
@@ -439,6 +560,12 @@ def close(conn: sqlite3.Connection, ctx: Ctx, hid: int, *, resume: bool) -> dict
         if resume:
             raise HandoffError("the handoff is still open: open it and press Hotovo", 409)
         return finish(conn, ctx, hid, "cancelled", by="owner")
+    if h["status"] in PENDING:
+        if not resume:
+            return finish(conn, ctx, hid, "cancelled", by="owner")
+        if h["status"] == "parked":
+            _reprepare(conn, ctx, h)
+        return get(conn, hid)
     if h["closed_at"]:
         return h
     conn.execute("UPDATE browser_handoffs SET closed_at = ? WHERE id = ?", (now_iso(), h["id"]))
@@ -457,28 +584,67 @@ def close(conn: sqlite3.Connection, ctx: Ctx, hid: int, *, resume: bool) -> dict
 
 
 def sweep(conn: sqlite3.Connection, settings=None, now: datetime | None = None) -> dict:
-    """Every minute (pos.scheduler.reap_runs): expire what is due, one reminder push for an unopened one."""
+    """Every minute (pos.scheduler.reap_runs): park what is past its live window, one reminder push for a parked
+    one he has not opened, and the fallback notice (once per handoff) when push does not reach him."""
     ensure_schema(conn)
     now = now or _now()
-    expired, reminded = [], []
-    for row in conn.execute(f"SELECT id FROM browser_handoffs WHERE status IN {OPEN}").fetchall():
-        h = check_expiry(conn, get(conn, row["id"]), now)
-        if h["status"] == "expired":
-            expired.append(h["id"])
-            continue
+    expired, reminded, notified = [], [], []
+    for row in conn.execute(f"SELECT id FROM browser_handoffs WHERE status IN {LISTED}").fetchall():
+        h0 = get(conn, row["id"])
+        h = check_expiry(conn, h0, now)
+        if h0["status"] in OPEN and h["status"] == "parked":
+            expired.append(h["id"])  # its live window passed: parked (the key keeps its name for the scheduler log)
         due = datetime.fromisoformat(h["created_at"]) + timedelta(minutes=REMIND_AFTER_MIN)
-        if h["status"] == "waiting" and not h["reminded_at"] and now >= due:
+        if h["status"] == "parked" and not h["opened_at"] and not h["reminded_at"] and now >= due:
             conn.execute("UPDATE browser_handoffs SET reminded_at = ? WHERE id = ?", (_iso(now), h["id"]))
             conn.commit()
             reminded.append(h["id"])
             _remind(conn, settings, h, now)
+        if h["status"] in LISTED and not h.get("notified_at"):
+            via = _notify_fallback(conn, h, now)
+            if via:
+                notified.append({"id": h["id"], "via": via})
     # A finished handoff's relay (its last frame) is dropped once the guard has seen the end.
     cutoff = _iso(now - timedelta(minutes=2))
     for hid in list(_relays):
         row = conn.execute("SELECT status, finished_at FROM browser_handoffs WHERE id = ?", (hid,)).fetchone()
         if row is None or (row["status"] in FINAL and (row["finished_at"] or "") < cutoff):
             drop_relay(hid)
-    return {"expired": expired, "reminded": reminded}
+    return {"expired": expired, "reminded": reminded, **({"notified": notified} if notified else {})}
+
+
+def _notify_fallback(conn: sqlite3.Connection, h: dict, now: datetime) -> str | None:
+    """At most once per handoff: push reaches the owner (the "Čeká na tebe" push covers it), or one e-mail to his
+    work mailbox (pos.owner_fallback). Marked before the network call, so a crash never sends it twice."""
+    from . import owner_fallback
+
+    if owner_fallback.push_reaches_owner(conn):
+        conn.execute("UPDATE browser_handoffs SET notified_at = ?, notified_via = 'push' WHERE id = ?",
+                     (_iso(now), h["id"]))
+        conn.commit()
+        return None
+    conn.execute("UPDATE browser_handoffs SET notified_at = ?, notified_via = 'email…' WHERE id = ? "
+                 "AND notified_at IS NULL", (_iso(now), h["id"]))
+    conn.commit()
+    agent = actors.get(conn, h["actor_id"])["name"]
+    from . import tasks
+
+    ref = f" ({tasks.display_id(h['task_id'])})" if h["task_id"] else ""
+    link = owner_fallback.public_url(f"/m/handoff/{h['id']}")
+    text = (f"{agent} potřebuje jeden tvůj krok v prohlížeči{ref}:\n\n{h['title']}\n"
+            + (f"\n{h['reason']}\n" if h["reason"] else "")
+            + f"\nOtevři: {link}\n\nAgent stránku připraví, ty se jen přihlásíš nebo klikneš. Položka zůstává v "
+              "„Čeká na tebe“, dokud ji nedokončíš nebo nezrušíš.\n\n"
+              "Tento e-mail dostáváš, protože v telefonu nemáš zapnuté notifikace PersonalOS. Zapneš je v aplikaci: "
+            + owner_fallback.public_url("/m/settings") + "\n")
+    ok, detail = owner_fallback.email_owner(f"Čeká na tebe: {h['title']}", text)
+    conn.execute("UPDATE browser_handoffs SET notified_via = ? WHERE id = ?",
+                 ("email" if ok else f"failed: {detail}"[:200], h["id"]))
+    audit.log(conn, Ctx(h["actor_id"], via="system"), "handoff_notified" if ok else "handoff_notify_failed",
+              "task" if h["task_id"] else None, h["task_id"], handoff_id=h["id"], via="email",
+              **({} if ok else {"error": detail}))
+    conn.commit()
+    return "email" if ok else None
 
 
 def _remind(conn: sqlite3.Connection, settings, h: dict, now: datetime) -> None:
@@ -489,10 +655,10 @@ def _remind(conn: sqlite3.Connection, settings, h: dict, now: datetime) -> None:
             from .config import get_settings
 
             settings = get_settings()
-        left = max(1, int((datetime.fromisoformat(h["expires_at"]) - now).total_seconds() // 60))
         agent = actors.get(conn, h["actor_id"])["name"]
         push.send(conn, settings, actors.owner_id(conn), {
-            "title": f"Připomínka: {h['title']}", "body": f"{agent} čeká v prohlížeči ještě {left} min.",
+            "title": f"Připomínka: {h['title']}",
+            "body": f"{agent} potřebuje tvůj krok v prohlížeči. Otevři ho a agent stránku hned připraví.",
             "tag": f"handoff-{h['id']}", "url": f"/m/handoff/{h['id']}", "kind": "needs"})
         conn.commit()
     except Exception:  # noqa: BLE001 - a reminder is a courtesy; the item is in the list either way
@@ -530,26 +696,26 @@ def view(conn: sqlite3.Connection, h: dict) -> dict:
             "task_ref": tasks.display_id(h["task_id"]) if h["task_id"] else None,
             "created_at": h["created_at"], "expires_at": h["expires_at"], "opened_at": h["opened_at"],
             "finished_at": h["finished_at"], "finished_by": h["finished_by"], "closed": bool(h["closed_at"]),
+            "preparing": h["status"] == "preparing", "parked": h["status"] == "parked",
             "done_hint": h["done_hint"], "frame_version": r.version, "page": dict(r.meta)}
 
 
 def needs_items(conn: sqlite3.Connection) -> list[dict]:
-    """"Čeká na tebe" items (owner): open handoffs, and expired ones he has not resumed or dismissed."""
+    """"Čeká na tebe" items (owner): every handoff until it is done or cancelled (live, parked or being prepared
+    again). Opening one wakes the agent when it is parked: there are no dead "expired" items."""
     from . import tasks
 
     ensure_schema(conn)
     rows = conn.execute(
         f"""SELECT h.*, a.name AS agent_name, a.kind AS agent_kind FROM browser_handoffs h
             JOIN actors a ON a.id = h.actor_id
-            WHERE h.status IN {OPEN} OR (h.status = 'expired' AND h.closed_at IS NULL)
-            ORDER BY h.id DESC LIMIT 20""").fetchall()
+            WHERE h.status IN {LISTED} ORDER BY h.id DESC LIMIT 20""").fetchall()
     out = []
     for r in rows:
-        expired = r["status"] == "expired"
         out.append({
             "kind": "handoff", "key": f"handoff:{r['id']}", "id": r["id"], "ref": None,
-            "title": r["title"], "detail": r["reason"] or "", "status": r["status"], "expired": expired,
-            "expires_at": r["expires_at"], "blocking": not expired,
+            "title": r["title"], "detail": r["reason"] or "", "status": r["status"], "expired": False,
+            "parked": r["status"] in PENDING, "expires_at": r["expires_at"], "blocking": True,
             "task_ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
             "from_name": r["agent_name"], "from_kind": r["agent_kind"], "at": r["created_at"],
             "link": f"/handoff/{r['id']}", "m_link": f"/m/handoff/{r['id']}",

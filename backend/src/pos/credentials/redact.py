@@ -108,6 +108,24 @@ def pattern(secret: str) -> tuple[str, int]:
     return "".join(p for p, _ in parts), sum(m for _, m in parts)
 
 
+def basic_auth_password(value: str) -> str | None:
+    """The password inside an HTTP basic-auth value (base64 "user:password", optionally "Basic ..."), so that
+    the password echoed back on its own is redacted too, not only the encoded pair."""
+    v = (value or "").strip()
+    if v[:6].lower() == "basic ":
+        v = v[6:].strip()
+    if len(v) < 8 or len(v) % 4 or not re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", v):
+        return None
+    try:
+        raw = base64.b64decode(v, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
+    _, sep, pw = raw.partition(":")
+    if not sep or len(pw) < 6 or not raw.isprintable():
+        return None
+    return pw
+
+
 class Redactor:
     """Replaces every known secret (and its encodings) with [REDACTED:<name>]."""
 
@@ -135,6 +153,9 @@ class Redactor:
             alts.append((least, 0, f"(?P<s{i}>{src})", m))
         alts.sort(key=lambda a: (-a[0], a[1], a[2]))
         self._re = re.compile("|".join(a[2] for a in alts)) if alts else None
+        pw = basic_auth_password(value or "")
+        if pw and pw != value and pw not in self.flex:
+            self.add(name, pw)  # a basic-auth value: its password alone is a secret as well
 
     @property
     def longest(self) -> int:

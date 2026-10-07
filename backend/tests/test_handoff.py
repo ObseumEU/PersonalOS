@@ -174,43 +174,180 @@ def test_cancel_tells_the_agent_and_the_task_goes_on(world):
     assert w.client.post(f"/api/handoffs/{h['id']}/done", json={}).status_code == 409
 
 
-def test_timeout_reminder_and_resume(world, monkeypatch):
+def _new_run(w) -> int:
+    """The agent's next run on the same task (after it was woken)."""
+    rid = w.conn.execute("INSERT INTO runs (actor_id, task_id, kind, status, started_at) VALUES (?, ?, 'task', "
+                         "'running', ?)", (w.agent_id, w.task_id, now_iso())).lastrowid
+    w.conn.commit()
+    return rid
+
+
+def test_the_live_window_parks_it_and_opening_it_wakes_the_agent(world, monkeypatch):
+    """prod 2026-10-07: T-957/T-958's handoffs expired unseen. Now nothing dies: the run ends, the item stays, and
+    opening it wakes the agent, which prepares the page again and continues the same handoff live."""
     w = world
-    sent = []
+    sent, woken = [], []
     monkeypatch.setattr(push, "send", lambda conn, settings, actor_id, payload, **kw: sent.append(payload) or 1)
-    h = ask(w, minutes=20)
-    t0 = datetime.fromisoformat(handoff.get(w.conn, h["id"])["created_at"])
-    assert handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=5)) == {"expired": [], "reminded": []}
+    from pos import owner_fallback, wake
+
+    monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: "m1")
+    monkeypatch.setattr(wake, "wake", lambda actor_id: woken.append(actor_id))
+    h = ask(w, minutes=45)
+    got = handoff.get(w.conn, h["id"])
+    t0 = datetime.fromisoformat(got["created_at"])
+    assert datetime.fromisoformat(got["expires_at"]) - t0 == timedelta(minutes=handoff.MAX_MINUTES)  # never long
+    assert handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=3))["expired"] == []
     out = handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=11))
-    assert out["reminded"] == [h["id"]] and sent[0]["url"] == f"/m/handoff/{h['id']}"
-    assert sent[0]["title"].startswith("Připomínka") and "9 min" in sent[0]["body"]
-    assert handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=12))["reminded"] == []  # once
-    out = handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=21))
     assert out["expired"] == [h["id"]]
-    assert handoff.get(w.conn, h["id"])["finished_by"] == "timeout"
-    assert task_status(w) == "waiting"  # it waits for him; the agent's run ends
+    got = handoff.get(w.conn, h["id"])
+    assert got["status"] == "parked" and got["finished_by"] == "timeout" and task_status(w) == "waiting"
+    # The guard hears it and ends the run; the item stays, blocking, with no "expired" in it.
     assert w.client.get(f"/api/worker/browser/handoff/{h['id']}/poll", params={"wait": 0},
-                        headers=w.h).json()["status"] == "expired"
+                        headers=w.h).json()["status"] == "parked"
+    w.conn.execute("UPDATE runs SET status = 'ok' WHERE id = ?", (w.run_id,))
+    w.conn.commit()
     item = [i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "handoff"][0]
-    assert item["expired"] is True and item["blocking"] is False
-    assert w.client.post(f"/api/handoffs/{h['id']}/done", json={}).status_code == 409
-    back = w.client.post(f"/api/handoffs/{h['id']}/resume").json()
-    assert back["closed"] is True and task_status(w) == "next"
+    assert item["expired"] is False and item["parked"] is True and item["blocking"] is True
+    # One reminder push for a parked one he has not opened, later.
+    assert handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=61))["reminded"] == [h["id"]]
+    assert sent[-1]["title"].startswith("Připomínka") and sent[-1]["url"] == f"/m/handoff/{h['id']}"
+    assert handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=62))["reminded"] == []
+
+    # He opens it (even hours later): "preparing", the agent is woken with the task.
+    opened = w.client.post(f"/api/handoffs/{h['id']}/open", json={"app": "m"}).json()
+    assert opened["status"] == "preparing" and opened["preparing"] is True
+    assert woken == [w.agent_id] and task_status(w) == "next"
+    assert "připrav stránku znovu" in w.conn.execute("SELECT progress_note FROM tasks WHERE id = ?",
+                                                     (w.task_id,)).fetchone()[0]
+    assert w.client.get(f"/api/handoffs/{h['id']}/frame", params={"wait": 0}).headers["x-handoff-status"] == "preparing"
+    assert w.client.post(f"/api/handoffs/{h['id']}/open", json={}).json()["status"] == "preparing"  # no 2nd wake
+    assert woken == [w.agent_id]
+    # The agent's new run asks again on the same task: the same handoff goes live, at once active (he is there).
+    w.conn.execute("UPDATE tasks SET status = 'working' WHERE id = ?", (w.task_id,))
+    w.conn.commit()
+    w.run_id = _new_run(w)
+    again = ask(w)
+    assert again["id"] == h["id"] and again["status"] == "active"
+    got = handoff.get(w.conn, h["id"])
+    assert got["run_id"] == w.run_id and got["reattached"] == 1 and task_status(w) == "waiting"
+    assert len([i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "handoff"]) == 1
+    r = w.client.post(f"/api/worker/browser/handoff/{h['id']}/frame", headers=w.h,
+                      json={"frame": base64.b64encode(JPEG).decode(), "w": 800, "h": 600})
+    assert r.status_code == 200
+    assert w.client.get(f"/api/handoffs/{h['id']}/frame", params={"wait": 0}).status_code == 200
+    done = w.client.post(f"/api/handoffs/{h['id']}/done", json={"keep_login": False}).json()
+    assert done["status"] == "done" and task_status(w) == "working"
     assert not [i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "handoff"]
-    assert w.conn.execute("SELECT 1 FROM audit_log WHERE action = 'handoff_resumed'").fetchone()
+    acts = [r["action"] for r in w.conn.execute("SELECT action FROM audit_log WHERE action LIKE 'handoff_%'")]
+    assert {"handoff_parked", "handoff_reprepare", "handoff_reattached", "handoff_done"} <= set(acts)
 
 
-def test_the_run_ending_expires_it_and_the_minute_job_sweeps(world):
+def test_preparing_without_the_agent_parks_again_and_he_can_cancel(world, monkeypatch):
     w = world
+    from pos import owner_fallback, wake
+
+    monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: "m1")
+    woken = []
+    monkeypatch.setattr(wake, "wake", lambda actor_id: woken.append(actor_id))
     h = ask(w)
     w.conn.execute("UPDATE runs SET status = 'error' WHERE id = ?", (w.run_id,))
     w.conn.commit()
     scheduler.reap_runs(w.conn)
     got = handoff.get(w.conn, h["id"])
-    assert got["status"] == "expired" and got["finished_by"] == "run_ended"
-    dismissed = w.client.post(f"/api/handoffs/{h['id']}/cancel").json()
-    assert dismissed["closed"] is True and task_status(w) == "next"
+    assert got["status"] == "parked" and got["finished_by"] == "run_ended"
+    assert w.client.post(f"/api/handoffs/{h['id']}/open", json={}).json()["status"] == "preparing"
+    later = datetime.now().astimezone() + timedelta(minutes=handoff.PREPARE_MINUTES + 1)
+    handoff.sweep(w.conn, w.settings, now=later)
+    assert handoff.get(w.conn, h["id"])["status"] == "parked"
+    # "Zkusit znovu" (resume) wakes it again; Zrušit ends it for good and tells the agent.
+    assert w.client.post(f"/api/handoffs/{h['id']}/resume").json()["status"] == "preparing"
+    assert len(woken) == 2
+    cancelled = w.client.post(f"/api/handoffs/{h['id']}/cancel").json()
+    assert cancelled["status"] == "cancelled" and task_status(w) == "next"
     assert "nežádej" in w.conn.execute("SELECT progress_note FROM tasks WHERE id = ?", (w.task_id,)).fetchone()[0]
+    assert not [i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "handoff"]
+
+
+def test_without_a_push_device_the_owner_gets_one_email_per_handoff(world, monkeypatch):
+    w = world
+    from pos import owner_fallback
+
+    mails = []
+    monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: mails.append((subject, text)) or "m1")
+    h = ask(w)
+    out = handoff.sweep(w.conn, w.settings)
+    assert out["notified"] == [{"id": h["id"], "via": "email"}]
+    subject, text = mails[0]
+    assert subject == "Čeká na tebe: Přihlas se do LinkedIn – zbytek udělám já"
+    assert f"/m/handoff/{h['id']}" in text and "notifikace" in text and "secret-token" not in text
+    got = handoff.get(w.conn, h["id"])
+    assert got["notified_via"] == "email" and got["notified_at"]
+    handoff.sweep(w.conn, w.settings)
+    t0 = datetime.fromisoformat(got["created_at"])
+    handoff.sweep(w.conn, w.settings, now=t0 + timedelta(minutes=30))  # parked: still the same handoff
+    assert len(mails) == 1  # at most once per handoff
+    # With a working push device there is no e-mail (the "Čeká na tebe" push covers it).
+    push.ensure_schema(w.conn)
+    w.conn.execute("INSERT INTO push_subscriptions (actor_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, 'k', "
+                   "'a', ?)", (actors.owner_id(w.conn), "https://fcm.googleapis.com/x", now_iso()))
+    w.conn.execute("UPDATE browser_handoffs SET status = 'cancelled' WHERE id = ?", (h["id"],))
+    w.conn.commit()
+    w.run_id = _new_run(w)
+    h2 = ask(w)
+    assert h2["id"] != h["id"]
+    handoff.sweep(w.conn, w.settings)
+    assert len(mails) == 1 and handoff.get(w.conn, h2["id"])["notified_via"] == "push"
+
+
+def test_a_failed_email_is_recorded_and_not_retried(world, monkeypatch):
+    w = world
+    from pos import owner_fallback
+
+    calls = []
+
+    def boom(subject, text):
+        calls.append(1)
+        raise RuntimeError("POS_GMAIL_SEND_TOKEN_X is not set")
+
+    monkeypatch.setattr(owner_fallback, "SENDER", boom)
+    h = ask(w)
+    handoff.sweep(w.conn, w.settings)
+    handoff.sweep(w.conn, w.settings)
+    assert calls == [1] and handoff.get(w.conn, h["id"])["notified_via"].startswith("failed:")
+    assert w.conn.execute("SELECT 1 FROM audit_log WHERE action = 'handoff_notify_failed'").fetchone()
+
+
+def test_owner_without_push_sees_one_setup_item_until_he_hides_it(world, monkeypatch):
+    w = world
+    from pos import owner_fallback
+
+    assert not [i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "setup"]
+    monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: "m1")
+    ask(w)
+    handoff.sweep(w.conn, w.settings)  # it mattered: a handoff had to go by e-mail
+    items = w.client.get("/api/needs-me").json()["items"]
+    setup = [i for i in items if i["kind"] == "setup"]
+    assert len(setup) == 1 and setup[0]["title"] == "Zapnout notifikace v telefonu"
+    assert setup[0]["m_link"] == "/m/settings" and setup[0]["blocking"] is False
+    assert w.client.post(setup[0]["hide_url"]).json() == {"hidden": True}
+    assert not [i for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "setup"]
+
+
+def test_old_expired_handoffs_become_parked_when_their_task_still_waits(world):
+    w = world
+    h = ask(w)
+    handoff._ready.clear()
+    w.conn.execute("UPDATE browser_handoffs SET status = 'expired', finished_at = ?, finished_by = 'timeout' "
+                   "WHERE id = ?", (now_iso(), h["id"]))
+    other = w.conn.execute("INSERT INTO browser_handoffs (actor_id, task_id, run_id, title, status, created_at, "
+                           "expires_at) VALUES (?, NULL, NULL, 'x', 'expired', ?, ?)",
+                           (w.agent_id, now_iso(), now_iso())).lastrowid
+    w.conn.commit()
+    handoff.ensure_schema(w.conn)
+    assert handoff.get(w.conn, h["id"])["status"] == "parked"
+    assert handoff.get(w.conn, other)["closed_at"]  # no task: closed, not listed
+    keys = [i["key"] for i in w.client.get("/api/needs-me").json()["items"] if i["kind"] == "handoff"]
+    assert keys == [f"handoff:{h['id']}"]
 
 
 def test_clean_event_rejects_what_is_not_input():

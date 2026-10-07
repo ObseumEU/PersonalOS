@@ -84,15 +84,21 @@ done_selector, minutes)`:
   long-poll, `/input`; the guard long-polls `/api/worker/browser/handoff/<id>/poll`). Coordinates are 0..1 of
   the viewport; events are validated (`pos.handoff.clean_event`);
 - it ends with **Hotovo** (by default he also keeps the agent's login: `browser:profile` is granted and the
-  cookies are saved encrypted, so the next run is logged in), the `done_*` hint coming true, **Zrušit**, or the
-  timeout (30 min default, at most 45; one reminder push after 10 min if unopened; a run that ends expires it).
-  An expired one stays in Čeká na tebe as **Pokračovat** (the task goes back to the agent, which prepares the
-  page again) / **Zahodit**;
-- the agent's call returns how it ended and it continues in the same browser.
+  cookies are saved encrypted, so the next run is logged in), the `done_*` hint coming true, or **Zrušit**;
+- it never dies unseen (prod 2026-10-07: T-957/T-958 expired after 25-30 min, the owner had no push device).
+  The run waits live only briefly (5 min default, at most 10); then the handoff is **parked**: the run ends (no
+  pool slot waits), the task waits, and the item stays in Čeká na tebe until done or cancelled. When he opens a
+  parked one it becomes **preparing**: the task goes back to the agent and wakes it, his view shows "Agent
+  připravuje stránku…", the agent prepares the page again and asks again on the same task, which re-attaches to
+  the same handoff (active at once, 20 min), and the view goes live. Not prepared within 15 min: parked again
+  ("Zkusit znovu"). One reminder push after 60 min for a parked one he has not opened;
+- notice: the "Čeká na tebe" push; when the owner has no working push device, one e-mail per handoff to his
+  work mailbox (`pos.owner_fallback`, Gmail `gmail.send`), and a one-time "Zapnout notifikace v telefonu" item;
+- the agent's call returns how it ended and it continues in the same browser (or ends its run when parked).
 
 Security: only the signed-in owner opens a handoff (owner session; members get 403, nothing is public). Frames and
 typed text live only in the api process's memory, never in the database, a file or a log; the audit log keeps
-`handoff_requested`, `handoff_opened` (who, when, which app and device), `handoff_done|cancelled|expired` with
+`handoff_requested`, `handoff_opened` (who, when, which app and device), `handoff_done|cancelled|parked|reprepare|reattached` with
 counts of clicks, keys and characters, never what was typed, and the page URL without its query. The guard
 redacts what he typed from everything the agent reads afterwards, and password fields are masked
 (`-webkit-text-security: disc`, also after a "show password" toggle) in every frame and stored screenshot. The

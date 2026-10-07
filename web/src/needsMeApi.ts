@@ -4,7 +4,7 @@ import type { ApprovalView } from "./components/ApprovalBody";
 
 /** One thing that waits for the owner (GET /api/needs-me). */
 export type NeedsItem = {
-  kind: "handoff" | "approval" | "access" | "publish" | "draft" | "ask" | "review" | "mention";
+  kind: "handoff" | "setup" | "approval" | "access" | "publish" | "draft" | "ask" | "review" | "mention";
   key: string;
   id: number;
   ref: string | null;
@@ -42,6 +42,10 @@ export type NeedsItem = {
   m_link?: string;
   status?: string;
   expired?: boolean;
+  /** handoff: no live page yet (the agent prepares it when he opens it). */
+  parked?: boolean;
+  /** setup: "Skrýt" (the item does not come back). */
+  hide_url?: string;
   expires_at?: string;
   /** draft: one waiting Gmail draft; an ask of a draft campaign lists its drafts. */
   draft?: WaitingDraft;
@@ -72,6 +76,7 @@ export const ownerActions = {
   /** An expired handoff: Pokračovat (the agent prepares the page again) or Zahodit. */
   handoffResume: (id: number) => api(`/api/handoffs/${id}/resume`, { method: "POST", body: "{}" }),
   handoffDismiss: (id: number) => api(`/api/handoffs/${id}/cancel`, { method: "POST", body: "{}" }),
+  hide: (url: string) => api(url, { method: "POST", body: "{}" }),
   markDraft: (url: string, state: "sent" | "discarded") => api(url, { method: "POST", body: JSON.stringify({ state }) }),
 };
 
@@ -116,7 +121,7 @@ export function refreshNeedsMe(): Promise<void> {
 export function dropNeedsItem(key: string) {
   if (!state) return;
   const items = state.items.filter((i) => i.key !== key);
-  const counts = { handoff: 0, approval: 0, access: 0, publish: 0, draft: 0, ask: 0, review: 0, mention: 0 };
+  const counts = { handoff: 0, setup: 0, approval: 0, access: 0, publish: 0, draft: 0, ask: 0, review: 0, mention: 0 };
   items.forEach((i) => (counts[i.kind] += 1));
   state = { count: items.length, counts, items };
   subs.forEach((f) => f(state!));

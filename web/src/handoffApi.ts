@@ -3,7 +3,9 @@ import { api } from "./api";
 /** An agent's live browser waiting for the owner (pos.handoff). */
 export type Handoff = {
   id: number;
-  status: "waiting" | "active" | "done" | "cancelled" | "expired";
+  /** waiting/active: live in the agent's browser; parked: the agent's run ended, opening it wakes the agent;
+   * preparing: the agent is preparing the page again for him. */
+  status: "waiting" | "active" | "parked" | "preparing" | "done" | "cancelled" | "expired";
   title: string;
   reason: string;
   url: string | null;
@@ -15,6 +17,8 @@ export type Handoff = {
   finished_at: string | null;
   finished_by: string | null;
   closed: boolean;
+  preparing?: boolean;
+  parked?: boolean;
   frame_version: number;
   page: { url?: string; title?: string; w?: number; h?: number };
 };
@@ -41,6 +45,8 @@ export const handoffApi = {
 };
 
 export const isOpen = (s: Handoff["status"]) => s === "waiting" || s === "active";
+/** Waiting for the agent to prepare the page again (or for the owner to open it): no live page yet. */
+export const isPending = (s: Handoff["status"]) => s === "parked" || s === "preparing";
 
 /** Playwright's name for a key the owner pressed (with Control/Alt/Meta/Shift as needed), or null for a
  * printable character that goes in as text. */
