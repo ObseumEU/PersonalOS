@@ -1017,20 +1017,29 @@ def browser_capture(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_
     hosts over HTTPS, only for the agent's running run. Audited without the value."""
     from urllib.parse import urlparse
 
-    from . import audit, browser, outbound_linkedin
+    from . import audit, browser, op_write, outbound_linkedin
 
     if not browser.may_browse(conn, ctx.actor_id):
         raise HTTPException(403, "this agent lacks tool:browser")
     run_id = _live_run(conn, ctx, body.get("run_id"))
     target = str(body.get("target") or "")
-    hosts = outbound_linkedin.CAPTURE_TARGETS.get(target)
-    if hosts is None:
-        raise HTTPException(422, f"target: one of {sorted(outbound_linkedin.CAPTURE_TARGETS)}")
+    targets = sorted([*outbound_linkedin.CAPTURE_TARGETS, op_write.TARGET])
+    if target not in targets:
+        raise HTTPException(422, f"target: one of {targets}")
     u = urlparse(str(body.get("url") or ""))
-    if u.scheme != "https" or (u.hostname or "").lower() not in hosts:
+    host = (u.hostname or "").lower()
+    if target == op_write.TARGET:
+        if u.scheme != "https" or not op_write.host_ok(host):
+            raise HTTPException(403, f"{target} is taken only from the 1Password web app "
+                                     f"({', '.join(op_write.HOST_SUFFIXES)}) over HTTPS")
+    elif u.scheme != "https" or host not in outbound_linkedin.CAPTURE_TARGETS[target]:
+        hosts = outbound_linkedin.CAPTURE_TARGETS[target]
         raise HTTPException(403, f"{target} is taken only from {', '.join(hosts)} over HTTPS")
     try:
-        n = outbound_linkedin.capture(conn, ctx.actor_id, target, str(body.get("value") or ""))
+        if target == op_write.TARGET:
+            n = op_write.capture(conn, ctx.actor_id, str(body.get("value") or ""))
+        else:
+            n = outbound_linkedin.capture(conn, ctx.actor_id, target, str(body.get("value") or ""))
     except PermissionError as e:
         raise HTTPException(403, str(e)) from e
     except ValueError as e:

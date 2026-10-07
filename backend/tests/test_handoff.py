@@ -334,3 +334,30 @@ def test_guard_hands_the_live_browser_to_the_owner_and_continues():
     out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=150)
     assert out.returncode == 0, out.stdout[-2000:] + out.stderr[-3000:]
     assert "HANDOFF E2E OK" in out.stdout
+
+
+def test_a_temporary_1password_write_token_is_taken_off_the_console_only_for_its_task(world, monkeypatch, tmp_path):
+    """1Password cannot give the existing service account write access (T-918, 2026-10-07): the agent prepares a
+    temporary one, the owner clicks Create, and the token shown once goes straight into PersonalOS."""
+    from pos import op_write
+
+    w = world
+    monkeypatch.setattr(op_write, "_path", lambda: tmp_path / "secrets" / "op-write-token.bin")
+    tok = "ops_" + "eyJ" + "x" * 60
+    cap = "/api/worker/browser/capture"
+    body = {"run_id": w.run_id, "url": "https://obseum.1password.eu/developer-tools/service-accounts/new",
+            "target": op_write.TARGET, "value": tok}
+    r = w.client.post(cap, headers=w.h, json=body)
+    assert r.status_code == 403 and "write-token task" in r.json()["detail"]  # no task of that kind
+    w.conn.execute("UPDATE tasks SET source = ? WHERE id = ?", (op_write.TASK_SOURCE, w.task_id))
+    w.conn.commit()
+    assert w.client.post(cap, headers=w.h, json={**body, "url": "https://evil.example/1password.eu"}
+                         ).status_code == 403
+    assert w.client.post(cap, headers=w.h, json={**body, "url": "http://my.1password.com/x"}).status_code == 403
+    assert w.client.post(cap, headers=w.h, json={**body, "value": "••••••••"}).status_code == 422
+    assert w.client.post(cap, headers=w.h, json=body).json()["chars"] == len(tok)
+    assert op_write.token() == tok and tok.encode() not in op_write._path().read_bytes()
+    assert tok not in "\n".join(str(tuple(r)) for r in w.conn.execute("SELECT * FROM audit_log"))
+    op_write.discard()
+    assert op_write.token() is None and not op_write.present()
+    assert op_write.host_ok("my.1password.com") and not op_write.host_ok("1password.com.evil.example")

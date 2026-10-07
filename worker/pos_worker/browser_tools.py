@@ -171,9 +171,12 @@ TOOLS: dict[str, tuple[str, dict]] = {
     "browser_capture_secret": (
         "Store a value shown on the page (a client ID or client secret in a developer portal) straight into "
         "PersonalOS, encrypted, without you ever seeing it; it is redacted from everything you read afterwards. "
-        "Only for known targets (linkedin.client_id, linkedin.client_secret) on their own site. reveal_ref: the "
+        "Only for known targets on their own site: linkedin.client_id, linkedin.client_secret, and "
+        "onepassword.write_token (a temporary 1Password service account's token, only with the platform's task "
+        "for it). reveal_ref: the "
         "'show' / eye button to press first when the value is masked. Never read a secret any other way.",
-        _schema({"target": {"type": "string", "enum": ["linkedin.client_id", "linkedin.client_secret"]},
+        _schema({"target": {"type": "string", "enum": ["linkedin.client_id", "linkedin.client_secret",
+                                                       "onepassword.write_token"]},
                  "ref": REF, "reveal_ref": {"type": "string", "description": "the ref of a 'show' button, if masked"},
                  "element": ELEMENT}, ["target", "ref"])),
 }
