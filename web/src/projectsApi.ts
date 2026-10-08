@@ -126,7 +126,16 @@ export type Capability = {
   verified: boolean;
 };
 export type BlockedCheck = { id: number; at: string; agent: string | null; surface: string; reasons: string[]; excerpt: string; overridden: boolean };
-export type Reality = { capabilities: Capability[]; expiry_hours: number; blocked: BlockedCheck[]; can_override: boolean };
+export type RealityHold = { task_id: number; ref: string; title: string; status: string; assignee: string | null; capabilities: string[]; note: string; since: string };
+export type Reality = {
+  capabilities: Capability[];
+  expiry_hours: number;
+  blocked: BlockedCheck[];
+  can_override: boolean;
+  holds?: RealityHold[];
+  /** the owner or the project lead: one-click release of a held task */
+  can_release?: boolean;
+};
 
 const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });
 
@@ -146,6 +155,8 @@ export const projectsApi = {
   ask: (ref: string, question: string, effort: 1 | 2) => api<AskAnswer>(`/api/projects/${ref}/ask`, json("POST", { question, effort })),
   reality: (ref: string) => api<Reality>(`/api/projects/${ref}/reality`),
   probe: (ref: string) => api<{ capabilities: Capability[] }>(`/api/projects/${ref}/reality/probe`, json("POST")),
+  release: (ref: string, taskId: number, reason = "") =>
+    api<{ released: boolean; status: string | null }>(`/api/projects/${ref}/reality/holds/${taskId}/release`, json("POST", { reason })),
   override: (checkId: number, reason: string) => api<{ override_id: number }>(`/api/reality/checks/${checkId}/override`, json("POST", { reason })),
 };
 

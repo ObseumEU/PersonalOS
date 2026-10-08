@@ -7,6 +7,9 @@
 #      build, health check over HTTPS, rollback to the previous image and source on failure;
 #   5. write /work/kniha/.deploy/status.txt with the CURRENT state only (a successful pass clears
 #      an old error: T-873 was a false alarm from a stale log tail).
+# Transient network errors (DNS "Could not resolve hostname", connect refused/timed out, reset) are
+# retried within the pass (3 tries, 10 s and 30 s apart) before they count as a problem: a DNS blip at
+# 01:45 on 2026-10-08 stood in status.txt as a failure until the next pass.
 # Installed copy: /opt/server/kniha-deployer/sync.sh (source: PersonalOS deploy/kniha-deployer/).
 set -u
 W=/work/kniha
@@ -35,15 +38,29 @@ if [ ! -d "$W/.git" ]; then
 fi
 mkdir -p "$OUT"
 
+TRANSIENT='Could not resolve hostname|Temporary failure in name resolution|Name or service not known|Try again|Connection timed out|Connection refused|Connection reset|Network is unreachable|No route to host|kex_exchange_identification|Connection closed by remote host|ssh_exchange_identification'
+net() {  # label cmd...: run a network git command; transient failures are retried, the rest are problems
+  label=$1; shift
+  for wait in 10 30 0; do
+    out=$("$@" 2>&1); rc=$?
+    if [ $rc = 0 ] || ! printf '%s' "$out" | grep -q -E "$TRANSIENT"; then break; fi
+    [ $wait = 0 ] && break
+    echo "$(now) $label: transient network error, retrying in ${wait} s" >> "$S/sync.log"  # not a problem yet
+    sleep $wait
+  done
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return $rc
+}
+
 # 1. Fetch, so the agents see origin without a credential of their own.
-git -C "$W" fetch -q --prune origin 2>&1 | sed "s/^/$(now) kniha fetch: /" | while read -r l; do problem "$l"; done
-git -C "$W/web" fetch -q --prune origin 2>&1 | sed "s/^/$(now) web fetch: /" | while read -r l; do problem "$l"; done
+net "kniha fetch" git -C "$W" fetch -q --prune origin 2>&1 | sed "s/^/$(now) kniha fetch: /" | while read -r l; do problem "$l"; done
+net "web fetch" git -C "$W/web" fetch -q --prune origin 2>&1 | sed "s/^/$(now) web fetch: /" | while read -r l; do problem "$l"; done
 
 # 2. Push: main and agent/* (Kniha), production and agent/* (web). Never --force: a rejected
 #    push (not a fast-forward) is logged and shown in status.txt while it lasts.
 push() {  # repo refspecs...
   r=$1; shift
-  git -C "$r" push -q --porcelain origin "$@" 2>&1 | grep -v -E '^(To |Done|=|remote:|[ *+-]	)' | grep -v '^$' \
+  net "push $(basename "$r")" git -C "$r" push -q --porcelain origin "$@" 2>&1 | grep -v -E '^(To |Done|=|remote:|[ *+-]	)' | grep -v '^$' \
     | sed "s|^|$(now) push $(basename "$r"): |" | while read -r l; do problem "$l"; done
 }
 KB=$(git -C "$W" for-each-ref --format='%(refname:short)' refs/heads/agent/ | tr '\n' ' ')
@@ -52,7 +69,7 @@ push "$W" main $KB
 push "$W/web" production $WB
 
 # 3. Deploy the web when origin/production moved.
-git -C "$W/web" fetch -q origin production
+net "web fetch production" git -C "$W/web" fetch -q origin production >/dev/null 2>&1
 sha=$(git -C "$W/web" rev-parse origin/production)
 last=$(cat "$S/deployed" 2>/dev/null || echo none)
 if [ "$sha" != "$last" ] && [ "$sha" != "$(cat "$S/failed" 2>/dev/null)" ]; then

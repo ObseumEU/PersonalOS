@@ -507,6 +507,59 @@ def test_the_owner_releases_a_hold(env):
     assert reality.held(env["conn"], t["id"]) is None
 
 
+def test_work_that_builds_or_switches_on_a_capability_is_never_held(env):
+    """T-1044 (2026-10-08): the lead's task for the developer preparing the public-order switch (title says
+    "landing", "CTA", "objednat") was held until "order" was live: the switch is how it goes live."""
+    c = env["conn"]
+    t = tasks.create(c, env["Lead"], {
+        "title": "Přepínač VEREJNA_OBJEDNAVKA: /objednat bez hesla + větev CTA na landingu (připravit, NEZAPÍNAT)",
+        "notes": "Launch: objednávka a platba bez hesla, kampaň až potom.", "project": "kniha", "topic": "kniha",
+        "assignee": {"type": "agent", "id": env["ids"]["Dev"]}})
+    assert t["status"] == "next" and reality.held(c, t["id"]) is None
+    launch = tasks.create(c, env["Lead"], {"title": "Spuštění: veřejná objednávka a platba (launch)",
+                                           "project": "kniha", "topic": "marketing",
+                                           "assignee": {"type": "agent", "id": env["ids"]["Lead"]}})
+    assert launch["status"] == "next"  # the lead enables it: a promotion topic does not make it promotion
+    # what promotes it is still held: a promotion role, or a promotion tag on unassigned work
+    assert _promo(env, "Pozvánka pro partnery", "Ať si objednají knihu.")["status"] == "waiting"
+    tagged = tasks.create(c, env["Writer"], {"title": "Příspěvek o objednávce knihy", "project": "kniha",
+                                             "topic": "linkedin"})
+    assert tagged["status"] == "waiting"
+
+
+def test_a_hold_on_work_that_is_not_promotion_is_released_by_the_tick(env):
+    c = env["conn"]
+    t = _promo(env, "Kampaň: e-mail partnerům", "Ať si objednají knihu.")
+    assert t["status"] == "waiting"
+    c.execute("UPDATE tasks SET assignee_id = ? WHERE id = ?", (env["ids"]["Dev"], t["id"]))  # handed to who builds it
+    assert reality.release_holds(c) == [t["id"]]
+    assert tasks.get(c, env["owner"], t["id"])["status"] == "next"
+    assert c.execute("SELECT released_by FROM reality_holds WHERE task_id = ?", (t["id"],)).fetchone()[0] == \
+        "not_promotion"
+
+
+def test_the_owner_and_the_project_lead_release_a_hold_with_one_click(env):
+    c, pid = env["conn"], env["project"]["id"]
+    t = _promo(env, "Kampaň: e-mail partnerům", "Ať si objednají knihu.")
+    with pytest.raises(Forbidden):  # not the lead
+        reality.release_by_hand(c, env["Dev"], t["id"], "chci")
+    c.execute("UPDATE projects SET lead_id = ? WHERE id = ?", (env["ids"]["Lead"], pid))
+    assert [h["task_id"] for h in reality.holds(c, [pid])] == [t["id"]]
+    assert reality.may_release(c, env["Lead"], pid) and not reality.may_release(c, env["Dev"], pid)
+    out = reality.release_by_hand(c, env["Lead"], t["id"], "připravuje přepínač, nic neposílá")
+    assert out["status"] == "next" and out["by"] == f"lead:{env['ids']['Lead']}"
+    assert reality.held(c, t["id"]) is None and reality.holds(c, [pid]) == []
+    a = c.execute("SELECT actor_id, detail FROM audit_log WHERE action = 'reality_release' AND entity_id = ? "
+                  "AND detail LIKE '%\"by\"%'",
+                  (t["id"],)).fetchone()
+    assert a["actor_id"] == env["ids"]["Lead"] and "připravuje přepínač" in a["detail"]
+    with pytest.raises(reality.NotFound):
+        reality.release_by_hand(c, env["owner"], t["id"])
+    t2 = _promo(env, "Newsletter: platba kartou")
+    assert reality.release_by_hand(c, env["owner"], t2["id"])["by"] == f"owner:{env['owner'].actor_id}"
+    assert tasks.get(c, env["owner"], t2["id"])["status"] == "next"
+
+
 # ------------------------------------------------------------------ done means delivered
 
 def _work(env, dod, **fields):

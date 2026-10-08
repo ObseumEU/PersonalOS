@@ -96,3 +96,56 @@ def test_no_digest_before_the_morning_and_the_sweep_runs_in_the_core_routine_loo
     if datetime.now(TZ).hour >= stuck_sweep.DIGEST_HOUR:
         assert out["stuck"]["digests"] == {"CEO": 1}  # no lead below the owner: the CEO hears of it
     assert dev.actor_id != ceo.actor_id
+
+
+def test_a_task_still_waiting_on_something_real_is_not_requeued(conn, tmp_path):
+    """2026-10-08 00:00: T-880, T-885, T-886, T-958 and T-1042 went back to the queue only to re-wait."""
+    from pos import asks, handoff
+
+    owner = Ctx(actors.owner_id(conn), via="api")
+    ceo = _agent(conn, owner, tmp_path, "CEO", "ceo")
+    dev = _agent(conn, owner, tmp_path, "Dev", "developer", ceo)
+    now = _morning()
+    today = now.astimezone(TZ).date()
+    yesterday, tomorrow = (today - timedelta(days=1)).isoformat(), (today + timedelta(days=1)).isoformat()
+
+    def waiting(title, **kw):
+        t = tasks.create(conn, ceo, {"title": title, "assignee": "Dev", **kw})
+        conn.execute("UPDATE tasks SET status = 'waiting' WHERE id = ?", (t["id"],))
+        return t["id"]
+
+    parent = waiting("M2: ostré kapitoly", do_date=yesterday)  # T-880: open subtasks
+    sub = tasks.create(conn, ceo, {"title": "P1: oprava", "assignee": "Dev", "parent_id": parent})
+    blocker = waiting("Google Admin: skupina kniha@", do_date=tomorrow)
+    dep = waiting("E-maily", do_date=yesterday)  # T-885: its note names what it waits on
+    conn.execute("UPDATE tasks SET progress_note = ? WHERE id = ?",
+                 (f"Čeká na {tasks.display_id(blocker)} (David) → pak SMTP_HOST.", dep))
+    later = waiting("M3", do_date=yesterday, follow_up=tomorrow)  # T-886: a follow-up still ahead
+    owner_item = waiting("Google Admin předání", do_date=yesterday)  # T-958: an open handoff
+    handoff.ensure_schema(conn)
+    conn.execute("INSERT INTO browser_handoffs (actor_id, task_id, title, status, created_at, expires_at) "
+                 "VALUES (?, ?, 'login', 'parked', '2026-10-07', '2026-10-08')", (dev.actor_id, owner_item))
+    asked = waiting("Rozhodnutí o ceně", do_date=yesterday)  # an open question to the owner
+    asks.ensure_schema(conn)
+    ticket = tasks.create(conn, owner, {"title": "Cena knihy?"})
+    conn.execute("INSERT INTO owner_asks (ticket_id, asker_id, source_task_id, topic_key, kind, created_at) "
+                 "VALUES (?, ?, ?, 'cena', 'decision', '2026-10-07')", (ticket["id"], dev.actor_id, asked))
+    free = waiting("Nasazení 75d1cc9", do_date=yesterday)  # T-1042: nothing open any more
+    conn.commit()
+
+    out = stuck_sweep.sweep(conn, now=now)
+    assert out["woken"] == [tasks.display_id(free)]
+    for tid in (parent, dep, later, owner_item, asked):
+        assert conn.execute("SELECT status FROM tasks WHERE id = ?", (tid,)).fetchone()[0] == "waiting", tid
+    reasons = {tid: stuck_sweep.waits_on(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone(),
+                                         today.isoformat()) for tid in (parent, dep, later, owner_item, asked)}
+    assert reasons[parent] == f"otevřený podúkol {tasks.display_id(sub['id'])}"
+    assert reasons[dep] == f"čeká na {tasks.display_id(blocker)}" and reasons[later].startswith("další kontrola")
+    assert reasons[owner_item] == "otevřené předání vlastníkovi" and reasons[asked] == "otevřený dotaz na vlastníka"
+
+    # once the subtask is done and the owner answered, the calendar wakes them again
+    conn.execute("UPDATE tasks SET status = 'done' WHERE id = ?", (sub["id"],))
+    conn.execute("UPDATE owner_asks SET status = 'answered' WHERE source_task_id = ?", (asked,))
+    conn.commit()
+    assert set(stuck_sweep.sweep(conn, now=now + timedelta(minutes=10))["woken"]) == {
+        tasks.display_id(parent), tasks.display_id(asked)}

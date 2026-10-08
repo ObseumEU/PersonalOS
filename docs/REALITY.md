@@ -53,10 +53,20 @@ lets the same content through for 72 h. People are never gated. `POS_GROUNDING=0
 
 ## 3. Sequencing
 
-An agent's marketing / outreach / content task (role growth, growth_sales, content, marketing_lead,
-community; a promotion topic or title) in a project with a registry that names a capability that is not live
-is created `waiting` with a note and a `reality_holds` row. Agents cannot claim or reopen it; it goes back to
-`next` (agent woken) once every capability it names is live. The owner moving it releases it.
+Only a task whose OUTPUT is outbound promotion is held: its assignee (or, unassigned, its creator) has a
+marketing / outreach / content role (growth, growth_sales, content, marketing_lead, marketing, community,
+sales), or its topic is a promotion tag (marketing, outreach, newsletter, linkedin, …). Engineering and launch
+work that builds or switches on the capability (developer, qa, sre, cto, product_lead, project_manager, …) is
+never held, whatever its title says: on 2026-10-08 T-1044, the Kniha Developer's task preparing the
+public-order switch, was held until "order" was live, and the switch is how it goes live (deadlock).
+
+Such a task in a project with a registry that names a capability that is not live is created `waiting` with
+a note and a `reality_holds` row. Agents cannot claim or reopen it; it goes back to `next` (agent woken) once
+every capability it names is live, or once it is not promotion any more (reassigned to who builds it; the
+30-min tick releases it, `released_by = not_promotion`). The owner and the project lead release a hold with
+one click: **Uvolnit** under "Držené úkoly" on the project page (`POST /api/projects/{ref}/reality/holds/{task}/release`)
+or `reality_release_hold(task, reason)`; audited as `reality_release` with `by = owner:<id> | lead:<id>` and
+the reason. The owner moving the task also releases it.
 
 ## 4. Done means delivered (pos.delivery)
 

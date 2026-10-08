@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from . import project_info, projects
 from .api_tasks import get_ctx, get_db
 from .auth import require_user
+from .core import NotFound
 
 router = APIRouter(prefix="/api/projects", tags=["projects"], dependencies=[Depends(require_user)])
 
@@ -118,7 +119,8 @@ def project_reality(ref: str, conn=Depends(get_db), ctx=Depends(get_ctx)):
     is_owner = bool(actors.get(conn, ctx.actor_id)["is_owner"])
     return {"capabilities": reality.registry(conn, [row["id"]]), "expiry_hours": reality.EXPIRY_HOURS,
             "blocked": grounding.recent(conn, [row["id"]], "block", 10) if is_owner else [],
-            "can_override": is_owner}
+            "can_override": is_owner, "holds": reality.holds(conn, [row["id"]]),
+            "can_release": reality.may_release(conn, ctx, row["id"])}
 
 
 @router.post("/{ref}/reality/probe")
@@ -144,6 +146,24 @@ def project_reality_verify(ref: str, key: str, body: VerifyIn, conn=Depends(get_
 
     row = projects._row(conn, ctx, ref)
     out = reality.verify(conn, ctx, row["id"], key, body.accept, body.note)
+    conn.commit()
+    return out
+
+
+class ReleaseIn(BaseModel):
+    reason: str = ""
+
+
+@router.post("/{ref}/reality/holds/{task_id}/release")
+def project_reality_release(ref: str, task_id: int, body: ReleaseIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """One click "uvolnit": the owner or the project lead releases a held task (back to the queue, audited)."""
+    from . import reality
+
+    row = projects._row(conn, ctx, ref)
+    h = reality.held(conn, task_id)
+    if h is None or h["project_id"] != row["id"]:
+        raise NotFound("this task is not held in this project")
+    out = reality.release_by_hand(conn, ctx, task_id, body.reason)
     conn.commit()
     return out
 

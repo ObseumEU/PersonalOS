@@ -306,6 +306,11 @@ function RealityBox({ slug }: { slug: string }) {
     toast(t("pj.reality_override_done"));
     load();
   };
+  const release = async (taskId: number) => {
+    await projectsApi.release(slug, taskId);
+    toast(t("pj.reality_released"));
+    load();
+  };
   return (
     <section aria-labelledby="pj-reality" className="rounded-lg border border-line px-4 py-3.5">
       <h3 id="pj-reality" className="flex items-center gap-2 pb-1 text-xs font-medium tracking-wide text-ink-2 uppercase">
@@ -342,6 +347,25 @@ function RealityBox({ slug }: { slug: string }) {
           </li>
         ))}
       </ul>
+      {(data.holds?.length ?? 0) > 0 && (
+        <div className="mt-2.5 flex flex-col gap-1.5 border-t border-line pt-2">
+          <span className="text-xs text-amber-200">{t("pj.reality_holds")}</span>
+          <span className="text-xs text-ink-2">{t("pj.reality_holds_hint")}</span>
+          {data.holds!.map((h) => (
+            <div key={h.task_id} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[13px]">
+              <span className="min-w-0 flex-1">
+                <span className="text-ink-2">{h.ref} · {h.assignee ?? "?"} · </span>
+                {h.title}
+              </span>
+              {data.can_release && (
+                <button type="button" onClick={() => release(h.task_id)} className="text-xs text-ink-2 hover:text-accent">
+                  {t("pj.reality_release")}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {data.blocked.length > 0 && (
         <div className="mt-2.5 flex flex-col gap-1.5 border-t border-line pt-2">
           <span className="text-xs text-amber-200">{t("pj.reality_blocked")}</span>

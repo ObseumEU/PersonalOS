@@ -32,11 +32,16 @@ Agents read it with `reality_list`; the owner sees it on the project page ("Co j
 (pos.grounding) checks outbound and owner-facing content against it; the sequencing below holds
 promotion tasks until what they promote is live.
 
-**Sequencing**: an agent's marketing / outreach / content task (by the creator's or assignee's role, its
-topic or title) in a project with a registry that names a capability that is not live is created as
-`waiting` with a note and a row in `reality_holds`. It cannot be claimed or reopened by an agent while
-held; the probe job (`tick`, every 30 min) and every verification release it once all its capabilities
-are live, and wake the assignee. The owner moving it releases it (his escape hatch).
+**Sequencing**: an agent's task whose OUTPUT is outbound promotion (its assignee, or when unassigned its
+creator, has a marketing / outreach / content role, or its topic is a promotion tag) in a project with a
+registry that names a capability that is not live is created as `waiting` with a note and a row in
+`reality_holds`. Engineering and launch work that builds or switches on the capability (BUILD_ROLES) is
+never held, whatever its title says (T-1044, 2026-10-08: the switch that makes "order" public was held until
+"order" was public). A held task cannot be claimed or reopened by an agent; the probe job (`tick`, every
+30 min) and every verification release it once all its capabilities are live (or it is not promotion any
+more), and wake the assignee. The owner and the project lead release it with one click ("Uvolnit" on the
+project page, `reality_release_hold`; audited as reality_release by owner:<id> / lead:<id>); the owner
+moving the task also releases it.
 
 Tables are created on first use (no numbered migration, like pos.project_info).
 """
@@ -75,14 +80,16 @@ STATUS_CS = {"live": "živé (ověřeno)", "unverified": "neověřeno", "test_on
              "mock": "atrapa (mock)", "missing": "chybí"}
 ACCESS_CS = {"public": "veřejné", "password": "na heslo", "internal": "interní"}
 
-# Who promotes: these roles' tasks (created or assigned) are marketing / outreach / content.
+# Who promotes: these roles' tasks (assigned, or created when unassigned) are marketing / outreach / content.
 PROMO_ROLES = {"growth", "growth_sales", "content", "marketing_lead", "marketing", "community", "sales"}
 PROMO_TOPICS = {"marketing", "outreach", "content", "obsah", "kampan", "kampaň", "newsletter", "linkedin",
                 "socials", "social", "pr", "growth", "prodej", "sales", "propagace", "reklama"}
-PROMO_TITLE_RE = re.compile(r"\b(?:kampa[nň]|newsletter|outreach|osloven|oslovit|propagac|propagovat|marketing|"
-                            r"reklam|příspěv|prispev|linkedin|post\b|announce|oznámen|oznamen|e-?mail(?:ing)?\s+"
-                            r"(?:pro|partner|zákazník|zakaznik)|mailing|launch|spuštění kampaně|landing)",
-                            re.IGNORECASE)
+# Who builds or enables a capability (engineering, launch, operations): never held. T-1044 (2026-10-08): the
+# Kniha Developer's task preparing the public-order switch was held until "order" was live, yet that switch is
+# how it goes live: the milestone could never unblock. The title is no signal ("landing", "launch", "CTA").
+BUILD_ROLES = {"developer", "qa", "sre", "cto", "product_lead", "project_manager", "deployer", "security",
+               "automation", "access_manager", "designer", "devops", "engineer"}
+
 
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS reality_capabilities (
@@ -795,11 +802,17 @@ def _role(conn: sqlite3.Connection, actor_id: int | None) -> str:
 
 
 def is_promotion(conn: sqlite3.Connection, task: dict) -> bool:
-    if (task.get("topic") or "").lower() in PROMO_TOPICS:
+    """The task's OUTPUT is outbound promotion: its assignee (or, unassigned, its creator) has a marketing /
+    outreach / content role, or its topic says so. Engineering and launch work that builds or enables the
+    capability is never promotion, whatever its title or topic says."""
+    assignee = _role(conn, task.get("assignee_id"))
+    if assignee in BUILD_ROLES:
+        return False
+    if assignee in PROMO_ROLES:
         return True
-    if _role(conn, task.get("created_by")) in PROMO_ROLES or _role(conn, task.get("assignee_id")) in PROMO_ROLES:
+    if (task.get("topic") or "").strip().lower() in PROMO_TOPICS:
         return True
-    return bool(PROMO_TITLE_RE.search(task.get("title") or ""))
+    return not task.get("assignee_id") and _role(conn, task.get("created_by")) in PROMO_ROLES
 
 
 def held(conn: sqlite3.Connection, task_id: int) -> sqlite3.Row | None:
@@ -807,10 +820,38 @@ def held(conn: sqlite3.Connection, task_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM reality_holds WHERE task_id = ? AND released_at IS NULL", (task_id,)).fetchone()
 
 
+def holds(conn: sqlite3.Connection, project_ids) -> list[dict]:
+    """The open holds of these projects, for the project page."""
+    ensure_schema(conn)
+    ids = [int(i) for i in project_ids if i]
+    if not ids:
+        return []
+    from .tasks import display_id
+
+    out = []
+    for r in conn.execute(f"""SELECT h.*, t.title, t.status, a.name AS assignee FROM reality_holds h
+                              JOIN tasks t ON t.id = h.task_id LEFT JOIN actors a ON a.id = t.assignee_id
+                              WHERE h.released_at IS NULL AND h.project_id IN ({",".join("?" * len(ids))})
+                              ORDER BY h.created_at""", ids):
+        out.append({"task_id": r["task_id"], "ref": display_id(r["task_id"]), "title": r["title"],
+                    "status": r["status"], "assignee": r["assignee"], "capabilities": json.loads(r["capabilities"]),
+                    "note": r["note"], "since": r["created_at"]})
+    return out
+
+
+def may_release(conn: sqlite3.Connection, ctx: Ctx, project_id: int) -> bool:
+    """The owner and the project's lead may release a hold by hand."""
+    me = conn.execute("SELECT is_owner FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
+    if me is not None and me["is_owner"]:
+        return True
+    p = conn.execute("SELECT lead_id FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return p is not None and p["lead_id"] is not None and p["lead_id"] == ctx.actor_id
+
+
 def hold_note(caps: list[dict]) -> str:
     names = ", ".join(f"„{c['name']}“ ({STATUS_CS[c['status']]})" for c in caps)
     return (f"Čeká na živé funkce: {names}. Propagovat lze jen to, co je v „Co je živé“ ověřené; úkol se sám "
-            "vrátí do fronty, až budou živé (reality_list).")
+            "vrátí do fronty, až budou živé (reality_list). Vlastník nebo lead projektu ho může uvolnit.")
 
 
 def on_task_created(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> dict | None:
@@ -850,6 +891,11 @@ def on_task_created(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> dict | No
         return None
 
 
+def _still_promotion(conn: sqlite3.Connection, task_id: int) -> bool:
+    t = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return t is not None and is_promotion(conn, dict(t))
+
+
 def refuse_if_held(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> None:
     """An agent may not start a held promotion task; a person moving it releases the hold."""
     h = held(conn, task_id)
@@ -857,6 +903,9 @@ def refuse_if_held(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> None:
         return
     if _is_person(conn, ctx.actor_id):
         release(conn, task_id, f"owner:{ctx.actor_id}", wake_it=False)
+        return
+    if not _still_promotion(conn, task_id):  # reassigned to whoever builds it: not promotion any more
+        release(conn, task_id, "not_promotion", wake_it=False)
         return
     caps = {c["key"]: c for c in registry(conn, [h["project_id"]])}
     waiting = [caps[k] for k in json.loads(h["capabilities"]) if k in caps and caps[k]["status"] != "live"]
@@ -866,32 +915,72 @@ def refuse_if_held(conn: sqlite3.Connection, ctx: Ctx, task_id: int) -> None:
     raise _invalid(f"{hold_note(waiting)} Do something else now; nothing about these may go out yet.")
 
 
-def release(conn: sqlite3.Connection, task_id: int, by: str, wake_it: bool = True) -> None:
+_REQUEUE_NOTE = {
+    "live": ("Funkce, na které úkol čekal, jsou živé a ověřené: pokračuj.",
+             "PersonalOS: funkce jsou živé a ověřené; úkol je zpět ve frontě."),
+    "not_promotion": ("Úkol funkci staví nebo zapíná, nepropaguje ji: sekvenční držení se na něj nevztahuje. "
+                      "Pokračuj.",
+                      "PersonalOS: držení uvolněno: úkol funkci staví nebo zapíná (engineering / spuštění), "
+                      "nepropaguje ji. Zpět ve frontě."),
+}
+
+
+def release(conn: sqlite3.Connection, task_id: int, by: str, wake_it: bool = True, reason: str = "",
+            ctx: Ctx | None = None) -> None:
+    """Release a hold. The platform (`live`, `not_promotion`) and a release by hand (`owner:<id>` /
+    `lead:<id>` with wake_it) put a waiting task back to `next`; a person moving the task moved it already."""
     conn.execute("UPDATE reality_holds SET released_at = ?, released_by = ? WHERE task_id = ? AND released_at IS NULL",
                  (now_iso(), by, task_id))
-    if by != "live":
-        audit.log(conn, _system(conn), "reality_release", "task", task_id, by=by)
+    extra = {"reason": reason} if reason else {}
+    manual = by.startswith(("owner:", "lead:"))
+    if by not in _REQUEUE_NOTE and not (manual and wake_it):
+        audit.log(conn, ctx or _system(conn), "reality_release", "task", task_id, by=by, **extra)
         return
     from . import comments, tasks, versioning, wake
 
+    if manual:
+        who = actors.get(conn, int(by.split(":", 1)[1]))["name"]
+        note = (f"Držení uvolnil(a) {who}" + (f": {reason}" if reason else "") + ". Pokračuj.",
+                f"PersonalOS: sekvenční držení uvolnil(a) {who}" + (f" ({reason})" if reason else "")
+                + "; úkol je zpět ve frontě.")
+    else:
+        note = _REQUEUE_NOTE[by]
     t = conn.execute("SELECT status, assignee_id FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if t is not None and t["status"] == "waiting":
-        versioning.update(conn, _system(conn), tasks.ENTITY, task_id, {
-            "status": "next", "progress_note": "Funkce, na které úkol čekal, jsou živé a ověřené: pokračuj."},
-            action="reality_release")
-        comments.log(conn, _system(conn), task_id, "PersonalOS: funkce jsou živé a ověřené; úkol je zpět ve frontě.",
-                     "system")
+        versioning.update(conn, _system(conn), tasks.ENTITY, task_id, {"status": "next", "progress_note": note[0][:500]},
+                          action="reality_release")
+        comments.log(conn, _system(conn), task_id, note[1], "system")
         if wake_it and t["assignee_id"]:
             wake.wake(t["assignee_id"])
-    audit.log(conn, _system(conn), "reality_release", "task", task_id, by=by)
+    audit.log(conn, ctx or _system(conn), "reality_release", "task", task_id, by=by, **extra)
+
+
+def release_by_hand(conn: sqlite3.Connection, ctx: Ctx, task_id: int, reason: str = "") -> dict:
+    """The owner's or the project lead's one-click "uvolnit": the held task goes back to the queue now,
+    recorded in the audit (reality_release, by owner:<id> / lead:<id>, with the reason)."""
+    h = held(conn, task_id)
+    if h is None:
+        raise NotFound(f"task {task_id} is not held")
+    if not may_release(conn, ctx, h["project_id"]):
+        raise Forbidden("only the owner or the project's lead may release a held task")
+    me = conn.execute("SELECT is_owner FROM actors WHERE id = ?", (ctx.actor_id,)).fetchone()
+    by = f"{'owner' if me['is_owner'] else 'lead'}:{ctx.actor_id}"
+    release(conn, task_id, by, wake_it=True, reason=(reason or "").strip()[:300], ctx=ctx)
+    t = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return {"released": True, "task_id": task_id, "by": by, "status": t["status"] if t else None}
 
 
 def release_holds(conn: sqlite3.Connection, project_id: int | None = None) -> list[int]:
-    """Holds whose every capability is live now are released (the task back to `next`, the agent woken)."""
+    """Holds whose every capability is live now, or whose task is not promotion (any more), are released
+    (the task back to `next`, the agent woken)."""
     ensure_schema(conn)
     q = "SELECT * FROM reality_holds WHERE released_at IS NULL" + (" AND project_id = ?" if project_id else "")
     out = []
     for h in conn.execute(q, (project_id,) if project_id else ()).fetchall():
+        if not _still_promotion(conn, h["task_id"]):
+            release(conn, h["task_id"], "not_promotion")
+            out.append(h["task_id"])
+            continue
         caps = {c["key"]: c for c in registry(conn, [h["project_id"]])}
         keys = json.loads(h["capabilities"] or "[]")
         if all(k in caps and caps[k]["status"] == "live" for k in keys):
@@ -1013,6 +1102,7 @@ def register_mcp(mcp, session) -> None:
     mcp_server.TOOL_PERMISSIONS.setdefault("reality_upsert", "tasks:claim")
     mcp_server.TOOL_PERMISSIONS.setdefault("reality_submit_evidence", "tasks:claim")
     mcp_server.TOOL_PERMISSIONS.setdefault("reality_verify", "tasks:review")
+    mcp_server.TOOL_PERMISSIONS.setdefault("reality_release_hold", "tasks:read")
 
     @mcp.tool(name="reality_list", description=(
         "What is actually usable now in a project ('Co je živé'): each capability or user-journey step with its "
@@ -1055,3 +1145,13 @@ def register_mcp(mcp, session) -> None:
                        evidence_id: int | None = None) -> dict:
         with session(ctx, "reality_verify", project=project, key=key, accept=accept) as (conn, c):
             return verify(conn, c, project, key, accept, note, evidence_id)
+
+    @mcp.tool(name="reality_release_hold", description=(
+        "Project lead (or the owner): release a task the sequencing holds ('Čeká na živé funkce') back to the "
+        "queue now, with a reason (audited). Only for a task that does not promote something that is not live, "
+        "e.g. work that builds or switches on the capability. task: T-123 or 123."))
+    def reality_release_hold(ctx: Context, task: str, reason: str) -> dict:
+        with session(ctx, "reality_release_hold", task=task) as (conn, c):
+            from .tasks import parse_id
+
+            return release_by_hand(conn, c, parse_id(task), reason)

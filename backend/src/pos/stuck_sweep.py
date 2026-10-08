@@ -7,7 +7,11 @@ task. Every tick, deterministically:
 
 1. **wake**: an agent's `waiting` task whose do_date or follow_up is today or earlier goes back to
    `next` (a system comment says why) and its agent is woken; at most once a day per task, so a task
-   put back to `waiting` with the same date does not loop;
+   put back to `waiting` with the same date does not loop. It is NOT woken while it still waits on
+   something real (2026-10-08: T-880, T-885, T-886, T-958, T-1042 were requeued at midnight only to
+   re-wait): an open owner item (an open ask, a pending approval, an open browser handoff), an open
+   subtask or a task its progress note says it waits on ("Čeká na T-958"), or a follow-up date still
+   in the future (a do_date that passed does not override it);
 2. **flag**: an agent's `working` task with no activity (a change, a comment, a run) for over
    IDLE_HOURS is flagged to the agent's lead (the CEO when it has none below the owner);
 3. **digest**: once a day (from DIGEST_HOUR, Europe/Prague) each lead with something flagged or
@@ -16,6 +20,7 @@ task. Every tick, deterministically:
 """
 
 import json
+import re
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
@@ -50,6 +55,44 @@ def _lead(conn: sqlite3.Connection, agent_id: int) -> int | None:
     return ceo if ceo and ceo != agent_id else None
 
 
+_REF_RE = re.compile(r"\bT-(\d{1,6})\b")
+
+
+def _table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+
+def waits_on(conn: sqlite3.Connection, t, today: str) -> str | None:
+    """What a waiting task still waits on (a reason in Czech), or None when nothing holds it any more."""
+    from . import tasks
+
+    if t["follow_up"] and t["follow_up"] > today:
+        return f"další kontrola {t['follow_up']}"
+    tid = t["id"]
+    if _table(conn, "owner_asks") and conn.execute(
+            "SELECT 1 FROM owner_asks WHERE source_task_id = ? AND status = 'open' LIMIT 1", (tid,)).fetchone():
+        return "otevřený dotaz na vlastníka"
+    if conn.execute("SELECT 1 FROM approvals WHERE task_id = ? AND status = 'pending' LIMIT 1", (tid,)).fetchone():
+        return "čeká na schválení"
+    if _table(conn, "browser_handoffs"):
+        from .handoff import LISTED
+
+        if conn.execute(f"SELECT 1 FROM browser_handoffs WHERE task_id = ? AND status IN ({','.join('?' * len(LISTED))}) "
+                        "LIMIT 1", (tid, *LISTED)).fetchone():
+            return "otevřené předání vlastníkovi"
+    sub = conn.execute("SELECT id FROM tasks WHERE parent_id = ? AND status != 'done' AND archived_at IS NULL "
+                       "ORDER BY id LIMIT 1", (tid,)).fetchone()
+    if sub:
+        return f"otevřený podúkol {tasks.display_id(sub['id'])}"
+    refs = {int(m) for m in _REF_RE.findall(t["progress_note"] or "")} - {tid}
+    if refs:
+        dep = conn.execute(f"SELECT id FROM tasks WHERE id IN ({','.join('?' * len(refs))}) AND status != 'done' "
+                           "AND archived_at IS NULL ORDER BY id LIMIT 1", tuple(refs)).fetchone()
+        if dep:
+            return f"čeká na {tasks.display_id(dep['id'])}"
+    return None
+
+
 def wake_due(conn: sqlite3.Connection, now: datetime, apply: bool = True) -> list[dict]:
     """Agents' waiting tasks past their do_date / follow_up: back to `next`, the agent woken."""
     from . import business, comments, tasks, versioning, wake
@@ -70,6 +113,8 @@ def wake_due(conn: sqlite3.Connection, now: datetime, apply: bool = True) -> lis
             continue
         if reality.held(conn, t["id"]) is not None:
             continue  # promotion held until what it promotes is live (pos.reality); the probe job releases it
+        if waits_on(conn, t, today):
+            continue  # still waits on something real: it is woken by that, not by the calendar
         due = min(d for d in (t["do_date"], t["follow_up"]) if d)
         item = {"id": t["id"], "ref": tasks.display_id(t["id"]), "title": t["title"], "assignee": t["assignee_id"],
                 "why": f"čekal do {due}"}

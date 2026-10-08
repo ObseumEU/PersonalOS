@@ -17,7 +17,10 @@ state live only there). Every 60 s `sync.sh`:
    and the sha is marked failed until a new commit lands on main;
 5. writes `/work/kniha/.deploy/status.txt` with the **current** state only: what is live, the last
    deploy's result, and the problems of this pass. A good pass clears an old error (T-873 was a false
-   alarm from the old status, which showed the last 15 log lines even days later).
+   alarm from the old status, which showed the last 15 log lines even days later). Transient network
+   errors (DNS "Could not resolve hostname", connect refused/timed out, reset) are retried within the pass
+   (3 tries, 10 s and 30 s apart, logged to `state/sync.log`) before they count as a problem: a DNS blip at
+   01:45 on 2026-10-08 stood in status.txt as a failure until the next pass.
 
 For the agents (read-only, no shell on svr03 needed): `/work/kniha/.deploy/status.txt`,
 `deploys.log` (every web/app deploy with its result), `last-deploy.log` (web build),
@@ -25,7 +28,10 @@ For the agents (read-only, no shell on svr03 needed): `/work/kniha/.deploy/statu
 
 The app on svr03: `/opt/server/kniha-test/` = `src/` (deployed sha), `.env` (PRISTUP_HESLO, ADMIN_HESLO;
 mode 600, owner drosko, never in git), `compose.override.yml` (joins `my-app-network`, so Caddy reaches
-`kniha-test:8787`), `e2e/journey.mjs` (Playwright walk of the whole journey). Data: volume
+`kniha-test:8787`). The E2E journey lives in the Kniha repo, `app/e2e/journey.mjs` (the team runs it
+itself with `run_with_credentials` and the credentials kniha-test-admin / kniha-test-basic-auth, see the
+repo's `app/DEPLOY.md`); the old host copy `e2e/` is retired (`e2e.retired-<date>`), nothing on the host or
+the reality probe uses it. Data: volume
 `kniha-test_kniha-test-data`. Caddy: block `kniha-test.obseum.cz` in
 `/opt/server/docker-migration/caddy/Caddyfile` (microphone allowed for that origin).
 
