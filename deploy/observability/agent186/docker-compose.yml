@@ -40,7 +40,7 @@ services:
         max-file: "3"
 
   blackbox:
-    image: prom/blackbox-exporter:v0.27.0
+    image: prom/blackbox-exporter:v0.29.0
     container_name: obs-blackbox
     restart: unless-stopped
     command: ["--config.file=/etc/blackbox/blackbox.yml"]
