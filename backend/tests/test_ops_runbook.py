@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from mcp.client import Client
 
-from pos import actors, agents, mcp_server, ops_runbook
+from pos import actors, agents, mcp_server, ops_runbook, review_policy, tasks
 from pos.access import service as access
 from pos.config import Settings
 from pos.core import Ctx
@@ -126,7 +126,7 @@ def test_validated_actions_build_argv_lists_without_a_shell():
         if name == "compose_up":
             sample = {"stack": "personalos", "service": "api"}
         pl = ops_runbook.plan(name, ops_runbook.validate(name, sample))
-        assert "known_hosts" in pl or all(isinstance(a, str) for a in pl["argv"])
+        assert "known_hosts" in pl or "api" in pl or all(isinstance(a, str) for a in pl["argv"])
 
 
 def test_the_pinned_github_keys_match_their_published_fingerprints():
@@ -169,6 +169,37 @@ def test_a_call_runs_through_the_executor_with_an_audit_row_and_the_run_id(app, 
     assert first["detail"]["outcome"] == "ok" and first["detail"]["exit_code"] == 0
     assert first["detail"]["output_len"] > ops_runbook.MAX_OUTPUT and first["detail"]["reason"]
     assert first["detail"]["args"]["container"] == "personalos-api-1"
+
+
+def test_review_policy_kniha_runs_in_the_api_and_its_output_goes_into_the_task(app, monkeypatch):
+    conn, sre, owner = app["conn"], app["sre"], app["owner"]
+    calls = []
+
+    def redirect(c, apply=False):
+        calls.append(apply)
+        return {"to_kniha_lead": ["T-001→Kniha Lead: Opravit formulář"], "applied": apply}
+
+    monkeypatch.setattr(review_policy, "redirect_kniha", redirect)
+    task = tasks.create(conn, owner, {"title": "Kniha reviews to the Kniha Lead"})["id"]
+    no_executor = {"sender": lambda *a: pytest.fail("never the host executor")}
+    out = ops_runbook.run(conn, Ctx(sre), "review_policy_kniha_dry", {}, "T-1002 dry", task_id=task, **no_executor)
+    assert out["ok"] and json.loads(out["output"])["to_kniha_lead"] and calls == [False]
+    out = ops_runbook.run(conn, Ctx(sre), "review_policy_kniha_apply", None, "T-1002 apply", task_id=task,
+                          **no_executor)
+    assert out["ok"] and json.loads(out["output"])["applied"] and calls == [False, True]
+    with pytest.raises(ops_runbook.Invalid):  # nothing from the caller reaches the command
+        ops_runbook.validate("review_policy_kniha_apply", {"db": "/tmp/x.db"})
+    conn.commit()
+    bodies = [r["body"] for r in conn.execute("SELECT body FROM task_comments WHERE task_id = ? ORDER BY id", (task,))]
+    assert len(bodies) == 2 and "review_policy_kniha_dry" in bodies[0] and "T-001→Kniha Lead" in bodies[1]
+    assert [r["detail"]["outcome"] for r in _rows(conn)] == ["ok", "ok"]
+
+    def broken(c, apply=False):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(review_policy, "redirect_kniha", broken)
+    out = ops_runbook.run(conn, Ctx(sre), "review_policy_kniha_dry", {}, "again", **no_executor)
+    assert not out["ok"] and out["outcome"] == "failed" and "locked" in out["error"]
 
 
 def test_a_refused_value_and_a_missing_reason_are_audited_and_nothing_is_sent(app, monkeypatch, tmp_path):
@@ -293,6 +324,7 @@ def test_the_executor_validates_again_and_never_runs_a_command_it_was_handed(exe
         {**good, "params": {"container": "nexus-process-pilot-postgres-1"}},
         {**good, "argv": ["sh", "-c", "reboot"]},
         {**good, "action": "shell"},
+        {**good, "action": "review_policy_kniha_apply", "params": {}},  # runs in the API only
         {**good, "reason": ""},
         {**good, "v": 2},
         ["docker", "restart", "kb-kb-1"],
