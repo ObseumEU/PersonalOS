@@ -37,6 +37,11 @@ systemctl enable --now pos-backup@knowlage.timer
 systemctl list-timers 'pos-backup@*'
 ```
 
+Put `BACKUP_CMD` in single quotes when the command has a `$` (`$(date ...)`, a
+variable): the script sources the env file under `set -u`, so in double quotes it
+expands at load time and the run fails with "unbound variable". Cron escapes `%`
+as `\%`; drop that backslash here.
+
 Do the cron edit and `enable --now` together, so the job is never scheduled twice
 or not at all. (A double start is harmless anyway: the lock and the age check stop it.)
 
