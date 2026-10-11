@@ -474,6 +474,10 @@ def test_a_conflict_is_one_task_and_is_never_retried_until_a_new_commit(tmp_path
     t = tasks.get(conn, Ctx(actors.owner_id(conn)), deploys[0]["task_id"])
     assert t["title"].startswith("Rebase agent/dev onto main") and t["assignee_name"] == "Software Engineer"
     assert "app.txt" in t["notes"] and "<<<<<<<" in t["notes"]
+    # where the branch forked and what main is now (T-746): a stale checkout shows at once
+    fork = git(deploy, "merge-base", res.old, res.new)
+    assert fork != res.old
+    assert f"Branch base (merge-base): {fork[:10]}; main of the deployer now: {res.old[:10]}." in t["notes"]
 
     # main moves on (unrelated changes) three times: silently re-checked, never another attempt or report
     for i in range(3):

@@ -528,9 +528,14 @@ def _touches_protected(wt: Path, commits: list[str]) -> bool:
     return any(protected_among(gitcheck.changed_paths(wt, c)) for c in commits)
 
 
-def conflict_log(source: str, target: str, files: list[str], hunks: str, why: str) -> str:
+def conflict_log(source: str, target: str, files: list[str], hunks: str, why: str,
+                 fork: str = "", main: str = "") -> str:
+    """`fork`: where the branch left `target` (its merge-base), `main`: the deployer's `target` now.
+    A fork far behind main says the author worked on a stale checkout (T-746)."""
     listing = "\n".join(f"  - {f}" for f in files) or "  (git named no file)"
-    return (f"CONFLICT: {source} does not merge into {target}. Conflicting files:\n{listing}\n\n"
+    bases = (f"Branch base (merge-base): {fork[:10] or '?'}; {target} of the deployer now: {main[:10] or '?'}.\n"
+             if fork or main else "")
+    return (f"CONFLICT: {source} does not merge into {target}. Conflicting files:\n{listing}\n{bases}\n"
             f"Not promoted: {why}. The deployer will not try this commit again.\n"
             f"What to do: rebase your branch onto the current {target} (git fetch deployer {target}, then "
             f"git rebase deployer/{target}: the deployer's checkout; origin can be days behind), resolve the conflicts in the files above, run the tests, and commit. "
@@ -596,7 +601,10 @@ def promote_tick(wt: Path, reporter: Reporter, *, source: str, remote: str, targ
 
     def conflict(files: list[str], hunks: str, why: str) -> Result:
         res.reason = _clip(f"merge conflict in {', '.join(files) or '?'}")
-        return fail("merge", conflict_log(source, target, files, hunks, why), conflict=files)
+        fork = subprocess.run(["git", "merge-base", base, tip], cwd=wt, capture_output=True, text=True).stdout.strip()
+        log = conflict_log(source, target, files, hunks, why, fork=fork, main=base)
+        print(log.split("\n\nHunks:", 1)[0], flush=True)  # the deployer's own log: files and bases, no hunks
+        return fail("merge", log, conflict=files)
 
     protected = _touches_protected(wt, commits)
     candidate, note = tip, ""
