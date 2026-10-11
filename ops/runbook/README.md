@@ -16,6 +16,7 @@ catalogue). The catalogue, its allowlists and the pinned GitHub host keys are in
 | `backup_run` | `systemd-run --user --unit=pos-runbook-backup --collect --no-block ops/backup/backup.sh` (the nightly job; it has a lock) |
 | `towerdog_stop`, `towerdog_start` | `docker stop/start nexus-process-pilot-towerdog-1` |
 | `refresh_known_hosts {deployer}` | writes GitHub's pinned host keys into `personalos` (`data/deployer-ssh/known_hosts`) or `kniha` (`/opt/server/kniha-deployer/known_hosts`); old file kept as `.bak`; never `ssh-keyscan` |
+| `review_policy_kniha_dry`, `review_policy_kniha_apply` | `python -m pos.review_policy --kniha [--apply]`, run inside the API (personalos-api-1), not by this executor (it refuses them); the output also goes into `task_id` as a comment. Live with the API deploy, no reinstall |
 
 Every call needs a reason and leaves one audit row `ops_runbook:<action>` (args, reason, outcome,
 exit code, output length, run id). Output is redacted and cut to 8k characters. An action not in

@@ -110,7 +110,7 @@ def handle(request, runner=subprocess_runner, known_hosts_writer=write_known_hos
             with _write_lock:
                 code, out = known_hosts_writer(plan["known_hosts"], catalogue.known_hosts_text())
         else:
-            argv = plan["argv"]
+            argv = plan.get("argv")  # none for an action run inside the API
             if not argv or argv[0] not in PROGRAMS or any(not isinstance(a, str) or "\x00" in a for a in argv):
                 raise Refused("not an allowed program")
             if write:
