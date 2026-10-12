@@ -350,6 +350,40 @@ def test_the_executor_writes_only_the_pinned_known_hosts_of_a_listed_deployer(ex
     assert not out["ok"]
 
 
+def _proc(root, pid, name, swap_kb, cgroup):
+    d = root / str(pid)
+    d.mkdir()
+    swap = "" if swap_kb is None else f"VmSwap:\t{swap_kb:>8} kB\n"
+    (d / "status").write_text(f"Name:\t{name}\nVmRSS:\t   1000 kB\n{swap}")
+    (d / "cgroup").write_text(cgroup + "\n")
+
+
+def test_swap_top_lists_the_processes_with_most_swap_and_their_containers(executor, tmp_path, monkeypatch):
+    api, kb = "a" * 64, "b" * 64
+    _proc(tmp_path, 10, "python", 4000, f"0::/system.slice/docker-{api}.scope")
+    _proc(tmp_path, 11, "uvicorn", 1000, f"0::/system.slice/docker-{api}.scope")
+    _proc(tmp_path, 12, "java", 9000, f"0::/user.slice/docker-{kb}.scope")
+    _proc(tmp_path, 13, "sshd", 500, "0::/system.slice/ssh.service")
+    _proc(tmp_path, 14, "idle", 0, "0::/")
+    _proc(tmp_path, 15, "kthreadd", None, "0::/")
+    (tmp_path / "self").mkdir()
+    ran = []
+
+    def runner(argv, timeout):
+        ran.append(argv)
+        return 0, f"{api} personalos-api-1\n"
+
+    monkeypatch.setattr(ops_runbook, "PROC", str(tmp_path))
+    out = executor.handle({"v": 1, "action": "swap_top", "params": {}, "reason": "swap 81 %"}, runner=runner)
+    assert out["ok"], out
+    assert ran == [["docker", "ps", "--no-trunc", "--format", "{{.ID}} {{.Names}}"]]
+    lines = out["output"].splitlines()
+    assert lines[:4] == ["9000 java bbbbbbbbbbbb", "4000 python personalos-api-1", "1000 uvicorn personalos-api-1",
+                         "500 sshd -"]
+    assert "5000 personalos-api-1" in lines and lines[-1] == "total 14500 kB swap in 4 processes"
+    assert not executor.handle({"v": 1, "action": "swap_top", "params": {"top": "99"}, "reason": "r"})["ok"]
+
+
 def test_the_executor_cuts_long_output_and_survives_a_crashing_runner(executor):
     def big(argv, timeout):
         return 0, "x" * (executor.MAX_OUTPUT * 2)

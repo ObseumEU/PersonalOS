@@ -118,6 +118,9 @@ def handle(request, runner=subprocess_runner, known_hosts_writer=write_known_hos
                     code, out = runner(argv, plan["timeout"])
             else:
                 code, out = runner(argv, plan["timeout"])
+            if "swap_top" in plan:  # argv only named the containers; the list comes from /proc
+                names = catalogue.container_names(out) if code == 0 else {}
+                code, out = 0, catalogue.swap_top(names=names, top=plan["swap_top"])
     except Refused as e:
         return {"ok": False, "exit_code": None, "error": f"refused: {e}", "output": ""}
     except Exception as e:  # noqa: BLE001 - one bad request never stops the executor
