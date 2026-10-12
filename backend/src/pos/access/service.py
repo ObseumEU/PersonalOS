@@ -932,7 +932,8 @@ def hold_looping_task(conn: sqlite3.Connection, agent_id: int, now: datetime | N
 def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float, lim: float,
               task_id: int | None = None) -> int:
     """A run was refused for the agent's own limit: one request per (agent, limit) a day. One still
-    open, or raised within LIMIT_HIT_DEDUP_H (decided or not), only counts the hit, noted in the audit
+    open, or raised within LIMIT_HIT_DEDUP_H for the same limit value (a raised limit hit again is
+    news), only counts the hit, noted in the audit
     at most once an hour; the Access manager is not woken again (prod 2026-10-03: T-517 reopened on
     every hit, 173 runs a day)."""
     store.ensure_schema(conn)
@@ -940,8 +941,9 @@ def limit_hit(conn: sqlite3.Connection, agent_id: int, metric: str, used_: float
     held = hold_looping_task(conn, agent_id, now)
     row = conn.execute(
         """SELECT id, detail FROM access_requests WHERE agent_id = ? AND metric = ? AND trigger = 'limit_hit'
-           AND (status = 'pending' OR created_at >= ?) ORDER BY id DESC LIMIT 1""",
-        (agent_id, metric, _iso(now - timedelta(hours=LIMIT_HIT_DEDUP_H)))).fetchone()
+           AND (status = 'pending' OR (created_at >= ? AND json_extract(detail, '$.limit') = ?))
+           ORDER BY id DESC LIMIT 1""",
+        (agent_id, metric, _iso(now - timedelta(hours=LIMIT_HIT_DEDUP_H)), lim)).fetchone()
     if row:
         detail = json.loads(row["detail"] or "{}")
         detail["repeats"] = int(detail.get("repeats", 0)) + 1

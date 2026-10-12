@@ -193,6 +193,10 @@ def test_repeated_limit_hits_within_a_day_make_one_request_and_never_reopen_the_
     assert audit("access_limit_hit") == 1 and audit("access_limit_hit_repeat") == 1  # noted once an hour
     # A different limit is its own key; a day later the same limit raises a new request.
     assert access.limit_hit(conn, agent, "usd_day", 5, 5) != first
+    # A raised limit hit again within the day is news for the Access manager: its own request.
+    raised = access.limit_hit(conn, agent, "runs_day", 6, 6)
+    assert raised != first and access.limit_hit(conn, agent, "runs_day", 6, 6) == raised
+    conn.execute("DELETE FROM access_requests WHERE id = ?", (raised,))
     conn.execute("UPDATE access_requests SET created_at = ? WHERE id = ?",
                  ((datetime.now(timezone.utc) - timedelta(hours=25)).isoformat(timespec="seconds"), first))
     assert access.limit_hit(conn, agent, "runs_day", 3, 3) != first
