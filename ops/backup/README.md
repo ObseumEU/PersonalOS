@@ -29,8 +29,8 @@ removed), `logs/`, `drill/`, `metrics/pos_backup.prom`.
 
 ## Off-host
 
-- **.186** (`agent@192.168.1.186:/srv/backups/svr03/`): `rsync -aH --delete` mirror of daily, weekly
-  and archive, with svr03's key `~/.ssh/pos_backup_ed25519`, restricted on .186 to
+- **.186** (`agent@192.168.1.186:/srv/backups/svr03/`): `rsync -aH --delete` mirror of weekly
+  and archive and of the newest 7 dailies (`KEEP_DAILY_186`, T-1056: .186's disk is small), with svr03's key `~/.ssh/pos_backup_ed25519`, restricted on .186 to
   `restrict,from="192.168.1.108",command="/usr/bin/rrsync /srv/backups/svr03"`. .186's SSD is worn,
   so it is not the only copy.
 - **Google Drive** of david.rosko@obseum.cz, folder **PersonalOS zálohy** (created by the

@@ -13,6 +13,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 STORE="${POS_BACKUP_STORE:-/opt/server/backups/personalos}"
 KEEP_DAILY="${KEEP_DAILY:-14}"
 KEEP_WEEKLY="${KEEP_WEEKLY:-8}"
+KEEP_DAILY_186="${KEEP_DAILY_186:-7}"   # .186's disk is small: it keeps only the newest 7 dailies (T-1056)
 REMOTE="${POS_BACKUP_REMOTE:-agent@192.168.1.186:}"   # rrsync-restricted to /srv/backups/svr03 on .186
 SSH_KEY="${POS_BACKUP_SSH_KEY:-$HOME/.ssh/pos_backup_ed25519}"
 PY_IMAGE="${PY_IMAGE:-python:3.12-slim}"
@@ -158,10 +159,15 @@ docker run --rm --cpus 0.5 -v personalos_pos-data:/data -v "$STORE/archive:/arch
   sh -c "python /b.py adhoc /data /archive/pos-data-adhoc && chown -R $(id -u):$(id -g) /archive"
 find "$STORE/archive" -name '*.db' -print0 | xargs -0 -r -n1 zstd -q -T1 -10 --rm
 
-# 8. Off-host: .186 (mirror of daily/weekly/archive; the key is restricted with rrsync on .186)
+# 8. Off-host: .186 (mirror of daily/weekly/archive; the key is restricted with rrsync on .186).
+# Dailies past the newest KEEP_DAILY_186 are excluded, and --delete-excluded removes them on .186.
 trap - ERR
 rc=0
-"${NICE[@]}" rsync -aH --delete --partial -e "ssh -i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=20" \
+OLD_186=()
+while IFS= read -r d; do OLD_186+=(--exclude "/daily/$(basename "$d")/"); done \
+  < <({ ls -1d "$STORE"/daily/*/ 2>/dev/null || true; } | sort -r | tail -n +$((KEEP_DAILY_186 + 1)))
+"${NICE[@]}" rsync -aH --delete --delete-excluded --partial "${OLD_186[@]}" \
+  -e "ssh -i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=20" \
   "$STORE/daily" "$STORE/weekly" "$STORE/archive" "$REMOTE" || rc=$?
 if [ $rc = 0 ]; then
   log "copied to .186"; metric pos_backup_last_success_timestamp_seconds "$(date +%s)" 'target="agent186"'

@@ -1010,12 +1010,19 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     author = author_row["name"]
     where = f"DM with {author}" if ch["kind"] == "dm" else f"#{ch['name']}"
     title = f"Chat: answer {author} ({where})"
-    open_ = conn.execute("""SELECT id FROM tasks WHERE title = ? AND assignee_id = ? AND archived_at IS NULL
-                            AND status IN ('inbox', 'next', 'working')""", (title, aid)).fetchone()
+    open_ = conn.execute("""SELECT id, status, retry_after FROM tasks WHERE title = ? AND assignee_id = ?
+                            AND archived_at IS NULL AND status IN ('inbox', 'next', 'working')""",
+                         (title, aid)).fetchone()
     from .guard.external import wrap_external
 
     said = wrap_external(f"chat:{author}", body, ref=f"message {message_id}")
     if open_:
+        # A new message is new work: a hold (a failed run's 24 h back-off) or an `inbox` status kept the task
+        # out of /api/worker/next, and the message waited in it unseen (T-834: the owner's message 2124 to the
+        # CEO, whose worker polled for two minutes and found nothing).
+        if open_["retry_after"] or open_["status"] == "inbox":
+            changes = {"retry_after": None} | ({"status": "next"} if open_["status"] == "inbox" else {})
+            versioning.update(conn, ctx, tasks.ENTITY, open_["id"], changes, action="resume")
         comments.log(conn, ctx, open_["id"], f"{author} added (message {message_id}): {body[:1500]}", "comment")
         audit.log(conn, ctx, "chat_task", "task", open_["id"], channel=ch["id"], message=message_id)
         # Stays unread: the task's notes carry only the first message, so the run takes this
