@@ -212,8 +212,18 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
                  (t["id"], ha, now_iso()))
     out = tasks.complete(conn, w, t["id"], "Objednávka čeká na schválení.\nOvěřeno: košík zkontrolován")
     assert out["status"] == "review"
-    # A small verified task without code or outbound: accepted.
+    # A small verified task without code or outbound: a newcomer's goes to its lead (CTO, T-472)...
     t = _task(conn, Ctx(cto), ha, title="Přejmenovat entitu", estimate_min=15)
+    out = tasks.complete(conn, w, t["id"], "Přejmenováno.\nOvěřeno: entita v HA má nový název")
+    assert out["status"] == "review" and out["reviewer_id"] == cto
+    # ...an experienced agent's is accepted.
+    now = now_iso()
+    for i in range(review_policy.EXPERIENCED_ACCEPTED):
+        conn.execute("INSERT INTO tasks (title, status, assignee_type, assignee_id, completed_at, created_at, "
+                     "updated_at, visibility, owner_id) VALUES (?, 'done', 'agent', ?, ?, ?, ?, 'team', ?)",
+                     (f"hotovo {i}", ha, now, now, now, actors.owner_id(conn)))
+    conn.commit()
+    t = _task(conn, Ctx(cto), ha, title="Přejmenovat další entitu", estimate_min=15)
     assert tasks.complete(conn, w, t["id"], "Přejmenováno.\nOvěřeno: entita v HA má nový název")["status"] == "done"
     # An explicit reviewer other than the owner stays.
     t = _task(conn, owner, ha, title="Nastavit automatizaci", source="event:gmail")
@@ -223,9 +233,9 @@ def test_routine_work_is_accepted_the_team_lead_reviews_and_the_ceo_only_judgmen
     # The measurement over today: the routine no longer reaches the CEO.
     today = datetime.now(timezone.utc).date().isoformat()
     m = review_policy.measure(conn, today, today)
-    assert m["handed_in"] == 13, m  # with the routine check that showed no evidence
+    assert m["handed_in"] == 14, m["after"]  # with the routine check that showed no evidence
     # The head's work goes to a general reviewer now (pos.review_policy.ceo_offload): "other".
-    assert m["after"] == {"auto_accept": 4, "qa": 1, "team_lead": 4, "ceo": 2, "owner": 0, "other": 2}, m
+    assert m["after"] == {"auto_accept": 5, "qa": 1, "team_lead": 4, "ceo": 2, "owner": 0, "other": 2}, m
     assert m["after"]["ceo"] == m["ceo_before"] == 2  # the plan, the invoice
 
 
