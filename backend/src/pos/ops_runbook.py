@@ -5,8 +5,9 @@ and ops work stalled for days. `ops_runbook(action, params, reason)` runs one ac
 fixed catalogue through a small host-side executor (ops/runbook, a user systemd service of
 drosko on svr03 listening on a unix socket bind-mounted into the API container):
 
-- read-only diagnostics: docker_ps, docker_stats, docker_logs, df, free, uptime,
-  systemctl_user_status, journalctl_tail;
+- read-only diagnostics: docker_ps, docker_stats, docker_logs, df, free, uptime, swap_top
+  (VmSwap per process and container, read from /proc by the executor), systemctl_user_status,
+  journalctl_tail;
 - safe actions: compose_up (our stacks' app services, never a database), restart (an
   allowlist of containers), backup_run (ops/backup/backup.sh as a transient user unit),
   towerdog_stop / towerdog_start (Nexus' towerdog), refresh_known_hosts (writes the GitHub
@@ -150,6 +151,10 @@ def known_hosts_text() -> str:
 
 # ------------------------------------------------------------------ the catalogue
 
+SWAP_TOP = 15
+PROC = "/proc"
+_DOCKER_CGROUP = re.compile(r"docker[-/]([0-9a-f]{12,64})")
+
 # A parameter: (type, allowed or (lo, hi), default; None = required).
 ACTIONS = {
     "docker_ps": {"kind": "read", "params": {}, "doc": "docker ps -a (names, images, status)"},
@@ -160,6 +165,9 @@ ACTIONS = {
     "df": {"kind": "read", "params": {}, "doc": "df -h"},
     "free": {"kind": "read", "params": {}, "doc": "free -m"},
     "uptime": {"kind": "read", "params": {}, "doc": "uptime"},
+    "swap_top": {"kind": "read", "params": {},
+                 "doc": f"the {SWAP_TOP} processes with the most swap (VmSwap from /proc, 'kB process container'), "
+                        "then swap per container"},
     "systemctl_user_status": {"kind": "read", "params": {"unit": ("choice", frozenset(UNITS), None)},
                               "doc": "systemctl [--user] status <unit> --no-pager"},
     "journalctl_tail": {"kind": "read", "params": {
@@ -273,6 +281,9 @@ def plan(action: str, p: dict) -> dict:
         return {"argv": ["free", "-m"], "timeout": 15}
     if action == "uptime":
         return {"argv": ["uptime"], "timeout": 15}
+    if action == "swap_top":  # docker ps only names the containers; the executor reads /proc itself
+        return {"argv": ["docker", "ps", "--no-trunc", "--format", "{{.ID}} {{.Names}}"], "timeout": 30,
+                "swap_top": SWAP_TOP}
     if action == "systemctl_user_status":
         return {"argv": _unit_argv(p["unit"], "systemctl", "status", "--no-pager", "--lines=20", p["unit"]),
                 "timeout": 15}
@@ -312,6 +323,49 @@ def run_in_api(conn, action: str) -> dict:
         conn.rollback()
         return {"ok": False, "exit_code": 1, "output": "", "error": f"{type(e).__name__}: {str(e)[:300]}"}
     return {"ok": True, "exit_code": 0, "output": json.dumps(result, ensure_ascii=False, indent=1)}
+
+
+def container_names(docker_ps: str) -> dict:
+    """{short id: name} from `docker ps --format '{{.ID}} {{.Names}}'`."""
+    out = {}
+    for line in docker_ps.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            out[parts[0][:12]] = parts[1]
+    return out
+
+
+def swap_top(names: dict | None = None, top: int = SWAP_TOP) -> str:
+    """swap_top (T-1062): who holds the swap. VmSwap of every process from /proc/<pid>/status,
+    its container from /proc/<pid>/cgroup (named when docker ps knew it, '-' for the host);
+    "kB process container" lines biggest first, then the total per container."""
+    names, proc = names or {}, PROC
+    rows = []
+    for pid in os.listdir(proc):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, pid, "status")) as f:
+                status = f.read()
+            with open(os.path.join(proc, pid, "cgroup")) as f:
+                cgroup = f.read()
+        except OSError:  # the process ended meanwhile
+            continue
+        kb = re.search(r"^VmSwap:\s*(\d+)", status, re.M)
+        if not kb or int(kb.group(1)) <= 0:
+            continue
+        comm = re.search(r"^Name:\s*(\S+)", status, re.M)
+        cid = _DOCKER_CGROUP.search(cgroup)
+        cid = cid.group(1)[:12] if cid else "-"
+        rows.append((int(kb.group(1)), comm.group(1) if comm else "?", names.get(cid, cid)))
+    rows.sort(key=lambda r: -r[0])
+    per = {}
+    for kb, _, where in rows:
+        per[where] = per.get(where, 0) + kb
+    lines = [f"{kb} {comm} {where}" for kb, comm, where in rows[:top]]
+    lines += ["", "per container (kB):"] + [f"{kb} {w}" for w, kb in sorted(per.items(), key=lambda x: -x[1])]
+    lines.append(f"total {sum(per.values())} kB swap in {len(rows)} processes")
+    return "\n".join(lines) + "\n"
 
 
 def catalogue() -> list[dict]:
