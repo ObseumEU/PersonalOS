@@ -10,9 +10,9 @@ waiting for the CEO. Most of them did not need a person at all. Every hand-in no
   - a document or note (a digest, summary, standup, report, minutes, research) that asks nobody
     for a decision;
   - an incoming item (an `event:` task: a mail) triaged with nothing to act on and nothing sent;
-  - a small task (estimate ≤ 60 min, or sized S by the triage) with a verification line, no code
-    and nothing sent outside; or a small one by an experienced agent (≥ 10 results accepted in
-    60 days, ≤ 15 % returned) whose tests passed.
+  - a small task (estimate ≤ 60 min, or sized S by the triage) by an experienced agent (≥ 10
+    results accepted in 60 days, ≤ 15 % returned) with a verification line and either no code
+    and nothing sent outside, or tests that passed. A newcomer's small task goes to its lead.
 - **code**: a code change goes to the **QA Reviewer** (the default reviewer for code), unless it did
   the work itself. Kniha work (project, team or topic kniha) goes to the **Kniha Lead** instead: QA
   cannot see that repository (T-731); the Kniha Lead's own code goes to QA, never to itself.
@@ -288,8 +288,10 @@ def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
         if is_triage(row) and summary and shown and not code and schedules.all_green(note) \
                 and not DECISION_RE.search(note or ""):
             return Decision("low", "accept", reason="an incoming item triaged, nothing to act on, nothing sent")
-        if verified and not code and is_small(conn, row):
-            return Decision("low", "accept", reason="a small verified task, no code, nothing sent")
+        if verified and not code and is_small(conn, row) and experienced(conn, row["assignee_id"]):
+            # Only an experienced agent's word is enough (CTO, T-472); a newcomer's goes to its lead.
+            return Decision("low", "accept", reason="a small verified task by an experienced agent, no code, "
+                                                    "nothing sent")
         if verified and verification.tests_passed(note) and is_small(conn, row) \
                 and experienced(conn, row["assignee_id"]):
             return Decision("low", "accept", reason="a small task by an experienced agent, tests passing")

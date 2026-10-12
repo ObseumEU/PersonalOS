@@ -229,7 +229,13 @@ def test_a_done_claim_without_evidence_is_sent_back_and_never_auto_accepted(env)
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (out["id"],)).fetchone()
     assert evidence.flagged(conn, out["id"]) and review_policy.decide(conn, row, note).action != "accept"
     assert evidence.nudges(conn, env["agent"])
-    # The same small result with its test output is accepted at once.
+    # The same small result with its test output is accepted at once (by an experienced agent).
+    for i in range(review_policy.EXPERIENCED_ACCEPTED):
+        conn.execute("INSERT INTO tasks (title, status, assignee_type, assignee_id, completed_at, created_at, "
+                     "updated_at, visibility, owner_id) VALUES (?, 'done', 'agent', ?, datetime('now'), "
+                     "datetime('now'), datetime('now'), 'team', ?)", (f"hotovo {i}", env["agent"],
+                                                                       actors.owner_id(conn)))
+    conn.commit()
     out = _hand_in(env, "Hotovo, testy prošly: 12 passed.\nOvěřeno: 12 passed.", estimate_min=30)
     assert out["status"] == "done" and "platform_note" not in out
 
