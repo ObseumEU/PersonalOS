@@ -248,8 +248,14 @@ def dm_channel(conn: sqlite3.Connection, a: int, b: int, ctx: Ctx | None = None)
     if row:
         return row
     ctx = ctx or Ctx(a)
-    ch = versioning.insert(conn, ctx, "channel", {"kind": "dm", "visibility": "private", "dm_key": key,
-                                                  "created_by": ctx.actor_id, "created_at": now_iso()})
+    try:
+        ch = versioning.insert(conn, ctx, "channel", {"kind": "dm", "visibility": "private", "dm_key": key,
+                                                      "created_by": ctx.actor_id, "created_at": now_iso()})
+    except sqlite3.IntegrityError:  # created by a parallel first message between the read and the insert
+        row = find_dm(conn, a, b)
+        if row is None:
+            raise
+        return row
     _add_member(conn, ch["id"], a)
     _add_member(conn, ch["id"], b)
     return _channel(conn, ch["id"])
@@ -569,11 +575,13 @@ def channel_lead(conn: sqlite3.Connection, ch: sqlite3.Row) -> int | None:
         p = None
     if p and p["lead_id"]:
         lead = actors.get(conn, p["lead_id"])
-        if lead["kind"] != "human" and not lead["archived_at"]:
+        if lead["kind"] != "human" and not lead["archived_at"] and not lead["paused_at"]:
             return lead["id"]
+    # A paused lead answers nobody: the CEO takes it (prod 2026-10-13, #kniha led by the paused Kniha Developer).
     team = conn.execute(_agents_sql() + " AND lower(COALESCE(team, '')) = ? ORDER BY id", (name,)).fetchall()
     ids = {r["id"] for r in team}
-    top = [r["id"] for r in team if r["reports_to"] not in ids]
+    paused = {r[0] for r in conn.execute("SELECT id FROM actors WHERE paused_at IS NOT NULL")}
+    top = [r["id"] for r in team if r["reports_to"] not in ids and r["id"] not in paused]
     if top:
         return top[0]
     return role_member(conn, "ceo")
@@ -587,11 +595,13 @@ def _route_unaddressed(conn: sqlite3.Connection, ch: sqlite3.Row,
     if parent is not None:
         root = parent["reply_to"] or parent["id"]
         author = actors.get(conn, parent["author_id"])
-        if author["kind"] != "human" and not author["archived_at"] and author["runtime"] != "service":
+        if (author["kind"] != "human" and not author["archived_at"] and not author["paused_at"]
+                and author["runtime"] != "service"):
             return author["id"], "reply"
         row = conn.execute("""SELECT m.author_id FROM chat_messages m JOIN actors a ON a.id = m.author_id
                               WHERE m.channel_id = ? AND (m.id = ? OR m.reply_to = ?) AND a.kind != 'human'
-                              AND a.runtime != 'service' AND a.archived_at IS NULL AND m.archived_at IS NULL
+                              AND a.runtime != 'service' AND a.archived_at IS NULL AND a.paused_at IS NULL
+                              AND m.archived_at IS NULL
                               ORDER BY m.id DESC LIMIT 1""", (ch["id"], root, root)).fetchone()
         if row:
             return row["author_id"], "reply"
@@ -874,6 +884,9 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
               **({"meeting": meeting["id"]} if meeting is not None else {}),
               **({"rerouted_from": rerouted["channel"]} if rerouted else {}),
               **({"merged_from": merged_from} if merged_from else {}))
+    from . import answer_status
+
+    answer_status.invalidate()  # the line under the owner's message follows at once (no 3 s cache)
 
     platform_note = None
     if not system and author["kind"] != "human":
@@ -996,6 +1009,9 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     author_row = actors.get(conn, ctx.actor_id)
     to_owner = bool(author_row["is_owner"]) and priority is None
     if not (agents_code.answers_chat(target["name"]) or to_owner):
+        return
+    if target["paused_at"] and to_owner:  # its task would never run: the CEO answers instead, now
+        availability.forward_unserved(conn, ctx, ch, target, message_id, body, why="je pozastavený")
         return
     path = workers.reply_path(conn, target)
     if path is None:  # a service, or an agent without a worker: never silent (pos.availability)
@@ -1165,13 +1181,23 @@ def _message_row(conn: sqlite3.Connection, message_id: int) -> sqlite3.Row:
     return row
 
 
+AGENT_EDIT_HOURS = 24  # an agent fixes its own message within this window (chat_edit), not with a second one
+
+
 def edit(conn: sqlite3.Connection, ctx: Ctx, message_id: int, body: str) -> dict:
-    """Authors edit their own messages; every version stays in the history."""
+    """Authors edit their own messages (an agent within AGENT_EDIT_HOURS); every version stays in the history,
+    the audit log has the edit and readers see "upraveno" (edited_at)."""
     row = _message_row(conn, message_id)
     if row["author_id"] != ctx.actor_id:
         raise Forbidden("only the author edits a message")
     if row["archived_at"]:
         raise ChatError("this message is archived")
+    author = actors.get(conn, ctx.actor_id)
+    if author["kind"] != "human":
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(row["created_at"])
+        if age > timedelta(hours=AGENT_EDIT_HOURS):
+            raise ChatError(f"messages older than {AGENT_EDIT_HOURS} h are not edited; post a short correction "
+                            f"that quotes it instead")
     body = (body or "").strip()
     if not body or len(body) > MAX_BODY:
         raise ChatError("empty or too long")
@@ -1199,16 +1225,15 @@ def react(conn: sqlite3.Connection, ctx: Ctx, message_id: int, emoji: str) -> di
     row = _message_row(conn, message_id)
     _check_read(conn, _channel(conn, row["channel_id"]), ctx.actor_id)
     _require_send(conn, ctx)
-    cur = conn.execute("SELECT archived_at FROM chat_reactions WHERE message_id = ? AND actor_id = ? AND emoji = ?",
-                       (message_id, ctx.actor_id, emoji)).fetchone()
-    if cur is None:
-        conn.execute("INSERT INTO chat_reactions (message_id, actor_id, emoji, created_at) VALUES (?, ?, ?, ?)",
-                     (message_id, ctx.actor_id, emoji, now_iso()))
-        on = True
-    else:
-        on = cur["archived_at"] is not None
-        conn.execute("UPDATE chat_reactions SET archived_at = ? WHERE message_id = ? AND actor_id = ? AND emoji = ?",
-                     (None if on else now_iso(), message_id, ctx.actor_id, emoji))
+    # One statement (a read-then-insert raced into "UNIQUE constraint failed" on a double tap): a new reaction is
+    # inserted, an existing one toggles. The read after it is inside the write transaction it opened.
+    now = now_iso()
+    conn.execute("""INSERT INTO chat_reactions (message_id, actor_id, emoji, created_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT (message_id, actor_id, emoji) DO UPDATE
+                    SET archived_at = CASE WHEN archived_at IS NULL THEN ? ELSE NULL END""",
+                 (message_id, ctx.actor_id, emoji, now, now))
+    on = conn.execute("SELECT archived_at IS NULL AS on_ FROM chat_reactions WHERE message_id = ? AND actor_id = ? "
+                      "AND emoji = ?", (message_id, ctx.actor_id, emoji)).fetchone()["on_"] == 1
     audit.log(conn, ctx, "chat_react", "chat_message", message_id, emoji=emoji, on=on)
     conn.commit()
     return message_view(conn, message_id, ctx.actor_id)
@@ -1748,7 +1773,8 @@ AGENT_TYPING_S = 30
 TYPING_S = HUMAN_TYPING_S  # kept for older callers
 _typing: dict[int, dict[int, dict]] = {}  # channel -> actor -> entry
 _typing_lock = threading.Lock()
-_CHAT_ORIGIN = re.compile(r"Source: chat channel (\d+) \(.*?\), message (\d+)\.")
+# "(DM with Owner)" is there for an agent's own answer, not for one forwarded to the CEO (availability.forward_unserved)
+_CHAT_ORIGIN = re.compile(r"Source: chat channel (\d+)(?: \(.*?\))?, message (\d+)\.")
 
 
 def _thread_of(conn: sqlite3.Connection, message_id: int | None) -> int | None:
@@ -1853,6 +1879,22 @@ def typing_view(conn: sqlite3.Connection, viewer: int, channel_id: int | None = 
     return out
 
 
+def presence_view(conn: sqlite3.Connection, viewer: int, cached: bool = True) -> dict:
+    """What the chat shows besides messages: agents with a live run, who is typing (an agent whose answer to the
+    owner is queued, held or being worked on counts: pos.answer_status), and where each answer stands."""
+    from . import answer_status
+
+    try:
+        answers = answer_status.view(conn, viewer, cached)
+    except Exception:  # noqa: BLE001 - the indicator never takes the stream down
+        import logging
+
+        logging.getLogger(__name__).exception("answer status failed")
+        answers = {}
+    typing_ = answer_status.merge_typing(typing_view(conn, viewer), answer_status.typing_entries(conn, answers, viewer))
+    return {"working": working_ids(conn), "typing": typing_, "answers": answers}
+
+
 def chat_origin(conn: sqlite3.Connection, task_id: int) -> tuple[int, int] | None:
     """(channel id, message id) when the task is a chat answer (`_ask_to_answer`)."""
     row = conn.execute("SELECT notes FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1927,15 +1969,20 @@ async def stream(db_path: Path, viewer: int, cursor: int | None = None, *, poll:
     start = time.monotonic()
     last_presence, last_ping = None, start
     yield "retry: 3000\n\n"
-    while True:
+
+    def read(cur):
         conn = connect(db_path)
         try:
-            if cursor is None:
-                cursor = cursor_now(conn)
-            events, cursor = changes(conn, viewer, cursor)
-            presence = {"working": working_ids(conn), "typing": typing_view(conn, viewer)}
+            if cur is None:
+                cur = cursor_now(conn)
+            evs, cur = changes(conn, viewer, cur)
+            return evs, cur, presence_view(conn, viewer)
         finally:
             conn.close()
+
+    while True:
+        # on a worker thread: a slow or locked database never stalls the event loop (every open tab polls)
+        events, cursor, presence = await asyncio.to_thread(read, cursor)
         for ev in events:
             yield _sse(ev["type"], ev, ev["id"])
         if presence != last_presence:

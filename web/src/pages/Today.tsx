@@ -5,7 +5,7 @@ import NeedsInbox from "../components/NeedsInbox";
 import QuickAnswer from "../components/QuickAnswer";
 import { AssigneeChip } from "../components/tasks/bits";
 import Timeline from "../components/Timeline";
-import { PageHeader, Panel } from "../components/ui";
+import { LoadError, PageHeader, Panel } from "../components/ui";
 import { type FileItem, filesApi, fmtDate } from "../filesApi";
 import { LOCALE, t } from "../i18n";
 import { type Counts, type Task, dueLabel, tasksApi } from "../tasksApi";
@@ -25,8 +25,13 @@ export default function Today() {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [agenda, setAgenda] = useState<Agenda | null>(null);
   const [recent, setRecent] = useState<FileItem[] | null>(null);
+  // Today's tasks could not load: say so with "Zkusit znovu" (an empty list would read "nothing planned").
+  const [tasksError, setTasksError] = useState<string | null>(null);
   const refresh = () => {
-    tasksApi.list("today", undefined, "mine").then(setTasks, () => setTasks([]));
+    tasksApi.list("today", undefined, "mine").then(
+      (x) => (setTasks(x), setTasksError(null)),
+      (e) => setTasksError(e instanceof Error ? e.message : String(e)),
+    );
     const d = new Date();
     agendaApi(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`, 1).then(setAgenda, () => setAgenda(null));
     tasksApi.counts().then(setCounts, () => undefined);
@@ -54,6 +59,7 @@ export default function Today() {
             }
             bodyClassName="overflow-y-auto"
           >
+            {!tasks && tasksError && <LoadError error={tasksError} onRetry={refresh} />}
             {tasks?.length === 0 && (
               <p className="px-4 py-5 text-sm text-ink-2">
                 {t("home.nothing_today")}{" "}

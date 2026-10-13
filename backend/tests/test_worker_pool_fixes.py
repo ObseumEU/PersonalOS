@@ -111,6 +111,40 @@ def test_a_blocked_worker_gives_its_slot_back_for_a_while(tmp_path):
     assert "a" in pool.tick()["started"]
 
 
+def test_a_refused_run_waits_until_the_refusals_reset_not_five_minutes(tmp_path):
+    """prod 2026-10-08..11: "claude usage limit until 2026-10-11T13:00" lasted 3 days; the 5-min retry started
+    ~13,500 workers, all refused (409). The pool now waits for the refusal's "until" (a cap at most 30 min, the
+    owner may raise it; an engine's usage limit up to 6 h)."""
+    now = 1_790_000_000.0
+    from datetime import datetime, timezone
+
+    def iso(t):
+        return datetime.fromtimestamp(t, timezone.utc).isoformat(timespec="seconds")
+
+    usage = f"no runtime available: claude usage limit until {iso(now + 3 * 86400)}"
+    assert wpool.blocked_wait(usage, now) == wpool.BLOCKED_USAGE_MAX_S
+    assert wpool.blocked_wait(f"claude usage limit until {iso(now + 3600)}", now) == 3600
+    cap = f"company cap USD / 24 h reached ($50.31 of $50.00); new runs wait until {iso(now + 7200)} (…)"
+    assert wpool.blocked_wait(cap, now) == wpool.BLOCKED_CAP_MAX_S
+    assert wpool.blocked_wait(f"usage limit until {iso(now - 60)}", now) == wpool.BLOCKED_BACKOFF_S  # past: retry
+    assert wpool.blocked_wait("over budget", now) == wpool.BLOCKED_BACKOFF_S
+
+    _keys(tmp_path, "a")
+    clock = [0.0]
+    pool = wpool.Pool(tmp_path, tmp_path / "work", spawn=lambda s, k: Proc(), lazy=True, max_running=1,
+                      probe=lambda s, k: True, clock=lambda: clock[0])
+    assert pool.tick()["started"] == ["a"]
+    (tmp_path / "work" / "a").mkdir(parents=True, exist_ok=True)
+    wpool.write_blocked(tmp_path / "work" / "a", f"claude usage limit until {iso(__import__('time').time() + 7200)}")
+    pool.children["a"][0].returncode = wpool.BLOCKED_EXIT
+    pool.tick()
+    assert not (tmp_path / "work" / "a" / wpool.BLOCKED_FILE).exists()
+    clock[0] += wpool.BLOCKED_BACKOFF_S + 1
+    assert pool.tick()["started"] == []                                # still within the usage limit
+    clock[0] += 7200
+    assert pool.tick()["started"] == ["a"]
+
+
 def test_a_refused_run_ends_the_pool_worker_instead_of_holding_the_slot():
     class Client:
         def me(self):

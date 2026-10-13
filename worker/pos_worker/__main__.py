@@ -316,13 +316,17 @@ def main() -> None:
     def check(me: dict, task: dict) -> dict | None:
         return triage.check(me, task) if triage.enabled_for(task) else None
 
-    ended = Worker(client, new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
-                   max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0),
-                   tools_dir=str(tool_library.tools_root(workdir)), triage=check,
-                   exit_idle_s=float(os.environ.get("WORKER_EXIT_IDLE_S") or 0)).run_forever()
+    worker = Worker(client, new_session, poll_wait=int(os.environ.get("WORKER_POLL", "60")),
+                    max_steps=int(os.environ.get("WORKER_MAX_STEPS") or 0),
+                    tools_dir=str(tool_library.tools_root(workdir)), triage=check,
+                    exit_idle_s=float(os.environ.get("WORKER_EXIT_IDLE_S") or 0))
+    ended = worker.run_forever()
     if ended == "blocked":  # its run was refused: the pool gives the slot to another agent for a while
-        from .pool import BLOCKED_EXIT
+        from pathlib import Path
 
+        from .pool import BLOCKED_EXIT, write_blocked
+
+        write_blocked(Path(workdir), getattr(worker, "blocked_reason", ""))
         sys.exit(BLOCKED_EXIT)
 
 

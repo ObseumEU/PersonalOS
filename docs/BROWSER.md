@@ -108,7 +108,10 @@ browser is the pool's isolated headless Chromium as before.
 page (a developer portal's client id or secret) goes from the guard straight into PersonalOS
 (`/api/worker/browser/capture`, known targets on their own HTTPS host only, for the agent's running run),
 encrypted; the model never sees it and it is redacted from later reads. Targets: `linkedin.client_id`,
-`linkedin.client_secret` (pos.outbound_linkedin.CAPTURE_TARGETS).
+`linkedin.client_secret` (pos.outbound_linkedin.CAPTURE_TARGETS), and `secret`: any HTTPS page (plain HTTP on
+the LAN), the value waits encrypted for 30 minutes for that agent and the answer is a `capture_id` for
+`secret_create(fields={"<field>": {"source": "capture_browser", "capture_id": ...}})` (docs/CREDENTIALS.md,
+"Agent secrets").
 
 ## Kept logins (`browser:profile`)
 

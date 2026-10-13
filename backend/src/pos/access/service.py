@@ -1566,7 +1566,10 @@ def digest(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     settings_store.put(conn, Ctx(owner, via="system"), "access.digest_at", _iso(now))
     day = spend(conn, None, now - timedelta(days=1), now + timedelta(seconds=1))
     month = spend(conn, None, _month_start(now), now + timedelta(seconds=1))
-    if not rows and not day["usd"] and not day["tokens"]:
+    from ..credentials import secrets
+
+    shared = secrets.digest_lines(conn, since)  # agents' secrets shared across teams (pos.credentials.secrets)
+    if not rows and not shared and not day["usd"] and not day["tokens"]:
         conn.commit()
         return {"sent": False}
     counts: dict[str, int] = {}
@@ -1588,6 +1591,7 @@ def digest(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
 
     summary = " · ".join(f"{k[7:]} {v}" for k, v in counts.items()) or "žádné změny"
     body = "\n".join([f"**Přístupy za poslední den** — {summary}", *lines, "",
+                      *([f"**Tajemství sdílená mezi týmy** ({len(shared)})", *shared, ""] if shared else []),
                       f"**Útrata**: 24 h {vs('usd_day', day['usd'])}, {vs('tokens_day', day['tokens'])}; "
                       f"měsíc {vs('usd_month', month['usd'])}."])
     _dm_owner(conn, body)

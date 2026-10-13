@@ -428,10 +428,13 @@ def upsert(conn: sqlite3.Connection, ctx: Ctx, project, key: str, fields: dict) 
         vals = {"project_id": p["id"], "key": key, "status": "unverified", "access": "public", "aliases": "[]",
                 "created_by": ctx.actor_id, "created_at": now, "updated_at": now, **fields}
         cols = ", ".join(vals)
-        conn.execute(f"INSERT INTO reality_capabilities ({cols}) VALUES ({', '.join('?' * len(vals))})",
-                     list(vals.values()))
-        audit.log(conn, ctx, "reality_add", "project", p["id"], key=key, status=vals["status"], url=vals.get("url"))
-    else:
+        if conn.execute(f"INSERT INTO reality_capabilities ({cols}) VALUES ({', '.join('?' * len(vals))}) "
+                        "ON CONFLICT (project_id, key) DO NOTHING", list(vals.values())).rowcount:
+            audit.log(conn, ctx, "reality_add", "project", p["id"], key=key, status=vals["status"], url=vals.get("url"))
+        else:  # added by a concurrent call since the read: this one changes it
+            prev = conn.execute("SELECT * FROM reality_capabilities WHERE project_id = ? AND key = ?",
+                                (p["id"], key)).fetchone()
+    if prev is not None:
         changes = dict(fields)
         reset = prev["status"] == "live" and any(
             k in changes and changes[k] != prev[k] for k in ("url", "access", "probe_url", "probe_expect"))
@@ -1078,12 +1081,12 @@ def seed_kniha(conn: sqlite3.Connection) -> int:
                               expect, notes, cred, extra.get("deploy_ref"), now, prev["id"]))
                 moved.append(key)
             continue
-        conn.execute("""INSERT INTO reality_capabilities (project_id, key, name, kind, position, status, url, access,
-                        aliases, probe_mode, probe_url, probe_expect, notes, probe_credential, deploy_ref, created_at,
-                        updated_at) VALUES (?, ?, ?, 'journey_step', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                     (p["id"], key, name, pos, status, url, access, json.dumps(aliases, ensure_ascii=False), mode,
-                      probe_url, expect, notes, cred, extra.get("deploy_ref"), now, now))
-        n += 1
+        n += conn.execute("""INSERT INTO reality_capabilities (project_id, key, name, kind, position, status, url,
+                             access, aliases, probe_mode, probe_url, probe_expect, notes, probe_credential, deploy_ref,
+                             created_at, updated_at) VALUES (?, ?, ?, 'journey_step', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             ON CONFLICT (project_id, key) DO NOTHING""",
+                          (p["id"], key, name, pos, status, url, access, json.dumps(aliases, ensure_ascii=False), mode,
+                           probe_url, expect, notes, cred, extra.get("deploy_ref"), now, now)).rowcount
     if n or moved:
         audit.log(conn, _system(conn), "reality_seed", "project", p["id"], added=n, **({"moved": moved} if moved else {}))
     return n + len(moved)

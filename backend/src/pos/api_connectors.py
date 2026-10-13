@@ -5,6 +5,7 @@ import hmac
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .config import Settings, get_settings
@@ -204,10 +205,16 @@ async def github_webhook(request: Request, conn=Depends(get_db)):
         raise HTTPException(401, "bad signature")
     kind = request.headers.get("x-github-event", "")
     payload = await request.json()
-    ctx = Ctx(actors.owner_id(conn), via="webhook")
-    results = [routing.ingest(conn, ctx, ev) for ev in routing.github_events(kind, payload)]
-    conn.commit()
-    return {"events": results}
+
+    def ingest():  # on a worker thread: never write the database on the event loop
+        ctx = Ctx(actors.owner_id(conn), via="webhook")
+        results = [routing.ingest(conn, ctx, ev) for ev in routing.github_events(kind, payload)]
+        conn.commit()
+        return {"events": results}
+
+    from starlette.concurrency import run_in_threadpool
+
+    return await run_in_threadpool(ingest)
 
 
 @hooks.post("/grafana")
@@ -416,6 +423,23 @@ def sentinel_heartbeat(body: dict, conn=Depends(get_db), _=Depends(sentinel_only
     from . import monitor
 
     return monitor.heartbeat(conn, body)
+
+
+@sentinel.post("/alert")
+def sentinel_alert(body: dict, settings: Settings = Depends(get_settings), _=Depends(sentinel_only)):
+    """PersonalOS itself is degraded (the sentinel's deep-health watch): the owner at once (push, else e-mail),
+    the SRE's task, the audit (pos.platform_alert). Its own connection with a short lock wait, not get_db."""
+    from . import platform_alert
+    from .db import connect
+
+    conn = connect(settings.db_path, busy_timeout_ms=platform_alert.BUSY_MS)
+    try:
+        out, code = platform_alert.handle(conn, settings, body)
+    except platform_alert.AlertError as e:
+        raise HTTPException(422, str(e)) from e
+    finally:
+        conn.close()
+    return JSONResponse(out, status_code=code)
 
 
 @sentinel.get("/stats")

@@ -270,6 +270,7 @@ class Worker:
                 log.info("%s already has a live run; skipping it", ref)
                 return "skipped"
             log.info("run for %s blocked: %s", ref, e)
+            self.blocked_reason = str(e)  # the pool waits until the refusal's "until" (pos_worker.pool.blocked_wait)
             if not self.exit_idle_s:  # the pool's worker ends at once instead (run_forever)
                 self.sleep(min(self.poll_wait, 30))
             return "blocked"

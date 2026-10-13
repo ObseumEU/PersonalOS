@@ -5,6 +5,7 @@ Waiting for work is a long poll: the worker sleeps on the server side, so an
 idle agent never spends tokens (AGENTS-SPEC 4.2).
 """
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -36,8 +37,13 @@ def worker_ctx(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> 
     # Every worker call (the alive tick every 10 s, heartbeats, polls) would be a write; the
     # "seen" time moves at most every SEEN_WRITE_S (pos.workers reads it at a 5-min scale).
     if (row["last_seen_at"] or "") < _seen_cutoff():
-        conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
-        conn.commit()
+        # Best effort: "seen" never fails the call it rides on (prod 2026-10-13: /api/worker/next, /alive and the
+        # handoff poll answered 500 "database is locked" from this UPDATE).
+        try:
+            conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.rollback()
     return Ctx(actor_id, via="worker")
 
 
@@ -302,6 +308,14 @@ def _reserve_admits(conn: sqlite3.Connection, cand, st: dict) -> bool:
 POLL_FALLBACK_S = 2.0  # re-check the database this often even without a wake (other processes)
 
 
+def _poll_once(db_path, ctx: Ctx) -> dict:
+    conn = connect(db_path)
+    try:
+        return _next_work(conn, ctx)
+    finally:
+        conn.close()
+
+
 @router.get("/next")
 async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Settings = Depends(get_settings)):
     """Long poll: returns as soon as there is a task or a message, else after `wait` s.
@@ -313,11 +327,9 @@ async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Se
     deadline = time.monotonic() + max(0, min(wait, 120))
     async with wake.listener(ctx.actor_id) as woken:
         while True:
-            conn = connect(settings.db_path)
-            try:
-                out = _next_work(conn, ctx)
-            finally:
-                conn.close()
+            # on a worker thread: _next_work writes (seen, delivered), and a write waiting for the lock on the
+            # event loop stalls every request (prod 2026-10-13: /api/worker/next 500 "database is locked")
+            out = await asyncio.to_thread(_poll_once, settings.db_path, ctx)
             remaining = deadline - time.monotonic()
             if out.get("task") or out.get("unread_messages") or remaining <= 0:
                 return out
@@ -1117,6 +1129,10 @@ def browser_credential(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(work
     return {"name": name, "value": v["value"]}
 
 
+# browser_capture_secret(target="secret"): a value for secret_create, staged (pos.credentials.secrets).
+SECRET_TARGET = "secret"
+
+
 @router.post("/browser/capture")
 def browser_capture(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """browser_capture_secret: a value the guard took off a page (a client id or secret in a developer portal)
@@ -1130,11 +1146,30 @@ def browser_capture(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_
         raise HTTPException(403, "this agent lacks tool:browser")
     run_id = _live_run(conn, ctx, body.get("run_id"))
     target = str(body.get("target") or "")
-    targets = sorted([*outbound_linkedin.CAPTURE_TARGETS, op_write.TARGET])
+    targets = sorted([*outbound_linkedin.CAPTURE_TARGETS, op_write.TARGET, SECRET_TARGET])
     if target not in targets:
         raise HTTPException(422, f"target: one of {targets}")
     u = urlparse(str(body.get("url") or ""))
     host = (u.hostname or "").lower()
+    if target == SECRET_TARGET:
+        # For secret_create (pos.credentials.secrets): any page over HTTPS (plain HTTP only on the local
+        # network), staged for 30 minutes for this agent; the agent gets a capture id, never the value.
+        from .credentials import secrets
+        from .credentials.service import private_host
+
+        if not host or not (u.scheme == "https" or (u.scheme == "http" and private_host(host))):
+            raise HTTPException(403, "a secret is taken only from an HTTPS page (plain HTTP only on the local network)")
+        try:
+            capture_id = secrets.stage_capture(ctx.actor_id, str(body.get("value") or ""), host, run_id)
+        except secrets.SecretError as e:
+            raise HTTPException(422, str(e)) from e
+        except secrets.serverstore.Unavailable as e:
+            raise HTTPException(503, str(e)) from e
+        n = len(str(body.get("value") or "").strip())
+        audit.log(conn, Ctx(ctx.actor_id, via="worker", run_id=run_id), "secret_captured", None, None, target=target,
+                  host=host, chars=n, capture_id=capture_id)
+        conn.commit()
+        return {"ok": True, "target": target, "chars": n, "capture_id": capture_id}
     if target == op_write.TARGET:
         if u.scheme != "https" or not op_write.host_ok(host):
             raise HTTPException(403, f"{target} is taken only from the 1Password web app "

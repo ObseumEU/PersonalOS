@@ -43,6 +43,9 @@ export default {
   "m.chat.no_messages": "Zatím žádné zprávy.",
   "m.chat.typing": "píše…",
   "m.chat.working": "pracuje…",
+  "m.chat.working_reply": "připravuje odpověď…",
+  "m.chat.queued": "ve frontě",
+  "m.chat.held": "čeká na rozpočet",
   "m.chat.working_on": "pracuje na {ref}",
   "m.chat.start": "Napsat",
   "m.chat.new_dm": "Nová konverzace",
@@ -121,6 +124,8 @@ export default {
   "m.more.full": "Otevřít celou aplikaci",
   "m.more.full_hint": "Projekty, Tým, Znalosti, Kalendář a celé Nastavení",
   "m.more.settings": "Oznámení, instalace a zařízení",
+  "m.more.secrets": "Tajemství",
+  "m.more.secrets_hint": "Hesla a klíče agentů: kdo je má, citlivost",
   "m.more.logout": "Odhlásit toto zařízení",
   "m.more.version": "Verze aplikace {v}",
 

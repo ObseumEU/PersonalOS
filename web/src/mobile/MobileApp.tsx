@@ -1,4 +1,4 @@
-import { ArrowRight, ExternalLink, Flag, Gauge, Inbox, ListChecks, LogOut, MessagesSquare, MoreHorizontal, RefreshCw, Settings, WifiOff } from "lucide-react";
+import { ArrowRight, ExternalLink, Flag, Gauge, Inbox, ListChecks, LockKeyhole, LogOut, MessagesSquare, MoreHorizontal, RefreshCw, Settings, WifiOff } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api, getMe, logout, type Me } from "../api";
@@ -29,6 +29,8 @@ const Company = lazy(() => import("../pages/Company"));
 const Goals = lazy(() => import("../pages/Goals"));
 // The owner in an agent's live browser (opened from a push or "Čeká na tebe"): loads on first open.
 const MobileHandoff = lazy(() => import("./Handoff"));
+// Tajemství: the agents' secrets, owner only (loads on first open).
+const MobileSecrets = lazy(() => import("./Secrets"));
 const RefPreviewHost = lazy(() => import("../components/RefPreview").then((m) => ({ default: m.RefPreviewHost })));
 
 /** The reference preview (a note, a message, a source) loads the first time one is opened. */
@@ -116,7 +118,7 @@ function TabBar({ needs }: { needs: number }) {
     { to: "/m", label: t("m.tab.chat"), Icon: MessagesSquare, active: loc.pathname === "/m" || loc.pathname.startsWith("/m/chat") },
     { to: "/m/needs", label: t("m.tab.needs"), Icon: Inbox, active: loc.pathname.startsWith("/m/needs"), badge: needs },
     { to: "/m/tasks", label: t("m.tab.tasks"), Icon: ListChecks, active: loc.pathname.startsWith("/m/tasks") },
-    { to: "/m/more", label: t("m.tab.more"), Icon: MoreHorizontal, active: loc.pathname.startsWith("/m/more") || loc.pathname.startsWith("/m/settings") || loc.pathname.startsWith("/m/company") || loc.pathname.startsWith("/m/goals") },
+    { to: "/m/more", label: t("m.tab.more"), Icon: MoreHorizontal, active: loc.pathname.startsWith("/m/more") || loc.pathname.startsWith("/m/settings") || loc.pathname.startsWith("/m/company") || loc.pathname.startsWith("/m/goals") || loc.pathname.startsWith("/m/secrets") },
   ];
   return (
     <nav aria-label={t("m.tabs")} className="fixed inset-x-0 bottom-0 z-20 flex border-t border-line bg-bg/95 pb-[env(safe-area-inset-bottom)] backdrop-blur">
@@ -153,6 +155,13 @@ function More({ onLogout }: { onLogout?: () => void }) {
         <span className="flex flex-col">
           {t("m.more.goals")}
           <span className="text-[13px] text-ink-2">{t("m.more.goals_hint")}</span>
+        </span>
+      </Link>
+      <Link to="/m/secrets" className={row}>
+        <LockKeyhole size={20} className="text-ink-2" />
+        <span className="flex flex-col">
+          {t("m.more.secrets")}
+          <span className="text-[13px] text-ink-2">{t("m.more.secrets_hint")}</span>
         </span>
       </Link>
       <Link to="/m/settings" className={row}>
@@ -248,6 +257,7 @@ function Shell({ onLogout }: { onLogout?: () => void }) {
           <Route path="/m/goals" element={<Goals />} />
           <Route path="/m/report/:ref" element={<Suspense fallback={null}><ReportPage /></Suspense>} />
           <Route path="/m/handoff/:id" element={<MobileHandoff />} />
+          <Route path="/m/secrets" element={<MobileSecrets />} />
           <Route path="/m/*" element={<Navigate to="/m" replace />} />
           <Route path="*" element={<Outside />} />
         </Routes>

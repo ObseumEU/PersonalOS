@@ -74,6 +74,13 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, sha: str, *, base: str = "", author:
     qa = reviewer(conn)
     if qa is None:
         return {"status": "approved", "note": f"no active {roles.QA}: the review gate is open", "task": None}
+    # The row first (ON CONFLICT): of two asks about one sha at once (a deployer retry), one creates the
+    # review task; the other answers from that row instead of making a second task and failing on the key.
+    if not conn.execute("INSERT INTO deploy_reviews (sha, base, status, author, created_at) "
+                        "VALUES (?, ?, 'pending', ?, ?) ON CONFLICT (sha) DO NOTHING",
+                        (sha, base, author, now_iso())).rowcount:
+        conn.commit()
+        return ask(conn, ctx, sha, base=base, author=author, subject=subject, commits=commits)
     rng = f"{base[:10]}..{sha[:10]}" if base else sha[:10]
     t = tasks.create(conn, ctx, {
         "title": f"Review agent/dev {sha[:8]}: {subject[:80] or 'nová změna'}",
@@ -89,8 +96,7 @@ def ask(conn: sqlite3.Connection, ctx: Ctx, sha: str, *, base: str = "", author:
         "source": "deployer",
     })
     conn.execute("UPDATE tasks SET reviewer_id = ? WHERE id = ?", (qa["id"], t["id"]))  # its own verdict closes it
-    conn.execute("INSERT INTO deploy_reviews (sha, base, status, author, task_id, created_at) "
-                 "VALUES (?, ?, 'pending', ?, ?, ?)", (sha, base, author, t["id"], now_iso()))
+    conn.execute("UPDATE deploy_reviews SET task_id = ? WHERE sha = ?", (t["id"], sha))
     audit.log(conn, ctx, "deploy_review_asked", "task", t["id"], sha=sha[:12], author=author)
     conn.commit()
     return {"status": "pending", "note": None, "task": t["ref"]}

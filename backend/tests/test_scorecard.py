@@ -315,6 +315,38 @@ def test_a_frustrated_owner_message_reaches_the_ceo_with_context(conn, owner, co
     assert frustration.stats(conn)["frustrations"] == 2
 
 
+def test_a_complaint_without_a_doer_task_in_1h_gets_one_and_an_incident(conn, owner, company, monkeypatch):
+    """T-1050: the 6.10. complaint got an answer but no task; nobody worked on it for a day."""
+    from pos import wake
+
+    monkeypatch.setattr(wake, "wake", lambda aid: 1)
+    now = datetime.now(timezone.utc)
+    today = now.astimezone(frustration.TZ).date().isoformat()
+    lonely = chat.send_dm(conn, owner, company["cto"], "tvl notifikace zase nefungujou!!!")
+    handled = chat.send_dm(conn, owner, company["cto"], "kolikrát to mám psát, oprav zálohy!!!")
+    fresh = chat.send_dm(conn, owner, company["cto"], "nefunguje mi kalendář!!!")
+    conn.execute("UPDATE chat_messages SET created_at = ? WHERE id IN (?, ?)",
+                 (iso(now - timedelta(hours=2)), lonely["id"], handled["id"]))
+    # The CEO answered and made itself a task: not enough. A doer task linked to the message is.
+    _task(conn, owner, "CEO: odpovědět", notes=f"?msg={lonely['id']}", deadline=today,
+          assignee={"type": "agent", "id": company["ceo"]})
+    _task(conn, owner, "Opravit zálohy", notes=f"Odkaz: /chat/1?msg={handled['id']}", deadline=today,
+          assignee={"type": "agent", "id": company["SRE"]})
+    conn.commit()
+    made = frustration.complaint_task_sweep(conn, now)
+    assert len(made) == 1
+    t = tasks.get(conn, owner, made[0])
+    assert t["assignee_id"] == company["cto"] and t["priority"] == 1 and t["deadline"] == today
+    assert f"?msg={lonely['id']}" in t["notes"] and t["source"] == f"owner_complaint:{lonely['id']}"
+    incident = conn.execute("SELECT m.body FROM chat_messages m JOIN channel_members c ON c.channel_id = m.channel_id "
+                            "WHERE c.actor_id = ? AND m.body LIKE '%Incident: stížnost majitele bez úkolu%'",
+                            (company["ceo"],)).fetchone()
+    assert incident and tasks.display_id(made[0]) in incident["body"]
+    assert frustration.complaint_task_sweep(conn, now) == []  # once per message; the fresh one waits its hour
+    assert frustration.complaint_task_sweep(conn, now + timedelta(hours=1, minutes=1)) != []  # now it is due
+    assert fresh["id"]
+
+
 def test_double_answers_and_unanswered_asks(conn, owner, company):
     now = datetime.now(timezone.utc)
     a = chat.send_dm(conn, owner, company["cto"], "Jak jsme na tom s deployem?")

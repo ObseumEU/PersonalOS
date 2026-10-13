@@ -202,6 +202,9 @@ services:
       POST: 0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Our rules instead of the stock ones (with POST=0 they deny every restart; see the file): reads of state and
+      # logs, restart of the runbook's allowlist, start of the deployer. Nothing else.
+      - ./ops/sentinel/docker-proxy.haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
     restart: unless-stopped
 
   sentinel:

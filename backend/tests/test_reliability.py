@@ -45,7 +45,7 @@ def env(tmp_path, monkeypatch):
 def test_connections_wait_for_the_lock_and_skip_the_fsync_per_commit(tmp_path):
     db = tmp_path / "x.db"
     conn = connect(db)
-    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS == 10_000
+    assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == BUSY_TIMEOUT_MS == 5_000
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1

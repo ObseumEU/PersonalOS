@@ -11,7 +11,8 @@ drosko on svr03 listening on a unix socket bind-mounted into the API container):
 - safe actions: compose_up (our stacks' app services, never a database), restart (an
   allowlist of containers), backup_run (ops/backup/backup.sh as a transient user unit),
   towerdog_stop / towerdog_start (Nexus' towerdog), refresh_known_hosts (writes the GitHub
-  host keys PINNED below into a deployer's known_hosts; never ssh-keyscan);
+  host keys PINNED below into a deployer's known_hosts; never ssh-keyscan), caddy_remove_site
+  (one exact site block out of the front proxy's Caddyfile: backup, validate, reload, T-1299);
 - in the API container itself (no executor, no parameters): review_policy_kniha_dry /
   review_policy_kniha_apply (`python -m pos.review_policy --kniha [--apply]`, T-1058).
 
@@ -105,6 +106,9 @@ UNITS = {
     "nexus-production-backup.timer": "system",
     **{f"pos-backup@{n}.{k}": "system" for n in ("personalos", "knowlage", "nexus") for k in ("service", "timer")},
 }
+# Caddy container -> its Caddyfile on the host (bind-mounted at CADDY_CONFIG inside it).
+CADDY = {"caddy-proxy": "/opt/server/docker-migration/caddy/Caddyfile"}
+CADDY_CONFIG = "/etc/caddy/Caddyfile"
 BACKUP_SCRIPT = "/opt/server/personalos/app/ops/backup/backup.sh"  # drosko's nightly cron job (ops/backup)
 BACKUP_UNIT = "pos-runbook-backup"
 # deployer -> its known_hosts on the host (the container copies or mounts it).
@@ -186,6 +190,12 @@ ACTIONS = {
     "refresh_known_hosts": {"kind": "write", "params": {"deployer": ("choice", frozenset(DEPLOYERS), None)},
                             "doc": "write GitHub's pinned host keys into the deployer's known_hosts (old file kept "
                                    "as .bak)"},
+    "caddy_remove_site": {"kind": "write", "params": {
+        "container": ("choice", frozenset(CADDY), None), "site": ("sites", None, None),
+        "mode": ("choice", frozenset({"dry", "apply"}), "dry")},
+        "doc": "remove the one Caddyfile block whose address is exactly <site> ('a.cz, www.a.cz'); dry shows the "
+               "diff, apply keeps Caddyfile.bak-<YYYYMMDDHHMM>, runs caddy validate (a failure restores the old "
+               "file) and caddy reload"},
     # Run inside the API (personalos-api-1), never by the host executor (T-1058).
     "review_policy_kniha_dry": {"kind": "read", "params": {}, "where": "api",
                                 "doc": "python -m pos.review_policy --kniha in personalos-api-1 (dry run: which "
@@ -199,6 +209,8 @@ API_ACTIONS = frozenset(n for n, a in ACTIONS.items() if a.get("where") == "api"
 _SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]{0,99}$")
 _DURATION = re.compile(r"^(\d{1,6})([smh])$")
 _NAME = re.compile(r"[^a-z0-9_]+")
+_HOST = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+MAX_SITES = 10
 
 
 def action_name(action) -> str:
@@ -219,6 +231,12 @@ def _value(name: str, spec: tuple, raw):
         return n
     if not isinstance(raw, str):
         raise Invalid(f"{name} must be a string")
+    if typ == "sites":  # a Caddy site address: hostnames separated by commas, normalised to "a.cz, www.a.cz"
+        hosts = [h.strip().lower() for h in raw.split(",")]
+        if not 0 < len(hosts) <= MAX_SITES or not all(_HOST.match(h) for h in hosts) or len(set(hosts)) < len(hosts):
+            raise Invalid(f"{name} must be up to {MAX_SITES} distinct hostnames separated by commas "
+                          "(no ports, schemes, wildcards or shell metacharacters)")
+        return ", ".join(hosts)
     if not _SAFE.match(raw):
         raise Invalid(f"{name}: only letters, digits and . _ @ - (no spaces or shell metacharacters)")
     if typ == "choice":
@@ -306,6 +324,12 @@ def plan(action: str, p: dict) -> dict:
         return {"argv": ["docker", "start", TOWERDOG], "timeout": 60}
     if action == "refresh_known_hosts":
         return {"known_hosts": DEPLOYERS[p["deployer"]]}
+    if action == "caddy_remove_site":  # the executor edits the file itself, then runs these two
+        caddy = ["docker", "exec", p["container"], "caddy"]
+        return {"caddy_remove_site": {"caddyfile": CADDY[p["container"]], "site": p["site"],
+                                      "apply": p["mode"] == "apply",
+                                      "validate": [*caddy, "validate", "--config", CADDY_CONFIG],
+                                      "reload": [*caddy, "reload", "--config", CADDY_CONFIG]}, "timeout": 60}
     if action in API_ACTIONS:  # no argv: the executor refuses it
         return {"api": ["pos.review_policy", "--kniha", *(["--apply"] if action.endswith("_apply") else [])],
                 "timeout": 120}
@@ -368,6 +392,63 @@ def swap_top(names: dict | None = None, top: int = SWAP_TOP) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _caddy_code(line: str) -> str:
+    """A Caddyfile line without its comment and with quoted text blanked (their braces do not count)."""
+    out, quote = [], False
+    for i, ch in enumerate(line):
+        if ch == '"' and (i == 0 or line[i - 1] != "\\"):
+            quote = not quote
+        elif quote:
+            continue
+        elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+            break
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def caddy_blocks(text: str) -> list[tuple[int, int, tuple[str, ...]]]:
+    """(first line, last line, addresses) of every top-level block of a Caddyfile (0-based lines;
+    the global options block has no address). Unbalanced braces raise Invalid."""
+    out, depth, start, head = [], 0, None, ""
+    for i, line in enumerate(text.splitlines()):
+        code = _caddy_code(line)
+        if depth == 0:
+            if not code.strip():
+                continue
+            if start is None:
+                start, head = i, ""
+            if "{" not in code:
+                head += " " + code
+                if not code.rstrip().endswith(","):  # a top-level line without a block (import, ...)
+                    start = None
+                continue
+            head += " " + code.split("{", 1)[0]
+        depth += code.count("{") - code.count("}")
+        if depth < 0:
+            raise Invalid(f"the Caddyfile has an unbalanced }} on line {i + 1}")
+        if depth == 0:
+            out.append((start, i, tuple(a for a in re.split(r"[\s,]+", head.strip().lower()) if a)))
+            start = None
+    if depth:
+        raise Invalid("the Caddyfile has an unclosed { block")
+    return out
+
+
+def remove_caddy_site(text: str, site: str) -> str:
+    """The Caddyfile without the one block whose address is exactly `site` (validated "a.cz, www.a.cz").
+    No block or more than one: Invalid, nothing changes."""
+    want = site.split(", ")
+    hits = [b for b in caddy_blocks(text) if sorted(b[2]) == sorted(want)]
+    if len(hits) != 1:
+        raise Invalid(f"{'no' if not hits else len(hits)} site blocks with the address {site!r}; need exactly one")
+    first, last, _ = hits[0]
+    lines = text.splitlines(keepends=True)
+    if last + 1 < len(lines) and not lines[last + 1].strip() and (first == 0 or not lines[first - 1].strip()):
+        last += 1  # its blank separator goes with it
+    return "".join(lines[:first] + lines[last + 1:])
+
+
 def catalogue() -> list[dict]:
     out = []
     for name, a in ACTIONS.items():
@@ -382,6 +463,8 @@ def catalogue() -> list[dict]:
                 d["min"], d["max"] = allowed
             elif typ == "duration":
                 d["max"] = "24h"
+            elif typ == "sites":
+                d["format"] = "host[, host...]"
             params[p] = d
         out.append({"action": name, "kind": a["kind"], "doc": a["doc"], "params": params})
     return out
@@ -618,7 +701,7 @@ def register_mcp(mcp, session) -> None:
         "Run one action of the fixed svr03 runbook (no shell): read-only docker_ps, docker_stats, docker_logs "
         "{container, since<=24h, tail<=500}, df, free, uptime, systemctl_user_status {unit}, journalctl_tail "
         "{unit, lines<=300}; actions compose_up {stack, service}, restart {container}, backup_run, towerdog_stop, "
-        "towerdog_start, refresh_known_hosts {deployer}; in the API container review_policy_kniha_dry and "
+        "towerdog_start, refresh_known_hosts {deployer}, caddy_remove_site {container, site, mode=dry|apply}; in the API container review_policy_kniha_dry and "
         "review_policy_kniha_apply (their output also goes into task_id as a comment). reason is required "
         "(audited); task_id links the task. "
         "Values come from allowlists (ops_runbook_list). An action not in the catalogue is not run: the CTO "

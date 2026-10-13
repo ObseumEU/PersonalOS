@@ -593,6 +593,35 @@ def test_a_hand_in_needs_evidence_per_criterion(env):
     assert view[1]["evidence"] == "pytest: 14 passed"
 
 
+def test_a_refusal_carries_a_k_line_template_and_a_repeat_parks_the_task(env):
+    c = env["conn"]
+    t = _work(env, "1. Commit je nasazený v produkci\n2. Výstup pytest s novým testem")
+    with pytest.raises(tasks.Invalid) as e:
+        tasks.complete(c, env["Writer"], t["id"], "K2: pytest: 14 passed")
+    msg = str(e.value)
+    assert "Šablona" in msg and "Příklad platného řádku: K1:" in msg
+    assert "\nK1: <Commit je nasazený" in msg and "URL" in msg and "sha commitu" in msg
+    assert "\nK2: pytest: 14 passed  (doloženo)" in msg
+    assert "waiting" not in msg
+    assert c.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] != "waiting"
+    with pytest.raises(tasks.Invalid, match="přešel do waiting"):  # the same refusal again: no third paid try
+        tasks.complete(c, env["Writer"], t["id"], "K2: pytest: 15 passed")
+    row = c.execute("SELECT * FROM tasks WHERE id = ?", (t["id"],)).fetchone()
+    assert row["status"] == "waiting" and "chybí důkaz K1" in row["progress_note"] and row["follow_up"]
+    assert any("chybí důkaz K1" in x["body"] for x in comments.list_for(c, env["Writer"], t["id"]))
+
+
+def test_a_different_refusal_does_not_park_the_task(env):
+    c = env["conn"]
+    t = _work(env, "1. Objednávka se ukládá do databáze\n2. Testy prochází")
+    with pytest.raises(tasks.Invalid):
+        tasks.complete(c, env["Writer"], t["id"], "Hotovo.")
+    with pytest.raises(tasks.Invalid) as e:
+        tasks.complete(c, env["Writer"], t["id"], "K1: commit 3f2a9c1d")
+    assert "waiting" not in str(e.value)
+    assert c.execute("SELECT status FROM tasks WHERE id = ?", (t["id"],)).fetchone()[0] != "waiting"
+
+
 def test_criteria_evidence_from_the_tool_and_failing_evidence(env):
     c = env["conn"]
     t = _work(env, "- Data jsou uložená\n- Report je hotový")

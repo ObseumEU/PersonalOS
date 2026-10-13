@@ -46,6 +46,31 @@ def _short(value, limit: int) -> str:
     return redact(" ".join(text.split()), limit)
 
 
+# Tools whose input may carry a secret's literal value (pos.credentials.secrets, source 'value'): the value is
+# replaced before anything of the input is kept.
+SECRET_TOOLS = ("secret_create", "secret_rotate")
+
+
+def _scrub(tool: str, value):
+    """A secret tool's input without any literal `value` (recursively); other tools' input as it is."""
+    if not any(str(tool or "").endswith(t) for t in SECRET_TOOLS):
+        return value
+
+    def walk(v):
+        if isinstance(v, dict):
+            return {k: ("[REDACTED]" if k == "value" else walk(x)) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        return v
+
+    if isinstance(value, str):
+        try:
+            return json.dumps(walk(json.loads(value)), ensure_ascii=False)
+        except ValueError:
+            return "[REDACTED]"
+    return walk(value)
+
+
 def _result_text(content) -> str:
     if isinstance(content, list):
         return " ".join(str(c.get("text") or "") for c in content if isinstance(c, dict))
@@ -81,7 +106,8 @@ def summarize(jsonl: str) -> dict:
         elif kind == "assistant" and isinstance(ev.get("message"), dict):
             for c in ev["message"].get("content") or []:
                 if isinstance(c, dict) and c.get("type") == "tool_use":
-                    call = {"tool": str(c.get("name") or "?"), "input": _short(c.get("input") or {}, INPUT_CHARS),
+                    name = str(c.get("name") or "?")
+                    call = {"tool": name, "input": _short(_scrub(name, c.get("input") or {}), INPUT_CHARS),
                             "error": False}
                     calls[str(c.get("id"))] = call
                     order.append(call)
@@ -108,8 +134,9 @@ def summarize(jsonl: str) -> dict:
                     call["result"] = _short(item.get("aggregated_output") or "", ERROR_CHARS)
                 order.append(call)
             elif t == "mcp_tool_call":
-                call = {"tool": f"{item.get('server') or 'mcp'}:{item.get('tool') or '?'}",
-                        "input": _short(item.get("arguments") or {}, INPUT_CHARS),
+                name = f"{item.get('server') or 'mcp'}:{item.get('tool') or '?'}"
+                call = {"tool": name,
+                        "input": _short(_scrub(name, item.get("arguments") or {}), INPUT_CHARS),
                         "error": item.get("status") == "failed" or bool(item.get("error"))}
                 if call["error"]:
                     call["result"] = _short(item.get("error") or item.get("result") or "", ERROR_CHARS)

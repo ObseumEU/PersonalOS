@@ -11,7 +11,8 @@ _RULES = [
     # key=value / "key": "value" pairs whose name says secret
     (re.compile(r"""(?i)(["']?(?:api[_-]?key|apikey|token|access[_-]?token|refresh[_-]?token|secret|password|passwd|"""
                 r"""pwd|authorization|cookie|set-cookie|session|client[_-]?secret|private[_-]?key|master[_-]?key)"""
-                r"""["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&}]+)"""), r"\1<redacted>"),
+                r"""["']?\s*[:=]\s*)(?:(?:Bearer|Basic|Token)\s+)?(?:"[^"]*"|'[^']*'|[^\s,;&}]+)"""),
+     r"\1<redacted>"),  # "Authorization: Bearer <token>": the token too, not only the word Bearer
     (re.compile(r"(?i)\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]{6,}"), r"\1 <redacted>"),
     (re.compile(r"\b(?:sk|pk|rk)-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{8,}"), "<key>"),
     (re.compile(r"\b(?:pos|ghp|gho|ghs|ghu|glpat|xox[abpr])[-_][A-Za-z0-9_-]{8,}"), "<key>"),

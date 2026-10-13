@@ -66,7 +66,10 @@ def _approvals(conn: sqlite3.Connection, viewer: sqlite3.Row) -> list[dict]:
             "from_name": r["requested_by_name"], "from_kind": r["requested_by_kind"], "at": r["created_at"],
             "ref": tasks.display_id(r["task_id"]) if r["task_id"] else None,
             "link": f"/approvals#a{r['id']}",
+            **({"priority": details["priority"]} if details.get("priority") else {}),
         })
+    # Business priority first (a high secret's share waits on him: pos.credentials.secrets), newest first otherwise.
+    out.sort(key=lambda i: i.get("priority") != "business")
     return out
 
 

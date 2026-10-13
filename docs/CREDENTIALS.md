@@ -27,7 +27,8 @@ from `POS_SECRETS_KEY` (like the LinkedIn app's secret). An entry has fields (`u
 of `op://…` and is then used exactly like a 1Password one (grants, hosts, audit, use limits, redaction; the
 grounding check accepts it). The redactor also removes the password inside a basic-auth value on its own.
 
-Only the operator writes entries, with the CLI in the api container; no agent tool or endpoint can:
+The operator writes entries with the CLI in the api container (agents make their own, see **Agent secrets**
+below; no HTTP endpoint writes or reads a value):
 
 ```
 docker exec -i personalos-api-1 python -m pos.credentials put kniha-test-admin     --from-env-file - --key ADMIN_HESLO --basic-user admin < /opt/server/kniha-test/.env
@@ -36,6 +37,71 @@ docker exec personalos-api-1 python -m pos.credentials list      # names and fie
 
 `/opt/server/kniha-test/sync-credentials.sh` re-syncs the kniha-test entries after a password change
 (`rotate-passwords.sh` there calls it).
+
+## Agent secrets (Tajemství): agents create and share their own
+
+> **Potřebuješ tajemství? Vytvoř ho (secret_create), nesdílej hodnoty ve zprávách, sdílej přes secret_share;
+> nikdy nežádej Davida o hodnotu, kterou můžeš vygenerovat nebo zachytit.** (the rule for every agent; the pos server instructions say it too)
+
+Code: `backend/src/pos/credentials/secrets.py` (tools in `credentials/mcp.py`, the owner's API `/api/secrets` in
+`credentials/api.py`), the page **Tajemství** (`/secrets`, on the phone `/m/secrets`).
+
+A secret is a server-store entry (the backend above) plus one registry credential per field: `<name>` for the
+primary field (`password`, `token`, `value`, `secret`, `key`, else the first) and `<name>.<field>` for the others,
+each `pos://<name>/<field>`. Everything credentials do applies unchanged: grants `cred:<name>`, `{{cred:<name>}}`
+in `run_with_credentials` and `credential_http`, allowed hosts and command prefixes, the use log and hourly limit,
+redaction of every output (also base64 / URL / hex / JSON forms), the grounding check.
+
+| Tool | What it does |
+|---|---|
+| `secret_create(name, description, fields, source, purpose, hosts, sensitivity, project, header, env_var, commands, tools, primary_field)` | makes the values, stores them, registers the credentials, grants them to the creator. `name` kebab-case 3-48 chars; not a registry credential, a server-store entry or a 1Password item title. |
+| `secret_rotate(name, fields, source)` | new values (default: every generated field the same way, derived fields follow); grants stay. The creator, or a holder in the secret's team. |
+| `secret_share(name, to_agent \| to_team, reason)` | grants to another agent or a whole team (rules below). Holders only. |
+| `secret_revoke(name, from_agent \| from_team, reason)` | ends the grants: the owner, the creator, whoever shared it to them, or the agent itself. |
+| `secret_list()` | names and metadata of the secrets the agent holds or created, never values. |
+| `secret_delete(name)` | the creator (or the owner on the page): the value, the credentials and every grant go. |
+
+**Sources** (per field; `source` is the default for fields given without one):
+
+- `generate`: `{source, length 12-256 (32), charset alnum|hex|base64url|digits|letters|symbols}`, made in the API.
+- `capture_browser`: `browser_capture_secret(target="secret", ref, reveal_ref)` in the agent's live browser takes
+  the value off the page (HTTPS, or HTTP on the LAN) into an encrypted stage (`<data>/secrets/staged/`, bound to
+  that agent, 30 minutes, taken once) and answers with a `capture_id`; then `{source: "capture_browser",
+  capture_id}`. The guard redacts the value from everything the agent reads afterwards.
+- `capture_command`: `{source, command, timeout}` runs in the agent's own sandbox (pos.sandbox) with stdout
+  redirected to a file there (not the exec log), read back by the API and deleted; the tool returns nothing of it
+  (a failure: the exit code and stderr, redacted).
+- `from_secret`: `{source, secret: <credential held without a scope> | "self:<earlier field>", transform: copy |
+  base64 | basic_auth | hex | sha256, user | user_secret}` (basic_auth = base64 `user:password`). Each read of
+  another credential is a use in the log (tool `derive`). A copy of a `high` secret is `high`.
+- `value`: `{source, value}`, a literal the agent already knows from elsewhere. Allowed, but: it is replaced in the
+  call's audit, the run's transcript summary and the run's record (`runner._finish` redacts every value a run put
+  into a secret), the tool result warns, and the improve loop counts it (`secret:misuse.literal_value`).
+
+**Metadata** (`agent_secrets`, created on first use): creator, team (the creator's), project, purpose, hosts,
+sensitivity, fields and how each was made; never a value.
+
+**Limits**: `POS_SECRETS_MAX_PER_AGENT` (default 20) secrets per agent; at most 8 fields, 4096 characters per
+value (one line), 16 384 together.
+
+**Sharing**: inside the secret's team or project, at once. To another team, at once too, audited
+(`secret_share_cross_team`) and listed in the owner's daily access digest ("Tajemství sdílená mezi týmy").
+`sensitivity: high` (payment, banking, the owner's own accounts, production DB write; also set automatically
+when the name, description, purpose or hosts say so, the owner may lower it) waits for the owner's one-click
+approval: an approval `secret.share` (business priority, first in "Čeká na tebe"); approving creates the grants
+(granted by the owner), rejecting tells the agent.
+
+**Safety**: values are never logged, never in a tool result, an audit row, a transcript summary or a run record;
+every command output and HTTP response is redacted as for any credential. A value made without passing through
+the model (generated, captured, derived) that still shows up in a run's output is audited as `secret_misuse`;
+refused secret operations as `secret_denied`; both feed the improve loop (`secret:*` signals), as do refused uses
+of a secret's credential.
+
+**The owner's page Tajemství** (Nastavení → Tajemství, and Přístupy links there; `/m/secrets` on the phone):
+every secret, the operator's CLI entries (kniha-test-*) included, with creator, holders, last use, uses in 7
+days, sensitivity and pending shares; **Odebrat** (a holder), **Smazat**, sensitivity **běžné / vysoká**. Values
+are never shown: no endpoint returns one (the rule of this whole module: people read values in 1Password or on
+the server), so there is no "Zobrazit". `GET /api/secrets` and its actions are owner only.
 
 ## How an agent uses a credential
 

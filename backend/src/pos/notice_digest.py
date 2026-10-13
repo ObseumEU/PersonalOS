@@ -129,12 +129,12 @@ def add(conn: sqlite3.Connection, ctx: Ctx, to: sqlite3.Row, body: str, notice: 
     stamp = now_iso()
     item = conn.execute("SELECT * FROM notice_digest_items WHERE actor_id = ? AND day = ? AND key = ?",
                         (to["id"], day, key)).fetchone()
-    if item is not None:
-        conn.execute("""UPDATE notice_digest_items SET count = count + 1, line = ?, author = ?, last_at = ?
-                        WHERE actor_id = ? AND day = ? AND key = ?""", (_line(body), author, stamp, to["id"], day, key))
-    else:
-        conn.execute("""INSERT INTO notice_digest_items (actor_id, day, key, author, line, count, first_at, last_at)
-                        VALUES (?, ?, ?, ?, ?, 1, ?, ?)""", (to["id"], day, key, author, _line(body), stamp, stamp))
+    # One statement for both (a concurrent notice on the same subject may have added the row since the read).
+    conn.execute("""INSERT INTO notice_digest_items (actor_id, day, key, author, line, count, first_at, last_at)
+                    VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT (actor_id, day, key) DO UPDATE SET count = count + 1, line = excluded.line,
+                        author = excluded.author, last_at = excluded.last_at""",
+                 (to["id"], day, key, author, _line(body), stamp, stamp))
     text = _render(conn, to["id"], day)
     sys_ctx = Ctx(actors.system_id(conn), via="system")
     dig = conn.execute("SELECT message_id FROM notice_digests WHERE actor_id = ? AND day = ?", (to["id"], day)).fetchone()

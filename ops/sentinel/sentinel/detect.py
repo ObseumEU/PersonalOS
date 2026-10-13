@@ -15,6 +15,9 @@ from .redact import redact
 from .store import Store
 
 
+LOCKED = "database is locked"
+
+
 def _minute(t: float) -> int:
     return int(t // 60)
 
@@ -40,6 +43,8 @@ def ingest_logs(s: Store, t: dict, service: str, container: str, lines: list[tup
             if code:
                 s.stat(container, code, m, 1)
                 fresh[code] += 1
+        if LOCKED in line:  # SQLite's lock errors per minute (sentinel.platform: the owner's alert)
+            s.stat(container, "locked", m, 1)
         if fpmod.QUOTA.search(line):
             s.stat(container, "quota", m, 1)
             fresh["quota"] += 1

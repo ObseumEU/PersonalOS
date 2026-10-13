@@ -16,7 +16,7 @@ import { FeedbackPanel, InstructionsEditor } from "../components/Feedback";
 import Markdown from "../components/Markdown";
 import { confirmDialog, toast } from "../components/overlay";
 import { SchedulesPanel } from "../components/Schedules";
-import { PageHeader, Panel } from "../components/ui";
+import { LoadError, PageHeader, Panel } from "../components/ui";
 import { ago, fmtTime, label, t } from "../i18n";
 import { tasksApi } from "../tasksApi";
 import { fmtTokens } from "./Agents";
@@ -586,7 +586,7 @@ export default function AgentDetail() {
     }
   }
 
-  if (!a) return <p className="p-6 text-sm text-ink-2">{error ?? t("act.loading")}</p>;
+  if (!a) return error ? <LoadError error={error} onRetry={load} /> : <p className="p-6 text-sm text-ink-2">{t("act.loading")}</p>;
   const current = a.queue.find((x) => x.status === "working");
 
   const stop = async () => {

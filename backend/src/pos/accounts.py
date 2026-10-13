@@ -135,13 +135,17 @@ def accept(conn: sqlite3.Connection, token: str, password: str) -> int:
     _check_new_password(password)
     inviter = Ctx(row["invited_by"], via="invite")
     now = now_iso()
+    # The invitation is used up first, atomically: a second accept at the same time (a double submit)
+    # gets "not valid" instead of failing on the new person's unique name and e-mail.
+    if not conn.execute("UPDATE invites SET used_at = ? WHERE id = ? AND used_at IS NULL", (now, row["id"])).rowcount:
+        raise AuthError("this invitation is not valid (used or expired)")
     actor = versioning.insert(conn, inviter, "actor", {
         "kind": "human", "name": row["name"], "is_owner": 0, "created_at": now, "updated_at": now,
         "created_by": row["invited_by"], "permissions": row["permissions"], "runtime": "web",
         "reports_to": row["reports_to"], "role": row["role"]})
     conn.execute("INSERT INTO human_accounts (actor_id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
                  (actor["id"], row["email"], hash_password(password), now))
-    conn.execute("UPDATE invites SET used_at = ?, actor_id = ? WHERE id = ?", (now, actor["id"], row["id"]))
+    conn.execute("UPDATE invites SET actor_id = ? WHERE id = ?", (actor["id"], row["id"]))
     audit.log(conn, inviter, "invite_accepted", "actor", actor["id"], email=row["email"])
     conn.commit()
     return actor["id"]

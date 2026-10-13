@@ -28,10 +28,16 @@ def main() -> None:
                 log.info("tick: %s", out)
         except Exception:  # noqa: BLE001 - keep watching
             log.exception("tick failed")
-        wait = cfg["interval_s"] - (time.monotonic() - started)
-        while wait > 0 and not stop["now"]:
+        while not stop["now"]:
+            # PersonalOS's deep health every cfg.platform.every_s (sentinel.platform), between the ticks
+            if sen.platform.due(time.time()):
+                out = sen.platform_tick()
+                if out.get("actions") or out.get("error"):
+                    log.info("platform: %s", out)
+            wait = cfg["interval_s"] - (time.monotonic() - started)
+            if wait <= 0:
+                break
             time.sleep(min(wait, 1.0))
-            wait -= 1.0
 
 
 if __name__ == "__main__":

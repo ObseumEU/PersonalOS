@@ -16,6 +16,7 @@ catalogue). The catalogue, its allowlists and the pinned GitHub host keys are in
 | `backup_run` | `systemd-run --user --unit=pos-runbook-backup --collect --no-block ops/backup/backup.sh` (the nightly job; it has a lock) |
 | `towerdog_stop`, `towerdog_start` | `docker stop/start nexus-process-pilot-towerdog-1` |
 | `refresh_known_hosts {deployer}` | writes GitHub's pinned host keys into `personalos` (`data/deployer-ssh/known_hosts`) or `kniha` (`/opt/server/kniha-deployer/known_hosts`); old file kept as `.bak`; never `ssh-keyscan` |
+| `caddy_remove_site {container=caddy-proxy, site, mode=dry\|apply}` | removes the **one** top-level block whose address is exactly `site` (`libertyloft.cz, www.libertyloft.cz`: hostnames and commas only, any order) from `/opt/server/docker-migration/caddy/Caddyfile`. No match or more than one: nothing changes. `dry` (default) prints the diff only; `apply` copies the file to `Caddyfile.bak-<YYYYMMDDHHMM>` (kept), rewrites it in place, runs `docker exec caddy-proxy caddy validate --config /etc/caddy/Caddyfile`, then `caddy reload`; a failed validate or reload writes the old file back (T-1299) |
 | `review_policy_kniha_dry`, `review_policy_kniha_apply` | `python -m pos.review_policy --kniha [--apply]`, run inside the API (personalos-api-1), not by this executor (it refuses them); the output also goes into `task_id` as a comment. Live with the API deploy, no reinstall |
 
 Every call needs a reason and leaves one audit row `ops_runbook:<action>` (args, reason, outcome,
@@ -40,7 +41,8 @@ not an autonomy default, and `request_access` for it needs the owner).
   The executor validates them again with its **own frozen copy** of the catalogue
   (`~/.local/lib/pos-ops-runbook/catalogue.py`, copied by `install.sh`: a later commit changes
   nothing until the owner reinstalls), builds the argv itself, allows only `docker`, `df`, `free`,
-  `uptime`, `systemctl`, `journalctl`, `systemd-run`, runs without a shell with a timeout and a
+  `uptime`, `systemctl`, `journalctl`, `systemd-run` (and edits only the Caddyfiles listed in
+  `CADDY`), runs without a shell with a timeout and a
   minimal environment, accepts only peers with uid 0 (the API container) or drosko
   (`SO_PEERCRED`), serialises write actions and logs every request to its journal.
 

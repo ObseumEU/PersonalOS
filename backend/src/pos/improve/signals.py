@@ -29,7 +29,10 @@ Sources (all in the DB):
 - **ux:<kind>:<path>**: the web smoke's findings (pos.improve.smoke), when it ran today;
 - **push:send.<status>**, **push:client.<step>**: notifications the push service refused or never got, and
   browsers that could not subscribe (pos.push); **push:owner_no_device** (a state): the owner installed the
-  app but no device of his is subscribed, so nothing reaches his phone.
+  app but no device of his is subscribed, so nothing reaches his phone;
+- **secret:<what>**: agents' secrets (pos.credentials.secrets): `secret:denied.<op>_<cause>` (a refused share,
+  copy, revoke, rotate or the per-agent limit), `secret:use_refused.<cause>` (a refused use of a secret's
+  credential), `secret:misuse.<kind>` (a value seen in a run it never passed through, a literal value).
 
 `daily(conn)` computes and stores the day's digest (`improve_signals`, one row per day and key,
 created on first use); `latest(conn)` reads the newest; `ranked()` orders by impact × trend.
@@ -51,7 +54,8 @@ EXAMPLES = 5
 LOOP_CLAIMS = 5  # claims of one task in the window that make a loop
 # How much one occurrence of a category hurts (the owner's pain first); 0 = information only.
 WEIGHTS = {"owner": 5.0, "grounding": 4.0, "push": 4.0, "deploy": 3.0, "run_error": 3.0, "loop": 3.0, "ux": 3.0,
-           "tool_error": 2.0, "cost_cap": 2.0, "guard": 1.0, "stuck": 1.0, "agent_fail": 0.0, "spend": 0.0}
+           "tool_error": 2.0, "cost_cap": 2.0, "secret": 2.0, "guard": 1.0, "stuck": 1.0, "agent_fail": 0.0,
+           "spend": 0.0}
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS improve_signals (
     day        TEXT NOT NULL,
@@ -416,7 +420,44 @@ def _push(conn, acc: _Acc, s: str, u: str) -> None:
                     f"{r['host']}: {r['error']}")
 
 
-EVENT_COLLECTORS = (_runs, _tools, _guard, _loops, _deploys, _owner, _agents, _spend, _grounding, _push)
+def _secrets(conn, acc: _Acc, s: str, u: str) -> None:
+    """Agents' secrets (pos.credentials.secrets): a refused secret operation (`secret:denied.<what>_<cause>`: a
+    share by a non-holder, a copy without a grant, a revoke or rotate not theirs, the per-agent limit), a refused
+    use of a secret's credential (`secret:use_refused.<cause>`), and a misuse (`secret:misuse.<kind>`: a value
+    that never passed through the model showed up in a run anyway; a literal value given to secret_create)."""
+    names: set[str] | None = None
+    for r in conn.execute("""SELECT id, action, detail FROM audit_log WHERE at >= ? AND at < ? AND (action IN
+                                 ('secret_denied', 'secret_misuse', 'cred_refused', 'secret_create', 'secret_rotate'))
+                             ORDER BY id DESC""", (s, u)):
+        try:
+            d = json.loads(r["detail"] or "{}") or {}
+        except (TypeError, ValueError):
+            d = {}
+        if r["action"] == "secret_denied":
+            what = f"{slug(str(d.get('what') or 'op'), 1, cut=False)}_{slug(str(d.get('cause') or 'denied'), 2, cut=False)}"
+            acc.add(f"secret:denied.{what}", "secret", "secret operation refused", f"audit:{r['id']}",
+                    f"{d.get('what')}: {d.get('cause')} ({d.get('secret') or '?'})")
+        elif r["action"] == "secret_misuse":
+            acc.add(f"secret:misuse.{slug(str(d.get('kind') or 'misuse'), 3, cut=False)}", "secret",
+                    "secret value where it must not be", f"audit:{r['id']}", ", ".join(d.get("credentials") or []))
+        elif r["action"] in ("secret_create", "secret_rotate"):
+            if d.get("literal"):
+                acc.add("secret:misuse.literal_value", "secret", "secret made from a literal value (prefer generate "
+                        "or capture)", f"audit:{r['id']}", str(d.get("secret") or ""))
+        else:  # cred_refused: only for a secret's credential
+            if names is None:
+                names = set()
+                if _has(conn, "agent_secrets"):
+                    for (n,) in conn.execute("SELECT name FROM agent_secrets WHERE deleted_at IS NULL"):
+                        names.add(n)
+            n = str(d.get("name") or "")
+            if n and (n in names or n.split(".")[0] in names):
+                cause = slug(str(d.get("error") or "refused"), 3)
+                acc.add(f"secret:use_refused.{cause}", "secret", "use of an agent's secret refused", f"audit:{r['id']}",
+                        f"{n}: {d.get('error') or ''}")
+
+
+EVENT_COLLECTORS = (_runs, _tools, _guard, _loops, _deploys, _owner, _agents, _spend, _grounding, _push, _secrets)
 
 
 def events(conn: sqlite3.Connection, s: str, u: str) -> dict[str, dict]:

@@ -456,3 +456,52 @@ def test_a_message_to_a_service_is_no_unanswered_incident(watched):
     conn.commit()
     assert workers.watch(conn)["unanswered"] == []
     assert _incidents(conn, "chat_unanswered") == []
+
+
+# ------------------------------------------------------------------ a paused agent never takes the owner's message
+
+def _paused_agent(conn, tmp_path, name, team=None):
+    aid = agents.create_agent(conn, _owner(conn), name=name, purpose="x", lifetime="long_lived",
+                              permissions=["tasks:read", "tasks:claim", "messages:send"], data_dir=tmp_path)["agent"]["id"]
+    conn.execute("UPDATE actors SET paused_at = ?, team = ? WHERE id = ?",
+                 (datetime.now(timezone.utc).isoformat(timespec="seconds"), team, aid))
+    conn.commit()
+    return aid
+
+
+def test_owner_dm_to_a_paused_agent_goes_to_the_ceo(seeded, tmp_path):
+    """Prod 2026-10-13: the owner's messages to paused agents got "Chat: answer" tasks that never ran."""
+    from pos import answer_status
+
+    conn = seeded
+    owner = _owner(conn)
+    ceo = actors.find_by_name(conn, "CEO")
+    _seen_now(conn, ceo["id"])
+    aid = _paused_agent(conn, tmp_path, "Pauznutý vývojář")
+    msg = chat.send_dm(conn, owner, aid, "Kde je ten odkaz?")
+    assert _chat_task(conn, aid) is None
+    reply = _replies(conn, msg["id"])
+    assert len(reply) == 1 and "je pozastavený" in reply[0]["body"]
+    t = _chat_task(conn, ceo["id"])
+    assert t is not None and chat.chat_origin(conn, t["id"]) == (msg["channel_id"], msg["id"])
+    answer_status.invalidate()
+    st = answer_status.compute(conn)[msg["channel_id"]]
+    assert st["agent"] == "CEO" and st["state"] == "queued"  # the line names who really takes it
+
+
+def test_unaddressed_message_in_a_channel_led_by_a_paused_agent_goes_to_the_ceo(seeded, tmp_path):
+    conn = seeded
+    owner = _owner(conn)
+    ceo = actors.find_by_name(conn, "CEO")
+    _seen_now(conn, ceo["id"])
+    aid = _paused_agent(conn, tmp_path, "Pauznutý vývojář", team="pauza-test")
+    g = chat.create_channel(conn, owner, "pauza-test", [aid])
+    assert chat.channel_lead(conn, chat._channel(conn, g["id"])) == ceo["id"]
+    msg = chat.send(conn, owner, g["id"], "Dejte mi link kde si to můžu otestovat!")
+    assert _chat_task(conn, aid) is None
+    t = _chat_task(conn, ceo["id"])
+    assert t is not None and chat.chat_origin(conn, t["id"]) == (g["id"], msg["id"])
+    # a reply in a thread the paused agent wrote in also goes to the CEO
+    root = chat.send(conn, Ctx(aid, via="system"), g["id"], "Stav projektu", system=True)
+    chat.send(conn, owner, g["id"], "A co dál?", reply_to=root["id"])
+    assert _chat_task(conn, aid) is None

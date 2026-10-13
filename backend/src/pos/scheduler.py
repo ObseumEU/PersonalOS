@@ -343,6 +343,14 @@ def routines_overdue(conn: sqlite3.Connection) -> dict:
         unanswered = []
     if unanswered:
         out = {**out, "unanswered": unanswered}
+    try:  # an owner complaint with no doer task after 1 h: the platform makes one + incident to the CEO (T-1050)
+        complaints = frustration.complaint_task_sweep(conn)
+    except Exception:  # noqa: BLE001
+        log.exception("complaint task sweep failed")
+        conn.rollback()
+        complaints = []
+    if complaints:
+        out = {**out, "complaint_tasks": complaints}
     return {**out, "stuck": stuck} if stuck else out
 
 

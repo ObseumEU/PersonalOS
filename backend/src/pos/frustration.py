@@ -36,6 +36,11 @@ unanswered for over 2 h):
 - the platform's notices that once went out in the owner's name ("Owner handed in T-375 …",
   msgs 1230, 1400, 1406) are not his words: never flagged nor counted. (They are sent by PersonalOS
   now: pos.chat.send_dm.)
+
+Every complaint gets a doer task (T-1050: the 6.10. complaint got an answer but no task, and nobody
+worked on it for a day): `complaint_task_sweep` (same core loop) checks each flagged message after
+COMPLAINT_TASK_HOURS; without an open task for a doer (not the CEO) dated today and linked to the
+message (`?msg=<id>` in its notes), it makes one at the CTO/COO and sends the CEO an incident.
 """
 
 import json
@@ -57,6 +62,8 @@ REPEAT_MIN_WORDS = 4
 REPEAT_SIMILARITY = 0.6
 DOUBLE_MINUTES = 15
 UNANSWERED_HOURS = 2
+COMPLAINT_TASK_HOURS = 1  # a complaint without an open doer task by then gets one from the platform (T-1050)
+COMPLAINT_LOOKBACK_HOURS = 48
 
 STRONG = (
     ("!!!", re.compile(r"!{2,}")),
@@ -284,15 +291,19 @@ def _flag(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, message_id: int, 
         return None
     ensure_schema(conn)
     now = now_iso()
-    have = conn.execute("SELECT markers FROM owner_frustration WHERE message_id = ?", (message_id,)).fetchone()
-    if have is not None:
-        merged = list(dict.fromkeys([*json.loads(have["markers"] or "[]"), *found["markers"]]))
-        conn.execute("UPDATE owner_frustration SET markers = ? WHERE message_id = ?",
-                     (json.dumps(merged, ensure_ascii=False), message_id))
-    else:
+    # Insert first (atomic: the row is ours, or a parallel call made it and we merge into it inside the write
+    # transaction our insert attempt opened). A read-then-insert raced into "UNIQUE constraint failed".
+    try:
         conn.execute("INSERT INTO owner_frustration (message_id, channel_id, markers, repeat_of, created_at) "
                      "VALUES (?, ?, ?, ?, ?)", (message_id, ch["id"], json.dumps(found["markers"], ensure_ascii=False),
                                                 found["repeat_of"], now))
+    except sqlite3.IntegrityError:
+        have = conn.execute("SELECT markers FROM owner_frustration WHERE message_id = ?", (message_id,)).fetchone()
+        if have is None:  # another constraint, not the row being there
+            raise
+        merged = list(dict.fromkeys([*json.loads(have["markers"] or "[]"), *found["markers"]]))
+        conn.execute("UPDATE owner_frustration SET markers = ? WHERE message_id = ?",
+                     (json.dumps(merged, ensure_ascii=False), message_id))
     ceo = notices.ceo(conn)
     if not ceo:
         return found
@@ -321,7 +332,9 @@ def _flag(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, message_id: int, 
                       "„zase“, „dokonči“, nadávka nebo opakovaný požadavek). Něco, co měl mít, nemá. Najdi "
                       "**příčinu** a oprav ji ještě dnes, ne jen tuhle zprávu.\n\n### Zpráva\n" + block +
                       "\n\n### Co udělat\n1. Zjisti, co nefunguje nebo co se nedodalo a proč (úkol, agent, routina).\n"
-                      "2. Oprav příčinu nebo ji dej tomu, kdo ji opraví, s termínem dnes.\n"
+                      "2. Oprav příčinu nebo ji dej tomu, kdo ji opraví: **úkol pro doera** (ne pro CEO) s "
+                      "termínem dnes a s odkazem na zprávu (`?msg=<id>` výše) v poznámkách. Bez takového úkolu "
+                      f"do {COMPLAINT_TASK_HOURS} h ho platforma založí sama u CTO/COO a pošle ti incident.\n"
                       "3. Majiteli jedna odpověď ve stejném vlákně: co se stalo, co je opravené, co se změní, "
                       "aby se to neopakovalo.\n4. Do poznámek úkolu zapiš příčinu (pro týdenní zlepšení platformy)."),
             "definition_of_done": "Příčina je zapsaná a opravená (nebo předaná s termínem dnes); majitel má jednu "
@@ -401,6 +414,110 @@ def unanswered_sweep(conn: sqlite3.Connection, now: datetime | None = None) -> l
             log.exception("could not flag unanswered message %s", m["id"])
     conn.commit()
     return flagged_now
+
+
+# ------------------------------------------------------------------ every complaint gets a doer task
+
+_GUARD_SCHEMA = """CREATE TABLE IF NOT EXISTS owner_complaint_guard (
+    message_id  INTEGER PRIMARY KEY,
+    task_id     INTEGER,
+    created     INTEGER NOT NULL DEFAULT 0,
+    checked_at  TEXT NOT NULL
+)"""
+
+
+def _doer_task(conn: sqlite3.Connection, message_id: int, ceo: int | None, today: str) -> int | None:
+    """An open task for a doer (not the CEO, not the owner) linked to the message (`?msg=<id>` or
+    `owner_complaint:<id>` in its notes or source) with a date today or earlier."""
+    owner = actors.owner_id(conn)
+    for r in conn.execute(
+            """SELECT id, assignee_id FROM tasks WHERE status != 'done' AND archived_at IS NULL
+               AND COALESCE(MIN(COALESCE(do_date, deadline), COALESCE(deadline, do_date)), '9999') <= ?
+               AND (notes LIKE ? OR notes LIKE ? OR source = ?) ORDER BY id""",
+            (today, f"%?msg={message_id}%", f"%owner_complaint:{message_id}%", f"owner_complaint:{message_id}")):
+        if r["assignee_id"] and r["assignee_id"] not in (ceo, owner):
+            return r["id"]
+    return None
+
+
+def _complaint_doer(conn: sqlite3.Connection, channel_id: int, ceo: int | None) -> int | None:
+    """The CTO when the owner complained to engineering (a DM with an engineering agent), else the COO;
+    the other one when that one is missing, the CEO last."""
+    from . import notices, roles
+
+    eng = conn.execute("""SELECT 1 FROM channel_members m JOIN actors a ON a.id = m.actor_id
+                          WHERE m.channel_id = ? AND (a.team = 'engineering' OR a.name = ?)""",
+                       (channel_id, roles.CTO)).fetchone()
+    order = (roles.CTO, roles.COO) if eng else (roles.COO, roles.CTO)
+    for name in order:
+        aid = notices._active(conn, name)
+        if aid:
+            return aid
+    return ceo
+
+
+def complaint_task_sweep(conn: sqlite3.Connection, now: datetime | None = None) -> list[int]:
+    """Every complaint of the owner (a flagged message, not only "bez odpovědi") needs an open task for a
+    doer with today's date, linked to the message, within COMPLAINT_TASK_HOURS. Without one the platform
+    makes it (CTO/COO, priority 1, due today) and sends the CEO an incident: an answer without a task is
+    not enough (T-1050, the 6.10. notification complaint that nobody worked on). Each message once.
+    Returns the tasks made. Code, no model; in the core routines_overdue loop."""
+    from . import audit, notices, tasks
+
+    ensure_schema(conn)
+    conn.execute(_GUARD_SCHEMA)
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    today = now.astimezone(TZ).date().isoformat()
+    s = (now - timedelta(hours=COMPLAINT_LOOKBACK_HOURS)).isoformat(timespec="seconds")
+    u = (now - timedelta(hours=COMPLAINT_TASK_HOURS)).isoformat(timespec="seconds")
+    unanswered_only = json.dumps([f"bez odpovědi {UNANSWERED_HOURS} h"], ensure_ascii=False)
+    ceo = notices.ceo(conn)
+    made = []
+    for f in conn.execute("""SELECT f.*, m.body, m.created_at AS sent_at FROM owner_frustration f
+                             JOIN chat_messages m ON m.id = f.message_id
+                             WHERE m.created_at >= ? AND m.created_at <= ? AND f.markers != ?
+                             AND f.message_id NOT IN (SELECT message_id FROM owner_complaint_guard)
+                             ORDER BY f.message_id""", (s, u, unanswered_only)).fetchall():
+        mid = f["message_id"]
+        have = _doer_task(conn, mid, ceo, today)
+        if have:
+            conn.execute("INSERT INTO owner_complaint_guard (message_id, task_id, created, checked_at) VALUES (?, ?, 0, ?)",
+                         (mid, have, now_iso()))
+            continue
+        try:
+            sys_ctx = notices.system_ctx(conn)
+            doer = _complaint_doer(conn, f["channel_id"], ceo)
+            link = f"/chat/{f['channel_id']}?msg={mid}"
+            text = " ".join((f["body"] or "").split())[:600]
+            markers_ = ", ".join(json.loads(f["markers"] or "[]"))
+            ceo_ref = tasks.display_id(f["task_id"]) if f["task_id"] else "—"
+            t = tasks.create(conn, sys_ctx, {
+                "title": f"Stížnost majitele bez úkolu · zpráva {mid}",
+                "assignee": {"type": "agent", "id": doer}, "status": "next", "priority": 1,
+                "do_date": today, "deadline": today, "topic": "board", "source": f"owner_complaint:{mid}",
+                "notes": (f"### Proč\nMajitel si stěžoval ({markers_}) a do {COMPLAINT_TASK_HOURS} h nevznikl "
+                          "otevřený úkol pro toho, kdo to opraví. Odpověď bez úkolu nestačí (T-1050).\n\n"
+                          f"### Zpráva\n„{text}“\n\nOdkaz: {link}\n\n"
+                          f"### Odkud\nPojistka platformy (frustration.complaint_task_sweep), úkol CEO {ceo_ref}.\n\n"
+                          "### Hotovo znamená\nPříčina je opravená (nebo předaná doerovi s termínem dnes a odkazem "
+                          "na zprávu) a majitel ve vlákně ví, co se změnilo."),
+                "definition_of_done": "Příčina stížnosti opravená nebo předaná s termínem dnes; výsledek ve vlákně "
+                                      "majitele."})
+        except Exception:  # noqa: BLE001 - one message must not stop the sweep
+            log.exception("could not make a task for owner complaint %s", mid)
+            continue
+        conn.execute("INSERT INTO owner_complaint_guard (message_id, task_id, created, checked_at) VALUES (?, ?, 1, ?)",
+                     (mid, t["id"], now_iso()))
+        ref = tasks.display_id(t["id"])
+        notices.dm(conn, ceo, f"**Incident: stížnost majitele bez úkolu.** Zpráva {mid} ({link}) nemá ani po "
+                              f"{COMPLAINT_TASK_HOURS} h otevřený úkol pro doera s dnešním termínem. Platforma "
+                              f"založila {ref} u {actors.get(conn, doer)['name']}. Odpověď bez úkolu nestačí: "
+                              "zkontroluj, že se na tom dnes dělá.",
+                   attachments=[{"type": "task", "id": t["id"]}])
+        audit.log(conn, sys_ctx, "owner_complaint_no_task", "task", t["id"], message=mid, assignee=doer)
+        made.append(t["id"])
+    conn.commit()
+    return made
 
 
 def _agent_replies(conn: sqlite3.Connection, m: sqlite3.Row, owner: int, until: datetime) -> list[sqlite3.Row]:

@@ -31,6 +31,7 @@ still apply in the core.
 
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -62,6 +63,38 @@ RANK_MESSAGES = 3   # unread messages: a DM, "handed in for your review", an @me
 RANK_TASK = 4       # ordinary queued work
 BLOCKED_EXIT = 75   # a worker ends with this when its run was refused (budget, usage limit): try later
 BLOCKED_BACKOFF_S = 300
+BLOCKED_CAP_MAX_S = 1800        # a cap the owner may raise: look again within half an hour
+BLOCKED_USAGE_MAX_S = 6 * 3600  # an engine's usage limit nobody can raise: wait for its reset
+BLOCKED_FILE = ".blocked"
+_UNTIL = re.compile(r"until (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)")
+
+
+def write_blocked(workdir: Path, reason: str) -> None:
+    """The worker's last words for the pool: why its run was refused (with the refusal's "until")."""
+    try:
+        (workdir / BLOCKED_FILE).write_text(reason[:500], encoding="utf-8")
+    except OSError:
+        pass
+
+
+def blocked_wait(reason: str, now: float | None = None) -> float:
+    """How long an agent whose run was refused waits before the pool asks again. The refusal says until when
+    ("claude usage limit until 2026-10-11T13:00:00+00:00", "new runs wait until …"): a 5-min retry over a
+    3-day usage limit started ~13,500 workers that were all refused (prod 2026-10-08..11)."""
+    from datetime import datetime, timezone
+
+    m = _UNTIL.search(reason or "")
+    if not m:
+        return BLOCKED_BACKOFF_S
+    try:
+        until = datetime.fromisoformat(m.group(1).replace("Z", "+00:00"))
+    except ValueError:
+        return BLOCKED_BACKOFF_S
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    left = until.timestamp() - (time.time() if now is None else now)
+    cap = BLOCKED_USAGE_MAX_S if "usage limit" in reason else BLOCKED_CAP_MAX_S
+    return max(BLOCKED_BACKOFF_S, min(left, cap))
 
 
 def work_rank(work: dict) -> int | None:
@@ -124,6 +157,15 @@ class Pool:
             env.setdefault("WORKER_POLL", "30")
         return subprocess.Popen([sys.executable, "-m", "pos_worker"], env=env)
 
+    def _take_blocked(self, slug: str) -> str:
+        path = self.work / slug / BLOCKED_FILE
+        try:
+            reason = path.read_text(encoding="utf-8")
+            path.unlink()
+        except OSError:
+            return ""
+        return reason
+
     @staticmethod
     def _stop(proc) -> None:
         if proc.poll() is None:
@@ -148,7 +190,7 @@ class Pool:
                     continue
                 if proc.returncode == BLOCKED_EXIT:  # its run was refused: the slot goes to someone else
                     self.failures.pop(slug, None)
-                    self.not_before[slug] = self.clock() + BLOCKED_BACKOFF_S
+                    self.not_before[slug] = self.clock() + blocked_wait(self._take_blocked(slug))
                     log.info("worker %s: run refused (budget or limit); trying again later", slug)
                     continue
                 n = self.failures[slug] = self.failures.get(slug, 0) + 1

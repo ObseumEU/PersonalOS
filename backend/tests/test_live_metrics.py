@@ -85,6 +85,9 @@ def test_metrics_count_routes_by_template_and_read_the_business_numbers(tmp_path
     monkeypatch.setattr(metrics, "_requests", {})
     monkeypatch.setattr(metrics, "_hist", {})
     monkeypatch.setattr(metrics, "_locked", 0)
+    from pos import db
+
+    monkeypatch.setattr(db, "_totals", {"locked": 0, "long_tx": 0})
     settings = Settings(data_dir=tmp_path, scheduler=False)
     with TestClient(create_app(settings)) as client:
         conn = connect(settings.db_path)
@@ -103,6 +106,7 @@ def test_metrics_count_routes_by_template_and_read_the_business_numbers(tmp_path
     assert "pos_review_queue 1" in body
     assert "pos_cost_usd_today 0.250000" in body
     assert "pos_sqlite_locked_total 0" in body
+    assert "pos_sqlite_long_tx_total 0" in body
 
 
 def test_metrics_are_not_served_through_a_proxy(tmp_path, monkeypatch):

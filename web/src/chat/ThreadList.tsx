@@ -2,14 +2,21 @@ import { Hash } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { type ThreadItem, chatApi } from "../chatApi";
 import { t } from "../i18n/core";
-import { Avatar } from "../mobile/ui";
+import { Avatar, LoadError } from "../mobile/ui";
 import { stripToolMarkup } from "../toolMarkup";
 import { ThreadChip } from "./ThreadChip";
 
 /** Threads in the owner's channels, the latest activity first, with unread replies ("Vlákna"). */
 export function useThreads(listen: (reload: () => void) => () => void) {
-  const [data, setData] = useState<{ threads: ThreadItem[]; unread: number } | null>(null);
-  const load = useCallback(() => chatApi.threads().then(setData, () => undefined), []);
+  // A first load that fails is an empty list with the error (ThreadList shows it with "Zkusit znovu").
+  const [data, setData] = useState<{ threads: ThreadItem[]; unread: number; error?: string } | null>(null);
+  const load = useCallback(
+    () =>
+      chatApi.threads().then(setData, (e) =>
+        setData((d) => (d && !d.error ? d : { threads: [], unread: 0, error: e instanceof Error ? e.message : String(e) })),
+      ),
+    [],
+  );
   useEffect(() => {
     load();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -29,8 +36,17 @@ export function useThreads(listen: (reload: () => void) => () => void) {
   return data;
 }
 
-export default function ThreadList({ data, onOpen, active }: { data: { threads: ThreadItem[] } | null; onOpen: (it: ThreadItem) => void; active?: number | null }) {
+export default function ThreadList({
+  data,
+  onOpen,
+  active,
+}: {
+  data: { threads: ThreadItem[]; error?: string } | null;
+  onOpen: (it: ThreadItem) => void;
+  active?: number | null;
+}) {
   if (data === null) return <p className="px-4 py-6 text-sm text-ink-2">{t("act.loading")}</p>;
+  if (data.error) return <LoadError error={data.error} onRetry={() => window.dispatchEvent(new Event("pos:threads"))} />;
   if (!data.threads.length) return <p className="px-4 py-8 text-center text-sm text-ink-2">{t("m.chat.threads_empty")}</p>;
   return (
     <div className="flex flex-col">

@@ -8,7 +8,8 @@ the database (run outcomes, the review queue, cost per day).
 Series:
 - pos_http_requests_total{method, route, status}       counter (status: 2xx, 3xx, 4xx, 5xx)
 - pos_http_request_duration_seconds{method, route}     histogram (long-lived streams excluded)
-- pos_sqlite_locked_total                              counter ("database is locked" in a request)
+- pos_sqlite_locked_total                              counter ("database is locked", any connection, pos.db)
+- pos_sqlite_long_tx_total                             counter (write transactions held > POS_DB_LONG_TX_S)
 - pos_runs_total{status, kind}                         counter (every run ever, by outcome)
 - pos_runs_running                                     gauge
 - pos_review_queue                                     gauge (tasks in review)
@@ -30,6 +31,7 @@ import sqlite3
 import threading
 import time
 from bisect import bisect_left
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,6 +45,11 @@ _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = {}
 _hist: dict[tuple[str, str], list] = {}  # (method, route) -> [bucket counts..., sum, count]
 _locked = 0
+# The last minute of requests for the deep health (pos.health): (monotonic time, seconds or None, 5xx).
+WINDOW_S = 60.0
+_recent: deque = deque(maxlen=50_000)
+# Probes do not count in the window (they would dilute the error rate they report).
+UNWINDOWED = ("/api/health", "/api/health/deep", "/metrics")
 
 
 def _route_of(scope) -> str:
@@ -74,6 +81,28 @@ def observe(method: str, route: str, status: int, seconds: float | None) -> None
         h[-1] += 1
 
 
+def _remember(route: str, status: int, seconds: float | None) -> None:
+    if route in UNWINDOWED:
+        return
+    with _lock:
+        _recent.append((time.monotonic(), seconds, status >= 500))
+
+
+def window(window_s: float = WINDOW_S) -> dict:
+    """The last minute of API requests: count, 5xx, the 5xx share and the p95 latency (timed routes only)."""
+    cut = time.monotonic() - window_s
+    with _lock:
+        while _recent and _recent[0][0] < cut:
+            _recent.popleft()
+        items = list(_recent)
+    n = len(items)
+    errors = sum(1 for _, _, e in items if e)
+    times = sorted(s for _, s, _ in items if s is not None)
+    p95 = times[min(len(times) - 1, int(0.95 * len(times)))] if times else None
+    return {"requests": n, "errors_5xx": errors, "rate_5xx": round(errors / n, 3) if n else 0.0,
+            "p95_ms": round(p95 * 1000) if p95 is not None else None}
+
+
 def count_locked() -> None:
     global _locked
     with _lock:
@@ -99,16 +128,13 @@ class Metrics:
 
         try:
             await self.app(scope, receive, _send)
-        except Exception as e:
-            if "database is locked" in str(e):
-                count_locked()
-            raise
         finally:
             route = _route_of(scope)
             if route != "other" and route != "/metrics":
                 timed = not any(route.startswith(p) for p in UNTIMED)
-                observe(scope.get("method", "GET"), route, status[0],
-                        time.perf_counter() - start if timed else None)
+                took = time.perf_counter() - start if timed else None
+                observe(scope.get("method", "GET"), route, status[0], took)
+                _remember(route, status[0], took)
 
 
 # ------------------------------------------------------------------ exposition
@@ -156,9 +182,7 @@ def _business(db_path: Path) -> list[str]:
             out += [f"pos_needs_me{_labels(kind=k)} {v}" for k, v in sorted(counts.items())]
         except Exception:  # noqa: BLE001 - a scrape never fails on one number
             pass
-    except sqlite3.Error as e:
-        if "locked" in str(e):
-            count_locked()
+    except sqlite3.Error:
         out.append("# business metrics unavailable")
     finally:
         conn.close()
@@ -171,7 +195,10 @@ def render(db_path: Path | None = None) -> str:
     with _lock:
         reqs = dict(_requests)
         hist = {k: list(v) for k, v in _hist.items()}
-        locked = _locked
+    from . import db
+
+    totals = db.totals()
+    locked, long_tx = _locked + totals["locked"], totals["long_tx"]
     for (m, r, s), n in sorted(reqs.items()):
         lines.append(f"pos_http_requests_total{_labels(method=m, route=r, status=s)} {n}")
     lines += ["# HELP pos_http_request_duration_seconds API latency by route template.",
@@ -184,8 +211,10 @@ def render(db_path: Path | None = None) -> str:
         lines.append(f"pos_http_request_duration_seconds_bucket{_labels(method=m, route=r, le='+Inf')} {h[-1]}")
         lines.append(f"pos_http_request_duration_seconds_sum{_labels(method=m, route=r)} {h[-2]:.6f}")
         lines.append(f"pos_http_request_duration_seconds_count{_labels(method=m, route=r)} {h[-1]}")
-    lines += ["# HELP pos_sqlite_locked_total Requests that failed on 'database is locked'.",
-              "# TYPE pos_sqlite_locked_total counter", f"pos_sqlite_locked_total {locked}"]
+    lines += ["# HELP pos_sqlite_locked_total 'database is locked' errors (any connection of the API process).",
+              "# TYPE pos_sqlite_locked_total counter", f"pos_sqlite_locked_total {locked}",
+              "# HELP pos_sqlite_long_tx_total Write transactions held longer than POS_DB_LONG_TX_S.",
+              "# TYPE pos_sqlite_long_tx_total counter", f"pos_sqlite_long_tx_total {long_tx}"]
     from . import live
 
     lines += ["# TYPE pos_live_subscribers gauge", f"pos_live_subscribers {live.subscriber_count()}"]

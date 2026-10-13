@@ -101,6 +101,16 @@ def _socket(monkeypatch, tmp_path):
     ("refresh_known_hosts", {"deployer": "../../etc"}),
     ("df", {"path": "/"}),
     ("df", "-h; id"),
+    ("caddy_remove_site", {"container": "kb-caddy-1", "site": "a.cz"}),
+    ("caddy_remove_site", {"container": "caddy-proxy"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "a.cz; reboot"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "a.cz {\n}\nb.cz"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "https://a.cz"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "a.cz:443"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "*.a.cz"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "a.cz,,b.cz"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "a.cz, a.cz"}),
+    ("caddy_remove_site", {"container": "caddy-proxy", "site": "a.cz", "mode": "force"}),
 ])
 def test_validation_refuses_anything_off_the_list_or_with_metacharacters(action, params):
     with pytest.raises(ops_runbook.Invalid):
@@ -125,8 +135,11 @@ def test_validated_actions_build_argv_lists_without_a_shell():
         sample = {k: sorted(s[1])[0] for k, s in spec.items() if s[0] == "choice"}
         if name == "compose_up":
             sample = {"stack": "personalos", "service": "api"}
+        if name == "caddy_remove_site":
+            sample["site"] = "example.cz"
         pl = ops_runbook.plan(name, ops_runbook.validate(name, sample))
-        assert "known_hosts" in pl or "api" in pl or all(isinstance(a, str) for a in pl["argv"])
+        argvs = [pl[name][k] for k in ("validate", "reload")] if name == "caddy_remove_site" else [pl.get("argv") or []]
+        assert "known_hosts" in pl or "api" in pl or all(isinstance(a, str) for v in argvs for a in v)
 
 
 def test_the_pinned_github_keys_match_their_published_fingerprints():
@@ -348,6 +361,110 @@ def test_the_executor_writes_only_the_pinned_known_hosts_of_a_listed_deployer(ex
     out = executor.handle({"v": 1, "action": "refresh_known_hosts", "params": {"deployer": "/etc/ssh"},
                            "reason": "x"})
     assert not out["ok"]
+
+
+CADDYFILE = """{
+\temail ops@obseum.cz
+}
+
+(internal) {
+\t@out not remote_ip 10.0.0.0/8
+\trespond @out 403
+}
+
+personalos.obseum.cz {
+\timport internal
+\treverse_proxy personalos-web-1:80
+}
+
+libertyloft.cz, www.libertyloft.cz {
+\t# old site, "now {on} GitHub Pages"
+\theader X-Info "a } b"
+\troot * /srv/liberty
+\tfile_server {
+\t\thide .git
+\t}
+}
+
+www.libertyloft.cz {
+\tredir https://libertyloft.cz{uri}
+}
+
+kb.obseum.cz,
+  kb2.obseum.cz {
+\treverse_proxy kb-caddy-1:8080
+}
+"""
+
+
+def _caddy(executor, tmp_path, monkeypatch, site, mode, runner):
+    path = tmp_path / "Caddyfile"
+    if not path.exists():
+        path.write_text(CADDYFILE)
+    monkeypatch.setitem(ops_runbook.CADDY, "caddy-proxy", str(path))
+    out = executor.handle({"v": 1, "action": "caddy_remove_site", "reason": "T-254 ACME fails",
+                           "params": {"container": "caddy-proxy", "site": site, "mode": mode}}, runner=runner)
+    return out, path
+
+
+def test_caddy_remove_site_finds_exactly_one_block_and_keeps_the_rest():
+    blocks = ops_runbook.caddy_blocks(CADDYFILE)
+    assert [b[2] for b in blocks] == [(), ("(internal)",), ("personalos.obseum.cz",),
+                                      ("libertyloft.cz", "www.libertyloft.cz"), ("www.libertyloft.cz",),
+                                      ("kb.obseum.cz", "kb2.obseum.cz")]
+    new = ops_runbook.remove_caddy_site(CADDYFILE, "www.libertyloft.cz, libertyloft.cz")
+    assert "libertyloft.cz, www" not in new and "root * /srv/liberty" not in new and "hide .git" not in new
+    assert new.count("www.libertyloft.cz {") == 1 and "kb2.obseum.cz {" in new and "\n\n\n" not in new
+    assert len(new.splitlines()) == len(CADDYFILE.splitlines()) - 9  # 8 lines and the blank after
+    assert "kb.obseum.cz, kb2.obseum.cz" in ops_runbook.validate(
+        "caddy_remove_site", {"container": "caddy-proxy", "site": "KB.obseum.cz,kb2.obseum.cz"})["site"]
+    for site in ("libertyloft.cz", "obseum.cz", "personalos.obseum.cz, kb.obseum.cz"):  # no exact match
+        with pytest.raises(ops_runbook.Invalid, match="no site blocks"):
+            ops_runbook.remove_caddy_site(CADDYFILE, site)
+    twice = CADDYFILE + "\nwww.libertyloft.cz {\n\trespond 404\n}\n"
+    with pytest.raises(ops_runbook.Invalid, match="2 site blocks"):
+        ops_runbook.remove_caddy_site(twice, "www.libertyloft.cz")
+    with pytest.raises(ops_runbook.Invalid, match="unclosed"):
+        ops_runbook.remove_caddy_site(CADDYFILE + "a.cz {\n", "a.cz")
+
+
+def test_caddy_remove_site_dry_shows_the_diff_and_writes_nothing(executor, tmp_path, monkeypatch):
+    out, path = _caddy(executor, tmp_path, monkeypatch, "libertyloft.cz, www.libertyloft.cz", "dry",
+                       lambda argv, t: pytest.fail("a dry run runs nothing"))
+    assert out["ok"] and "dry run" in out["output"] and "-libertyloft.cz, www.libertyloft.cz {" in out["output"]
+    assert path.read_text() == CADDYFILE and [p.name for p in tmp_path.iterdir()] == ["Caddyfile"]
+    out, _ = _caddy(executor, tmp_path, monkeypatch, "nowhere.cz", "apply", lambda argv, t: pytest.fail("no"))
+    assert not out["ok"] and "nothing changed" in out["output"] and path.read_text() == CADDYFILE
+    assert [p.name for p in tmp_path.iterdir()] == ["Caddyfile"]
+
+
+def test_caddy_remove_site_apply_backs_up_validates_and_reloads(executor, tmp_path, monkeypatch):
+    ran = []
+
+    def runner(argv, timeout):
+        ran.append(argv)
+        return 0, "Valid configuration\n"
+
+    out, path = _caddy(executor, tmp_path, monkeypatch, "libertyloft.cz, www.libertyloft.cz", "apply", runner)
+    assert out["ok"], out
+    assert ran == [["docker", "exec", "caddy-proxy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"],
+                   ["docker", "exec", "caddy-proxy", "caddy", "reload", "--config", "/etc/caddy/Caddyfile"]]
+    assert "/srv/liberty" not in path.read_text() and "www.libertyloft.cz {" in path.read_text()
+    backups = [p for p in tmp_path.iterdir() if p.name.startswith("Caddyfile.bak-")]
+    assert len(backups) == 1 and backups[0].read_text() == CADDYFILE and len(backups[0].name) == 26
+
+
+def test_caddy_remove_site_restores_the_old_file_when_validate_fails(executor, tmp_path, monkeypatch):
+    ran = []
+
+    def runner(argv, timeout):
+        ran.append(argv[4])
+        return (1, "Error: adapting config: unknown directive") if argv[4] == "validate" else (0, "")
+
+    out, path = _caddy(executor, tmp_path, monkeypatch, "libertyloft.cz, www.libertyloft.cz", "apply", runner)
+    assert not out["ok"] and out["exit_code"] == 1 and "validate failed" in out["output"]
+    assert ran == ["validate"] and path.read_text() == CADDYFILE  # never reloaded, the old file is back
+    assert [p.read_text() for p in tmp_path.iterdir() if p.name.startswith("Caddyfile.bak-")] == [CADDYFILE]
 
 
 def _proc(root, pid, name, swap_kb, cgroup):
