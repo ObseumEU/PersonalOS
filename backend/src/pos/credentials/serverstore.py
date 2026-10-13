@@ -10,9 +10,11 @@ auth). A registry entry points to one field with the reference `pos://<entry>/<f
 from there on it is used exactly like a 1Password credential: the same grants, hosts, audit, use limits and
 redaction (pos.credentials.service resolves either kind).
 
-Only the operator or the platform writes entries, with the CLI inside the api container
-(`python -m pos.credentials put …`, see __main__.py); no agent tool and no HTTP endpoint writes or reads one.
-Values are never logged, listed or returned by anything but `resolve`, which only the credential service calls.
+The operator writes entries with the CLI inside the api container (`python -m pos.credentials put …`, see
+__main__.py); agents make their own through pos.credentials.secrets (secret_create, secret_rotate), whose values
+come from sources that never pass through the model. No HTTP endpoint reads one. Values are never logged, listed
+or returned by anything but `resolve`, which only the credential service calls (and the secrets module, to
+derive one secret from another inside the API).
 """
 
 import base64
@@ -200,3 +202,71 @@ def resolve(value_ref: str) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# ------------------------------------------------------------------ captures waiting for secret_create
+
+# browser_capture_secret(target='secret') takes a value off the agent's page; it waits here, encrypted, bound to
+# that agent, until secret_create (pos.credentials.secrets) takes it (once) or STAGE_TTL_S passes.
+STAGE_RE = re.compile(r"^cap-[0-9a-f]{12}$")
+STAGE_TTL_S = 1800
+
+
+def _stage_dir() -> Path:
+    return Path(_settings().data_dir) / "secrets" / "staged"
+
+
+def _stage_aad(stage_id: str, owner: str) -> bytes:
+    return f"stage:{stage_id}:{owner}".encode()
+
+
+def stage(owner: str, value: str, meta: dict | None = None) -> str:
+    """Keep one captured value for its owner (an agent id); returns the capture id. Expired ones go."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    on, why = configured()
+    if not on:
+        raise Unavailable(why)
+    d = _stage_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(d, 0o700)
+    cutoff = datetime.now(timezone.utc).timestamp() - STAGE_TTL_S
+    for p in d.glob("cap-*.bin"):
+        with contextlib.suppress(OSError):
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+    stage_id = "cap-" + os.urandom(6).hex()
+    nonce = os.urandom(12)
+    body = json.dumps({"value": value, "meta": meta or {}, "at": datetime.now(timezone.utc).timestamp()}).encode()
+    blob = _MAGIC + nonce + AESGCM(_key()).encrypt(nonce, body, _stage_aad(stage_id, owner))
+    p = d / f"{stage_id}.bin"
+    tmp = p.with_suffix(".tmp")
+    tmp.write_bytes(blob)
+    with contextlib.suppress(OSError):
+        os.chmod(tmp, 0o600)
+    tmp.replace(p)
+    return stage_id
+
+
+def take_stage(stage_id: str, owner: str) -> tuple[str, dict]:
+    """The captured value (once: the file goes), only for the agent that captured it, within STAGE_TTL_S."""
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    if not STAGE_RE.match(stage_id or ""):
+        raise Unavailable("not a capture id")
+    p = _stage_dir() / f"{stage_id}.bin"
+    try:
+        blob = p.read_bytes()
+    except OSError:
+        raise Unavailable(f"no capture {stage_id} (used already, or older than 30 minutes): capture it again") from None
+    try:
+        data = json.loads(AESGCM(_key()).decrypt(blob[4:16], blob[16:], _stage_aad(stage_id, owner)))
+    except (InvalidTag, ValueError):
+        raise Unavailable(f"capture {stage_id} is not yours") from None
+    with contextlib.suppress(OSError):
+        p.unlink()
+    if datetime.now(timezone.utc).timestamp() - float(data.get("at") or 0) > STAGE_TTL_S:
+        raise Unavailable(f"capture {stage_id} is older than 30 minutes: capture it again")
+    return data["value"], data.get("meta") or {}

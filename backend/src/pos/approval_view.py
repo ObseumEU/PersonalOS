@@ -19,6 +19,7 @@ KIND_LABELS = {
     "money": "Peníze (platba, nákup)",
     "personal_channel": "Tvůj osobní kanál (LinkedIn, sítě)",
     "ordinary": "Běžná komunikace",
+    "secret": "Citlivé tajemství (platby, banka, tvé účty, produkční DB)",
 }
 KIND_WHY = {
     "commitment": "smlouva, cenová nabídka nebo jiný právní či finanční závazek",
@@ -34,6 +35,7 @@ ACTION_LABELS = {
     "github.issue": "Issue na GitHubu",
     "discord.send": "Zpráva na Discordu",
     "command": "Příkaz na serveru",
+    "secret.share": "Sdílení tajemství",
 }
 
 
@@ -86,6 +88,9 @@ def title(action: str, details) -> str:
     p = d.get("payload") if isinstance(d.get("payload"), dict) else {}
     subject = str(p.get("subject") or d.get("subject") or "").strip()
     base = action_label(action)
+    if action == "secret.share" and d.get("secret"):
+        to = ", ".join(str(x) for x in (d.get("to_names") or []))
+        return f"{base}: {d['secret']}" + (f" → {to}" if to else "")
     return f"{base}: {subject}" if subject else base
 
 
@@ -125,6 +130,10 @@ def view(conn: sqlite3.Connection | None, action: str, details, *, status: str =
         else:
             out["approve_label"] = "Uložit jako koncept v Gmailu"
             out["approve_hint"] = "Nic se neodešle: koncept najdeš v Gmailu a odešleš ho sám."
+    elif action == "secret.share":
+        out["text"] = str(d.get("text") or "")
+        out["approve_label"] = "Povolit sdílení"
+        out["approve_hint"] = "Agenti dostanou právo tajemství použít; hodnotu neuvidí nikdo."
     elif action == "linkedin.post":
         out["text"] = str(d.get("text") or p.get("text") or "")
         out["approve_label"] = "Schválit příspěvek"

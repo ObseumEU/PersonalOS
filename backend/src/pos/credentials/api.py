@@ -11,6 +11,7 @@ from ..api_tasks import get_ctx, get_db
 from ..api_worker import worker_ctx
 from ..auth import require_user
 from ..core import Forbidden
+from . import secrets as _secrets  # noqa: F401 - registers the approved-share hook (secret.share)
 from . import service
 
 router = APIRouter(prefix="/api/credentials", tags=["credentials"], dependencies=[Depends(require_user)])
@@ -271,3 +272,58 @@ def resolve(body: ResolveIn, conn=Depends(get_db), ctx=Depends(worker_ctx),
     except service.CredentialError as e:
         raise HTTPException(403, str(e)) from e
     return {"credentials": {n: {"value": v["value"], "env_var": v["env_var"]} for n, v in values.items()}}
+
+
+# ------------------------------------------------------------------ Tajemství: the owner's page (pos.credentials.secrets)
+
+secrets_router = APIRouter(prefix="/api/secrets", tags=["credentials"], dependencies=[Depends(require_user)])
+
+
+class SecretRevokeIn(BaseModel):
+    agent_id: int
+    reason: str = ""
+
+
+class SensitivityIn(BaseModel):
+    sensitivity: str
+
+
+def _secret(fn):
+    from . import secrets
+
+    try:
+        return fn()
+    except secrets.SecretError as e:
+        raise tasks.Invalid(str(e)) from e
+
+
+@secrets_router.get("")
+def secrets_overview(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Every secret (the agents' and the operator's CLI entries): creator, holders, last use, sensitivity.
+    Owner only. Never a value: there is no endpoint that shows one."""
+    from . import secrets
+
+    return secrets.overview(conn, ctx)
+
+
+@secrets_router.post("/{name}/revoke")
+def secrets_revoke(name: str, body: SecretRevokeIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import secrets
+
+    secrets._require_owner(conn, ctx)
+    return _secret(lambda: secrets.owner_revoke(conn, ctx, name, body.agent_id, body.reason))
+
+
+@secrets_router.post("/{name}/sensitivity")
+def secrets_sensitivity(name: str, body: SensitivityIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import secrets
+
+    return _secret(lambda: secrets.set_sensitivity(conn, ctx, name, body.sensitivity))
+
+
+@secrets_router.post("/{name}/delete")
+def secrets_delete(name: str, body: ReasonIn, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    from . import secrets
+
+    secrets._require_owner(conn, ctx)
+    return _secret(lambda: secrets.delete(conn, ctx, name, body.reason or "smazal majitel"))

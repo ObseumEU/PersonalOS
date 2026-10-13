@@ -493,6 +493,15 @@ def validate_request(conn: sqlite3.Connection, cap: str) -> None:
                           "adds new ones (or puts it into the PersonalOS vault in 1Password)") from None
     if c["archived_at"]:
         raise AccessError(f"{name} is archived")
+    from . import secrets
+
+    held_by = secrets.agent_secret_of(conn, c)
+    if held_by:
+        # An agent's own secret is shared by its holders (secret_share: the team, cross-team and approval rules),
+        # never granted on request: a request would skip the owner's approval of a high one.
+        raise AccessError(f"{name} is an agent's secret ({held_by['name']}, created by {held_by['creator']}): ask "
+                          f"one of its holders to secret_share it with you (holders: "
+                          f"{', '.join(held_by['holders']) or 'none'})")
     if scope and scope not in TOOLS and not re.fullmatch(r"(\*\.)?[a-z0-9.-]+(:\d+)?", scope):
         raise AccessError("scope after @ is command, http or a host")
 

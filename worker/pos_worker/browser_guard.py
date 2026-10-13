@@ -1009,6 +1009,11 @@ class Guard:
         await self.log("browser_capture_secret", {"target": target}, ok, None, **({} if ok else {"note": str(detail)}))
         if not ok:
             return text_result(f"Not stored: {self.red(str(detail))[:300]}", True)
+        if detail.get("capture_id"):
+            return text_result(f"Captured ({detail.get('chars')} characters) as capture_id={detail['capture_id']}. "
+                               "Within 30 minutes: secret_create(name=..., fields={'<field>': {'source': "
+                               f"'capture_browser', 'capture_id': '{detail['capture_id']}'}}}}, ...). You never see "
+                               "it; it is redacted from what you read.")
         return text_result(f"Stored {target} in PersonalOS ({detail.get('chars')} characters). You never see it; it "
                            "is redacted from what you read.")
 

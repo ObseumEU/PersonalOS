@@ -187,10 +187,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from .access.api import router as access_router
 
     app.include_router(access_router)
-    from .credentials.api import router as credentials_router, worker as credentials_worker
+    from .credentials.api import router as credentials_router, secrets_router, worker as credentials_worker
 
     app.include_router(credentials_router)  # 1Password-backed credentials (pos.credentials)
     app.include_router(credentials_worker)
+    app.include_router(secrets_router)  # Tajemství: agents' secrets, the owner's page (pos.credentials.secrets)
     app.include_router(hr_router)
     app.include_router(guard_api.router)
     guard_api.install_error_handler(app)

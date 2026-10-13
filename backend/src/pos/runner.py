@@ -236,6 +236,12 @@ def _model_for(req: "RunRequest") -> str | None:
 
 
 def _finish(conn, run_id: int, status: str, tin=None, tout=None, detail: str = "", jsonl: str = "") -> sqlite3.Row:
+    # Values the run put into a secret (pos.credentials.secrets) never reach the run's record or transcript.
+    from .credentials import secrets
+
+    who = conn.execute("SELECT actor_id FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if who is not None:
+        jsonl, detail = secrets.scrub_run(conn, run_id, who["actor_id"], jsonl or "", detail or "")
     conn.execute(
         "UPDATE runs SET status = ?, ended_at = ?, input_tokens = ?, output_tokens = ?, detail = ?, "
         "model = COALESCE(?, model), tool_calls = ?, turns = ? WHERE id = ?",

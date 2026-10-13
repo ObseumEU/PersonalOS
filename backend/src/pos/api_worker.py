@@ -1092,6 +1092,10 @@ def browser_credential(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(work
     return {"name": name, "value": v["value"]}
 
 
+# browser_capture_secret(target="secret"): a value for secret_create, staged (pos.credentials.secrets).
+SECRET_TARGET = "secret"
+
+
 @router.post("/browser/capture")
 def browser_capture(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_ctx)):
     """browser_capture_secret: a value the guard took off a page (a client id or secret in a developer portal)
@@ -1105,11 +1109,30 @@ def browser_capture(body: dict, conn=Depends(get_db), ctx: Ctx = Depends(worker_
         raise HTTPException(403, "this agent lacks tool:browser")
     run_id = _live_run(conn, ctx, body.get("run_id"))
     target = str(body.get("target") or "")
-    targets = sorted([*outbound_linkedin.CAPTURE_TARGETS, op_write.TARGET])
+    targets = sorted([*outbound_linkedin.CAPTURE_TARGETS, op_write.TARGET, SECRET_TARGET])
     if target not in targets:
         raise HTTPException(422, f"target: one of {targets}")
     u = urlparse(str(body.get("url") or ""))
     host = (u.hostname or "").lower()
+    if target == SECRET_TARGET:
+        # For secret_create (pos.credentials.secrets): any page over HTTPS (plain HTTP only on the local
+        # network), staged for 30 minutes for this agent; the agent gets a capture id, never the value.
+        from .credentials import secrets
+        from .credentials.service import private_host
+
+        if not host or not (u.scheme == "https" or (u.scheme == "http" and private_host(host))):
+            raise HTTPException(403, "a secret is taken only from an HTTPS page (plain HTTP only on the local network)")
+        try:
+            capture_id = secrets.stage_capture(ctx.actor_id, str(body.get("value") or ""), host, run_id)
+        except secrets.SecretError as e:
+            raise HTTPException(422, str(e)) from e
+        except secrets.serverstore.Unavailable as e:
+            raise HTTPException(503, str(e)) from e
+        n = len(str(body.get("value") or "").strip())
+        audit.log(conn, Ctx(ctx.actor_id, via="worker", run_id=run_id), "secret_captured", None, None, target=target,
+                  host=host, chars=n, capture_id=capture_id)
+        conn.commit()
+        return {"ok": True, "target": target, "chars": n, "capture_id": capture_id}
     if target == op_write.TARGET:
         if u.scheme != "https" or not op_write.host_ok(host):
             raise HTTPException(403, f"{target} is taken only from the 1Password web app "
