@@ -18,7 +18,7 @@ from pos.db import connect  # noqa: E402
 from pos.main import create_app  # noqa: E402
 
 FAKE_CODEX = r'''
-import json, sys, time
+import json, os, sys, time
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 def out(ev):
@@ -30,7 +30,7 @@ if "resume" in args:
     out({"type": "turn.completed", "usage": {"input_tokens": 50, "cached_input_tokens": 0, "output_tokens": 10}})
 else:
     out({"type": "thread.started", "thread_id": "thread-123"})
-    for i in range(4):
+    for i in range(int(os.environ.get("FAKE_CODEX_STEPS", "4"))):
         time.sleep(0.5)
         out({"type": "item.completed", "item": {"type": "command_execution", "command": f"step {i}"}})
     out({"type": "item.completed", "item": {"type": "agent_message", "text": "Finished without changes"}})
@@ -123,6 +123,9 @@ def _inject_when_running(tmp_path, owner, agent_id, text):
 
 def test_worker_runs_a_task_and_injects_a_message(setup, fake_codex, tmp_path, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "codex")
+    # A long first turn: the message must arrive mid-turn even on a loaded deployer (a 2 s turn finished before the
+    # injection and rejected a deploy on 2026-10-11). The injection stops the turn, so this costs no time.
+    monkeypatch.setenv("FAKE_CODEX_STEPS", "30")
     client, conn, owner, agent_id, key = setup
     from pos import tasks
 
