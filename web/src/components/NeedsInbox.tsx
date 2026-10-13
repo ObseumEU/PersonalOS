@@ -4,7 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import { agentsApi } from "../agentsApi";
 import { chatApi } from "../chatApi";
 import { ago, label, plural, t } from "../i18n";
-import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe } from "../needsMeApi";
+import { type NeedsItem, chooseOption, dropNeedsItem, refreshNeedsMe, useNeedsMe, useNeedsMeError } from "../needsMeApi";
 import { approvalHref, setSheetOrder, taskHref } from "../taskSheet";
 import { tasksApi } from "../tasksApi";
 import ApprovalBody, { approveLabel } from "./ApprovalBody";
@@ -12,7 +12,7 @@ import DecisionOptions from "./DecisionOptions";
 import OwnerActions, { OWNER_KINDS } from "./OwnerActions";
 import { AttachChips, MicButton, useAttachments } from "./compose";
 import { toast } from "./overlay";
-import { Panel } from "./ui";
+import { LoadError, Panel } from "./ui";
 
 const KIND = {
   approval: { Icon: ShieldCheck, key: "needs.kind.approval", cls: "text-amber-300" },
@@ -196,6 +196,7 @@ function Item({ it }: { it: NeedsItem }) {
 /** "Čeká na tebe": everything that needs the owner, with the action right on the row. */
 export default function NeedsInbox() {
   const needs = useNeedsMe();
+  const failed = useNeedsMeError();
   const c = needs?.counts;
   // ← → in the panel step through this list.
   useEffect(() => {
@@ -212,6 +213,7 @@ export default function NeedsInbox() {
               ? t("needs.none_short")
               : [
                   c!.handoff && `${t("needs.kind.handoff")} ${c!.handoff}`,
+                  c!.setup && `${t("needs.kind.setup")} ${c!.setup}`,
                   c!.approval && `${c!.approval} ${plural(c!.approval, t("needs.count.approval.one"), t("needs.count.approval.few"), t("needs.count.approval.many"))}`,
                   c!.ask && `${c!.ask} ${plural(c!.ask, t("needs.count.ask.one"), t("needs.count.ask.few"), t("needs.count.ask.many"))}`,
                   c!.review && `${c!.review} ${plural(c!.review, t("needs.count.review.one"), t("needs.count.review.few"), t("needs.count.review.many"))}`,
@@ -223,12 +225,13 @@ export default function NeedsInbox() {
                   .filter(Boolean)
                   .join(" · ")}
           </span>
-        ) : (
+        ) : failed ? null : (
           t("act.loading")
         )
       }
       className="border-amber-400/30"
     >
+      {!needs && failed && <LoadError error={failed} onRetry={() => void refreshNeedsMe()} />}
       {needs?.count === 0 && <p className="px-4 py-5 text-sm text-ink-2">{t("needs.none")}</p>}
       <ul className="max-h-[460px] overflow-y-auto">
         {needs?.items.map((it) => <Item key={it.key} it={it} />)}
