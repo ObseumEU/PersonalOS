@@ -28,6 +28,7 @@ const MobileAppSettings = lazy(() => import("./pages/MobileAppSettings"));
 const Notes = lazy(() => import("./pages/Notes"));
 const Projects = lazy(() => import("./pages/Projects"));
 const Reports = lazy(() => import("./pages/Reports"));
+const Secrets = lazy(() => import("./pages/Secrets"));
 const Settings = lazy(() => import("./pages/Settings"));
 const System = lazy(() => import("./pages/System"));
 const Tasks = lazy(() => import("./pages/Tasks"));
@@ -123,6 +124,7 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/mobile" element={<MobileAppSettings />} />
           <Route path="/credentials" element={<Credentials />} />
+          <Route path="/secrets" element={<Secrets />} />
           <Route path="/connectors" element={<Connectors />} />
           <Route path="/tools" element={<Tools />} />
           <Route path="/automations" element={<Automations />} />

@@ -121,6 +121,8 @@ export default {
   "m.more.full": "Otevřít celou aplikaci",
   "m.more.full_hint": "Projekty, Tým, Znalosti, Kalendář a celé Nastavení",
   "m.more.settings": "Oznámení, instalace a zařízení",
+  "m.more.secrets": "Tajemství",
+  "m.more.secrets_hint": "Hesla a klíče agentů: kdo je má, citlivost",
   "m.more.logout": "Odhlásit toto zařízení",
   "m.more.version": "Verze aplikace {v}",
 

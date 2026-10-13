@@ -13,6 +13,7 @@ import {
   Hash,
   Home,
   KeyRound,
+  LockKeyhole,
   type LucideIcon,
   MessagesSquare,
   Plug,
@@ -68,6 +69,7 @@ export const KNOWLEDGE_TABS: SubSection[] = [
 /** Nastavení: folded in the rail, a list on its own page and in the phone's "Víc" sheet. */
 export const SETTINGS: (SubSection & { blurb: string })[] = [
   { path: "/credentials", key: "nav.credentials", icon: KeyRound, blurb: "settings.blurb.credentials" },
+  { path: "/secrets", key: "nav.secrets", icon: LockKeyhole, blurb: "settings.blurb.secrets" },
   { path: "/connectors", key: "nav.connectors", icon: Plug, blurb: "settings.blurb.connectors" },
   { path: "/tools", key: "nav.tools", icon: Wrench, blurb: "settings.blurb.tools" },
   { path: "/automations", key: "nav.automations", icon: Workflow, blurb: "settings.blurb.automations" },

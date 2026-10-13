@@ -815,6 +815,9 @@ export default function Credentials() {
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-20">
       <PageHeader kicker={t("settings.kicker")} title={t("nav.credentials")} sub={t("cred.sub")} />
+      <Link to="/secrets" className="self-start text-xs text-ink-2 hover:text-accent">
+        {t("nav.secrets")} →
+      </Link>
       {v && !v.enabled && (
         <p className="panel border-amber-400/60! px-4 py-3 text-sm break-words text-amber-300">
           {t("cred.op_off", { reason: v.reason ?? "" })} <code>OP_SERVICE_ACCOUNT_TOKEN</code> {t("cred.and")} <code>POS_OP_VAULT</code> {t("cred.op_off_docs")}

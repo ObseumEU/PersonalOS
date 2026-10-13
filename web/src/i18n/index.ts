@@ -12,6 +12,7 @@ import meetings from "./cs/meetings";
 import mobile from "./cs/mobile";
 import projects from "./cs/projects";
 import report from "./cs/report";
+import secrets from "./cs/secrets";
 import settings from "./cs/settings";
 import team from "./cs/team";
 import tickets from "./cs/tickets";
@@ -19,6 +20,6 @@ import work from "./cs/work";
 
 import { register } from "./core";
 
-register(common, company, home, chat, agents, work, knowledge, settings, team, tickets, projects, mobile, report, meetings, goals, hr, handoff);
+register(common, company, home, chat, agents, work, knowledge, settings, team, tickets, projects, mobile, report, meetings, goals, hr, handoff, secrets);
 
 export * from "./core";
