@@ -790,8 +790,10 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
     - the review work items are kept in step (pos.review_work.sync).
 
     Everything is sent in the platform's voice (system_ctx), never the owner's. `dry_run`: only say
-    what would move and who would get a digest. `limit` is kept for callers; it no longer cuts the scan."""
-    from . import chat, comments, review_work, tasks, versioning, wake
+    what would move and who would get a digest. `limit` is kept for callers; it no longer cuts the scan.
+    A result the lean review policy accepts (the backlog before `python -m pos.review_policy --apply`)
+    is neither moved nor listed: nobody spends a review run on it."""
+    from . import chat, comments, review_policy, review_work, tasks, versioning, wake
 
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=REVIEW_SLA_HOURS)).isoformat(timespec="seconds")
@@ -809,11 +811,13 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
         # backlog older than the items is not moved up the chain the hour the items appear).
         item = conn.execute("SELECT MAX(created_at) FROM tasks WHERE source = ?",
                             (review_work.source_of(row["id"]),)).fetchone()[0]
-        if max(row["updated_at"], item or "") >= cutoff:
+        if max(row["updated_at"], item or "") >= cutoff or review_policy.lean_accepts(conn, row):
             continue
         reviewer = tasks.reviewer_of(conn, row)
         if item is None and review_work.deferred(conn, row, reviewer):
             continue  # a backlog result the batching has not reached: its clock starts at its item
+        if reviewer == owner and review_policy.owner_keeps(conn, row):
+            continue  # lean: he chose to review it or sent it back himself; no stand-in takes it from him
         target = _escalation_target(conn, row, reviewer, owner, ceo)
         if not target or target == reviewer:
             continue
@@ -843,7 +847,8 @@ def review_sla(conn: sqlite3.Connection, now: datetime | None = None, limit: int
     # The daily digest: one message per reviewer listing everything that waits for it.
     waiting: dict[int, list[sqlite3.Row]] = {}
     for row in conn.execute(waiting_sql).fetchall():
-        waiting.setdefault(tasks.reviewer_of(conn, row), []).append(row)
+        if not review_policy.lean_accepts(conn, row):
+            waiting.setdefault(tasks.reviewer_of(conn, row), []).append(row)
     for reviewer, items in waiting.items():
         r = actors.get(conn, reviewer)
         if r["is_owner"] or r["archived_at"]:

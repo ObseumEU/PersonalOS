@@ -570,8 +570,9 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     triaged = None
     policy = None
     if handed_in and "reviewer_id" not in extra:
-        # The risk-class review policy (pos.review_policy): low risk is accepted at once, code goes to
-        # the QA Reviewer. An explicit request_review and a reviewer the owner set are respected.
+        # The review policy (pos.review_policy): lean (the default) accepts all but what a person must
+        # see; classic accepts low risk and sends code to the QA Reviewer. An explicit request_review
+        # and a reviewer the owner set are respected.
         from . import review_policy
 
         if row["reviewer_id"] != actors.owner_id(conn):
@@ -580,7 +581,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
                 extra["reviewer_id"] = policy.reviewer_id
     if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
         extra["reviewer_id"] = reviewer_of(conn, row)
-        if extra["reviewer_id"] == actors.owner_id(conn):
+        if extra["reviewer_id"] == actors.owner_id(conn) and not (policy and policy.action == "accept"):
             # The owner's reviews go to a stand-in first (the team lead, the CEO for what needs
             # judgment); it leaves him only what truly needs him (pos.review_policy.owner_stand_in).
             from . import business
