@@ -103,10 +103,17 @@ def resolve(conn: sqlite3.Connection, ctx: Ctx, feedback_id: int, status: str, n
     return view(conn, row)
 
 
+PROMPT_BODY_CHARS = 600  # one feedback item in a run's prompt (a returned review can be pages long)
+
+
 def open_for_prompt(conn: sqlite3.Connection, actor_id: int, limit: int = 5) -> list[dict]:
-    """The latest open feedback for an agent's next run."""
-    return [{k: f[k] for k in ("id", "kind", "from_name", "task_ref", "body", "created_at")}
-            for f in list_for(conn, to_id=actor_id, status="open", limit=limit)]
+    """The latest open feedback for an agent's next run, each body cut to PROMPT_BODY_CHARS."""
+    out = [{k: f[k] for k in ("id", "kind", "from_name", "task_ref", "body", "created_at")}
+           for f in list_for(conn, to_id=actor_id, status="open", limit=limit)]
+    for f in out:
+        if len(f["body"] or "") > PROMPT_BODY_CHARS:
+            f["body"] = f["body"][:PROMPT_BODY_CHARS - 1].rstrip() + "…"
+    return out
 
 
 def coach_digest(conn: sqlite3.Connection) -> dict:

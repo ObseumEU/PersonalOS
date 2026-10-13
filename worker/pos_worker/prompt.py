@@ -26,11 +26,28 @@ def _where(m: dict) -> str:
     return f" in {place}; answer with chat_send(channel={m['channel_id']}, reply_to={thread})"
 
 
+MESSAGE_CHARS = 800  # a message body in the prompt; a longer one is cut (chat_read full=true has it whole)
+MAX_MESSAGES = 10   # messages listed in one prompt (most urgent first); the rest are only counted
+
+
+def _clip(m: dict) -> str:
+    """The message's body, cut to MESSAGE_CHARS; a wrapped one keeps its closing </external> tag."""
+    body = m.get("body") or ""
+    if len(body) <= MESSAGE_CHARS:
+        return body
+    tail = "</external>" if body.rstrip().endswith("</external>") else ""
+    more = (f" (cut; the rest: chat_read(channel={m['channel_id']}, thread={m.get('reply_to') or m['id']}, "
+            "full=true))" if m.get("channel_id") else " (cut)")
+    return body[:MESSAGE_CHARS - len(tail)].rstrip() + "…" + (f"\n{tail}" if tail else "") + more
+
+
 def _messages(msgs: list[dict]) -> str:
     out = []
-    for m in msgs:
+    for m in msgs[:MAX_MESSAGES]:
         # Bodies from agents arrive already wrapped as <external … trust="untrusted">.
-        out.append(f"- from {m['from_name']} (priority {m['priority']}, message {m['id']}{_where(m)}):\n{m['body']}")
+        out.append(f"- from {m['from_name']} (priority {m['priority']}, message {m['id']}{_where(m)}):\n{_clip(m)}")
+    if len(msgs) > MAX_MESSAGES:
+        out.append(f"- and {len(msgs) - MAX_MESSAGES} more (chat_read shows the chat ones)")
     return "\n".join(out)
 
 
