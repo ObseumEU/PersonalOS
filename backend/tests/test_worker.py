@@ -903,7 +903,9 @@ def test_the_fixed_prompt_names_its_builtin_tools_and_defers_big_tool_sets(monke
     # A Kniha profile: its own built-ins, the CLI's sub-agents/skills/to-dos never, ToolSearch for 30 tools.
     tools, search = builtin_set(["Bash", "Read", "Agent", "Skill", "TodoWrite"], [], 30)
     assert tools == ["Bash", "Read", "ToolSearch"] and search is True
-    # No profile: the default built-ins, not the CLI's default set; disallowed ones are left out.
+    # No profile: the default built-ins (the web only, no file tools), not the CLI's default set;
+    # disallowed ones are left out.
+    assert set(DEFAULT_BUILTIN) == {"WebSearch", "WebFetch"}
     tools, search = builtin_set([], ["WebFetch"], 100)
     assert tools[:-1] == [t for t in DEFAULT_BUILTIN if t != "WebFetch"] and tools[-1] == "ToolSearch"
     # A tiny set goes in upfront (no ToolSearch round trip).

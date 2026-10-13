@@ -48,7 +48,10 @@ DEFAULT_TOOLS = "mcp__pos Read Glob Grep Write Edit WebSearch WebFetch"
 
 # The built-in tools an agent gets when its profile names none (--tools always names them: the
 # CLI's default set adds ~20 tools agents never use, e.g. Agent/Task, Skill, Cron*, worktrees).
-DEFAULT_BUILTIN = ("Read", "Glob", "Grep", "Write", "Edit", "WebSearch", "WebFetch")
+# Only the web: an agent without a profile is not a coding one (its files are pos tools and the
+# sandbox); coding agents name theirs (claude_builtin, or the developer default_profile). Read comes
+# back by itself for a run with attached images (attach_images).
+DEFAULT_BUILTIN = ("WebSearch", "WebFetch")
 # Never given to an agent, even when a profile names them: sub-agents, skills and the CLI's own
 # to-do list (PersonalOS has tasks), whose descriptions and listings cost ~2k tokens on every turn.
 NEVER_BUILTIN = ("Agent", "Task", "Skill", "TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
