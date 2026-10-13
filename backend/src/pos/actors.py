@@ -35,13 +35,11 @@ def ensure_builtin(conn: sqlite3.Connection) -> dict[str, int]:
     for name, kind, owner in builtin:
         row = conn.execute("SELECT id FROM actors WHERE name = ?", (name,)).fetchone()
         if row is None:
-            cur = conn.execute(
-                "INSERT INTO actors (kind, name, is_owner, created_at) VALUES (?, ?, ?, ?)",
-                (kind, name, owner, now_iso()),
-            )
-            ids[name] = cur.lastrowid
-        else:
-            ids[name] = row["id"]
+            # ON CONFLICT: a second process starting at the same time created it between the read and here.
+            conn.execute("INSERT INTO actors (kind, name, is_owner, created_at) VALUES (?, ?, ?, ?) "
+                         "ON CONFLICT (name) DO NOTHING", (kind, name, owner, now_iso()))
+            row = conn.execute("SELECT id FROM actors WHERE name = ?", (name,)).fetchone()
+        ids[name] = row["id"]
     conn.commit()
     return ids
 
@@ -76,9 +74,11 @@ def system_id(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT id FROM actors WHERE name = ?", (SYSTEM_NAME,)).fetchone()
     if row is not None:
         return row["id"]
-    cur = conn.execute("INSERT INTO actors (kind, name, is_owner, runtime, created_at) VALUES ('agent', ?, 0, "
-                       "'service', ?)", (SYSTEM_NAME, now_iso()))
-    return cur.lastrowid
+    # Created on first use, possibly by two requests at once: the second one finds the first one's row
+    # (ON CONFLICT) instead of failing on the unique name.
+    conn.execute("INSERT INTO actors (kind, name, is_owner, runtime, created_at) VALUES ('agent', ?, 0, "
+                 "'service', ?) ON CONFLICT (name) DO NOTHING", (SYSTEM_NAME, now_iso()))
+    return conn.execute("SELECT id FROM actors WHERE name = ?", (SYSTEM_NAME,)).fetchone()["id"]
 
 
 def is_system(conn: sqlite3.Connection, actor_id: int | None) -> bool:
