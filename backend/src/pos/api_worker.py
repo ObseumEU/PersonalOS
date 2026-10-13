@@ -170,6 +170,17 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
            ORDER BY status = 'working' DESC, COALESCE(priority, 4), COALESCE(do_date, '9999'), id LIMIT 50""",
         (ctx.actor_id, cutoff, None, now_iso(), today().isoformat()),
     ).fetchall()
+    # The owner opened this agent's parked handoff and watches "Agent připravuje stránku…": that task goes first,
+    # whatever its priority, do_date or retry_after (prod 2026-10-13, T-1164 waited behind the reserve for good).
+    from . import handoff
+
+    urgent = handoff.preparing_task_ids(conn, ctx.actor_id)
+    if urgent:
+        marks = ",".join("?" * len(urgent))
+        first = conn.execute(f"""SELECT * FROM tasks WHERE id IN ({marks}) AND assignee_id = ? AND archived_at IS NULL
+                                AND status IN ('next', 'working') AND NOT {live}""",
+                             (*urgent, ctx.actor_id, cutoff, None)).fetchall()
+        candidates = list(first) + [c for c in candidates if c["id"] not in urgent]
     for cand in candidates:
         # a review item whose result no longer waits is closed and skipped (pos.review_work)
         if review_work.stale(conn, cand):
@@ -225,6 +236,8 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
         # The owner asked for this himself: the worker allows the profile's higher step cap (max_steps_owner).
         out["task"]["owner_request"] = business.owner_request(conn, conn.execute(
             "SELECT * FROM tasks WHERE id = ?", (row["id"],)).fetchone())
+        if row["id"] in urgent:  # the pool starts it ahead of ordinary work (pos_worker.pool RANK_OWNER)
+            out["task"]["owner_waiting"] = True
     return out
 
 
@@ -245,7 +258,12 @@ def _reserve_admits(conn: sqlite3.Connection, cand, st: dict) -> bool:
     its own daily budget, pos.business.owner_reply_exempt) start; the rest waits for the reserve to lift."""
     from . import business
 
+    from . import handoff
+
     if cand["status"] == "working" or business.classify(conn, cand) == "business":
+        return True
+    if handoff.prepare_exempt(conn, cand):  # the owner opened its handoff and waits for the page
+        st["owner_handoff"] = True
         return True
     if business.owner_reply_exempt(conn, cand):
         st["owner_reply"] = True
@@ -686,10 +704,15 @@ def _count_owner_reply(conn: sqlite3.Connection, ctx: Ctx, tid: int, run_id: int
     from .access import service as access
 
     try:
+        from . import handoff
+
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
         if row is None or business.classify(conn, row) == "business" or not access.business_only(conn):
             return
-        if business.owner_reply_task(conn, row):
+        if row["assignee_id"] and tid in handoff.preparing_task_ids(conn, row["assignee_id"]):
+            handoff.record_prepare_run(conn, ctx, tid, run_id)
+            conn.commit()
+        elif business.owner_reply_task(conn, row):
             business.record_owner_reply_run(conn, ctx, tid, run_id)
             conn.commit()
     except Exception:  # noqa: BLE001 - the run goes on either way

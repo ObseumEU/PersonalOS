@@ -538,3 +538,101 @@ def test_a_waiting_run_is_kept_alive_by_the_guards_poll_and_a_dead_worker_does_n
     run = w.conn.execute("SELECT status, detail FROM runs WHERE id = ?", (w.run_id,)).fetchone()
     assert run["status"] == "error" and not run["detail"].startswith(scheduler.SILENT_DETAIL)
     assert handoff.get(w.conn, h["id"])["status"] == "parked" and task_status(w) == "waiting"
+
+
+# ------------------------------------------------------------------ preparing: owner priority, real status, timeouts
+
+def _parked_platform_handoff(w, monkeypatch) -> dict:
+    """A handoff parked after its run ended, on a platform task, with the business reserve on (prod 2026-10-13,
+    T-1164: the HA Specialist's platform task never started and the owner watched the spinner for good)."""
+    from pos import business, owner_fallback, wake
+    from pos.access import service as access
+
+    monkeypatch.setattr(owner_fallback, "SENDER", lambda subject, text: "m1")
+    monkeypatch.setattr(wake, "wake", lambda actor_id: None)
+    h = ask(w)
+    w.conn.execute("UPDATE runs SET status = 'ok', ended_at = ? WHERE id = ?", (now_iso(), w.run_id))
+    w.conn.commit()
+    assert handoff.check_expiry(w.conn, handoff.get(w.conn, h["id"]))["status"] == "parked"
+    business.ensure_schema(w.conn)
+    w.conn.execute("UPDATE tasks SET value_kind = 'platform' WHERE id = ?", (w.task_id,))
+    access.set_budget(w.conn, w.owner, None, "usd_day", 50.0, "company cap")
+    w.conn.execute("INSERT INTO engine_usage (at, engine, actor_id, input_tokens, output_tokens, cost_usd) "
+                   "VALUES (?, 'claude', ?, 1000, 0, 41.0)", (now_iso(), w.owner.actor_id))
+    w.conn.commit()
+    assert access.business_only(w.conn)
+    return h
+
+
+def test_an_opened_handoff_starts_under_the_business_reserve_first_and_says_what_happens(world, monkeypatch):
+    from pos import api_worker
+
+    w = world
+    h = _parked_platform_handoff(w, monkeypatch)
+    agent = Ctx(w.agent_id, via="worker")
+    other = w.client.post("/api/tasks", json={"title": "Jiná práce", "priority": 1, "status": "next",
+                                              "assignee": {"type": "agent", "id": w.agent_id}}).json()
+    w.conn.execute("UPDATE tasks SET value_kind = 'platform' WHERE id = ?", (int(other["ref"].split("-")[1]),))
+    w.conn.commit()
+    assert "task" not in api_worker._next_work(w.conn, agent)  # the reserve holds platform work
+    opened = w.client.post(f"/api/handoffs/{h['id']}/open", json={}).json()
+    assert opened["status"] == "preparing" and opened["prepare"]["phase"] == "queued"
+    assert opened["prepare"]["deadline"]
+    # Owner priority: offered first (ahead of a priority-1 task), under the reserve, marked for the pool.
+    out = api_worker._next_work(w.conn, agent)
+    assert out["task"]["id"] == w.task_id != int(other["ref"].split("-")[1])
+    assert out["task"]["owner_waiting"] is True and out["state"]["owner_handoff"] is True
+    # Its run starts: the view says the agent is starting the browser; the run counts against the budget.
+    run = _new_run(w)
+    from pos import api_worker as aw
+
+    aw._count_owner_reply(w.conn, agent, w.task_id, run)
+    assert handoff.prepare_budget(w.conn)["runs"] == 1
+    assert w.client.get(f"/api/handoffs/{h['id']}").json()["prepare"]["phase"] == "starting"
+    # The run fails without re-attaching: parked at once, with the reason, and "Zkusit znovu" wakes it again.
+    w.conn.execute("UPDATE runs SET status = 'error', detail = 'playwright: browser crashed', ended_at = ? "
+                   "WHERE id = ?", (now_iso(), run))
+    w.conn.commit()
+    got = w.client.get(f"/api/handoffs/{h['id']}").json()
+    assert got["status"] == "parked" and got["prepare"]["phase"] == "error"
+    assert "browser crashed" in got["prepare"]["detail"]
+    again = w.client.post(f"/api/handoffs/{h['id']}/resume").json()
+    assert again["status"] == "preparing" and again["prepare"]["phase"] == "queued"
+    # The daily safety budget spent: no more starts under the reserve, and the view says until when.
+    for _ in range(handoff.PREPARE_RUNS_DAY):
+        handoff.record_prepare_run(w.conn, agent, w.task_id, run)
+    w.conn.commit()
+    assert "task" not in api_worker._next_work(w.conn, agent)
+    p = w.client.get(f"/api/handoffs/{h['id']}").json()["prepare"]
+    assert p["phase"] == "budget" and p["until"]
+
+
+def test_preparing_never_spins_silently_past_its_start_timeout(world, monkeypatch):
+    w = world
+    h = _parked_platform_handoff(w, monkeypatch)
+    w.client.post(f"/api/handoffs/{h['id']}/open", json={})
+    got = handoff.get(w.conn, h["id"])
+    t0 = datetime.fromisoformat(got["opened_at"])
+    handoff.sweep(w.conn, w.settings, now=t0 + timedelta(seconds=handoff.PREPARE_START_S - 10))
+    assert handoff.get(w.conn, h["id"])["status"] == "preparing"
+    handoff.sweep(w.conn, w.settings, now=t0 + timedelta(seconds=handoff.PREPARE_START_S + 5))
+    got = handoff.get(w.conn, h["id"])
+    assert got["status"] == "parked" and "nespustil" in got["prepare_note"]
+    p = w.client.get(f"/api/handoffs/{h['id']}").json()["prepare"]
+    assert p["phase"] == "timeout" and "nespustil" in p["detail"]
+    # A run that started keeps it going up to PREPARE_MINUTES in all, then it parks too.
+    assert w.client.post(f"/api/handoffs/{h['id']}/resume").json()["status"] == "preparing"
+    t1 = datetime.fromisoformat(handoff.get(w.conn, h["id"])["opened_at"])
+    _new_run(w)
+    handoff.sweep(w.conn, w.settings, now=t1 + timedelta(seconds=handoff.PREPARE_START_S + 5))
+    assert handoff.get(w.conn, h["id"])["status"] == "preparing"
+    handoff.sweep(w.conn, w.settings, now=t1 + timedelta(minutes=handoff.PREPARE_MINUTES, seconds=5))
+    got = handoff.get(w.conn, h["id"])
+    assert got["status"] == "parked" and got["prepare_note"]
+
+
+def test_the_pool_starts_an_owner_waiting_handoff_first():
+    from pos_worker import pool as wpool
+
+    work = {"state": {}, "unread_messages": 0, "task": {"topic": "ops", "priority": 4, "owner_waiting": True}}
+    assert wpool.work_rank(work) == wpool.RANK_OWNER

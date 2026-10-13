@@ -21,7 +21,25 @@ export type Handoff = {
   parked?: boolean;
   frame_version: number;
   page: { url?: string; title?: string; w?: number; h?: number };
+  /** What really happens while the agent prepares the page (or why a parked one did not go live). */
+  prepare?: HandoffPrepare | null;
 };
+
+export type HandoffPrepare = {
+  phase: "queued" | "starting" | "budget" | "error" | "timeout";
+  detail: string;
+  /** budget: when the agent can start (ISO). */
+  until: string | null;
+  /** when the view gives up waiting (ISO). */
+  deadline: string | null;
+};
+
+/** "HH:MM" local time of an ISO instant ("" when missing). */
+export function hhmm(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
+}
 
 /** One input event for the agent's page; x and y are 0..1 of the page's viewport. */
 export type HandoffEvent =

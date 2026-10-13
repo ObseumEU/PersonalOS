@@ -6,7 +6,7 @@ import { register } from "node:module";
 import { test } from "node:test";
 
 register("./ts-resolve.mjs", import.meta.url);
-const { isOpen, isPending, keyName, minutesLeft, pointAt } = await import("../src/handoffApi.ts");
+const { hhmm, isOpen, isPending, keyName, minutesLeft, pointAt } = await import("../src/handoffApi.ts");
 
 const k = (key: string, mods: Partial<{ ctrlKey: boolean; altKey: boolean; metaKey: boolean; shiftKey: boolean }> = {}) =>
   keyName({ key, ctrlKey: false, altKey: false, metaKey: false, shiftKey: false, ...mods });
@@ -48,4 +48,10 @@ test("a parked or preparing handoff has no live page yet, but is not over", () =
   assert.equal(isPending("preparing"), true);
   assert.equal(isOpen("preparing"), false);
   assert.equal(isPending("active") || isPending("done"), false);
+});
+
+test("the preparing view's times are HH:MM, empty when missing or bad", () => {
+  assert.match(hhmm("2026-10-13T13:16:06+00:00"), /^\d{1,2}:\d{2}$/);
+  assert.equal(hhmm(null), "");
+  assert.equal(hhmm("not a time"), "");
 });

@@ -70,6 +70,8 @@ def work_rank(work: dict) -> int | None:
     if state.get("frozen") or state.get("paused") or state.get("archived"):
         return None
     task = work.get("task") or None
+    if task and task.get("owner_waiting"):  # the owner opened its browser handoff and watches it being prepared
+        return RANK_OWNER
     if task and task.get("topic") == "chat":
         return RANK_OWNER if task.get("priority") == 1 else RANK_CHAT
     if not task:

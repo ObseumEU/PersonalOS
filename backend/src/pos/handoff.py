@@ -23,6 +23,13 @@ to this handoff (now `active`, the owner is there), and his view goes from "Agen
 live page. If the agent has not attached within PREPARE_MINUTES, the handoff is parked again (opening it wakes
 the agent once more).
 
+The owner is waiting while it prepares (prod 2026-10-13, T-1164: the business reserve held the HA Specialist's
+platform task and the owner watched "Agent připravuje stránku…" for good). So: the re-prepare run is owner priority
+(pos.api_worker offers it first and under the business reserve, within PREPARE_RUNS_DAY / PREPARE_USD_DAY a day);
+the view carries what really happens (`prepare`: queued, starting, budget with until when, error); a run that
+ends without re-attaching parks it at once with the reason; and nobody waits longer than PREPARE_START_S for the
+run to start or PREPARE_MINUTES in all: then it parks with a clear note and "Zkusit znovu".
+
 Notice: the push of "Čeká na tebe" (pos.push); when the owner has no working push subscription, one e-mail to
 his work mailbox per handoff (pos.owner_fallback), sent by the minute sweep.
 
@@ -54,7 +61,11 @@ LIVE_MINUTES = 5  # how long the agent's run waits for the owner (its browser st
 DEFAULT_MINUTES = LIVE_MINUTES
 MAX_MINUTES = 10  # the most an agent may ask to wait: a run never holds a pool slot for long
 OWNER_THERE_MINUTES = 20  # re-attached while the owner looks at it ("preparing"): he is there, give him time
-PREPARE_MINUTES = 15  # the owner opened a parked one: the agent has this long to prepare it again
+PREPARE_MINUTES = 8  # the owner opened a parked one: the agent has this long in all to prepare it again
+PREPARE_START_S = 180  # ... and this long for its run to start at all (queued or held): then it parks with why
+PREPARE_RUNS_DAY = 8  # re-prepare runs started under the business reserve, company-wide, rolling 24 h
+PREPARE_USD_DAY = 4.0  # ... and what they cost (an unfinished run counts at RUN_EST_FLOOR_USD)
+PREPARE_AUDIT = "handoff_prepare_reserve"
 REMIND_AFTER_MIN = 60  # one reminder push for a parked handoff the owner has not opened by then
 OPEN = ("waiting", "active")  # live: an agent's run holds the browser
 PENDING = ("parked", "preparing")  # no run: waits for the owner (parked) or for the agent (preparing)
@@ -89,12 +100,15 @@ CREATE TABLE IF NOT EXISTS browser_handoffs (
     parked_at TEXT,
     notified_at TEXT,
     notified_via TEXT,
-    reattached INTEGER NOT NULL DEFAULT 0
+    reattached INTEGER NOT NULL DEFAULT 0,
+    prepare_note TEXT,
+    prepare_from_run INTEGER
 );
 CREATE INDEX IF NOT EXISTS browser_handoffs_status ON browser_handoffs(status);
 """
 _COLUMNS = {"parked_at": "TEXT", "notified_at": "TEXT", "notified_via": "TEXT",
-            "reattached": "INTEGER NOT NULL DEFAULT 0"}
+            "reattached": "INTEGER NOT NULL DEFAULT 0", "prepare_note": "TEXT",
+            "prepare_from_run": "INTEGER"}
 _ready: set[str] = set()
 
 
@@ -364,7 +378,7 @@ def _reattach(conn: sqlite3.Connection, ctx: Ctx, h: dict, run, url: str | None,
     hint = _clean_hint(done_hint) or h["done_hint"]
     conn.execute("""UPDATE browser_handoffs SET run_id = ?, status = ?, expires_at = ?, url = COALESCE(?, url),
                     done_hint = ?, reason = CASE WHEN ? != '' THEN ? ELSE reason END, reattached = reattached + 1,
-                    finished_at = NULL, finished_by = NULL WHERE id = ?""",
+                    finished_at = NULL, finished_by = NULL, prepare_note = NULL WHERE id = ?""",
                  (run["id"], status, _iso(until), _host_path(url), json.dumps(hint),
                   " ".join(str(reason or "").split())[:600], " ".join(str(reason or "").split())[:600], h["id"]))
     t = conn.execute("SELECT status FROM tasks WHERE id = ?", (h["task_id"],)).fetchone()
@@ -425,8 +439,10 @@ def _reprepare(conn: sqlite3.Connection, ctx: Ctx, h: dict) -> None:
     from . import wake
 
     now = _now()
-    conn.execute("""UPDATE browser_handoffs SET status = 'preparing', opened_at = ?, expires_at = ? WHERE id = ?
-                    AND status = 'parked'""", (_iso(now), _iso(now + timedelta(minutes=PREPARE_MINUTES)), h["id"]))
+    last = conn.execute("SELECT COALESCE(MAX(id), 0) FROM runs").fetchone()[0]
+    conn.execute("""UPDATE browser_handoffs SET status = 'preparing', opened_at = ?, expires_at = ?, prepare_note = NULL,
+                    prepare_from_run = ? WHERE id = ? AND status = 'parked'""",
+                 (_iso(now), _iso(now + timedelta(minutes=PREPARE_MINUTES)), last, h["id"]))
     if h["task_id"]:
         t = conn.execute("SELECT status FROM tasks WHERE id = ?", (h["task_id"],)).fetchone()
         if t and t["status"] not in ("done", "cancelled"):
@@ -513,12 +529,15 @@ def check_expiry(conn: sqlite3.Connection, h: dict, now: datetime | None = None)
     again. Commits when it changes."""
     if h["status"] == "preparing":
         now = now or _now()
-        if h["expires_at"] > _iso(now):
+        why, note = _prepare_failed(conn, h, now)
+        if why is None:
             return h
-        conn.execute("UPDATE browser_handoffs SET status = 'parked' WHERE id = ? AND status = 'preparing'", (h["id"],))
+        conn.execute("UPDATE browser_handoffs SET status = 'parked', prepare_note = ? WHERE id = ? AND "
+                     "status = 'preparing'", (note[:500], h["id"]))
         audit.log(conn, Ctx(h["actor_id"], via="system"), "handoff_parked", "task" if h["task_id"] else None,
-                  h["task_id"], handoff_id=h["id"], why="not_prepared")
+                  h["task_id"], handoff_id=h["id"], why=why)
         conn.commit()
+        _wake(h["id"])
         return get(conn, h["id"])
     if h["status"] not in OPEN:
         return h
@@ -547,6 +566,138 @@ def check_expiry(conn: sqlite3.Connection, h: dict, now: datetime | None = None)
     _wake(h["id"])
     drop_relay(h["id"])
     return get(conn, h["id"])
+
+
+# ------------------------------------------------------------------ preparing: owner priority, real status, timeouts
+
+def _prepare_run(conn: sqlite3.Connection, h: dict):
+    """The agent's newest run on this task since the owner opened it (None: none started yet)."""
+    if not h["task_id"] or not h["opened_at"]:
+        return None
+    if h.get("prepare_from_run") is not None:  # runs started after he opened it (ids, not second-granular times)
+        return conn.execute("SELECT id, status, detail, started_at, ended_at FROM runs WHERE actor_id = ? AND "
+                            "task_id = ? AND id > ? ORDER BY id DESC LIMIT 1",
+                            (h["actor_id"], h["task_id"], h["prepare_from_run"])).fetchone()
+    return conn.execute("SELECT id, status, detail, started_at, ended_at FROM runs WHERE actor_id = ? AND task_id = ? "
+                        "AND started_at >= ? ORDER BY id DESC LIMIT 1",
+                        (h["actor_id"], h["task_id"], h["opened_at"])).fetchone()
+
+
+def _hhmm(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.fromisoformat(iso).astimezone(ZoneInfo("Europe/Prague")).strftime("%H:%M")
+    except (ValueError, KeyError):
+        return ""
+
+
+def _run_failed_note(run) -> str:
+    detail = " ".join(str(run["detail"] or "").split())[:240]
+    if run["status"] == "ok":
+        return "Běh agenta skončil, aniž stránku připravil" + (f": {detail}" if detail else ".")
+    if run["status"] == "blocked":
+        return "Běh agenta byl zastaven limitem" + (f": {detail}" if detail else ".")
+    return f"Běh agenta skončil chybou ({run['status']})" + (f": {detail}" if detail else ".")
+
+
+def _blocker(conn: sqlite3.Connection, h: dict) -> dict | None:
+    """Why no run has started for this preparing handoff yet: {phase, detail, until}, or None (it is just queued)."""
+    from . import killswitch
+    from .access import service as access
+
+    agent = actors.get(conn, h["actor_id"])
+    if killswitch.is_frozen(conn):
+        return {"phase": "error", "detail": "Všichni agenti jsou zmrazení (kill switch).", "until": None}
+    if agent["paused_at"] or agent["archived_at"]:
+        return {"phase": "error", "detail": f"Agent {agent['name']} je pozastavený.", "until": None}
+    try:
+        capped = access.admission(conn, h["actor_id"])
+        if capped:
+            until = capped.get("until") or capped.get("queue_until")
+            return {"phase": "budget", "until": until,
+                    "detail": f"Firemní denní rozpočet je vyčerpaný; agent se spustí v {_hhmm(until)}."}
+        until = access.limited_until(conn, h["actor_id"])
+        if until:
+            return {"phase": "budget", "until": until,
+                    "detail": f"Agent {agent['name']} vyčerpal svůj limit; spustí se v {_hhmm(until)}."}
+        if access.business_only(conn) and not prepare_budget(conn)["left"]:
+            until = access.business_only_until(conn)
+            return {"phase": "budget", "until": until,
+                    "detail": f"Rezerva pro předání je na dnes vyčerpaná; agent se spustí v {_hhmm(until)}."}
+    except Exception:  # noqa: BLE001 - the status is a courtesy: queued is the honest fallback
+        return None
+    return None
+
+
+def _prepare_failed(conn: sqlite3.Connection, h: dict, now: datetime) -> tuple[str | None, str]:
+    """A preparing handoff that will not go live: (why, the owner's note), else (None, '')."""
+    run = _prepare_run(conn, h)
+    if run is not None and run["status"] != "running":
+        return "run_failed", _run_failed_note(run)
+    if h["expires_at"] <= _iso(now):
+        return "not_prepared", (f"Agent stránku nepřipravil do {PREPARE_MINUTES} min. Zkus to znovu; když to "
+                                "nepomůže, předání zruš.")
+    opened = datetime.fromisoformat(h["opened_at"]) if h["opened_at"] else None
+    if run is None and opened is not None and now - opened >= timedelta(seconds=PREPARE_START_S):
+        b = _blocker(conn, h)
+        why = (b or {}).get("detail") or "Agent se nespustil (všechny sloty agentů jsou obsazené)."
+        return "not_started", f"Agent se do {PREPARE_START_S // 60} min nespustil. {why}"
+    return None, ""
+
+
+def prepare_status(conn: sqlite3.Connection, h: dict) -> dict | None:
+    """What the owner's "preparing" view shows: {phase: queued|starting|budget|error|timeout, detail, until,
+    deadline}. A parked one he opened carries its note (why it did not go live)."""
+    if h["status"] == "parked":
+        if h.get("prepare_note") and h["opened_at"]:
+            phase = "error" if (h.get("prepare_note") or "").startswith("Běh agenta") else "timeout"
+            return {"phase": phase, "detail": h["prepare_note"], "until": None, "deadline": None}
+        return None
+    if h["status"] != "preparing":
+        return None
+    opened = datetime.fromisoformat(h["opened_at"]) if h["opened_at"] else _now()
+    run = _prepare_run(conn, h)
+    if run is not None and run["status"] == "running":
+        return {"phase": "starting", "detail": "Agent spouští prohlížeč a otevírá stránku.", "until": None,
+                "deadline": h["expires_at"]}
+    deadline = _iso(min(opened + timedelta(seconds=PREPARE_START_S), datetime.fromisoformat(h["expires_at"])))
+    b = _blocker(conn, h)
+    if b:
+        return {**b, "deadline": deadline}
+    return {"phase": "queued", "detail": "Ve frontě: agent se spouští.", "until": None, "deadline": deadline}
+
+
+def preparing_task_ids(conn: sqlite3.Connection, actor_id: int) -> list[int]:
+    """This agent's tasks whose handoff the owner opened and waits on (owner priority in pos.api_worker)."""
+    ensure_schema(conn)
+    return [r[0] for r in conn.execute("SELECT DISTINCT task_id FROM browser_handoffs WHERE actor_id = ? AND "
+                                       "status = 'preparing' AND task_id IS NOT NULL", (actor_id,))]
+
+
+def prepare_budget(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
+    """Re-prepare runs started under the business reserve in the last 24 h: {runs, usd, left}."""
+    from .access.service import RUN_EST_FLOOR_USD
+
+    now = now or _now()
+    rows = conn.execute("""SELECT r.status, r.cost_usd FROM audit_log l
+                           LEFT JOIN runs r ON r.id = CAST(json_extract(l.detail, '$.run') AS INTEGER)
+                           WHERE l.action = ? AND l.at >= ?""", (PREPARE_AUDIT, _iso(now - timedelta(days=1)))).fetchall()
+    usd = sum(float(r["cost_usd"]) if r["cost_usd"] is not None else
+              (RUN_EST_FLOOR_USD if r["status"] in (None, "running") else 0.0) for r in rows)
+    return {"runs": len(rows), "usd": round(usd, 4), "left": len(rows) < PREPARE_RUNS_DAY and usd < PREPARE_USD_DAY}
+
+
+def prepare_exempt(conn: sqlite3.Connection, row) -> bool:
+    """Does this task start under the business reserve because the owner opened its handoff and waits?"""
+    return (row["assignee_id"] is not None and row["id"] in preparing_task_ids(conn, row["assignee_id"])
+            and prepare_budget(conn)["left"])
+
+
+def record_prepare_run(conn: sqlite3.Connection, ctx: Ctx, task_id: int, run_id: int) -> None:
+    audit.log(conn, ctx, PREPARE_AUDIT, "task", task_id, run=run_id)
 
 
 def close(conn: sqlite3.Connection, ctx: Ctx, hid: int, *, resume: bool) -> dict:
@@ -712,7 +863,8 @@ def view(conn: sqlite3.Connection, h: dict) -> dict:
             "created_at": h["created_at"], "expires_at": h["expires_at"], "opened_at": h["opened_at"],
             "finished_at": h["finished_at"], "finished_by": h["finished_by"], "closed": bool(h["closed_at"]),
             "preparing": h["status"] == "preparing", "parked": h["status"] == "parked",
-            "done_hint": h["done_hint"], "frame_version": r.version, "page": dict(r.meta)}
+            "done_hint": h["done_hint"], "frame_version": r.version, "page": dict(r.meta),
+            "prepare": prepare_status(conn, h)}
 
 
 def needs_items(conn: sqlite3.Connection) -> list[dict]:

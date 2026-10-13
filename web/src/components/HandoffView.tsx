@@ -1,6 +1,6 @@
 import { Check, ChevronDown, ChevronUp, CornerDownLeft, Delete, Loader2, Lock, RotateCcw, X, ZoomIn } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Handoff, type HandoffEvent, handoffApi, isOpen, isPending, keyName, minutesLeft, pointAt } from "../handoffApi";
+import { type Handoff, type HandoffEvent, handoffApi, hhmm, isOpen, isPending, keyName, minutesLeft, pointAt } from "../handoffApi";
 import { register, t } from "../i18n/core";
 import handoffDict from "../i18n/cs/handoff";
 import { refreshNeedsMe } from "../needsMeApi";
@@ -10,6 +10,38 @@ register(handoffDict);
 
 /** The owner in an agent's live browser (pos.handoff): the page as the agent's browser shows it, his clicks,
  * taps, scrolling and typing go into that same page, then "Hotovo" and the agent continues. Desktop and /m. */
+/** The real state of a handoff being prepared (pos.handoff.prepare_status): never a silent spinner. */
+function PrepareStatus({ h }: { h: Handoff }) {
+  const p = h.prepare;
+  if (!p) {
+    return (
+      <p className="flex items-center gap-2 text-sm" role="status" aria-live="polite">
+        {h.status === "preparing" && <Loader2 size={16} className="shrink-0 animate-spin text-accent" />}
+        {t(`ho.state.${h.status}`)}
+      </p>
+    );
+  }
+  const bad = p.phase === "error" || p.phase === "timeout";
+  const head =
+    p.phase === "budget"
+      ? p.until
+        ? t("ho.prep.budget", { until: hhmm(p.until) })
+        : t("ho.prep.budget_nountil")
+      : bad
+        ? t(`ho.prep.${p.phase}`, { detail: p.detail })
+        : t(`ho.prep.${p.phase}`);
+  return (
+    <div className="flex flex-col gap-1" role="status" aria-live="polite">
+      <p className={`flex items-center gap-2 text-sm ${bad ? "text-red-300" : ""}`}>
+        {!bad && <Loader2 size={16} className="shrink-0 animate-spin text-accent" />}
+        <span className="break-words">{head}</span>
+      </p>
+      {p.phase === "budget" && p.detail && <p className="text-xs break-words text-ink-2">{p.detail}</p>}
+      {!bad && p.deadline && <p className="text-xs text-ink-2">{t("ho.prep.deadline", { at: hhmm(p.deadline) })}</p>}
+    </div>
+  );
+}
+
 export default function HandoffView({ id, mobile = false, onClose }: { id: number; mobile?: boolean; onClose?: () => void }) {
   const [h, setH] = useState<Handoff | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -213,10 +245,7 @@ export default function HandoffView({ id, mobile = false, onClose }: { id: numbe
 
       {pending ? (
         <div className="flex flex-col gap-3 px-4 pb-4">
-          <p className="flex items-center gap-2 text-sm" role="status" aria-live="polite">
-            {h.status === "preparing" && <Loader2 size={16} className="shrink-0 animate-spin text-accent" />}
-            {t(`ho.state.${h.status}`)}
-          </p>
+          <PrepareStatus h={h} />
           <div className="flex flex-wrap gap-2">
             {h.status === "parked" && (
               <button className={primary} disabled={busy} onClick={() => finish("resume")}>
