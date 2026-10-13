@@ -21,52 +21,36 @@ other feedback that changes how the work is done.
 
 ## Leads
 
-Everyone has a lead (`reports_to`). The team is a company (docs/REORG.md):
-the owner is the board, the CEO reports to him, the heads to the CEO and
-everyone else to a head; `agents/<slug>/agent.json` sets each role's lead,
-and a member without one gets the COO. A lead, for everyone below it:
+Everyone has a lead (`reports_to`). Since the lean org (docs/REORG.md, 2026-10) the chart is
+flat: the owner is the board, the **CEO** reports to him and every other agent reports to the
+CEO. `agents/<slug>/agent.json` sets each role's lead. A lead, for everyone below it:
 
 - assigns, hands on and reassigns their tasks (`task_reassign`, `handoff_task`);
-- pauses, resumes or stops them (`manage_agent`), and may send them `stop` in chat;
-- reviews their work;
-- edits their routines and moves them within its own part of the chart.
+- pauses, resumes or stops them (`manage_agent`);
+- edits their routines.
 
 Permissions, limits, budget and archiving stay with the owner and HR.
 
-## Chain of command: who talks to the owner
+## Who talks to the owner
 
-Report to your lead, not the owner. Only the top of the chain (the CEO)
-contacts the owner: a DM, an
-@mention of him, an `ask_owner` ticket. Replying to the owner when he wrote to
-you (his DM, a thread he started, his message while you work) is always fine.
+The **CEO** is his one point of contact: it answers his messages at once and concretely, and
+gives work straight to the doer. Replying to the owner when he wrote to you (his DM, a thread he
+started, his message while you work) is always fine for every agent. Everything else that needs
+him goes to the CEO, which sends him one short morning summary (weekdays 08:40) and puts real
+decisions on an `ask_owner` card with a recommendation.
 
-Before contacting the owner, ask: can my lead decide this? If yes, ask the
-lead (`chat_send` with `to`, `send_message`, a task or `handoff_task`). The
-lead decides what it can, answers the asker and escalates up only what it
-cannot, by the same rule.
-
-- **The top of the chain batches.** The CEO collects what needs the owner;
-  the Chief of Staff sends him one Czech digest at most twice a day (08:40
-  and 16:30): numbered items, a one-line recommendation each, the task refs. Only urgent things (money being lost, the owner's data
-  or security at risk, a deadline today) go at once, with the reason.
-- **Owner-only items stay the owner's:** approvals of money, commitments and
-  posts on his personal channels (constitution rule 1; ordinary sends go out
-  directly and the CEO reviews them daily) and credential grants. They wait in their queues (Approvals,
-  Přístupy) and the digest lists them; nobody pings him per item.
-- **Narrow exceptions**, each written in the agent's instructions: the
-  Hlídač for critical incidents (severity critical, or the owner's data or
-  security at stake), at most 3 a day; the Access manager's daily digest (and
-  its company-cap alert); the Chief of Staff's digest, weekly report and
-  meeting in #weekly; the Home Assistant Specialist's safety OKs.
-
-This is a rule in the agents' instructions (the shared how-to-work lines, the
-MCP tool descriptions, `agents/README.md`, each `INSTRUCTIONS.md`), not a gate
-in code.
+- **Owner-only items stay the owner's:** approvals of money, commitments and posts on his
+  personal channels (constitution rule 1) and credential grants. They wait in their queues
+  (Approvals, Přístupy) and the morning summary lists them.
+- **Exceptions:** the SRE for critical incidents (severity critical, or the owner's data or
+  security at stake), at most 3 a day; the Access manager's daily digest (code).
 
 ## Tasks, review and activity
 
-- Every task has a **reviewer**: the one set on it, else whoever asked for it,
-  else the assignee's lead (the project lead in a project), else the owner.
+- Results are **accepted automatically** (`POS_REVIEW_MODE=lean`, docs/REORG.md). A person
+  reviews only money, legal, security, customer replies, outbound that needs approval, a
+  done-claim without evidence and work the owner returned. Such a task has a **reviewer**: the
+  one set on it, else whoever asked for it, else the assignee's lead, else the owner.
   Agents review only with `tasks:review`. A result goes to review unless its
   reviewer finishes it; nobody approves their own work, and an agent never
   reviews what it has just handed over. `review_task` accepts or returns

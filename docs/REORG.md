@@ -1,4 +1,70 @@
-# Reorganisation into a company (2026-09)
+# Lean org (2026-10)
+
+The owner asked (2026-10-13): *fix the whole PersonalOS, find out why it works so badly, cut
+the pointless roles, the token waste, the budgets and the limits.*
+
+## Why
+Measured on production for the week to 2026-10-13 (~$197 list price):
+- **~37 % went on the org itself**: reviews ($21, 190 runs; the CEO alone did 92), chat
+  wake-ups "Chat: nepřečtené zprávy" ($23, 111 runs), routines and meetings ($18), coaching
+  and instruction rewrites, chat loops between agents, command approvals.
+- **The real worker was starved**: the company cap ($50/24 h) blocked the Kniha Developer 29
+  times while heads reviewed each other; its own run cap ($1.5) cut coding runs mid-work.
+- **27 agents, all on Opus, ~120 tools each**; per-agent limits of $20/day summed to ~$400
+  against the $50 cap, so they meant nothing. Of the last 39 closed Kniha tasks, 3 were product work.
+- **Process was measured, not outcomes**: closed tasks, reviews and "Ověřeno" lines; agents
+  learned to produce paper.
+
+## The org
+```
+Board: David (Owner)
+└── CEO ........................ the owner's one point of contact; everyone reports to it
+    ├── Kniha Developer ........ "Kniha Produkt": product end to end (paused 2026-10-13: the
+    │                            owner's own session finishes app/ and web/)
+    ├── Kniha Growth & Sales ... "Kniha Obchod": customers, partners, sales, content
+    ├── Head of Customer Success "Obchod a zákazníci": Obseum customers, support, pipeline, LinkedIn
+    ├── Software Engineer ...... code of PersonalOS, Nexus and knowlage (effort high)
+    ├── SRE .................... servers, incidents (was the Hlídač), backups, security
+    ├── Home Assistant Specialist
+    ├── CFO .................... invoices, costs and contracts on request (was Legal)
+    └── platform identities, no routine work: Executive Assistant (chat fast lane, actor 2),
+        Access manager (hard limits), Head of People (dormant; hiring and the HR review)
+Services (no worker): Deployer, Knowledge agent (knowlage), Nexus, PersonalOS.
+```
+Archived (history kept, `agents/_archive/`), with the successor that took their open work
+(`roles.LEAN_SUCCESSORS` / `pos.reorg_lean.SUCCESSORS`): COO, Chief of Staff, Legal & Compliance,
+Performance Coach → CEO; CTO, QA Reviewer, Nexus Specialist, Knowlage Specialist, Nabu
+Specialist → Software Engineer; Hlídač, Security Engineer → SRE; Head of Growth, Content &
+Brand, Community Manager → Head of Customer Success; Kniha Lead → Kniha Developer; Kniha
+Marketing Lead, Kniha Content Creator → Kniha Growth & Sales.
+
+## Rules that changed
+- **No review by default.** Results are accepted automatically (`POS_REVIEW_MODE=lean`); a
+  person looks only at money, legal, security, customer replies, outbound that needs approval,
+  a done-claim without evidence and work the owner returned. Code is checked by the tests and
+  the deployer's gates, not by a QA agent.
+- **No meetings, standups, coaching rounds or self-improvement loops.** Two routines remain:
+  the CEO's weekday morning summary (08:40) and Obchod a zákazníci's weekly pipeline (Tue 10:00).
+  The sentinel's code does the health checks.
+- **Chat wakes an agent only for a person** (the owner or another human), or a DM / @mention
+  from its lead or the CEO. Agent-to-agent chatter waits for the next real task.
+- **Outcomes over activity**: instructions measure what reached the world (a live feature on the
+  public address, a sent mail, a reply, an order), never closed tasks or notes.
+- **Budgets per agent from agent.json** (`budget`), summing to about the company cap: the
+  builders get the room (Kniha Developer $20/day, $6/run; Software Engineer $15/day, $6/run),
+  routine roles a few dollars. The company cap ($50/24 h) stays the owner's.
+- **Narrow tools**: every kept agent has `pos_tools` in its profile; non-coding agents get no
+  file or shell tools.
+- **Memory** holds 12 000 characters (was 8 000); rules belong in INSTRUCTIONS.md, facts in memory.
+- **HR limit**: at most 16 active members (`hr.max_active_agents`); more needs the owner.
+
+## Applying it
+`python -m pos.reorg_lean` (dry run), `--apply`, `--announce` (the CEO's note in #team).
+Idempotent; everything is archived, never deleted (constitution rule 3).
+
+---
+
+# Reorganisation into a company (2026-09) [superseded by the lean org above]
 
 The owner asked (2026-09-26): *reorganise all the agents, redo the whole
 hierarchy so it makes sense; delete them all and recreate the structure so it
