@@ -405,10 +405,14 @@ def test_kept_logins_load_privately_and_go_back_when_they_change(monkeypatch, tm
     assert not fresh.profile and "--storage-state" not in fresh.playwright().args
 
 
-def test_orphaned_browsers_are_found_by_their_parent(tmp_path):
+def test_orphaned_browsers_are_found_by_their_parent(tmp_path, monkeypatch):
+    """The children come from the same (fake) proc tree, never the real /proc, and the test's own pid does not
+    matter: in the deployer, whose real pids are small, this went flaky and rejected a deploy (2026-10-12)."""
     proc = tmp_path / "proc"
+    monkeypatch.setattr(browser_guard.os, "getpid", lambda: 999_999)
     for pid, ppid, cmd in ((1, 0, "tini"), (40, 1, "python -m pos_worker.pool"),
-                           (77, 1, "/ms-playwright/chromium-1247/chrome --headless"), (78, 40, "chrome --type=renderer")):
+                           (77, 1, "/ms-playwright/chromium-1247/chrome --headless"), (78, 40, "chrome --type=renderer"),
+                           (79, 77, "chrome --type=gpu-process")):
         d = proc / str(pid)
         d.mkdir(parents=True)
         (d / "stat").write_text(f"{pid} (x) S {ppid} 0 0")
@@ -422,7 +426,7 @@ def test_orphaned_browsers_are_found_by_their_parent(tmp_path):
         browser_guard.sweep_orphans(proc)
     finally:
         os.kill = real_kill
-    assert 77 in killed and 40 not in killed and 78 not in killed
+    assert sorted(killed) == [77, 79]
 
 
 # ------------------------------------------------------------------ Codex gets the same server

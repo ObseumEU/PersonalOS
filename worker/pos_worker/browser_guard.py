@@ -122,9 +122,9 @@ def result_text(res) -> str:
 
 # ------------------------------------------------------------------ resources (Linux: /proc, flock)
 
-def _children_map() -> dict[int, list[int]]:
+def _children_map(proc: Path = Path("/proc")) -> dict[int, list[int]]:
     kids: dict[int, list[int]] = {}
-    for d in Path("/proc").glob("[0-9]*"):
+    for d in proc.glob("[0-9]*"):
         try:
             ppid = int((d / "stat").read_text().rsplit(")", 1)[1].split()[1])
         except (OSError, ValueError, IndexError):
@@ -133,9 +133,9 @@ def _children_map() -> dict[int, list[int]]:
     return kids
 
 
-def descendants(root: int) -> list[int]:
+def descendants(root: int, proc: Path = Path("/proc")) -> list[int]:
     """Every process below `root` (Linux /proc); [] elsewhere."""
-    kids = _children_map()
+    kids = _children_map(proc)
     out, todo = [], [root]
     while todo:
         for c in kids.get(todo.pop(), []):
@@ -188,8 +188,10 @@ def sweep_orphans(proc: Path = Path("/proc")) -> list[int]:
             cmd = (d / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
         except (OSError, ValueError, IndexError):
             continue
+        # The children from the same proc tree: the real /proc's pids are another tree (the test's fake one went
+        # flaky in the deployer, whose own pids are small numbers: it rejected a deploy on 2026-10-12).
         if ppid == 1 and BROWSER_PROC.search(cmd) and int(d.name) != os.getpid():
-            for pid in [*descendants(int(d.name)), int(d.name)]:
+            for pid in [*descendants(int(d.name), proc), int(d.name)]:
                 with contextlib.suppress(OSError):
                     os.kill(pid, 9)
                     killed.append(pid)
