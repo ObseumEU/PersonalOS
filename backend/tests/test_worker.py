@@ -583,7 +583,9 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
     stable = stable_prompt(me)
     # One shared "How to work" block; a line whose tool the agent does not see is left out.
     assert "schedule_create" not in stable and "memory_update" not in stable and stable.count("# How to work") == 1
-    assert "request_outbound" in stable and "definition_of_done" in stable and "Not due yet" not in stable
+    assert "request_access" in stable and "definition_of_done" in stable and "Not due yet" not in stable
+    # Outbound is the guardrails' (not repeated here); the e-mail line only with request_outbound.
+    assert "Gmail draft" not in stable
     assert "Outcome first" in stable and "no claim_task" in stable and "Ověřeno:" in stable
     a = build_task_prompt(me, {"ref": "T-001", "title": "One"}, [], include_guardrails=False, include_stable=False)
     b = build_task_prompt({**me, "feedback": []}, {"ref": "T-002", "title": "Two"}, [], include_guardrails=False,
@@ -596,10 +598,20 @@ def test_dev_prompt_is_short_and_its_stable_part_is_the_same_on_every_run(monkey
     # The lines it has tools for, and nothing more.
     monkeypatch.delenv("WORKER_POS_TOOLS")
     plain = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["chat_send", "schedule_create"]})
-    assert "Team chat" in plain and "schedule_create" in plain and "handoff_task" not in plain
+    assert "chat_send" in plain and "schedule_create" in plain and "handoff_task" not in plain
     assert "Not due yet" not in plain and "Autonomy" in plain
     due = stable_prompt({"name": "Writer", "instructions": "", "pos_tools": ["update_task"]})
     assert "Not due yet" in due and "do_date" in due
+
+
+def test_how_to_work_stays_short_and_does_not_repeat_the_guardrails():
+    """Every line is paid on every turn of every run (2026-10: 3.9-4.8k characters, half of it the
+    guardrails' outbound rule and the chain of command again)."""
+    from pos_worker.prompt import HOW_TO_WORK
+
+    assert sum(len(line) + 1 for line, _ in HOW_TO_WORK) <= 2500
+    text = "\n".join(line for line, _ in HOW_TO_WORK)
+    assert "kind=money" not in text and "Only the CEO contacts the owner" not in text
 
 
 def test_the_browser_and_files_guides_go_only_to_roles_that_use_them():
