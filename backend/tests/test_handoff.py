@@ -582,6 +582,7 @@ def test_an_opened_handoff_starts_under_the_business_reserve_first_and_says_what
     out = api_worker._next_work(w.conn, agent)
     assert out["task"]["id"] == w.task_id != int(other["ref"].split("-")[1])
     assert out["task"]["owner_waiting"] is True and out["state"]["owner_handoff"] is True
+    assert out["task"]["notes"].startswith("# THE OWNER IS WAITING RIGHT NOW") and "browser_request_owner_handoff"         in out["task"]["notes"]
     # Its run starts: the view says the agent is starting the browser; the run counts against the budget.
     run = _new_run(w)
     from pos import api_worker as aw

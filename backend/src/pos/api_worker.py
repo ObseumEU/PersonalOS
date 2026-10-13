@@ -238,6 +238,9 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             "SELECT * FROM tasks WHERE id = ?", (row["id"],)).fetchone())
         if row["id"] in urgent:  # the pool starts it ahead of ordinary work (pos_worker.pool RANK_OWNER)
             out["task"]["owner_waiting"] = True
+            brief = handoff.prepare_brief(conn, row["id"])
+            if brief:  # first thing in the run's prompt (the progress note never reaches it)
+                out["task"]["notes"] = f"{brief}\n\n{out['task'].get('notes') or ''}".strip()
     return out
 
 

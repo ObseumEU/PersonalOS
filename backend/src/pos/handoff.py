@@ -670,6 +670,25 @@ def prepare_status(conn: sqlite3.Connection, h: dict) -> dict | None:
     return {"phase": "queued", "detail": "Ve frontě: agent se spouští.", "until": None, "deadline": deadline}
 
 
+def prepare_brief(conn: sqlite3.Connection, task_id: int) -> str | None:
+    """The top of the task's notes in the run's prompt while the owner waits for its page: the progress note alone
+    never reached the prompt (prod 2026-10-13, run 2180 on T-1164 read the old notes, "waited for David" and set
+    the task to waiting while he watched the spinner)."""
+    ensure_schema(conn)
+    row = conn.execute("SELECT * FROM browser_handoffs WHERE task_id = ? AND status = 'preparing' ORDER BY id DESC "
+                       "LIMIT 1", (task_id,)).fetchone()
+    if row is None:
+        return None
+    return (f"# THE OWNER IS WAITING RIGHT NOW: browser handoff #{row['id']}\n"
+            f"The owner opened your browser handoff #{row['id']} (\"{row['title']}\") and is looking at "
+            "\"Agent připravuje stránku…\" this minute. Do this first, before anything else in this task: open the "
+            f"page in your browser ({row['url'] or 'the page from the handoff'}), fill in what you can, then call "
+            "browser_request_owner_handoff with the same title. It re-attaches to this handoff and he sees your live "
+            "page at once. Do not set the task to waiting, do not reschedule it and do not do other work first: he "
+            "is there now. If the page cannot be opened, say why with report_progress and end the run (he sees "
+            "the error and can retry).")
+
+
 def preparing_task_ids(conn: sqlite3.Connection, actor_id: int) -> list[int]:
     """This agent's tasks whose handoff the owner opened and waits on (owner priority in pos.api_worker)."""
     ensure_schema(conn)
