@@ -21,8 +21,10 @@ Stdlib only (python3 of the host).
 """
 
 import argparse
+import difflib
 import json
 import os
+import shutil
 import socket
 import socketserver
 import struct
@@ -83,6 +85,38 @@ def write_known_hosts(path: str, text: str) -> tuple[int, str]:
         f" (previous file kept as {target.name}.bak)" if old is not None else "")
 
 
+def _rewrite(path: Path, text: str) -> None:
+    """In place (same inode): a Caddyfile bind-mounted as a single file would not see a renamed one."""
+    with open(path, "r+", encoding="utf-8") as f:
+        f.write(text)
+        f.truncate()
+
+
+def caddy_remove_site(job: dict, runner, timeout: float, stamp: str | None = None) -> tuple[int, str]:
+    """Back up the Caddyfile, drop the one block of job["site"], validate, reload; a failed validate or
+    reload puts the old file back. Dry: only the diff. The backup always stays (nothing is deleted)."""
+    path = Path(job["caddyfile"])
+    old = path.read_text(encoding="utf-8")
+    try:
+        new = catalogue.remove_caddy_site(old, job["site"])
+    except catalogue.Invalid as e:
+        return 1, f"{path}: {e}; nothing changed"
+    diff = "".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), str(path), f"{path} (new)"))
+    if not job["apply"]:
+        return 0, f"dry run, nothing written:\n{diff}"
+    backup = path.with_name(f"{path.name}.bak-{stamp or time.strftime('%Y%m%d%H%M')}")
+    if backup.exists():
+        backup = path.with_name(f"{backup.name}{time.strftime('%S')}")
+    shutil.copy2(path, backup)
+    _rewrite(path, new)
+    for step in ("validate", "reload"):
+        code, out = runner(job[step], timeout)
+        if code != 0:
+            _rewrite(path, old)
+            return code, f"caddy {step} failed, the old Caddyfile is back (copy {backup.name}):\n{out}"
+    return 0, f"removed the block {job['site']!r} (old file kept as {backup.name}), validated, reloaded:\n{diff}"
+
+
 def handle(request, runner=subprocess_runner, known_hosts_writer=write_known_hosts) -> dict:
     """Validate one request again and run it. Never raises."""
     started = time.monotonic()
@@ -109,6 +143,13 @@ def handle(request, runner=subprocess_runner, known_hosts_writer=write_known_hos
                 raise Refused("not a deployer's known_hosts")
             with _write_lock:
                 code, out = known_hosts_writer(plan["known_hosts"], catalogue.known_hosts_text())
+        elif "caddy_remove_site" in plan:
+            job = plan["caddy_remove_site"]
+            if job["caddyfile"] not in catalogue.CADDY.values() or any(
+                    job[k][0] not in PROGRAMS for k in ("validate", "reload")):
+                raise Refused("not a listed Caddyfile")
+            with _write_lock:
+                code, out = caddy_remove_site(job, runner, plan["timeout"])
         else:
             argv = plan.get("argv")  # none for an action run inside the API
             if not argv or argv[0] not in PROGRAMS or any(not isinstance(a, str) or "\x00" in a for a in argv):
