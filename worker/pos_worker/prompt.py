@@ -195,6 +195,8 @@ def stable_prompt(me: dict) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+# The memory's cap: the same number as pos.agent_memory.MAX_CHARS (a backend test keeps them equal).
+MEMORY_MAX_CHARS = 12000
 MEMORY_HEAD = ("# Your memory (your own pinned notes from earlier runs: trust them, do not explore again what "
                "they say; keep them current with memory_update, the whole text, max {max} characters)")
 
@@ -204,8 +206,8 @@ def memory_section(me: dict) -> str:
     the stable part must not). Missing on an older PersonalOS: nothing."""
     if "memory" not in me:
         return ""
-    body = (me.get("memory") or "").strip()[:12000]
-    head = MEMORY_HEAD.format(max=8000)
+    body = (me.get("memory") or "").strip()[:MEMORY_MAX_CHARS]
+    head = MEMORY_HEAD.format(max=MEMORY_MAX_CHARS)
     return f"{head}\n\n{body}" if body else (
         f"{head}\n\n(empty: write down with memory_update what the next run should not have to find out again)")
 

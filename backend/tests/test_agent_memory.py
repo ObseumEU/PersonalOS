@@ -1,6 +1,8 @@
 """Every agent's pinned memory (pos.agent_memory): it writes its own, capped and
 versioned, the worker reads it fresh for each run and puts it into the prompt."""
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,14 +35,17 @@ def test_an_agent_keeps_its_own_capped_versioned_memory(env):
     assert agent_memory.get(conn, a)["body"] == ""
     agent_memory.set_body(conn, Ctx(a), "# HA\n- verze 2026.9.3")
     out = agent_memory.set_body(conn, Ctx(a), "# HA\n- verze 2026.9.4\n- HA OS")
-    assert out["body"].endswith("HA OS") and out["max_chars"] == agent_memory.MAX_CHARS
+    # A short receipt, not the text the agent just sent (echoing it carried the memory twice more per run).
+    assert out == {"chars": len("# HA\n- verze 2026.9.4\n- HA OS"), "updated_at": out["updated_at"], "version": 2}
+    assert agent_memory.text(conn, a).endswith("HA OS") and agent_memory.get(conn, a)["max_chars"] == 12000
     assert conn.execute("SELECT COUNT(*) FROM memories WHERE actor_id = ? AND archived_at IS NULL",
                         (a,)).fetchone()[0] == 1
     row = conn.execute("SELECT id FROM memories WHERE actor_id = ?", (a,)).fetchone()
     assert conn.execute("SELECT COUNT(*) FROM history WHERE entity = 'memory' AND entity_id = ?",
                         (row["id"],)).fetchone()[0] == 2
-    with pytest.raises(agent_memory.MemoryError, match="limit"):
-        agent_memory.set_body(conn, Ctx(a), "x" * (agent_memory.MAX_CHARS + 1))
+    with pytest.raises(agent_memory.MemoryError, match="not saved: .* 25 over the limit of 12000. Shorten"):
+        agent_memory.set_body(conn, Ctx(a), "x" * (agent_memory.MAX_CHARS + 25))
+    assert agent_memory.text(conn, a).endswith("HA OS")  # refused: nothing changed
     with pytest.raises(Forbidden):  # another agent cannot write it
         agent_memory.set_body(conn, Ctx(env["other"]), "přepsáno", agent_id=a)
     agent_memory.set_body(conn, env["owner"], "od majitele", agent_id=a)  # the owner can
@@ -48,6 +53,17 @@ def test_an_agent_keeps_its_own_capped_versioned_memory(env):
     assert agent_memory.text(conn, env["other"]) == ""
     for tool in ("memory_get", "memory_update"):
         assert tool in mcp_server.tool_names() and mcp_server.may_use(conn, a, tool)
+    # The memory is in the prompt already: the tool does not send the agent to read it first.
+    desc = {t.name: t.description for t in mcp_server.build(Path("unused.db"))._tool_manager.list_tools()}
+    assert "memory_get first" not in desc["memory_update"] and "already in your prompt" in desc["memory_update"]
+
+
+def test_the_worker_shows_the_same_cap_as_the_backend():
+    pytest.importorskip("pos_worker")
+    from pos_worker.prompt import MEMORY_MAX_CHARS, memory_section
+
+    assert MEMORY_MAX_CHARS == agent_memory.MAX_CHARS
+    assert f"max {agent_memory.MAX_CHARS} characters" in memory_section({"memory": "- fakt"})
 
 
 def test_the_worker_gets_it_and_the_prompt_shows_it(env):
