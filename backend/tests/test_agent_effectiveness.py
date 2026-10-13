@@ -296,6 +296,15 @@ def test_a_run_starts_with_relevant_passages_and_outside_ones_only_as_pointers(e
     assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'knowledge_preload'").fetchone()[0] == 1
     # Numbers-only and system work gets no pre-load at all.
     assert knowledge_first.preload(conn, Ctx(a), {**t, "source": "event:sentinel"}, search=lambda q: KB_ANSWER) is None
+    # Nor a chat answer or the inbox task, nor a routine check that closes itself (auto_close).
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "title": "Chat: answer Owner (DM) o SLA O2"},
+                                   search=lambda q: KB_ANSWER) is None
+    sid = conn.execute("INSERT INTO schedules (name, schedule, template, assignee_id, created_by, created_at, "
+                       "updated_at) VALUES ('SLA', 'daily 07:00', ?, ?, ?, ?, ?)",
+                       ('{"auto_close": true}', a, a, now_iso(), now_iso())).lastrowid
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "source": f"schedule:{sid}"}, search=lambda q: KB_ANSWER) is None
+    conn.execute("UPDATE schedules SET template = '{}' WHERE id = ?", (sid,))  # an ordinary schedule: passages
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "source": f"schedule:{sid}"}, search=lambda q: KB_ANSWER)
     conn.execute("UPDATE actors SET role = 'access_manager' WHERE id = ?", (a,))
     assert knowledge_first.preload(conn, Ctx(a), t, search=lambda q: KB_ANSWER) is None
     conn.execute("UPDATE actors SET role = NULL WHERE id = ?", (a,))
@@ -309,7 +318,7 @@ def test_a_run_starts_with_relevant_passages_and_outside_ones_only_as_pointers(e
     prompt = build_task_prompt({"name": "Writer"}, {**t, "knowledge": kn["text"]}, [])
     assert "From the knowledge base" in prompt and "m1:c3" in prompt
     share = knowledge_first.share(conn)
-    assert share["runs_with_passages"] == 1
+    assert share["runs_with_passages"] == 2  # the task above and the ordinary schedule's
 
 
 # ------------------------------------------------------------------ 3. the learning loop
