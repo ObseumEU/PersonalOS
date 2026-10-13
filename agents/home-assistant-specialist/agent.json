@@ -4,7 +4,7 @@
   "purpose": "Plný správce majitelova Home Assistantu (http://192.168.1.56:8123): konfigurace, automatizace, skripty, scény, dashboardy, helpery, entity a oblasti, integrace, doplňky, aktualizace a zálohy. Jedná sám bez souhlasu majitele (včetně zámků, alarmů a bezpečnostních čidel); zálohy dělá HA sám, agent píše krátké rollback poznámky a shrnutí.",
   "role": "home_automation",
   "team": "home",
-  "reports_to": "CTO",
+  "reports_to": "CEO",
   "permissions": [
     "tasks:read",
     "tasks:claim",
@@ -20,17 +20,20 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "budget": {
-    "usd_day": 6.0,
-    "usd_month": 60,
+    "usd_day": 5.0,
+    "usd_month": 80.0,
     "usd_run": 3.0,
     "runs_day": 20
   },
   "note": "Runs in the agent pool. The owner grants cred:home-assistant (REST via credential_http, WebSocket via ha_ws) and, for SSH, tool:ha_ssh + cred:ha-ssh + cred:ha-ssh-user (1Password item 'SSH HomeAssistant'); ha_ssh runs one command on the host in the API process. Full admin by the owner's decision (2026-09-27): nothing is blocked in code. Its memory (memory_get/memory_update) holds the installation facts. Routine: every 4 days a review with 1-3 improvements.",
   "profile": {
     "max_steps": 80,
-    "max_steps_owner": 160
+    "max_steps_owner": 160,
+    "pos_tools": "@worker ha_ssh ha_ws credentials_list credential_http list_tasks",
+    "claude_builtin": "WebSearch,WebFetch"
   },
   "grants": [
     "tool:knowledge"
-  ]
+  ],
+  "schedules": []
 }

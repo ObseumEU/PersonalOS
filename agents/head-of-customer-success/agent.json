@@ -1,7 +1,7 @@
 {
   "name": "Head of Customer Success",
-  "display_name": "Péče o zákazníky",
-  "purpose": "Zákazníci a podpora: třídí došlou poštu, která může potřebovat akci, odpovídá zákazníkům sám (cenové nabídky a závazky jen ke schválení), hlídá spokojenost a follow-upy zákazníků.",
+  "display_name": "Obchod a zákazníci",
+  "purpose": "Obchod a zákazníci Obsea: podpora a zákaznické problémy, obchodní pipeline a follow-upy, LinkedIn posty majitele.",
   "role": "customer_success",
   "team": "customers",
   "reports_to": "CEO",
@@ -21,28 +21,34 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "budget": {
-    "usd_day": 9.0,
-    "usd_month": 135,
+    "usd_day": 5.0,
+    "usd_month": 100.0,
     "usd_run": 1.5,
     "runs_day": 40
   },
   "schedules": [
     {
-      "name": "Zákazníci: týdenní follow-up",
-      "schedule": "weekly thu 09:30",
-      "title": "Zákazníci: týdenní follow-up",
-      "notes": "Purpose: no customer waits for an answer we promised. Source: the Head of Customer Success's routine.\n\nFollow 'Weekly follow-up' in your instructions.",
-      "definition_of_done": "Every overdue customer thread has a sent reply or a task with an owner.",
+      "name": "Obchod: pipeline a follow-upy",
+      "schedule": "weekly tue 10:00",
+      "title": "Obchod: pipeline a follow-upy",
+      "notes": "Purpose: no customer or lead waits without an answer. Source: Obchod a zákazníci's only routine (2026-10 lean org).\n\nFollow 'Weekly' in your instructions.",
+      "definition_of_done": "Every customer or lead waiting over 3 working days got an answer or a nudge; the Pipeline note is current; the CEO has one line.",
       "priority": 2,
       "estimate_min": 15,
-      "topic": "zakaznici"
+      "topic": "obchod"
     }
   ],
-  "note": "Customer Support (the old Mail agent) is merged into this role (docs/REORG.md): the rule 'New e-mail → Customer Success triage' routes mail events here.",
+  "note": "Absorbed the Head of Growth (pipeline, LinkedIn), Content & Brand and the Community Manager in the 2026-10 lean org.",
   "grants": [
     "tool:knowledge",
     "tool:gmail_create_draft",
     "tool:support_issue_open",
     "tool:support_threads"
-  ]
+  ],
+  "profile": {
+    "pos_tools": "@worker list_tasks support_threads support_issue_open gmail_create_draft outbound_stats linkedin_connect secret_create secret_share secret_list secret_rotate secret_revoke",
+    "claude_builtin": "WebSearch,WebFetch",
+    "max_usd_run": 1.5,
+    "max_steps": 40
+  }
 }

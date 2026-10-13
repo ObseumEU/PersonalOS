@@ -1,9 +1,9 @@
 {
   "name": "Kniha Growth & Sales",
-  "purpose": "Růst a prodej knihy: lead gen, funnely, partnerství, konverze a rozhovory se zákazníky.",
+  "purpose": "Kniha Obchod: zákazníci, partneři, prodej a obsah projektu Kniha (sloučeno s Marketing Lead a Content Creator).",
   "role": "growth_sales",
   "team": "kniha",
-  "reports_to": "Kniha Lead",
+  "reports_to": "CEO",
   "permissions": [
     "approvals:request",
     "messages:send",
@@ -19,15 +19,23 @@
   "effort": "medium",
   "profile": {
     "workdir": "/work/kniha",
-    "claude_builtin": "Bash,Read,Edit,Write,Glob,Grep,WebFetch,WebSearch",
+    "claude_builtin": "Read,Glob,Grep,WebSearch,WebFetch",
     "pos_tools": "@worker list_tasks kniha_reservations_summary",
-    "claude_tools": "Read|Glob|Grep|Write|Edit|WebSearch|WebFetch|Bash(git status:*)|Bash(git diff:*)|Bash(git log:*)|Bash(git show:*)|Bash(git add:*)|Bash(git commit:*)|Bash(git checkout:*)|Bash(git switch:*)|Bash(git branch:*)|Bash(git merge:*)|Bash(git restore:*)|Bash(git rev-parse:*)|Bash(ls:*)|Bash(cat /work/kniha/.deploy/:*)|Bash(git -C:*)|Bash(git worktree:*)|Bash(git cherry-pick:*)|Bash(cd:*)|Bash(pwd:*)",
+    "claude_tools": "Read|Glob|Grep|WebSearch|WebFetch",
     "max_usd_run": 2,
-    "max_steps": 200,
-    "max_steps_owner": 300
+    "max_steps": 80,
+    "max_steps_owner": 300,
+    "claude_disallowed": "Write Edit Bash"
   },
   "grants": [
     "tool:knowledge",
     "tool:kniha_reservations_summary"
-  ]
+  ],
+  "display_name": "Kniha Obchod",
+  "budget": {
+    "usd_day": 5.0,
+    "usd_month": 100.0,
+    "usd_run": 2.0,
+    "runs_day": 30
+  }
 }

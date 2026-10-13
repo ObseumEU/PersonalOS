@@ -4,7 +4,7 @@
   "purpose": "Osobní asistent majitele: rychlé odpovědi v chatu, osobní požadavky, agenda a termíny, dohledání v knowledge base; větší práci předá správnému členovi týmu.",
   "role": "assistant",
   "team": "leadership",
-  "reports_to": "Chief of Staff",
+  "reports_to": "CEO",
   "permissions": [
     "approvals:request",
     "messages:send",

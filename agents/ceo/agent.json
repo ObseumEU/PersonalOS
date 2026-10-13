@@ -1,7 +1,7 @@
 {
   "name": "CEO",
   "display_name": "Ředitel (CEO)",
-  "purpose": "Ředitel: převádí zadání majitele (board) na výsledky, deleguje na vedoucí, hlídá cíle a termíny, jako jediný kontaktuje majitele a s Asistentem vedení vede páteční board meeting.",
+  "purpose": "Ředitel a jediný kontakt majitele: odpovídá hned a konkrétně, úkoly dává rovnou výkonným agentům, hlídá výsledky (živé funkce, odeslané zprávy, objednávky), ne aktivitu.",
   "role": "ceo",
   "team": "leadership",
   "reports_to": "Owner",
@@ -22,36 +22,32 @@
   "model": "claude-opus-5-5",
   "effort": "medium",
   "budget": {
-    "usd_day": 6.0,
-    "usd_month": 80.0,
+    "usd_day": 8.0,
+    "usd_month": 160.0,
     "usd_run": 2.0,
-    "runs_day": 20
+    "runs_day": 60
   },
   "schedules": [
     {
-      "name": "CEO: pondělní plán",
-      "schedule": "weekly mon 08:00",
-      "title": "CEO: pondělní plán",
-      "notes": "Purpose: start the week with a plan the heads can act on. Source: the CEO's Monday routine.\n\nFollow the section 'Monday plan' in your instructions: goals (goal_list), last week's board notes, open work per head; at most 5 priorities, each with an owner and a date; message each head once.",
-      "definition_of_done": "Priorities for the week are written in a note (topic board) and every head with a priority got one message.",
+      "name": "CEO: ranní souhrn",
+      "schedule": "weekdays 08:40",
+      "title": "Ranní souhrn pro majitele",
+      "notes": "Purpose: one short Czech morning message to David. Source: the CEO's only routine (2026-10 lean org).\n\nFollow 'Weekday morning summary' in your instructions: what reached customers yesterday (numbers), what waits for him (approvals, cards) with links, the top problem and who fixes it. Nothing to report: one line.",
+      "definition_of_done": "David has one short message in his DM; nothing else was created.",
       "priority": 2,
-      "estimate_min": 15,
-      "topic": "board"
-    },
-    {
-      "name": "CEO: podklady pro board",
-      "schedule": "weekly fri 13:00",
-      "title": "CEO: podklady pro board",
-      "notes": "Purpose: the CEO's input to the Friday board meeting (the Chief of Staff writes the report at 14:00). Source: the CEO's Friday routine.\n\nFollow 'Friday board meeting' in your instructions.",
-      "definition_of_done": "A note 'Board <week>: CEO' exists and the Chief of Staff has its link.",
-      "priority": 2,
-      "estimate_min": 15,
-      "topic": "board"
+      "estimate_min": 5,
+      "topic": "digest"
     }
   ],
-  "note": "Top of the chain of command: the only agent that contacts the owner (the Chief of Staff's digest and weekly report, the Hlídač's critical incidents and the Access manager's digest are the named exceptions). Runs in the agent pool.",
+  "note": "Top of the chain and the owner's one point of contact (2026-10 lean org, docs/REORG.md): everyone reports to it; it absorbed the Chief of Staff's digest, the COO's cross-team work and the board routines.",
   "grants": [
     "tool:knowledge",
     "tool:kniha_reservations_summary"
-  ]
+  ],
+  "profile": {
+    "pos_tools": "@worker list_tasks get_agent_status org_chart stuck_tasks task_reassign assign_task manage_agent ask_owner goal_list goal_upsert scorecard outbound_stats kniha_reservations_summary project_list run_transcript review_task support_threads invoice_filings access_usage",
+    "claude_builtin": "WebSearch,WebFetch",
+    "max_usd_run": 2,
+    "max_steps": 40
+  }
 }

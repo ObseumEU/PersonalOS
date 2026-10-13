@@ -1,7 +1,7 @@
 {
   "name": "CFO",
-  "display_name": "Finanční ředitel (CFO)",
-  "purpose": "Finance: náklady na LLM (LiteLLM, předplatné Claude a Codex, spotřeba agentů), předplatná a faktury z pošty, cena za úkol; týdenní a měsíční report nákladů; zařazování faktur z pošty na Google Disk (firma / osobní).",
+  "display_name": "Finance a back office (CFO)",
+  "purpose": "Back office: faktury (zařazení na Disk), náklady na vyžádání, smlouvy a GDPR na vyžádání. Bez rutinních reportů.",
   "role": "cfo",
   "team": "finance",
   "reports_to": "CEO",
@@ -22,27 +22,22 @@
   "effort": "medium",
   "budget": {
     "usd_day": 3.0,
-    "usd_month": 45,
+    "usd_month": 45.0,
     "usd_run": 1.5,
-    "runs_day": 8
+    "runs_day": 20
   },
-  "schedules": [
-    {
-      "name": "CFO: týdenní report nákladů",
-      "schedule": "weekly mon 08:30",
-      "title": "CFO: týdenní report nákladů",
-      "notes": "Purpose: the company knows what it spends and on what. Source: the CFO's Monday routine (after the Access manager's budget review).\n\nFollow 'Weekly cost report' in your instructions; on the first Monday of the month write the monthly report instead.",
-      "definition_of_done": "A cost note (topic finance) exists and the CEO has a two-line summary.",
-      "priority": 2,
-      "estimate_min": 10,
-      "topic": "finance"
-    }
-  ],
+  "schedules": [],
   "grants": [
     "tool:knowledge",
     "tool:invoice_candidates",
     "tool:invoice_file",
     "tool:invoice_filings",
     "access:read"
-  ]
+  ],
+  "profile": {
+    "pos_tools": "@worker list_tasks invoice_candidates invoice_file invoice_filings access_usage hr_overview scorecard credential_http",
+    "claude_builtin": "WebSearch,WebFetch",
+    "max_usd_run": 1.5,
+    "max_steps": 40
+  }
 }

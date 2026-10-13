@@ -37,5 +37,7 @@
     "usd_run": 1.8,
     "runs_day": 30
   },
-  "note": "Takes over the HR agent's code role (pos.hr HR_NAME): the daily review, limits and the weekly report stay code; it creates agents with hire_agent (pos.hiring) within HR's limits."
+  "note": "Takes over the HR agent's code role (pos.hr HR_NAME): the daily review, limits and the weekly report stay code; it creates agents with hire_agent (pos.hiring) within HR's limits.",
+  "dormant": true,
+  "schedules": []
 }
