@@ -110,7 +110,20 @@ export type PushPrefs = {
   quiet_to: string;
   preview: boolean;
 };
-export type PushConfig = { enabled: boolean; public_key: string | null; prefs: PushPrefs; devices: number; this_device?: boolean };
+export type PushServerStatus = {
+  subscription: { id: number; created_at: string; last_ok_at: string | null; last_error: string | null; failures: number; host: string } | null;
+  last_ok_at: string | null;
+  last_failure: { at: string; status: number | null; error: string; host: string } | null;
+  steps: { at: string; step: string; ok: boolean; detail: string }[];
+};
+export type PushConfig = {
+  enabled: boolean;
+  public_key: string | null;
+  prefs: PushPrefs;
+  devices: number;
+  this_device?: boolean;
+  status?: PushServerStatus;
+};
 export type PushTestResult = {
   sub_id: number;
   device_id: string | null;
@@ -143,19 +156,32 @@ function keyBytes(b64: string): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-/** A failure on the way to a subscription goes to the server (pos.push.client_error), never only to a toast:
- * on 29. 9. the owner's phone failed here and nothing of it was known. */
-export function reportPushError(step: string, e: unknown) {
-  const error = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-  api("/api/push/client-error", { method: "POST", body: JSON.stringify({ step, error: error.slice(0, 290), standalone: isStandalone() }) }).catch(() => undefined);
+/** One step of turning notifications on, as shown in Settings and sent to the server (push_client_log). */
+export type PushStep = { step: string; ok: boolean; detail: string };
+
+/** Every step of the subscribe flow goes to the server, successes too (POST /api/push/client-log; a failed step is
+ * also a client failure in push_failures): on 29. 9. and again on 13. 10. the owner's phone failed here and the
+ * server knew nothing of it. */
+export function logPushStep(step: string, ok: boolean, detail: string) {
+  api("/api/push/client-log", { method: "POST", body: JSON.stringify({ step, ok, detail: detail.slice(0, 290), standalone: isStandalone() }) }).catch(
+    () => undefined,
+  );
 }
 
-async function step<T>(name: string, message: string, fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (e) {
-    reportPushError(name, e);
-    throw new Error(`${message} (${e instanceof Error ? e.message || e.name : String(e)})`);
+const errDetail = (e: unknown) => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
+
+export function reportPushError(step: string, e: unknown) {
+  logPushStep(step, false, errDetail(e));
+}
+
+/** The flow stopped at `step`; `steps` are all the steps done so far (the last one failed). */
+export class PushFlowError extends Error {
+  step: string;
+  steps: PushStep[];
+  constructor(step: string, message: string, steps: PushStep[]) {
+    super(message);
+    this.step = step;
+    this.steps = steps;
   }
 }
 
@@ -188,74 +214,147 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
   return (await reg?.pushManager.getSubscription()) ?? null;
 }
 
-const postSubscription = (sub: PushSubscription) => api("/api/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) });
+/** Settings → "Stav notifikací", the browser's half. */
+export type PushDiag = { supported: boolean; permission: string; standalone: boolean; sw: string; subscription: string | null; keyMatches: boolean | null };
 
-/** Ask for the permission, timed: a prompt the person answers takes seconds; a "default" within a moment means no
- * prompt was shown at all (prod 2026-10-07 20:19, the owner's Android app: "permission: default" twice, and he saw
- * only an error). Chrome on Android answers so when notifications are off for Chrome or the app in Android itself,
- * or Chrome muted the site's prompt. */
-async function askPermission(): Promise<{ permission: NotificationPermission; ms: number }> {
-  const t0 = performance.now();
-  const permission = await step("permission", "Oprávnění k oznámením se nepodařilo získat", () => Notification.requestPermission());
-  return { permission, ms: Math.round(performance.now() - t0) };
+export async function pushDiagnostics(publicKey?: string | null): Promise<PushDiag> {
+  const supported = pushSupported();
+  const d: PushDiag = {
+    supported,
+    permission: "Notification" in window ? Notification.permission : "nepodporováno",
+    standalone: isStandalone(),
+    sw: "nepodporován",
+    subscription: null,
+    keyMatches: null,
+  };
+  if (!("serviceWorker" in navigator)) return d;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration("/m");
+    d.sw = !reg ? "neregistrován" : reg.active ? `aktivní (${new URL(reg.scope).pathname})` : reg.installing || reg.waiting ? "instaluje se" : "neaktivní";
+    const sub = supported ? await reg?.pushManager.getSubscription() : null;
+    if (sub) {
+      d.subscription = new URL(sub.endpoint).host;
+      d.keyMatches = publicKey ? sameKey(sub, publicKey) : null;
+    }
+  } catch (e) {
+    d.sw = `chyba: ${errDetail(e)}`;
+  }
+  return d;
 }
+
+function sameKey(sub: PushSubscription, publicKey: string): boolean {
+  const have = sub.options?.applicationServerKey;
+  if (!have) return true; // the browser does not say: assume it is ours
+  const a = new Uint8Array(have);
+  const b = keyBytes(publicKey);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+const postSubscription = (sub: PushSubscription) => api("/api/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) });
 
 const NO_PROMPT_MS = 1500;
 
-function permissionError(permission: NotificationPermission, ms: number): Error {
+function permissionError(permission: NotificationPermission, ms: number): string {
   if (permission === "denied")
-    return new Error(
-      isAndroid()
-        ? "Oznámení jsou zakázaná. Android: podrž ikonu PersonalOS → Informace o aplikaci → Oznámení → Povolit (případně Nastavení → Aplikace → Chrome → Oznámení), pak aplikaci otevři znovu."
-        : "Oznámení jsou v prohlížeči zakázaná. Povol je v nastavení webu (ikona zámku vedle adresy) a zkus to znovu.",
-    );
+    return isAndroid()
+      ? "Oznámení jsou zakázaná. Android: podrž ikonu PersonalOS → Informace o aplikaci → Oznámení → Povolit (případně Nastavení → Aplikace → Chrome → Oznámení), pak aplikaci otevři znovu a stiskni Zapnout notifikace."
+      : "Oznámení jsou v prohlížeči zakázaná. Povol je v nastavení webu (ikona zámku vedle adresy) a zkus to znovu.";
   if (ms < NO_PROMPT_MS && isAndroid())
-    return new Error(
+    return (
       "Telefon dotaz na oznámení vůbec nezobrazil: Android má oznámení pro Chrome nebo pro aplikaci PersonalOS vypnutá. " +
-        "Zapni je: Nastavení → Aplikace → Chrome → Oznámení → Povolit (a stejně u aplikace PersonalOS, pokud tam je). " +
-        "Pak PersonalOS otevři znovu: oznámení se zapnou sama, bez dalšího klikání.",
+      "Zapni je: Nastavení → Aplikace → Chrome → Oznámení → Povolit (a stejně u aplikace PersonalOS, pokud tam je). " +
+      "Pak PersonalOS otevři znovu a stiskni Zapnout notifikace."
     );
-  if (ms < NO_PROMPT_MS)
-    return new Error("Prohlížeč dotaz na oznámení nezobrazil (ztlumil ho). Povol oznámení v nastavení webu (ikona zámku vedle adresy) a zkus to znovu.");
-  return new Error("Oznámení nebyla povolena (dialog zavřen). Zkus to znovu a zvol Povolit.");
+  if (ms < NO_PROMPT_MS) return "Prohlížeč dotaz na oznámení nezobrazil (ztlumil ho). Povol oznámení v nastavení webu (ikona zámku vedle adresy) a zkus to znovu.";
+  return "Oznámení nebyla povolena (dialog zavřen). Zkus to znovu a zvol Povolit.";
 }
 
-/** "Zapnout oznámení" (a click: iOS and Chrome ask for the permission only from a user gesture). Each step that
- * fails says which one and is reported to the server. `asked`: the permission was already requested from this
- * click (enablePushFromClick); it is not asked twice. */
-export async function enablePush(publicKey: string, asked?: { permission: NotificationPermission; ms: number }): Promise<void> {
-  if (isIOS() && !isStandalone()) throw new Error("Na iPhonu fungují oznámení jen v aplikaci přidané na plochu: Sdílet → Přidat na plochu, pak ji otevři z plochy.");
-  // requestPermission first and directly from the click: Safari refuses it after another await.
-  const { permission, ms } = asked ?? (await askPermission());
-  if (permission !== "granted") {
-    reportPushError("permission", new Error(permission === "default" && ms < NO_PROMPT_MS ? `default, no prompt (${ms} ms)` : `${permission} (${ms} ms)`));
-    throw permissionError(permission, ms);
+/** "Zapnout notifikace" (and "Přihlásit toto zařízení"): the whole flow on every click, nothing remembered from an
+ * earlier attempt. The permission is asked first and straight from the click (iOS and Chrome ask only from a user
+ * gesture; Safari refuses it after another await); already granted, it is not asked and the device subscribes at
+ * once. Then the server's key, the service worker, the push service's subscription (renewed when it was made with
+ * another key) and the server. Each step's result is sent to the server and returned; a failed one throws
+ * PushFlowError naming the step. */
+export async function enablePush(publicKey?: string | null): Promise<PushStep[]> {
+  const steps: PushStep[] = [];
+  const done = (step: string, detail: string) => {
+    steps.push({ step, ok: true, detail });
+    logPushStep(step, true, detail);
+  };
+  const fail = (step: string, message: string, detail: string): never => {
+    steps.push({ step, ok: false, detail: detail && detail !== message ? `${message} (${detail})` : message });
+    logPushStep(step, false, detail || message);
+    throw new PushFlowError(step, message, steps);
+  };
+  const run = async <T>(step: string, message: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      return fail(step, message, errDetail(e));
+    }
+  };
+
+  if (!pushSupported()) {
+    const missing = [!("serviceWorker" in navigator) && "serviceWorker", !("PushManager" in window) && "PushManager", !("Notification" in window) && "Notification"];
+    fail("support", isIOS() ? "Na iPhonu fungují oznámení jen v aplikaci přidané na plochu." : "Tento prohlížeč oznámení z webu neumí.",
+      `${missing.filter(Boolean).join(", ")} missing`);
   }
-  const reg = await step("service_worker", "Aplikace se nepřipravila (service worker)", pushRegistration);
-  let sub = await reg.pushManager.getSubscription();
+  if (isIOS() && !isStandalone()) fail("support", "Na iPhonu fungují oznámení jen v aplikaci přidané na plochu: Sdílet → Přidat na plochu, pak ji otevři z plochy.", "iOS, not standalone");
+
+  const before = Notification.permission;
+  if (before === "granted") done("permission", "granted (already)");
+  else {
+    const t0 = performance.now();
+    const permission = await run("permission", "Oprávnění k oznámením se nepodařilo získat", () => Notification.requestPermission());
+    const ms = Math.round(performance.now() - t0);
+    const detail = `${before} → ${permission} (${ms} ms${permission === "default" && ms < NO_PROMPT_MS ? ", no prompt shown" : ""})`;
+    if (permission !== "granted") fail("permission", permissionError(permission, ms), detail);
+    done("permission", detail);
+  }
+
+  let key = publicKey ?? null;
+  if (!key) {
+    const cfg = await run("key", "Nepodařilo se načíst nastavení oznámení ze serveru", () => pushApi.config());
+    if (!cfg.enabled || !cfg.public_key) fail("key", "Oznámení nejsou na serveru zapnutá (chybí klíče VAPID).", "server: push off");
+    key = cfg.public_key;
+  }
+  const vapid = key as string;
+  done("key", `VAPID public key, ${vapid.length} chars`);
+
+  const reg = await run("service_worker", "Aplikace se nepřipravila (service worker)", pushRegistration);
+  done("service_worker", `active, scope ${new URL(reg.scope).pathname}`);
+
+  let sub = await run("subscribe", "Nepodařilo se zjistit přihlášení k oznámením", () => reg.pushManager.getSubscription());
+  let renewed = "";
+  if (sub && !sameKey(sub, vapid)) {
+    // Made with another server key (the keys changed): the push service would refuse our sends. Make a new one.
+    await sub.unsubscribe().catch(() => undefined);
+    sub = null;
+    renewed = "old subscription had another key, renewed; ";
+  }
   if (!sub) {
-    sub = await step("subscribe", "Služba oznámení prohlížeče odmítla přihlášení", () =>
-      reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) }),
+    sub = await run("subscribe", "Služba oznámení prohlížeče odmítla přihlášení", () =>
+      reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(vapid) }),
     );
-  }
-  await step("server", "Server přihlášení k oznámením nepřijal", () => postSubscription(sub));
+    done("subscribe", `${renewed}new subscription at ${new URL(sub.endpoint).host}`);
+  } else done("subscribe", `existing subscription at ${new URL(sub.endpoint).host}`);
+
+  const final = sub;
+  await run("server", "Server přihlášení k oznámením nepřijal", () => postSubscription(final));
+  done("server", "subscription saved on the server");
+  return steps;
 }
 
-/** "Zapnout notifikace v telefonu" on the owner's item in "Čeká na tebe": the permission straight from the click
- * (Safari refuses it after another await), then the server's key, then the same steps as Settings. The permission
- * is asked once (it used to be asked again after the key, outside the click). */
+/** "Zapnout notifikace v telefonu" on the owner's item in "Čeká na tebe": the same flow as Settings. */
 export async function enablePushFromClick(): Promise<void> {
   if (!pushSupported()) throw new Error("Tady oznámení zapnout nejdou. Otevři PersonalOS v telefonu (/m) a stiskni to tam.");
-  if (isIOS() && !isStandalone()) throw new Error("Na iPhonu fungují oznámení jen v aplikaci přidané na plochu: Sdílet → Přidat na plochu, pak ji otevři z plochy.");
-  const asked = await askPermission();
-  const cfg = await pushApi.config();
-  if (!cfg.enabled || !cfg.public_key) throw new Error("Oznámení nejsou na serveru zapnutá.");
-  await enablePush(cfg.public_key, asked);
+  await enablePush(null);
 }
 
 /** On every start of the app (and on opening Settings): a subscription the browser has but the server does not
  * (a failed POST, a subscription the server dropped) is registered again; with the permission granted and no
- * subscription at all, one is made (no prompt is needed then). Silent; failures are reported. */
+ * subscription at all (or one made with another key), one is made (no prompt is needed then). Silent; the result
+ * is reported. */
 export async function syncPush(cfg?: PushConfig): Promise<boolean> {
   if (!pushSupported() || Notification.permission !== "granted") return false;
   try {
@@ -263,9 +362,14 @@ export async function syncPush(cfg?: PushConfig): Promise<boolean> {
     if (!c.enabled || !c.public_key) return false;
     const reg = await pushRegistration();
     let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameKey(sub, c.public_key)) {
+      await sub.unsubscribe().catch(() => undefined);
+      sub = null;
+    }
     if (sub && c.this_device) return false;
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(c.public_key) });
     await postSubscription(sub);
+    logPushStep("sync", true, `subscription at ${new URL(sub.endpoint).host} registered on app start`);
     return true;
   } catch (e) {
     reportPushError("sync", e);

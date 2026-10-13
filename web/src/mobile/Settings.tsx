@@ -1,20 +1,24 @@
 import { Bell, BellOff, Download, LogOut, Monitor, Send, Smartphone } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
 import { confirmDialog, toast } from "../components/overlay";
 import { ago, t } from "../i18n/core";
 import {
   type PushConfig,
+  type PushDiag,
   type PushPrefs,
+  type PushStep,
   type PushTestResult,
-  currentSubscription,
+  PushFlowError,
   disablePush,
   enablePush,
   isAndroid,
   isIOS,
   isStandalone,
+  logPushStep,
   promptInstall,
   pushApi,
+  pushDiagnostics,
   pushSupported,
   syncPush,
   useInstallable,
@@ -126,14 +130,93 @@ export function InstallSection() {
   );
 }
 
+const STEP_KEY: Record<string, string> = {
+  support: "m.push.step.support",
+  permission: "m.push.step.permission",
+  key: "m.push.step.key",
+  service_worker: "m.push.step.service_worker",
+  subscribe: "m.push.step.subscribe",
+  server: "m.push.step.server",
+  sync: "m.push.step.sync",
+  state: "m.push.step.state",
+  test: "m.push.step.test",
+};
+const stepLabel = (s: string) => (STEP_KEY[s] ? t(STEP_KEY[s]) : s);
+
+function StepList({ steps }: { steps: PushStep[] }) {
+  return (
+    <ul className="flex flex-col gap-1 text-[13px]" aria-live="polite">
+      {steps.map((s, i) => (
+        <li key={i} className="flex flex-wrap items-baseline gap-x-2">
+          <span className={s.ok ? "text-accent" : "text-red-400"}>{s.ok ? "✓" : "✗"}</span>
+          <span className="font-medium">{stepLabel(s.step)}</span>
+          <span className="break-all text-ink-2">{s.detail}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function permissionText(p: string) {
+  return p === "granted" ? t("m.push.perm.granted") : p === "denied" ? t("m.push.perm.denied") : p === "default" ? t("m.push.perm.default") : p;
+}
+
+/** "Stav notifikací": what this device and the server know, to tell at a glance where it stops. */
+function PushDiagnostics({ diag, cfg }: { diag: PushDiag | null; cfg: PushConfig | null }) {
+  const st = cfg?.status;
+  const rows: [string, string, boolean | null][] = [
+    [t("m.push.diag.permission"), diag ? permissionText(diag.permission) : "…", diag ? diag.permission === "granted" : null],
+    [t("m.push.diag.app"), diag ? (diag.standalone ? t("m.push.diag.installed") : t("m.push.diag.browser")) : "…", null],
+    [t("m.push.diag.sw"), diag?.sw ?? "…", diag ? diag.sw.startsWith("aktivní") : null],
+    [
+      t("m.push.diag.sub"),
+      diag ? (diag.subscription ? `${diag.subscription}${diag.keyMatches === false ? ` · ${t("m.push.diag.key_mismatch")}` : ""}` : t("m.push.diag.none")) : "…",
+      diag ? !!diag.subscription && diag.keyMatches !== false : null,
+    ],
+    [t("m.push.diag.server"), cfg ? (cfg.this_device ? t("m.push.diag.yes_since", { when: ago(st?.subscription?.created_at) }) : t("m.push.diag.no")) : "…", cfg ? !!cfg.this_device : null],
+    [t("m.push.diag.last_ok"), ago(st?.subscription?.last_ok_at ?? st?.last_ok_at), null],
+    [
+      t("m.push.diag.last_fail"),
+      st?.subscription?.last_error
+        ? st.subscription.last_error
+        : st?.last_failure
+          ? `${ago(st.last_failure.at)} · ${st.last_failure.host} · ${st.last_failure.error}`
+          : t("m.push.diag.none"),
+      null,
+    ],
+  ];
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line p-3">
+      <h3 className="text-[14px] font-medium">{t("m.push.diag.title")}</h3>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
+        {rows.map(([k, v, ok]) => (
+          <div key={k} className="contents">
+            <dt className="text-ink-2">{k}</dt>
+            <dd className={`break-all ${ok === false ? "text-red-400" : ""}`}>{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {st && st.steps.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <span className="text-[12px] text-ink-2">{t("m.push.diag.steps")}</span>
+          <StepList steps={[...st.steps].reverse().map((s) => ({ step: s.step, ok: s.ok, detail: `${ago(s.at)} · ${s.detail}` }))} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PushSection() {
   const [cfg, setCfg] = useState<PushConfig | null>(null);
-  const [subscribed, setSubscribed] = useState(false);
+  const [diag, setDiag] = useState<PushDiag | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  const [steps, setSteps] = useState<PushStep[] | null>(null);
+  const [flowError, setFlowError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [results, setResults] = useState<PushTestResult[] | null>(null);
+  const reported = useRef(false);
   const supported = pushSupported();
-  const permission = supported ? Notification.permission : "denied";
   const ios = isIOS();
   const load = useCallback(() => {
     pushApi.config().then(
@@ -141,54 +224,110 @@ export function PushSection() {
         setCfg(c);
         setFailed(null);
         // The browser has a subscription the server does not know (or may make one): register it again.
-        if (await syncPush(c)) setCfg(await pushApi.config());
-        currentSubscription().then((s) => setSubscribed(!!s), () => undefined);
+        const synced = await syncPush(c);
+        const fresh = synced ? await pushApi.config() : c;
+        if (synced) setCfg(fresh);
+        const d = await pushDiagnostics(fresh.public_key);
+        setDiag(d);
+        if (!reported.current) {
+          // What this device looks like when Settings opens: on the server even when nobody presses anything.
+          reported.current = true;
+          logPushStep("state", true, `permission=${d.permission} sw=${d.sw} sub=${d.subscription ?? "none"} server_knows=${!!fresh.this_device} standalone=${d.standalone}`);
+        }
       },
       (e) => setFailed(errText(e)),
     );
   }, []);
   useEffect(load, [load]);
 
+  // Prefs: one PUT at a time, quick flips merged into the next one (overlapping PUTs raced on the server: 500s).
+  const pending = useRef<Partial<PushPrefs>>({});
+  const saving = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+  const flush = useCallback(async () => {
+    if (saving.current || Object.keys(pending.current).length === 0) return;
+    const changes = pending.current;
+    pending.current = {};
+    saving.current = true;
+    try {
+      const prefs = await pushApi.prefs(changes);
+      setSaveError(null);
+      // Later flips still waiting stay as shown; the server's answer for the rest.
+      if (Object.keys(pending.current).length === 0) setCfg((c) => (c ? { ...c, prefs } : c));
+    } catch (e) {
+      setSaveError(errText(e));
+      toast(t("m.push.save_failed", { error: errText(e) }), { error: true });
+      pending.current = {};
+      pushApi.config().then((c) => setCfg((old) => (old ? { ...old, prefs: c.prefs } : c)), () => undefined);
+    } finally {
+      saving.current = false;
+      if (Object.keys(pending.current).length) void flush();
+    }
+  }, []);
   const save = (changes: Partial<PushPrefs>) => {
     if (!cfg) return;
     setCfg({ ...cfg, prefs: { ...cfg.prefs, ...changes } });
-    pushApi.prefs(changes).then((prefs) => setCfg((c) => (c ? { ...c, prefs } : c)), (e) => toast(e.message, { error: true }));
+    pending.current = { ...pending.current, ...changes };
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => void flush(), 300);
   };
-  const wrap = async (fn: () => Promise<unknown>) => {
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const flow = async (fn: () => Promise<unknown>) => {
     setBusy(true);
+    setFlowError(null);
     try {
       await fn();
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), { error: true });
+      const msg = e instanceof Error ? e.message : String(e);
+      if (e instanceof PushFlowError) {
+        setSteps(e.steps);
+        setFlowError(`${stepLabel(e.step)}: ${msg}`);
+      } else setFlowError(msg);
+      toast(msg, { error: true });
     } finally {
       setBusy(false);
       load();
     }
   };
-  const testAll = () =>
-    wrap(async () => {
-      const r = await pushApi.testAll();
-      setResults(r.results);
-      toast(r.devices === 0 ? t("m.push.test_no_devices") : t("m.push.test_result", { ok: r.sent, n: r.devices }), { error: r.sent < r.devices });
+  const enable = () =>
+    flow(async () => {
+      setSteps(null);
+      setSteps(await enablePush(cfg?.public_key));
     });
+  const sendTest = async () => {
+    const r = await pushApi.testAll();
+    setResults(r.results);
+    toast(r.devices === 0 ? t("m.push.test_no_devices") : t("m.push.test_result", { ok: r.sent, n: r.devices }), { error: r.sent < r.devices });
+  };
+  const subscribeAndTest = () =>
+    flow(async () => {
+      setSteps(null);
+      setResults(null);
+      setSteps(await enablePush(cfg?.public_key));
+      await sendTest();
+    });
+
   const p = cfg?.prefs;
+  const thisDevice = !!cfg?.this_device;
+  const permission = diag?.permission ?? (supported ? Notification.permission : "denied");
   const status = !supported
     ? ios
       ? t("m.push.ios_install")
       : t("m.push.unsupported")
     : cfg && !cfg.enabled
       ? t("m.push.server_off")
-      : permission === "denied"
-        ? isAndroid()
-          ? t("m.push.blocked_android")
-          : t("m.push.blocked")
-        : subscribed
-          ? cfg?.this_device === false
+      : thisDevice
+        ? t("m.push.on")
+        : permission === "denied"
+          ? isAndroid()
+            ? t("m.push.blocked_android")
+            : t("m.push.blocked")
+          : diag?.subscription
             ? t("m.push.on_unsynced")
-            : t("m.push.on")
-          : ios && !isStandalone()
-            ? t("m.push.ios_install")
-            : t("m.push.off");
+            : ios && !isStandalone()
+              ? t("m.push.ios_install")
+              : t("m.push.off");
 
   return (
     <Section title={t("m.push.title")} icon={<Bell size={18} />}>
@@ -200,39 +339,73 @@ export function PushSection() {
           {cfg ? ` · ${t("m.push.devices", { n: cfg.devices })}` : ""}
         </p>
       )}
-      {supported && cfg?.enabled && permission !== "denied" && (
+      {cfg?.enabled && (
         <div className="flex flex-wrap gap-2">
-          {subscribed ? (
-            <button className="btn h-11! text-[15px]!" disabled={busy} onClick={() => wrap(disablePush)}>
-              <BellOff size={16} /> {t("m.push.disable")}
-            </button>
+          {thisDevice ? (
+            <>
+              <button className="btn h-11! text-[15px]!" disabled={busy} onClick={() => flow(disablePush)}>
+                <BellOff size={16} /> {t("m.push.disable")}
+              </button>
+              <button className="btn h-11! text-[15px]!" disabled={busy} onClick={enable}>
+                <Bell size={16} /> {t("m.push.resubscribe")}
+              </button>
+            </>
           ) : (
-            <button className="btn-accent h-11! text-[15px]!" disabled={busy} onClick={() => wrap(() => enablePush(cfg.public_key!))}>
-              <Bell size={16} /> {t("m.push.enable")}
+            <button className="btn-accent h-11! text-[15px]!" disabled={busy} onClick={enable}>
+              <Bell size={16} /> {busy ? t("m.push.enabling") : t("m.push.enable")}
             </button>
           )}
         </div>
       )}
+      {flowError && (
+        <p role="alert" className="rounded-lg border border-red-400/50 p-2 text-[13px] text-red-400">
+          {flowError}
+        </p>
+      )}
+      {steps && <StepList steps={steps} />}
       {cfg?.enabled && (
         <div className="flex flex-col gap-2">
-          <button className="btn h-11! self-start text-[15px]!" disabled={busy || cfg.devices === 0} onClick={testAll}>
-            <Send size={16} /> {t("m.push.test_all")}
-          </button>
-          {cfg.devices === 0 && <p className="text-[12px] text-ink-2">{t("m.push.test_needs_device")}</p>}
+          {thisDevice ? (
+            <button className="btn h-11! self-start text-[15px]!" disabled={busy} onClick={() => flow(sendTest)}>
+              <Send size={16} /> {t("m.push.test_all")}
+            </button>
+          ) : (
+            <>
+              <p className="text-[13px] font-medium">{t("m.push.not_this_device")}</p>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-accent h-11! text-[15px]!" disabled={busy} onClick={subscribeAndTest}>
+                  <Send size={16} /> {t("m.push.subscribe_and_test")}
+                </button>
+                {cfg.devices > 0 && (
+                  <button className="btn h-11! text-[15px]!" disabled={busy} onClick={() => flow(sendTest)}>
+                    <Send size={16} /> {t("m.push.test_others")}
+                  </button>
+                )}
+              </div>
+            </>
+          )}
           {results && (
             <ul className="flex flex-col gap-1 text-[13px]" aria-live="polite">
+              {results.length === 0 && <li className="text-ink-2">{t("m.push.test_no_devices")}</li>}
               {results.map((r) => (
                 <li key={r.sub_id} className="flex flex-wrap items-baseline gap-x-2">
                   <span className={r.ok ? "text-accent" : "text-red-400"}>{r.ok ? "✓" : "✗"}</span>
                   <span>{r.label}</span>
                   <span className="text-ink-2">
                     {r.ok ? t("m.push.test_ok") : r.removed ? t("m.push.test_removed") : r.error || t("m.push.test_failed")}
+                    {r.status != null ? ` (HTTP ${r.status})` : ""}
                   </span>
                 </li>
               ))}
             </ul>
           )}
         </div>
+      )}
+      {cfg && <PushDiagnostics diag={diag} cfg={cfg} />}
+      {saveError && (
+        <p role="alert" className="text-[13px] text-red-400">
+          {t("m.push.save_failed", { error: saveError })}
+        </p>
       )}
       {p && (
         <div className="flex flex-col divide-y divide-line">
@@ -253,6 +426,7 @@ export function PushSection() {
               </label>
             </div>
           )}
+          {!thisDevice && <p className="py-2 text-[12px] text-ink-2">{t("m.push.prefs_need_device")}</p>}
         </div>
       )}
     </Section>
