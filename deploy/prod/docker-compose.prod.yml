@@ -127,6 +127,9 @@ services:
     # 1.5 GB container ran out (deploy 33, "JavaScript heap out of memory").
     mem_limit: ${POS_DEPLOYER_MEM:-2g}
     mem_reservation: 128m
+    # 1 core: a test run took 1.35 cores on svr03 and squeezed knowlage and the agents (T-1440,
+    # approved by the CTO). It runs slower (~10 -> ~14 min), well inside sh()'s 30 min timeout.
+    cpus: "${POS_DEPLOYER_CPUS:-1.0}"
     logging: *logging
 
   # The Software Engineer's clone (branch agent/dev) is /work/PersonalOS. The deployer's .git is
