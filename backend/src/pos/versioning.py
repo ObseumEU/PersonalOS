@@ -58,13 +58,19 @@ def _snapshot(conn: sqlite3.Connection, ctx: Ctx, v: Versioned, entity_id: int, 
     return data
 
 
-def insert(conn: sqlite3.Connection, ctx: Ctx, entity: str, values: dict) -> dict:
+def insert(conn: sqlite3.Connection, ctx: Ctx, entity: str, values: dict, *,
+           unless_exists: tuple[str, ...] = ()) -> dict | None:
+    """unless_exists: the unique columns of a get-or-create; when a row with these values is there
+    already (a concurrent request made it after our read), nothing is written and None comes back."""
     v = spec(entity)
     cols = list(values)
+    conflict = f" ON CONFLICT ({', '.join(unless_exists)}) DO NOTHING" if unless_exists else ""
     cur = conn.execute(
-        f"INSERT INTO {v.table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+        f"INSERT INTO {v.table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)}){conflict}",
         [values[c] for c in cols],
     )
+    if unless_exists and cur.rowcount == 0:
+        return None
     return created(conn, ctx, entity, cur.lastrowid)
 
 

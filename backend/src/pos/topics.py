@@ -157,12 +157,17 @@ def create(conn: sqlite3.Connection, ctx: Ctx, fields: dict) -> dict:
     fields = dict(fields)
     slug = _slug(fields.pop("slug", None) or fields.get("name") or "")
     values = _clean({"name": fields.get("name") or slug, **fields})
-    if conn.execute("SELECT 1 FROM topics WHERE slug = ?", (slug,)).fetchone():
+    if conn.execute("SELECT 1 FROM topics WHERE slug = ?", (slug,)).fetchone() or not _insert(conn, ctx, slug, values):
         raise Invalid(f"topic {slug} already exists")
-    now = now_iso()
-    versioning.insert(conn, ctx, ENTITY, {"description": "", **values, "slug": slug, "created_by": ctx.actor_id,
-                                          "created_at": now, "updated_at": now})
     return get(conn, ctx, slug, with_events=False)
+
+
+def _insert(conn: sqlite3.Connection, ctx: Ctx, slug: str, values: dict) -> bool:
+    """False: the topic is there already (made by a concurrent request since the caller's read)."""
+    now = now_iso()
+    return versioning.insert(conn, ctx, ENTITY, {"description": "", **values, "slug": slug, "created_by": ctx.actor_id,
+                                                 "created_at": now, "updated_at": now},
+                             unless_exists=("slug",)) is not None
 
 
 def _row_or_create(conn: sqlite3.Connection, ctx: Ctx, slug: str) -> sqlite3.Row:
@@ -171,7 +176,7 @@ def _row_or_create(conn: sqlite3.Connection, ctx: Ctx, slug: str) -> sqlite3.Row
     if row is None:
         if _counts(conn, ctx).get(slug) is None:
             raise NotFound(f"topic {slug}")
-        create(conn, ctx, {"slug": slug, "name": slug})
+        _insert(conn, ctx, slug, _clean({"name": slug}))  # or a concurrent request made it: the same row
         row = conn.execute("SELECT * FROM topics WHERE slug = ?", (slug,)).fetchone()
     return row
 
