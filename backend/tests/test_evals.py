@@ -22,9 +22,10 @@ def by_id(sid: str) -> dict:
 def test_every_role_has_two_scenarios_and_unique_ids():
     assert len(IDS) == len(set(IDS))
     counts = {r: sum(1 for s in scenarios.SCENARIOS if s["role"] == r) for r in scenarios.roles()}
-    assert set(counts) == {"ceo", "head-of-customer-success", "kniha-lead", "kniha-growth-sales",
+    assert set(counts) == {"ceo", "head-of-customer-success", "kniha-growth-sales",
                            "software-engineer", "sre", "access-manager"}
-    assert all(2 <= n <= 3 for n in counts.values())
+    # lean org: the CEO also took the archived Kniha Lead's two offer decisions
+    assert all(2 <= n <= 3 for r, n in counts.items() if r != "ceo") and counts["ceo"] == 4
 
 
 @pytest.mark.parametrize("sid", IDS)
@@ -87,7 +88,7 @@ def test_live_wiring_shows_the_tools_the_good_run_needs(sid):
     task = prompt.build_task_prompt(me, sc["task"], sc.get("context") or [], include_guardrails=False,
                                     include_stable=False)
     assert sc["task"]["ref"] in task
-    assert me["model"] == "claude-opus-5-5" and me["profile"].get("effort") == "medium"
+    assert me["model"] == "claude-opus-5-5" and me["profile"].get("effort") in {"medium", "high"}  # coding agents: high
 
 
 def test_mock_server_answers_and_records(tmp_path):

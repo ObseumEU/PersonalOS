@@ -45,7 +45,7 @@
     "tool:kniha_reservations_summary"
   ],
   "profile": {
-    "pos_tools": "@worker list_tasks get_agent_status org_chart stuck_tasks task_reassign assign_task manage_agent ask_owner goal_list goal_upsert scorecard outbound_stats kniha_reservations_summary project_list run_transcript review_task support_threads invoice_filings access_usage",
+    "pos_tools": "@worker send_message list_tasks get_agent_status org_chart stuck_tasks task_reassign assign_task manage_agent ask_owner goal_list goal_upsert scorecard outbound_stats kniha_reservations_summary project_list run_transcript review_task support_threads invoice_filings",
     "claude_builtin": "WebSearch,WebFetch",
     "max_usd_run": 2,
     "max_steps": 40

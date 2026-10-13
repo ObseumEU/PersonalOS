@@ -10,7 +10,8 @@
     "messages:send",
     "tasks:claim",
     "tasks:read",
-    "tasks:write"
+    "tasks:write",
+    "ops:observe"
   ],
   "budget_class": "normal",
   "lifetime": "long_lived",

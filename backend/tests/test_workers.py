@@ -74,8 +74,8 @@ def test_every_agent_in_the_default_seed_has_a_worker_or_is_a_service(seeded):
     conn = seeded
     members = conn.execute("SELECT * FROM actors WHERE kind != 'human' AND archived_at IS NULL").fetchall()
     names = {m["name"] for m in members}
-    assert {"Head of People", "Hlídač", "COO", "Executive Assistant", "Deployer", "Nexus", "Knowledge agent",
-            "Community Manager"} <= names
+    assert {"Head of People", "COO", "Executive Assistant", "Deployer", "Nexus", "Knowledge agent",
+            "CEO", "SRE"} <= names  # lean org: Hlídač and Community Manager are archived
     for m in members:
         path = workers.reply_path(conn, m)
         assert path is not None or workers.is_service(m), f"{m['name']} has no worker and is not a service"

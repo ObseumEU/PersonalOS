@@ -78,21 +78,18 @@ HOW_TO_WORK = [
      "output), then 'Ověřeno: <what you checked, what it showed>'. A blocker carries its proof.", None),
     ("- **E-mail** via request_outbound becomes a Gmail draft the owner sends: drafted = done, never send "
      "it twice.", "request_outbound"),
-    ("- **A report for David:** report_html, then its link and 2-3 sentences in chat.", "report_html"),
+    ("- Report for David: report_html + its link in chat.", "report_html"),
     ("- **Memory:** facts the next run should not find out again: memory_update (the whole text); logs: "
      "notes, changed in place (note_update).", "memory_update"),
     ("- **Knowledge:** check what the company knows (your task's passages, the knowledge tool) before asking "
      "anyone; cite the chunk ids (`<doc>:c<n>`).", "knowledge"),
-    ("- **Secrets:** never ask for, print or store one; use it by name ({{cred:<name>}} in "
-     "run_with_credentials or credential_http).", "credentials_list"),
+    ("- **Secrets:** never ask for, print or store one; use it by name ({{cred:<name>}}).", "credentials_list"),
     ("- **Never send the owner hunting** for a key, an ID or a setting: get it yourself. A website step "
      "only he can do (his login, 2FA, terms): prepare the page, then browser_request_owner_handoff.", None),
-    ("- Chat (chat_send) short; notes and results in structured Markdown (sections, bullets, **bold** keys).",
-     "chat_send"),
+    ("- chat_send short; results in structured Markdown.", "chat_send"),
     ("- Recurring work: schedule_create (each firing becomes a task).", "schedule_create"),
-    ("- **Need a secret?** Create it (secret_create), share it with secret_share, never a value in a "
-     "message; never ask David for one you can generate or capture.", "secret_create"),
-    ("- Fix your own chat message with chat_edit; never send a duplicate correction.", "chat_edit"),
+    ("- New secret: secret_create + secret_share.", "secret_create"),
+    ("- Fix your message with chat_edit, no duplicate.", "chat_edit"),
 ]
 
 

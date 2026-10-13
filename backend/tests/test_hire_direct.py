@@ -25,7 +25,7 @@ def co(tmp_path, monkeypatch):
     client = TestClient(create_app(settings))
     client.__enter__()
     conn = connect(settings.db_path)
-    by = {n: actors.find_by_name(conn, n) for n in ("Head of People", "COO", "CTO", HA, "Hlídač", "Access manager")}
+    by = {n: actors.find_by_name(conn, n) for n in ("Head of People", "COO", "CEO", HA, "SRE", "Access manager")}
     yield {"conn": conn, "keys": tmp_path / "keys", "data": tmp_path, **by}
     conn.close()
     client.__exit__(None, None, None)
@@ -74,14 +74,15 @@ def test_hr_hires_an_agent_that_works_at_once(co):
 
 
 def test_a_lead_hires_only_below_itself_and_never_hands_out_more(co):
-    conn, pm, ha, monitor = co["conn"], co["CTO"], co[HA], co["Hlídač"]
-    # the CTO hires a helper for the Home Assistant Specialist (in its part of the chart)
+    # lean org: the CEO is the lead of the Home Assistant Specialist and of the SRE (a member without reports)
+    conn, pm, ha, monitor = co["conn"], co["CEO"], co[HA], co["SRE"]
+    # the CEO hires a helper for the Home Assistant Specialist (in its part of the chart)
     out = hiring.hire(conn, _ctx(pm), name="Pomocník HA", purpose="pomáhá s dashboardy", lead=HA,
                       permissions=["tasks:read", "tasks:claim"], data_dir=co["data"])
     assert out["created"] and actors.get(conn, out["agent"]["id"])["reports_to"] == ha["id"]
     # the specialist is a lead now: it hires under itself, not under someone else
     with pytest.raises(Forbidden, match="own part of the chart"):
-        hiring.hire(conn, _ctx(ha), name="Cizí", purpose="x", lead="Hlídač", permissions=["tasks:read"],
+        hiring.hire(conn, _ctx(ha), name="Cizí", purpose="x", lead="SRE", permissions=["tasks:read"],
                     data_dir=co["data"])
     with pytest.raises(Forbidden, match="escalation"):
         hiring.hire(conn, _ctx(ha), name="Mocnější", purpose="x", permissions=["tasks:read", "ops:monitor"],
@@ -105,7 +106,7 @@ def test_over_hrs_limits_it_becomes_a_request_for_the_owner(co, monkeypatch):
 
 
 def test_hr_and_leads_edit_instructions_of_the_agents_below_them(co):
-    conn, hr, pm, ha = co["conn"], co["Head of People"], co["COO"], co[HA]
+    conn, hr, pm, ha = co["conn"], co["Head of People"], co["CEO"], co[HA]
     text = "# Home Assistant Specialist\n\nNová verze instrukcí: nejdřív záloha, pak změna, vždy rollback."
     out = agents.propose_instructions(conn, _ctx(hr), ha["id"], text, "test")
     assert out["path"] == "agents/home-assistant-specialist/INSTRUCTIONS.md"
@@ -115,6 +116,6 @@ def test_hr_and_leads_edit_instructions_of_the_agents_below_them(co):
     out = agents.propose_instructions(conn, _ctx(pm), made["agent"]["id"], text, "lead")
     assert out["applied_now"] and "rollback" in agents.instructions_of(actors.get(conn, made["agent"]["id"]))
     with pytest.raises(Forbidden):                                    # not a lead of the HA Specialist's peer
-        agents.propose_instructions(conn, _ctx(ha), co["Hlídač"]["id"], text, "x")
+        agents.propose_instructions(conn, _ctx(ha), co["SRE"]["id"], text, "x")
     assert workers.reply_path(conn, actors.get(conn, made["agent"]["id"]))["kind"] == "pool"
     assert org.manages(conn, pm["id"], made["agent"]["id"])

@@ -61,8 +61,10 @@ def test_worker_reads_its_key_file(tmp_path, monkeypatch):
 
 def test_the_repository_files_are_valid():
     specs = {s["slug"]: s for s in agents_code.specs()}
-    assert {"ceo", "coo", "cto", "software-engineer", "head-of-customer-success", "performance-coach", "hlidac",
-            "access-manager", "home-assistant-specialist"} <= set(specs)
+    # the lean org (2026-10): eleven roles, everyone else in agents/_archive (not read)
+    assert set(specs) == {"ceo", "software-engineer", "sre", "home-assistant-specialist", "kniha-developer",
+                          "kniha-growth-sales", "head-of-customer-success", "cfo", "executive-assistant",
+                          "access-manager", "head-of-people"}
     # every role runs in the agent pool (docs/REORG.md), and its lead is a member defined here or the owner
     names = {s["name"] for s in specs.values()} | {"Owner"}
     for s in specs.values():

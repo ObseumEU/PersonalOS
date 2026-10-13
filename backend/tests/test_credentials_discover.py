@@ -119,7 +119,7 @@ def test_token_basic_and_db_suggestions(app):
     c = tok["credentials"][0]
     assert c["field"] == "credential" and c["header"] == "Authorization: Bearer {value}"
     assert c["allowed_hosts"] == ["knowlage.obseum.cz"] and c["env_var"].endswith("TOKEN")
-    assert [a["name"] for a in tok["agents"]] == ["Knowlage Specialist"]
+    assert [a["name"] for a in tok["agents"]] == ["Software Engineer"]  # the Knowlage Specialist was archived in the lean org
     basic = discover.suggest(conn, item("bas1"), taken=set())
     assert basic["kind"] == "basic" and basic["credentials"][0]["allowed_hosts"] == ["192.168.1.1:8080"]
     assert "{{cred:router-admin-user}}:{{cred:router-admin}}@" in basic["usage"]

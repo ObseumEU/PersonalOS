@@ -455,7 +455,7 @@ def test_digest_with_incidents_is_one_cheap_monitor_task_or_code_only(app, monke
 def test_monitor_agent_file_is_valid_and_matches_the_rule():
     from pathlib import Path
 
-    spec = json.loads((Path(__file__).resolve().parents[2] / "agents" / "hlidac" / "agent.json").read_text("utf-8"))
+    spec = json.loads((Path(__file__).resolve().parents[2] / "agents" / "_archive" / "hlidac" / "agent.json").read_text("utf-8"))  # archived (lean org)
     assert spec["name"] == monitor.NAME and spec["worker"] == "pool" and "ops:monitor" in spec["permissions"]
     assert set(spec["permissions"]) <= set(agents.PERMISSIONS)
     assert spec["engine"] == "claude" and spec["model"] == "claude-opus-5-5"  # every agent on Opus 5.5 (2026-09-27)

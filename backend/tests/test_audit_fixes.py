@@ -179,8 +179,7 @@ def test_only_the_kniha_team_and_the_ceo_get_the_reservations_tool():
     root = Path(__file__).resolve().parents[2] / "agents"
     holders = {d.name for d in root.iterdir() if (d / "agent.json").is_file()
                and "tool:kniha_reservations_summary" in json.loads((d / "agent.json").read_text("utf-8")).get("grants", [])}
-    assert holders == {"ceo", "kniha-lead", "kniha-developer", "kniha-marketing-lead", "kniha-growth-sales",
-                       "kniha-content-creator"}
+    assert holders == {"ceo", "kniha-developer", "kniha-growth-sales"}  # lean org: the rest are archived
 
 
 @pytest.fixture
@@ -279,7 +278,9 @@ def test_the_software_engineer_can_set_its_task_to_waiting(org):
     path, ids = org
     root = Path(__file__).resolve().parents[2] / "agents"
     profile = json.loads((root / "software-engineer" / "agent.json").read_text("utf-8"))["profile"]
-    assert "update_task" in profile["pos_tools"].split()
+    from pos_worker.tools import expand, tool_list
+
+    assert "update_task" in expand(tool_list(profile["pos_tools"]))  # via the @worker preset
     conn = connect(path)
     t = tasks.create(conn, Ctx(actors.owner_id(conn)), {"title": "Oprava", "status": "working",
                                                         "assignee": {"type": "agent", "id": ids["Software Engineer"]}})

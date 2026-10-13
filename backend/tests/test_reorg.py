@@ -1,10 +1,16 @@
 """The 2026-09 reorganisation into a company (docs/REORG.md): agents from git with
 their leads, schedules and worker profiles; the QA review gate before the
 deployer promotes agent/dev; pos.reorg moving an install with the old agents
-onto the new structure without deleting anything."""
+onto the new structure without deleting anything.
 
+The lean org (2026-10) archived 16 of those roles to agents/_archive; these tests
+run on the lean agents/ plus those 16 archived files (`company_dir`), so the
+2026-09 behaviour (QA review gate, Hlídač, the reorg migration) stays tested."""
+
+import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,8 +22,28 @@ from pos.db import connect
 from pos.main import create_app
 
 
+AGENTS = Path(__file__).resolve().parents[2] / "agents"
+# the roles the lean org (commit 24190c5) moved to agents/_archive
+LEAN_ARCHIVED = ("chief-of-staff", "community-manager", "content-brand", "coo", "cto", "head-of-growth", "hlidac",
+                 "kniha-content-creator", "kniha-lead", "kniha-marketing-lead", "knowlage-specialist",
+                 "legal-compliance", "nexus-specialist", "performance-coach", "qa-reviewer", "security-engineer")
+
+
 @pytest.fixture
-def company(tmp_path, monkeypatch):
+def company_dir(tmp_path, monkeypatch):
+    """agents/ (the lean org) plus the 16 roles it archived, as POS_AGENTS_REPO_DIR."""
+    base = tmp_path / "agents-2026-09"
+    for d in AGENTS.iterdir():
+        if d.is_dir() and (d / "agent.json").is_file():
+            shutil.copytree(d, base / d.name)
+    for slug in LEAN_ARCHIVED:
+        shutil.copytree(AGENTS / "_archive" / slug, base / slug)
+    monkeypatch.setenv("POS_AGENTS_REPO_DIR", str(base))
+    return base
+
+
+@pytest.fixture
+def company(tmp_path, monkeypatch, company_dir):
     monkeypatch.setenv("POS_AGENTS_AS_CODE", "1")
     settings = Settings(data_dir=tmp_path, password="pw", session_secret="t" * 32, scheduler=False)
     client = TestClient(create_app(settings))
@@ -35,14 +61,15 @@ def _lead(conn, name):
 
 def test_the_company_comes_from_the_files_with_leads_routines_and_profiles(company):
     conn = company["conn"]
-    for name, lead in (("CEO", "Owner"), ("Chief of Staff", "CEO"), ("Executive Assistant", "Chief of Staff"),
-                       ("CTO", "CEO"), ("Software Engineer", "CTO"), ("Hlídač", "SRE"), ("QA Reviewer", "CTO"),
+    # the kept roles' files now name the CEO (lean org); the archived ones keep their 2026-09 leads
+    for name, lead in (("CEO", "Owner"), ("Chief of Staff", "CEO"), ("Executive Assistant", "CEO"),
+                       ("CTO", "CEO"), ("Software Engineer", "CEO"), ("Hlídač", "SRE"), ("QA Reviewer", "CTO"),
                        ("Performance Coach", "Head of People"), ("Content & Brand", "Head of Growth"),
-                       ("Home Assistant Specialist", "CTO"), ("Legal & Compliance", "CEO")):
+                       ("Home Assistant Specialist", "CEO"), ("Legal & Compliance", "CEO")):
         assert _lead(conn, name) == lead, name
     # routines come from agent.json once, as the owner's team schedules
     mine = {s["name"] for s in schedules.list_schedules(conn, actor_id=actors.find_by_name(conn, "CEO")["id"])}
-    assert {"CEO: pondělní plán", "CEO: podklady pro board"} <= mine
+    assert "CEO: ranní souhrn" in mine
     assert not schedules.list_schedules(conn, actor_id=actors.find_by_name(conn, "Legal & Compliance")["id"])
     assert agents_code.is_dormant("Legal & Compliance") and not agents_code.is_dormant("CEO")
     # each agent's worker settings come from its file (the pool serves many agents)
@@ -90,7 +117,7 @@ def test_the_worker_prefers_the_agents_profile(monkeypatch, tmp_path):
     assert session_workdir({}, "/work") == "/work"
 
 
-def test_the_qa_reviewer_reads_the_kniha_checkout(tmp_path):
+def test_the_qa_reviewer_reads_the_kniha_checkout(tmp_path, company_dir):
     """Prod 2026-10 (T-248, T-509): the QA Reviewer's file tools could not open /work/kniha, only its own
     /work/PersonalOS. agent.json "read_dirs" becomes claude --add-dir; only folders under /work or /repos."""
     pytest.importorskip("pos_worker")
@@ -185,7 +212,7 @@ def _legacy(conn, data_dir):
     return old, t, done
 
 
-def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch):
+def test_reorg_moves_an_old_install_and_deletes_nothing(tmp_path, monkeypatch, company_dir):
     settings = Settings(data_dir=tmp_path, password="pw", session_secret="t" * 32, scheduler=False)
     client = TestClient(create_app(settings))  # POS_AGENTS_AS_CODE=0: only the platform's own members
     client.__enter__()

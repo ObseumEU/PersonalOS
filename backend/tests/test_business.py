@@ -173,7 +173,10 @@ def test_agent_files_give_the_ha_specialist_and_the_engineer_higher_caps():
     assert se["max_steps"] >= agents_code.MIN_STEPS and se["max_steps_owner"] > se["max_steps"]
     for spec in agents_code.specs():
         # HR may hire on any allowed model (e.g. Sonnet for low-budget agents)
-        assert spec.get("model") in hiring.MODELS and spec.get("effort") == hiring.DEFAULT_EFFORT, spec["name"]
+        assert spec.get("model") in hiring.MODELS and spec.get("effort") in {hiring.DEFAULT_EFFORT, "high"}, spec["name"]
+        # lean org: only the coding agents (Bash in their built-ins) think harder
+        if spec.get("effort") == "high":
+            assert "Bash" in ((spec.get("profile") or {}).get("claude_builtin") or ""), spec["name"]
         assert spec.get("engine") == "claude", spec["name"]
 
 
@@ -422,8 +425,8 @@ def test_agent_files_grant_single_tools_once(conn, owner, tmp_path):
     conn.execute("UPDATE access_grants SET ended_at = ?, end_kind = 'revoked' WHERE id = ?", (now_iso(), gid))
     assert agents_code._grants_from_file(conn, Ctx(owner.actor_id), row, spec) == []  # a revoke stays
     listed = {s["name"]: s.get("grants") for s in agents_code.specs()}
-    for name in ("CEO", "Chief of Staff", "CFO", "Head of Growth", "Head of Customer Success", "CTO",
-                 "Knowlage Specialist", "Nexus Specialist", "Home Assistant Specialist", "SRE"):
+    for name in ("CEO", "CFO", "Head of Customer Success", "Software Engineer",
+                 "Home Assistant Specialist", "SRE"):
         assert "tool:knowledge" in (listed[name] or []), name
 
 
@@ -447,7 +450,7 @@ def test_cfo_and_security_read_spend_and_audit_with_access_read_not_access_manag
     assert mcp_server.may_use(conn, am.actor_id, "access_usage")
     assert "access:read" not in access.autonomy_caps()
     listed = {s["name"]: s.get("grants") or [] for s in agents_code.specs()}
-    assert "access:read" in listed["CFO"] and "access:read" in listed["Security Engineer"]
+    assert "access:read" in listed["CFO"]  # the Security Engineer was archived in the lean org
 
 
 def test_agents_never_see_the_freeze_tool_people_do(conn, owner, company):
@@ -479,7 +482,8 @@ def test_agent_files_give_every_agent_knowledge_and_reviewers_the_review_permiss
                         perm == "access:read" and "access:manage" in have), (s["name"], tool, perm)
             assert "freeze" not in shown, s["name"]
     leads = {s["name"]: set(s.get("permissions") or []) for s in agents_code.specs()}
-    for name in ("Kniha Lead", "Kniha Marketing Lead"):
+    # lean org: the CEO is the one reviewer left (the Kniha leads were archived)
+    for name in ("CEO",):
         assert {"tasks:review", "tasks:write"} <= leads[name], name
 
 

@@ -46,7 +46,7 @@
     "tool:support_threads"
   ],
   "profile": {
-    "pos_tools": "@worker list_tasks support_threads support_issue_open gmail_create_draft outbound_stats linkedin_connect secret_create secret_share secret_list secret_rotate secret_revoke",
+    "pos_tools": "@worker send_message list_tasks support_threads support_issue_open gmail_create_draft outbound_stats linkedin_connect secret_create secret_share secret_list secret_rotate secret_revoke",
     "claude_builtin": "WebSearch,WebFetch",
     "max_usd_run": 1.5,
     "max_steps": 40
