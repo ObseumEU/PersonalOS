@@ -166,3 +166,17 @@ def test_a_green_daily_check_closes_itself_and_only_findings_make_work(conn, tmp
     # anything else from a schedule is still reviewed
     assert run(weekly["id"], "Hotovo.")["status"] == "review"
     assert schedules.all_green("0 error/warn, žádné restarty") and not schedules.all_green("registry: denied 12×")
+
+
+def test_a_job_result_keyed_by_ids_is_audited_and_does_not_abort_the_tick(conn, monkeypatch):
+    """prod 2026-10-08..12: a job's result keyed by ints made audit.log(**result) raise "keywords must be strings";
+    the tick died, the job's next_run_at rolled back and the jobs after it did not run."""
+    scheduler.seed(conn)
+    job = dict(conn.execute("SELECT * FROM jobs WHERE action = 'reap_runs'").fetchone())
+    monkeypatch.setitem(scheduler.ACTIONS, "reap_runs", lambda c: {"released": [7], 7: "x"})
+    out = scheduler.run_job(conn, job)
+    assert out["released"] == [7]
+    row = conn.execute("SELECT last_run_at FROM jobs WHERE id = ?", (job["id"],)).fetchone()
+    assert row["last_run_at"] is not None
+    detail = json.loads(conn.execute("SELECT detail FROM audit_log WHERE action = 'job:reap_runs'").fetchone()[0])
+    assert detail["7"] == "x"

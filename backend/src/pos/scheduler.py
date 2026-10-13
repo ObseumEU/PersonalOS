@@ -817,7 +817,10 @@ def run_job(conn: sqlite3.Connection, job: sqlite3.Row | dict, by: Ctx | None = 
             or result.get("failed") or result.get("expired") or result.get("paused") or result.get("cap_alerts") \
             or result.get("alerted") or result.get("moved") or result.get("tasks") or result.get("published") \
             or result.get("filed") or result.get("duplicate") or result.get("issue") or result.get("triage")             or result.get("routed") or result.get("follow_up") or result.get("status_drafts")             or result.get("follow_ups") or result.get("errors") or result.get("stuck"):
-        audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"], **{k: v for k, v in result.items() if k != "task"})
+        # str(k): a result keyed by ids (ints) made this a TypeError that aborted the whole tick, rolled the job's
+        # next_run_at back and skipped the jobs after it (prod 2026-10-08..12: "keywords must be strings" 27×).
+        audit.log(conn, ctx, f"job:{job['action']}", "job", job["id"],
+                  **{str(k): v for k, v in result.items() if k != "task"})
     conn.commit()
     return result
 
