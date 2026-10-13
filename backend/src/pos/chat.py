@@ -1980,8 +1980,6 @@ async def stream(db_path: Path, viewer: int, cursor: int | None = None, *, poll:
         finally:
             conn.close()
 
-    import asyncio
-
     while True:
         # on a worker thread: a slow or locked database never stalls the event loop (every open tab polls)
         events, cursor, presence = await asyncio.to_thread(read, cursor)
