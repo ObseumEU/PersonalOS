@@ -180,7 +180,7 @@ def test_deployer_rejects_a_shared_tool_with_a_secret(tmp_path):
 
 # ------------------------------------------------------------------ the worker, usage, MCP
 
-def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root):
+def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root, monkeypatch):
     client, conn, owner, dev, key, _ = app
     make(root, "agents/software-engineer/tools/mine", manifest("mine"))
     make(root, "agents/other-agent/tools/theirs", manifest("theirs", owner="Other agent"))
@@ -209,6 +209,15 @@ def test_worker_tools_endpoint_returns_personal_and_allowed_shared(app, root):
     assert pw.codex_config(items)[0].startswith("mcp_servers.tool_links.command=")
     text = pw.prompt_section(items, include_skills=True)
     assert "mine [script, software-engineer]" in text and "Be brief." in text and "tools_record_use" in text
+    # The shared (coding) library only for an agent with shell or file-editing built-ins; personal tools stay.
+    coder = {"profile": {"claude_builtin": "Bash,Read,Edit,Write,Glob,Grep"}}
+    assert pw.for_profile(items, coder) == items
+    plain = pw.for_profile(items, {"profile": {"claude_builtin": "Read,Glob,WebSearch"}})
+    assert [t["id"] for t in plain] == ["software-engineer/mine"]
+    monkeypatch.setenv("WORKER_CLAUDE_BUILTIN", "Read,Write")  # no profile value: this worker's setting
+    assert pw.for_profile(items, {"profile": {}}) == items
+    monkeypatch.delenv("WORKER_CLAUDE_BUILTIN")
+    assert [t["id"] for t in pw.for_profile(items, {})] == ["software-engineer/mine"]
 
     class Broken:
         def tools(self):
