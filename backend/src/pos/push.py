@@ -118,6 +118,21 @@ CREATE TABLE IF NOT EXISTS push_failures (
     kind TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS push_failures_at ON push_failures(at);
+-- Every step of turning notifications on in a browser, successes too (Settings → "Zapnout oznámení"): permission,
+-- service worker, the push service's subscribe, the server. Before it a flow that stopped without an exception left
+-- no trace (prod 2026-10-13: the owner's Android app, no subscription and nothing reported).
+CREATE TABLE IF NOT EXISTS push_client_log (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    actor_id INTEGER,
+    device_id TEXT,
+    step TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    host TEXT NOT NULL DEFAULT '',
+    standalone INTEGER
+);
+CREATE INDEX IF NOT EXISTS push_client_log_actor ON push_client_log(actor_id, id);
 CREATE TABLE IF NOT EXISTS push_sent (
     actor_id INTEGER NOT NULL,
     key TEXT NOT NULL,
@@ -217,6 +232,9 @@ _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def set_prefs(conn: sqlite3.Connection, ctx: Ctx, changes: dict) -> dict:
+    """Merge `changes` into the member's settings. The read and the write are one write transaction, so switches
+    flipped quickly one after another (overlapping PUTs) neither fail nor undo each other. The caller commits."""
+    settings_store.begin_write(conn)
     cur = prefs(conn, ctx.actor_id)
     for k, v in changes.items():
         if k not in DEFAULT_PREFS:
@@ -397,6 +415,47 @@ def client_error(conn: sqlite3.Connection, actor_id: int, device_id: str | None,
     where = "" if standalone is None else (" [aplikace]" if standalone else " [karta prohlížeče]")
     _failure(conn, None, status=None, error=f"{(step or '?')[:40]}: {(error or '')[:200]}{where}", source="client",
              actor_id=actor_id, device_id=device_id, host=label_for(user_agent)[:40])
+
+
+CLIENT_LOG_KEEP = 2000
+
+
+def client_log(conn: sqlite3.Connection, actor_id: int, device_id: str | None, *, step: str, ok: bool, detail: str,
+               user_agent: str = "", standalone: bool | None = None) -> None:
+    """One step of the browser's subscribe flow, failed or not (push_client_log); a failed one also goes to
+    push_failures (client_error: the health signal). The caller commits."""
+    ensure_schema(conn)
+    from .devices import label_for
+
+    conn.execute("""INSERT INTO push_client_log (at, actor_id, device_id, step, ok, detail, host, standalone)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                 (now_iso(), actor_id, device_id, (step or "?")[:40], 1 if ok else 0, (detail or "")[:300],
+                  label_for(user_agent)[:40], None if standalone is None else int(standalone)))
+    conn.execute("DELETE FROM push_client_log WHERE id <= (SELECT MAX(id) FROM push_client_log) - ?", (CLIENT_LOG_KEEP,))
+    if not ok:
+        client_error(conn, actor_id, device_id, step=step, error=detail, user_agent=user_agent, standalone=standalone)
+
+
+def device_status(conn: sqlite3.Connection, actor_id: int, device_id: str | None) -> dict:
+    """Settings → "Stav notifikací", the server's half: this device's subscription (its last accepted and last failed
+    send), the member's last failed send on any device and this device's last subscribe steps."""
+    ensure_schema(conn)
+    sub = (conn.execute("""SELECT id, created_at, last_ok_at, last_error, failures, endpoint FROM push_subscriptions
+                           WHERE actor_id = ? AND device_id = ? ORDER BY id DESC LIMIT 1""",
+                        (actor_id, device_id)).fetchone() if device_id else None)
+    fail = conn.execute("""SELECT at, status, error, host FROM push_failures WHERE actor_id = ? AND source = 'send'
+                           ORDER BY id DESC LIMIT 1""", (actor_id,)).fetchone()
+    last_ok = conn.execute("SELECT MAX(last_ok_at) FROM push_subscriptions WHERE actor_id = ?", (actor_id,)).fetchone()[0]
+    steps = (conn.execute("""SELECT at, step, ok, detail FROM push_client_log WHERE actor_id = ? AND device_id = ?
+                             ORDER BY id DESC LIMIT 8""", (actor_id, device_id)).fetchall() if device_id else [])
+    return {
+        "subscription": ({"id": sub["id"], "created_at": sub["created_at"], "last_ok_at": sub["last_ok_at"],
+                          "last_error": sub["last_error"], "failures": sub["failures"], "host": _host(sub["endpoint"])}
+                         if sub else None),
+        "last_ok_at": last_ok,
+        "last_failure": dict(fail) if fail else None,
+        "steps": [{**dict(r), "ok": bool(r["ok"])} for r in steps],
+    }
 
 
 def health(conn: sqlite3.Connection, now: datetime | None = None) -> dict:

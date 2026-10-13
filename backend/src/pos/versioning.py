@@ -65,8 +65,13 @@ def insert(conn: sqlite3.Connection, ctx: Ctx, entity: str, values: dict) -> dic
         f"INSERT INTO {v.table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
         [values[c] for c in cols],
     )
-    row = _snapshot(conn, ctx, v, cur.lastrowid, "create")
-    audit.log(conn, ctx, "create", entity, cur.lastrowid)
+    return created(conn, ctx, entity, cur.lastrowid)
+
+
+def created(conn: sqlite3.Connection, ctx: Ctx, entity: str, entity_id: int) -> dict:
+    """Version 1 and the audit line of a row the caller inserted itself (an upsert)."""
+    row = _snapshot(conn, ctx, spec(entity), entity_id, "create")
+    audit.log(conn, ctx, "create", entity, entity_id)
     return row
 
 

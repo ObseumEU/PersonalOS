@@ -40,7 +40,9 @@ def config(request: Request, conn=Depends(get_db), ctx=Depends(get_ctx), setting
     return {"enabled": push.configured(settings), "public_key": settings.vapid_public_key or None,
             "prefs": push.prefs(conn, ctx.actor_id), "devices": len(subs),
             # whether the server has a subscription of this very device (the app re-registers when not)
-            "this_device": bool(sid) and any(s["device_id"] == sid for s in subs)}
+            "this_device": bool(sid) and any(s["device_id"] == sid for s in subs),
+            # Settings → "Stav notifikací": this device's subscription, the last send results, the last steps
+            "status": push.device_status(conn, ctx.actor_id, sid)}
 
 
 @router.post("/subscribe", status_code=201)
@@ -116,6 +118,22 @@ def client_error(body: ClientErrorIn, request: Request, conn=Depends(get_db), ct
     so a phone that never subscribes is visible in the push health signal instead of failing silently."""
     push.client_error(conn, ctx.actor_id, request.session.get("sid"), step=body.step, error=body.error,
                       user_agent=request.headers.get("user-agent", ""), standalone=body.standalone)
+    conn.commit()
+
+
+class ClientLogIn(BaseModel):
+    step: str = Field(max_length=40)
+    ok: bool
+    detail: str = Field(default="", max_length=300)
+    standalone: bool | None = None
+
+
+@router.post("/client-log", status_code=204)
+def client_log(body: ClientLogIn, request: Request, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Each step of "Zapnout oznámení" in the browser, successes too (push_client_log); a failed step is also a
+    client failure (push_failures, the health signal)."""
+    push.client_log(conn, ctx.actor_id, request.session.get("sid"), step=body.step, ok=body.ok, detail=body.detail,
+                    user_agent=request.headers.get("user-agent", ""), standalone=body.standalone)
     conn.commit()
 
 
