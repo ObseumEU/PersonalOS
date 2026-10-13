@@ -90,6 +90,9 @@ HOW_TO_WORK = [
     ("- Chat (chat_send) short; notes and results in structured Markdown (sections, bullets, **bold** keys).",
      "chat_send"),
     ("- Recurring work: schedule_create (each firing becomes a task).", "schedule_create"),
+    ("- **Need a secret?** Create it (secret_create), share it with secret_share, never a value in a "
+     "message; never ask David for one you can generate or capture.", "secret_create"),
+    ("- Fix your own chat message with chat_edit; never send a duplicate correction.", "chat_edit"),
 ]
 
 
