@@ -24,8 +24,8 @@ Every call needs a `reason` and writes one audit row `ops_runbook:<action>` (arg
 outcome, exit code, output length) with the run id when one is known. Output is redacted
 (pos.observability.redact) and cut to MAX_OUTPUT characters.
 
-Anything outside the catalogue: one task for the CTO (by role 'cto') with the command and
-the reason, never the owner. Who may use it: the permission `ops:runbook` (the SRE, granted
+Anything outside the catalogue: one task for the CTO (by role 'cto'; without one the SRE, else
+the CEO, never the one asking) with the command and the reason, never the owner. Who may use it: the permission `ops:runbook` (the SRE, granted
 once by ensure(); not part of the autonomy defaults, pos.access.RESTRICTED).
 
 This module is imported by the executor on the host as a plain file: stdlib imports only at
@@ -430,13 +430,18 @@ def _audit(conn, ctx, action: str, task_id: int | None, **detail) -> None:
               **{k: v for k, v in detail.items() if v is not None})
 
 
-def cto_id(conn) -> int | None:
+def cto_id(conn, exclude: int | None = None) -> int | None:
+    """Who decides an action outside the catalogue: the CTO, else (archived in the 2026-10 cut) the
+    SRE, else the CEO; never `exclude` (the one asking) and never the owner."""
     from . import roles
 
-    row = conn.execute("SELECT id FROM actors WHERE role = 'cto' AND archived_at IS NULL AND kind != 'human' "
-                       "ORDER BY id LIMIT 1").fetchone() or conn.execute(
-        "SELECT id FROM actors WHERE name = ? AND archived_at IS NULL AND kind != 'human'", (roles.CTO,)).fetchone()
-    return row["id"] if row else None
+    for role, name in (("cto", roles.CTO), ("sre", roles.SRE), ("ceo", roles.CEO)):
+        row = conn.execute("SELECT id FROM actors WHERE (role = ? OR name = ?) AND archived_at IS NULL "
+                           "AND kind != 'human' AND id IS NOT ? ORDER BY role = ? DESC, id LIMIT 1",
+                           (role, name, exclude, role)).fetchone()
+        if row:
+            return row["id"]
+    return None
 
 
 def _escalate(conn, ctx, action, params, reason: str, task_id: int | None) -> dict:
@@ -445,7 +450,7 @@ def _escalate(conn, ctx, action, params, reason: str, task_id: int | None) -> di
 
     name = action_name(action)
     asked = json.dumps({"action": str(action)[:200], "params": params}, ensure_ascii=False, default=str)[:2000]
-    cto = cto_id(conn)
+    cto = cto_id(conn, exclude=ctx.actor_id)
     if cto is None:
         _audit(conn, ctx, name, task_id, args=params, reason=reason, outcome="unknown_action_no_cto")
         return {"ok": False, "outcome": "unknown_action",

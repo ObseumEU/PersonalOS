@@ -224,12 +224,16 @@ def fingerprint(actor_id: int, tool: str, target: str) -> str:
     return hashlib.sha256(f"{actor_id}|{tool}|{target}".encode()).hexdigest()[:32]
 
 
-def security_reviewer(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    for name in (SECURITY, roles.CTO):
+def security_reviewer(conn: sqlite3.Connection, exclude: int | None = None) -> sqlite3.Row | None:
+    """Who confirms a tainted run's action: the Security Engineer, else the CTO, else (both archived
+    in the 2026-10 cut) the SRE, else the CEO; never `exclude` (the agent whose action it is)."""
+    for name in (SECURITY, roles.CTO, roles.SRE):
         r = actors.find_by_name(conn, name)
-        if r is not None and not r["archived_at"]:
+        if r is not None and not r["archived_at"] and r["id"] != exclude:
             return r
-    return None
+    r = conn.execute("SELECT * FROM actors WHERE role = 'ceo' AND archived_at IS NULL AND kind != 'human' "
+                     "ORDER BY id LIMIT 1").fetchone()
+    return r if r is not None and r["id"] != exclude else None
 
 
 def check(conn: sqlite3.Connection, ctx: Ctx, tool: str, args: dict) -> None:
@@ -287,7 +291,7 @@ def _hold(conn: sqlite3.Connection, ctx: Ctx, tool: str, target: str, why: str, 
                        (ctx.actor_id, run_id, tool, target, fp,
                         json.dumps({"why": why, "sources": sorted({t["source"] for t in taint})}), now_iso()))
     hold_id = cur.lastrowid
-    reviewer = security_reviewer(conn)
+    reviewer = security_reviewer(conn, exclude=ctx.actor_id)
     run_task = conn.execute("SELECT task_id FROM runs WHERE id = ?", (run_id,)).fetchone() if run_id else None
     from .guard.external import wrap_external
 
@@ -323,7 +327,7 @@ def may_decide(conn: sqlite3.Connection, actor_id: int, hold) -> bool:
         return True
     if actor_id == hold["actor_id"]:
         return False  # nobody confirms their own action
-    reviewer = security_reviewer(conn)
+    reviewer = security_reviewer(conn, exclude=hold["actor_id"])
     return reviewer is not None and reviewer["id"] == actor_id
 
 

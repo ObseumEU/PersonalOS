@@ -24,10 +24,14 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def ensure_hr_agent(conn: sqlite3.Connection) -> int:
-    """Create the HR agent actor and its system profile once; return its actor id."""
+def ensure_hr_agent(conn: sqlite3.Connection) -> int | None:
+    """Create the HR agent actor and its system profile once; return its actor id. None when the
+    Head of People is archived: it is not created again and its reviews skip (HR's limits still
+    apply, in the platform's name: _hr_ctx)."""
     store.ensure_schema(conn)
-    row = conn.execute("SELECT id FROM actors WHERE name = ?", (HR_NAME,)).fetchone()
+    row = conn.execute("SELECT id, archived_at FROM actors WHERE name = ?", (HR_NAME,)).fetchone()
+    if row is not None and row["archived_at"]:
+        return None
     if row is None:
         hr_id = conn.execute(
             "INSERT INTO actors (kind, name, is_owner, created_at) VALUES ('agent', ?, 0, ?)",
@@ -45,7 +49,13 @@ def ensure_hr_agent(conn: sqlite3.Connection) -> int:
 
 
 def _hr_ctx(conn: sqlite3.Connection, via: str) -> Ctx:
-    return Ctx(ensure_hr_agent(conn), via=via)
+    """HR's voice: the Head of People, else (archived) the platform's own identity."""
+    hr_id = ensure_hr_agent(conn)
+    return Ctx(hr_id if hr_id is not None else actors.system_id(conn), via=via)
+
+
+def _hr_active(conn: sqlite3.Connection) -> bool:
+    return conn.execute("SELECT 1 FROM actors WHERE name = ? AND archived_at IS NULL", (HR_NAME,)).fetchone() is not None
 
 
 def _may_run_hr(conn: sqlite3.Connection, ctx: Ctx) -> None:
@@ -77,6 +87,8 @@ def _serialize(result: ReviewResult, names: dict[str, str]) -> dict:
 def daily_review(conn: sqlite3.Connection, ctx: Ctx | None = None, *, apply: bool = True,
                  now: datetime | None = None, policy: HRPolicy | None = None) -> dict:
     policy = policy or current(conn)
+    if not _hr_active(conn):
+        return {"skipped": f"no active {HR_NAME}"}
     hr_ctx = _hr_ctx(conn, ctx.via if ctx else "system")
     if apply and ctx is not None:
         _may_run_hr(conn, ctx)
@@ -99,6 +111,8 @@ def weekly_report(conn: sqlite3.Connection, ctx: Ctx | None = None, *, now: date
                   policy: HRPolicy | None = None) -> dict:
     """Dry-run review over the last week and a "k přečtení" task for the owner."""
     policy = policy or current(conn)
+    if not _hr_active(conn):
+        return {"skipped": f"no active {HR_NAME}"}
     hr_ctx = _hr_ctx(conn, ctx.via if ctx else "system")
     if ctx is not None:
         _may_run_hr(conn, ctx)

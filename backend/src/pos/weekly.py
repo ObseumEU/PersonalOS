@@ -125,6 +125,14 @@ def agent_id(conn: sqlite3.Connection) -> int | None:
     return None
 
 
+def voice(conn: sqlite3.Connection) -> int:
+    """Who signs what the core posts for the Chief of Staff (an auto-published report, a closed meeting):
+    the Chief of Staff, else (archived in the 2026-10 cut) the CEO, else the platform; never the owner."""
+    from .notices import ceo
+
+    return agent_id(conn) or ceo(conn) or actors.system_id(conn)
+
+
 def channel_id(conn: sqlite3.Connection) -> int:
     """#weekly: the owner and the Chief of Staff (private; the owner invites others)."""
     from . import chat
@@ -670,8 +678,7 @@ def meeting_timeouts(conn: sqlite3.Connection) -> dict:
     closed, nudged = [], []
     for row in conn.execute("SELECT * FROM weekly_reports WHERE status = ? AND deadline_at IS NOT NULL "
                             "AND deadline_at < ?", (OPEN_MEETING, now)).fetchall():
-        cos = agent_id(conn) or actors.owner_id(conn)
-        ctx = Ctx(cos, via="scheduler")
+        ctx = Ctx(voice(conn), via="scheduler")
         week = row["week"]
         if row["answered_at"] and not row["nudged_at"]:
             _set(conn, week, nudged_at=now, deadline_at=_in(NUDGE_HOURS))
@@ -867,7 +874,7 @@ def publish_overdue(conn: sqlite3.Connection, now: datetime | None = None) -> di
         headline, narrative = auto_narrative(packet)
         _set(conn, row["week"], narrative=narrative, headline=headline, status="published",
              published_at=now.isoformat(timespec="seconds"))
-        ctx = Ctx(agent_id(conn) or actors.owner_id(conn), via="scheduler")
+        ctx = Ctx(voice(conn), via="scheduler")
         audit.log(conn, ctx, "weekly_report_auto_publish", "weekly_report", row["id"], week=row["week"])
         try:
             _post(conn, ctx, channel_id(conn), f"Týdenní report {row['week']} je zveřejněný (automaticky z čísel): "

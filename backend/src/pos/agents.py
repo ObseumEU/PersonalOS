@@ -395,20 +395,20 @@ def end_grants(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str) -
 
 
 def successor_of(conn: sqlite3.Connection, actor_id: int) -> int:
-    """Who takes over an archived member's work: its successor from the 2026-09 reorganisation
-    (roles.LEGACY), else its lead if active, else the owner."""
-    from . import roles
+    """Who takes over an archived member's work: its successor from the reorganisations
+    (roles.SUCCESSORS), else its lead if active, else the CEO; the owner only when there is none."""
+    from . import notices, roles
 
     row = actors.get(conn, actor_id)
-    new = roles.LEGACY.get(row["name"])
-    if new:
+    for new in roles.successor_names(row["name"]):
         succ = actors.find_by_name(conn, new)
         if succ is not None and succ["id"] != actor_id:
             return succ["id"]
     lead = row["reports_to"] if "reports_to" in row.keys() else None
-    if lead and not actors.get(conn, lead)["archived_at"]:
+    if lead and not actors.get(conn, lead)["archived_at"] and not actors.get(conn, lead)["is_owner"]:
         return lead
-    return actors.owner_id(conn)
+    ceo = notices.ceo(conn)
+    return ceo if ceo and ceo != actor_id else actors.owner_id(conn)
 
 
 def archive(conn: sqlite3.Connection, ctx: Ctx, agent_id: int, reason: str = "") -> dict:

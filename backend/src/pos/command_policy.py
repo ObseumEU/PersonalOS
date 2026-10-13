@@ -493,10 +493,24 @@ def fingerprint(command: str) -> str:
 
 
 def approver(conn: sqlite3.Connection, actor_id: int) -> sqlite3.Row:
-    """The CTO; the owner only for the CTO's own commands or when there is no CTO."""
+    """The CTO; without one (archived in the 2026-10 cut) the requester's active lead when it can
+    decide (command_approval_decide needs tasks:claim), else the CEO. The owner only when none of
+    them exists (or for the CTO's own commands)."""
     cto = conn.execute("""SELECT * FROM actors WHERE role = 'cto' AND archived_at IS NULL AND id != ?
                           ORDER BY id LIMIT 1""", (actor_id,)).fetchone()
-    return cto if cto is not None else actors.get(conn, actors.owner_id(conn))
+    if cto is not None:
+        return cto
+    from . import agents, notices
+
+    me = actors.get(conn, actor_id)
+    if (me["role"] or "") != "cto":
+        lead = notices.lead_of(conn, actor_id)  # its lead up the chart (an archived one skipped), else the CEO
+        if lead and lead != actor_id and agents.has_permission(conn, lead, "tasks:claim"):
+            return actors.get(conn, lead)
+        ceo = notices.ceo(conn)
+        if ceo and ceo != actor_id:
+            return actors.get(conn, ceo)
+    return actors.get(conn, actors.owner_id(conn))
 
 
 def approved(conn: sqlite3.Connection, actor_id: int, command: str) -> bool:

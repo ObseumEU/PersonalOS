@@ -4,9 +4,10 @@ routes it by role; handoffs between members; the COO's daily standup.
 
 The chart is a company (docs/REORG.md): the owner is the board, the CEO
 reports to him and the heads to the CEO; agents/*/agent.json sets each
-role's lead. A member with no lead yet gets the COO (the code role PM_NAME),
-the COO gets the owner. Defaults are seeded at startup and for agents created
-later; the owner changes them on the agent's page (set_org). Handoffs are versioned task
+role's lead. A member with no lead yet gets the COO (the code role PM_NAME;
+the CEO once the COO is archived), the COO gets the owner. Defaults are
+seeded at startup and for agents created later; the owner changes them on
+the agent's page (set_org). Handoffs are versioned task
 changes plus a message to the receiver, and a row in `handoffs` so the
 network can draw them.
 """
@@ -66,16 +67,29 @@ STANDUP_TEMPLATE = {
 REPO_AGENTS = Path(__file__).resolve().parents[3] / "agents"
 
 
-def pm_id(conn: sqlite3.Connection) -> int | None:
-    row = conn.execute("SELECT id FROM actors WHERE name = ?", (PM_NAME,)).fetchone()
+def coo_id(conn: sqlite3.Connection) -> int | None:
+    """The active COO only (the standup and other COO routines skip without one)."""
+    row = conn.execute("SELECT id FROM actors WHERE name = ? AND archived_at IS NULL", (PM_NAME,)).fetchone()
     return row["id"] if row else None
 
 
-def ensure_pm(conn: sqlite3.Connection) -> int:
+def pm_id(conn: sqlite3.Connection) -> int | None:
+    """Who has the code role "project manager" (the default lead, hiring without a lead): the active
+    COO, else the CEO (the 2026-10 cut archived the COO). Never an archived member."""
+    pid = coo_id(conn)
+    if pid is not None:
+        return pid
+    row = conn.execute("SELECT id FROM actors WHERE archived_at IS NULL AND kind != 'human' "
+                       "AND (role = 'ceo' OR name = ?) ORDER BY role = 'ceo' DESC, id LIMIT 1", (roles.CEO,)).fetchone()
+    return row["id"] if row else None
+
+
+def ensure_pm(conn: sqlite3.Connection) -> int | None:
     """Create the Project manager once, as the owner, under the same checks as
     any agent: the constitution (never more than the creator), an HR profile
     and a budget class. Like the HR agent it is a platform agent, so it does
-    not take one of the HR limit's slots and HR never retires it."""
+    not take one of the HR limit's slots and HR never retires it. An archived
+    COO stays archived (None): it is not created again."""
     from .budget import service as budget
     from .budget import store as budget_store
     from .guard import policy
@@ -85,7 +99,9 @@ def ensure_pm(conn: sqlite3.Connection) -> int:
 
     owner = actors.owner_id(conn)
     ctx = Ctx(owner, via="system")
-    pid = pm_id(conn)
+    if conn.execute("SELECT 1 FROM actors WHERE name = ? AND archived_at IS NOT NULL", (PM_NAME,)).fetchone():
+        return None
+    pid = coo_id(conn)
     if pid is None:
         policy.check_permission_grant(guard_actor(conn, owner), ["*"], PM_PERMISSIONS).raise_if_not_allowed()
         path = REPO_AGENTS / agents._slug(PM_NAME) / "INSTRUCTIONS.md"
@@ -331,7 +347,7 @@ def ensure_standup(conn: sqlite3.Connection) -> dict | None:
     If the owner archives it, it stays archived."""
     from . import schedules
 
-    pm = pm_id(conn)
+    pm = coo_id(conn)  # the COO's routine: no COO, no standup (the CEO does not inherit it)
     if pm is None:
         return None
     if conn.execute("SELECT 1 FROM schedules WHERE name = ? AND assignee_id = ?", (STANDUP_NAME, pm)).fetchone():

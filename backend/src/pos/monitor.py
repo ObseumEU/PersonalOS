@@ -122,15 +122,17 @@ def monitor_id(conn: sqlite3.Connection) -> int | None:
 
 
 def platform_owner_id(conn: sqlite3.Connection) -> int | None:
-    """Who owns a platform incident nobody triaged: the SRE, else the CTO (docs/REORG.md: platform
-    problems go to engineering, only money, security and data reach the owner, through the CEO).
-    None when neither exists: the caller falls back to the owner."""
+    """Who owns a platform incident nobody triaged: the SRE, else the CTO, else the CEO (docs/REORG.md:
+    platform problems go to engineering, only money, security and data reach the owner, through the
+    CEO). None when none of them exists: the caller falls back to the owner."""
     for name in (roles.SRE, roles.CTO):
         row = conn.execute("SELECT id FROM actors WHERE name = ? AND archived_at IS NULL AND kind != 'human'",
                            (name,)).fetchone()
         if row:
             return row["id"]
-    return None
+    row = conn.execute("SELECT id FROM actors WHERE role = 'ceo' AND archived_at IS NULL AND kind != 'human' "
+                       "ORDER BY id LIMIT 1").fetchone()
+    return row["id"] if row else None
 
 
 # ------------------------------------------------------------------ set-up
@@ -836,7 +838,8 @@ def digest(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     hb = _state(conn, "heartbeat") or {}
     counters = hb.get("counters") or {}
     fixed = int(counters.get("remediations_fixed_24h") or 0)
-    author = monitor_id(conn) or actors.owner_id(conn)
+    # The Hlídač's digest; archived (the 2026-10 cut), the SRE's (else the CEO's), never the owner's words.
+    author = monitor_id(conn) or platform_owner_id(conn) or actors.system_id(conn)
     if not rows and not fixed:
         if now.astimezone(TZ).weekday() == 0:
             week = (now - timedelta(days=7)).isoformat(timespec="seconds")

@@ -89,15 +89,14 @@ def recipient(conn: sqlite3.Connection, agent_id: int, why: str = "") -> int | N
 
 
 def successor(conn: sqlite3.Connection, actor_id: int) -> int | None:
-    """Who took over an archived member (docs/REORG.md mapping), else the CEO. An active member is
-    its own successor."""
+    """Who took over an archived member (pos.roles.SUCCESSORS: both reorganisations, followed to the
+    first active one), else the CEO. An active member is its own successor."""
     a = actors.get(conn, actor_id)
     if not a["archived_at"]:
         return actor_id
-    from .reorg import SUCCESSORS
+    from .roles import successor_names
 
-    new = SUCCESSORS.get(a["name"])
-    if new:
+    for new in successor_names(a["name"]):
         aid = _active(conn, new)
         if aid:
             return aid

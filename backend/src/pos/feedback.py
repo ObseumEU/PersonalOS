@@ -111,12 +111,13 @@ def open_for_prompt(conn: sqlite3.Connection, actor_id: int, limit: int = 5) -> 
 
 def coach_digest(conn: sqlite3.Connection) -> dict:
     """Daily: every agent with two or more open critiques becomes a task for the
-    Agent coach (else the Dev agent) to turn the pattern into better instructions."""
+    Agent coach to turn the pattern into better instructions. No coach (archived in
+    the 2026-10 cut): no task; the critiques stay open for the agent's next runs."""
     rows = conn.execute(
         """SELECT to_id, COUNT(*) AS n FROM feedback f JOIN actors a ON a.id = f.to_id
            WHERE f.status = 'open' AND f.kind = 'critique' AND f.archived_at IS NULL AND a.kind != 'human'
            GROUP BY to_id HAVING n >= 2""").fetchall()
-    coach = actors.find_by_name(conn, COACH) or actors.find_by_name(conn, roles.ENGINEER)
+    coach = actors.find_by_name(conn, COACH)
     if coach is None or not rows:
         return {"agents": 0}
     ctx = Ctx(actors.owner_id(conn), via="system")
