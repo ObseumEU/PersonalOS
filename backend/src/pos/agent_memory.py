@@ -13,7 +13,9 @@ import sqlite3
 from . import actors, versioning
 from .core import Ctx, Forbidden, now_iso
 
-MAX_CHARS = 8000
+# Merged agents keep two roles' facts, and 8000 pushed older rules out (the owner, 2026-10). The worker
+# shows the same number in the prompt (pos_worker.prompt.MEMORY_MAX_CHARS).
+MAX_CHARS = 12000
 ENTITY = "memory"
 
 
@@ -39,7 +41,8 @@ def text(conn: sqlite3.Connection, actor_id: int) -> str:
 def set_body(conn: sqlite3.Connection, ctx: Ctx, body: str, agent_id: int | None = None,
              system: bool = False) -> dict:
     """Replace the memory (the whole text). An agent writes its own; the owner any agent's; the
-    platform (`system`, pos.learning: lessons and the starter note) any agent's."""
+    platform (`system`, pos.learning: lessons and the starter note) any agent's. Returns a short
+    receipt, not the text: the agent just sent it (echoing it back carried the memory twice more)."""
     target = agent_id if agent_id is not None else ctx.actor_id
     if target != ctx.actor_id and not system and not actors.get(conn, ctx.actor_id)["is_owner"]:
         raise Forbidden("an agent's memory is its own: only it and the owner change it")
@@ -47,8 +50,9 @@ def set_body(conn: sqlite3.Connection, ctx: Ctx, body: str, agent_id: int | None
 
     body = pseudo_tools.clean((body or "").strip(), marker=False)  # tool calls written as text never ran
     if len(body) > MAX_CHARS:
-        raise MemoryError(f"memory is {len(body)} characters, the limit is {MAX_CHARS}: keep the facts, drop the "
-                          "history (logs and change records belong in notes)")
+        raise MemoryError(f"not saved: memory is {len(body)} characters, {len(body) - MAX_CHARS} over the limit "
+                          f"of {MAX_CHARS}. Shorten or drop older details (keep the facts the next run needs; "
+                          "logs and change records belong in notes) and send the whole text again")
     r = _row(conn, target)
     if r is None:
         now = now_iso()
@@ -58,7 +62,10 @@ def set_body(conn: sqlite3.Connection, ctx: Ctx, body: str, agent_id: int | None
     else:
         versioning.update(conn, ctx, ENTITY, r["id"], {"body": body})
     conn.commit()
-    return get(conn, target)
+    r = _row(conn, target)
+    version = conn.execute("SELECT MAX(version) FROM history WHERE entity = ? AND entity_id = ?",
+                           (ENTITY, r["id"])).fetchone()[0]
+    return {"chars": len(body), "updated_at": r["updated_at"], "version": version}
 
 
 def register_mcp(mcp, session) -> None:
@@ -72,8 +79,8 @@ def register_mcp(mcp, session) -> None:
 
     @mcp.tool(description=f"Replace your memory (the whole Markdown text, max {MAX_CHARS} characters). Keep what "
                           "the next run needs so it does not explore again: facts, hosts, paths, versions, "
-                          "inventories, known problems, decisions. Versioned; read it with memory_get first and "
-                          "send the full new text.")
+                          "inventories, known problems, decisions. Your memory is already in your prompt: send "
+                          "the whole new text. Versioned; returns {chars, updated_at, version}.")
     def memory_update(ctx: Context, body: str) -> dict:
         with session(ctx, "memory_update", chars=len(body or "")) as (conn, c):
             try:

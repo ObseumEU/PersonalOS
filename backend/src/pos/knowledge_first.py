@@ -3,14 +3,16 @@
 Measured on 2026-10-01: only 1.8 % of the agents' MCP calls used the knowledge base, though every
 agent has the grant. So the start of every run (pos.api_worker start_run) pre-loads the top-k
 knowlage passages for the task's title and notes: one cheap search (effort 1, no rerank, a few
-seconds, TIMEOUT_S at most), capped at MAX_CHARS (~800 tokens), each passage with its chunk id
+seconds, TIMEOUT_S at most), capped at MAX_CHARS (~500 tokens), each passage with its chunk id
 (`<doc>:c<n>`) so the result can cite it. The worker puts them into the task part of the prompt
 (pos_worker.prompt); the shared guidance says to check knowledge before acting and to cite sources.
 
 Only what helps (2026-10: the same three mailbox passages reached 335 unrelated runs, tainted them all
 and caused needless Security holds):
 - no pre-load for numbers-only and system roles (SKIP_ROLES: the Access manager's 180 daily reviews)
-  nor for tasks from system sources (SYSTEM_SOURCES: access reviews, sentinel and Grafana alerts);
+  nor for tasks from system sources (SYSTEM_SOURCES: access reviews, sentinel and Grafana alerts), chat
+  answers and the inbox task (a "Chat:" title, topic or source chat), or routine checks that close
+  themselves (a schedule with auto_close: pos.schedules.is_routine_check);
 - a relevance threshold: a passage must share at least MIN_SHARED content words with the task
   (knowlage's quick search ranks without a score worth a threshold: every hit is "relevance 0.033");
 - our own sources first (INTERNAL_SOURCES: repositories, meetings, PersonalOS);
@@ -38,7 +40,7 @@ log = logging.getLogger(__name__)
 K = 4
 EFFORT = 1
 TIMEOUT_S = 8
-MAX_CHARS = 3200
+MAX_CHARS = 2000  # 3200 until 2026-10: it went into every run's prompt, chat answers included
 MAX_PASSAGE = 900
 MIN_QUERY = 12
 # knowlage sources whose documents are ours (our repositories, our transcripts and uploads):
@@ -174,8 +176,12 @@ def skip_reason(conn: sqlite3.Connection, ctx: Ctx, task: dict) -> str | None:
     source = (task.get("source") or "").lower()
     if source.startswith(SYSTEM_SOURCES):
         return f"system source {source.split(':')[0]}"
-    if (task.get("topic") or "") == "chat":
+    if (task.get("topic") or "") == "chat" or (task.get("title") or "").startswith("Chat:")             or source.split(":")[0] in ("chat", "inbox"):
         return "chat"
+    from . import schedules
+
+    if source.startswith("schedule:") and schedules.is_routine_check(conn, task):
+        return "routine check"
     return None
 
 

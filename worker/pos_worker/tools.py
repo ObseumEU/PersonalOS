@@ -95,6 +95,20 @@ def fetch(client, root: Path) -> list:
     return out
 
 
+CODING_BUILTIN = {"Bash", "Edit", "Write"}
+
+
+def for_profile(tools: list, me: dict) -> list:
+    """The shared library (pr-description, summarize-diff, task-links: ~2k characters of list, skill
+    and MCP server a turn) only for a coding agent: Bash, Edit or Write among its Claude built-ins
+    (profile claude_builtin, else WORKER_CLAUDE_BUILTIN). Its own personal tools stay."""
+    raw = (me.get("profile") or {}).get("claude_builtin")
+    raw = os.environ.get("WORKER_CLAUDE_BUILTIN", "") if raw is None else str(raw)
+    if CODING_BUILTIN & set(re.split(r"[\s,|]+", raw)):
+        return tools
+    return [t for t in tools if t.get("scope") != "shared"]
+
+
 def _server_name(t: dict) -> str:
     return "tool_" + re.sub(r"[^a-z0-9]+", "_", str(t["name"]).lower()).strip("_")
 

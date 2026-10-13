@@ -20,7 +20,8 @@ The Performance Coach gets a weekly task (coach_weekly) with the week's lessons 
 that repeats becomes an instruction change (propose_instructions). Every active agent has a memory
 note (ensure_memories: a starter note), so the lessons and the facts have a place.
 
-Prod: `python -m pos.learning ensure-memories [--apply]`.
+Prod: `python -m pos.learning ensure-memories [--apply]`; `python -m pos.learning rewrite-lessons [--apply]`
+puts a replaced lesson's new text into the memories that still hold the old one (REWRITTEN_LESSONS).
 """
 
 import argparse
@@ -63,8 +64,15 @@ FAILURE_LESSONS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"timed? ?out|timeout", re.IGNORECASE),
      "Běh vypršel: dlouhé příkazy spouštěj s timeoutem a kontroluj průběžně; neblokuj se na čekání."),
     (re.compile(r"permission|not granted|forbidden|lacks |not allowed|unauthori[sz]ed", re.IGNORECASE),
-     "Chyběl nástroj nebo oprávnění: na začátku úkolu ověř my_access a o chybějící požádej hned (request_access)."),
+     "Chyběl nástroj nebo oprávnění: když tě nástroj odmítne, hned zavolej request_access (schválí se "
+     "okamžitě) a pokračuj."),
 ]
+# Lessons replaced by a better text: the old one sent every run to call my_access up front (one wasted
+# call per run, 2026-10). `rewrite-lessons` puts the new text into the memories that still have it.
+REWRITTEN_LESSONS = {
+    "Chyběl nástroj nebo oprávnění: na začátku úkolu ověř my_access a o chybějící požádej hned (request_access).":
+        FAILURE_LESSONS[-1][1],
+}
 
 
 # ------------------------------------------------------------------ memory
@@ -140,6 +148,30 @@ def ensure_memory(conn: sqlite3.Connection, actor_id: int) -> bool:
     agent_memory.set_body(conn, _system(conn), STARTER.format(name=actors.get(conn, actor_id)["name"]),
                           agent_id=actor_id, system=True)
     return True
+
+
+def rewrite_lessons(conn: sqlite3.Connection, apply: bool = False) -> dict:
+    """Every active memory that still holds a replaced lesson (REWRITTEN_LESSONS) gets the new text
+    in its place (its date stays). Idempotent: a rewritten memory no longer matches."""
+    from . import agent_memory
+
+    changed, skipped = [], []
+    for r in conn.execute("""SELECT m.actor_id, a.name FROM memories m JOIN actors a ON a.id = m.actor_id
+                             WHERE m.archived_at IS NULL ORDER BY m.actor_id""").fetchall():
+        body = agent_memory.text(conn, r["actor_id"])
+        new = body
+        for old, text in REWRITTEN_LESSONS.items():
+            new = new.replace(old, text)
+        if new == body:
+            continue
+        if apply:
+            try:
+                agent_memory.set_body(conn, _system(conn), new, agent_id=r["actor_id"], system=True)
+            except agent_memory.MemoryError as e:
+                skipped.append({"agent": r["name"], "why": str(e)})
+                continue
+        changed.append(r["name"])
+    return {"rewritten" if apply else "would_rewrite": list(dict.fromkeys(changed)), "skipped": skipped}
 
 
 def ensure_memories(conn: sqlite3.Connection, apply: bool = True) -> dict:
@@ -322,13 +354,13 @@ def main(argv: list[str] | None = None) -> None:
     from .db import connect
 
     p = argparse.ArgumentParser(description="The learning loop's maintenance.")
-    p.add_argument("command", choices=["ensure-memories"])
+    p.add_argument("command", choices=["ensure-memories", "rewrite-lessons"])
     p.add_argument("--apply", action="store_true", help="change the data (default: a dry run)")
     p.add_argument("--db", default=None)
     a = p.parse_args(argv)
     conn = connect(Path(a.db) if a.db else get_settings().db_path)
     try:
-        out = ensure_memories(conn, apply=a.apply)
+        out = (rewrite_lessons if a.command == "rewrite-lessons" else ensure_memories)(conn, apply=a.apply)
         if a.apply:
             conn.commit()
         print(json.dumps(out, ensure_ascii=False, indent=1))

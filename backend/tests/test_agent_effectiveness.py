@@ -296,6 +296,15 @@ def test_a_run_starts_with_relevant_passages_and_outside_ones_only_as_pointers(e
     assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'knowledge_preload'").fetchone()[0] == 1
     # Numbers-only and system work gets no pre-load at all.
     assert knowledge_first.preload(conn, Ctx(a), {**t, "source": "event:sentinel"}, search=lambda q: KB_ANSWER) is None
+    # Nor a chat answer or the inbox task, nor a routine check that closes itself (auto_close).
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "title": "Chat: answer Owner (DM) o SLA O2"},
+                                   search=lambda q: KB_ANSWER) is None
+    sid = conn.execute("INSERT INTO schedules (name, schedule, template, assignee_id, created_by, created_at, "
+                       "updated_at) VALUES ('SLA', 'daily 07:00', ?, ?, ?, ?, ?)",
+                       ('{"auto_close": true}', a, a, now_iso(), now_iso())).lastrowid
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "source": f"schedule:{sid}"}, search=lambda q: KB_ANSWER) is None
+    conn.execute("UPDATE schedules SET template = '{}' WHERE id = ?", (sid,))  # an ordinary schedule: passages
+    assert knowledge_first.preload(conn, Ctx(a), {**t, "source": f"schedule:{sid}"}, search=lambda q: KB_ANSWER)
     conn.execute("UPDATE actors SET role = 'access_manager' WHERE id = ?", (a,))
     assert knowledge_first.preload(conn, Ctx(a), t, search=lambda q: KB_ANSWER) is None
     conn.execute("UPDATE actors SET role = NULL WHERE id = ?", (a,))
@@ -309,7 +318,7 @@ def test_a_run_starts_with_relevant_passages_and_outside_ones_only_as_pointers(e
     prompt = build_task_prompt({"name": "Writer"}, {**t, "knowledge": kn["text"]}, [])
     assert "From the knowledge base" in prompt and "m1:c3" in prompt
     share = knowledge_first.share(conn)
-    assert share["runs_with_passages"] == 1
+    assert share["runs_with_passages"] == 2  # the task above and the ordinary schedule's
 
 
 # ------------------------------------------------------------------ 3. the learning loop
@@ -358,6 +367,25 @@ def test_an_owner_correction_and_a_failed_run_write_lessons(env):
     out = learning.on_failed_run(conn, conn.execute("SELECT * FROM runs WHERE id = ?", (rid,)).fetchone())
     assert out and "skutečně" in agent_memory.text(conn, w)
     assert learning.lesson_for_failure("connection reset by peer") is None
+    # A refused tool: ask for it when it happens, not a my_access call at the start of every run.
+    lesson = learning.lesson_for_failure("forbidden: not granted")
+    assert "request_access" in lesson and "my_access" not in lesson
+
+
+def test_the_old_my_access_lesson_is_rewritten_in_memories(env):
+    conn, ids = env["conn"], env["ids"]
+    w, other = ids["Writer"], ids["QA Reviewer"]
+    old = next(iter(learning.REWRITTEN_LESSONS))
+    agent_memory.set_body(conn, Ctx(w), f"# Fakta\n- x\n\n{learning.SECTION}\n{learning.PREFIX}{old} (2026-10-03)\n")
+    agent_memory.set_body(conn, Ctx(other), "# Fakta\n- nic\n")
+    dry = learning.rewrite_lessons(conn)
+    assert dry["would_rewrite"] == ["Writer"] and old in agent_memory.text(conn, w)  # a dry run by default
+    assert learning.rewrite_lessons(conn, apply=True)["rewritten"] == ["Writer"]
+    body = agent_memory.text(conn, w)
+    assert old not in body and "my_access" not in body
+    assert f"{learning.PREFIX}{learning.REWRITTEN_LESSONS[old]} (2026-10-03)" in body
+    assert agent_memory.text(conn, other) == "# Fakta\n- nic"
+    assert learning.rewrite_lessons(conn, apply=True)["rewritten"] == []  # idempotent
 
 
 def test_every_agent_gets_a_memory_note_and_the_coach_a_weekly_task(env):

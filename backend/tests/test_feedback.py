@@ -35,6 +35,9 @@ def test_feedback_reaches_the_agent_and_the_coach_turns_repeats_into_work(team):
         feedback.give(c, Ctx(writer), "Writer", "I am great")  # feedback is for someone else
     feedback.give(c, Ctx(ids["Software Engineer"]), "Writer", "The subject line was vague", "critique")
     assert [f["body"] for f in feedback.open_for_prompt(c, writer)][0] == "The subject line was vague"
+    feedback.give(c, Ctx(ids["Software Engineer"]), "Writer", "Long review. " * 100, "critique")
+    long = feedback.open_for_prompt(c, writer)[0]["body"]  # a run's prompt gets each item cut
+    assert len(long) == feedback.PROMPT_BODY_CHARS and long.endswith("…")
     out = feedback.coach_digest(c)
     assert out["agents"] == 1 and len(out["tasks"]) == 1
     task = tasks.get(c, me, tasks.parse_id(out["tasks"][0]))
@@ -67,3 +70,15 @@ def test_worker_prompt_shows_open_feedback():
                                           "body": "Too long"}]}
     text = build_task_prompt(me, {"ref": "T-002", "title": "Next newsletter"}, [], include_guardrails=False)
     assert "Recent feedback for you" in text and "critique from Owner (T-001): Too long" in text
+
+
+def test_the_prompt_cuts_long_messages_and_lists_at_most_ten():
+    from pos_worker.prompt import MAX_MESSAGES, MESSAGE_CHARS, build_task_prompt, injection
+
+    wrapped = '<external source="chat:Bot" trust="untrusted" ref="message 7">\n' + "x" * 2000 + "\n</external>"
+    msgs = [{"id": 7, "from_name": "Bot", "priority": "fyi", "body": wrapped, "channel_id": 3}]
+    msgs += [{"id": 100 + i, "from_name": "Owner", "priority": "fyi", "body": f"note {i}"} for i in range(12)]
+    text = build_task_prompt({"name": "Writer"}, {"ref": "T-1", "title": "x"}, msgs, include_guardrails=False)
+    assert "x" * MESSAGE_CHARS not in text and "x…\n</external> (cut; the rest: chat_read(channel=3, thread=7" in text
+    assert "note 8" in text and "note 9" not in text and f"and {len(msgs) - MAX_MESSAGES} more" in text
+    assert "and 1 more" in injection(msgs[:11]) and "more (" not in injection(msgs[:10])

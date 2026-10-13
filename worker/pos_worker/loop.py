@@ -25,7 +25,7 @@ from .client import Blocked, PosClient
 from . import images as run_images
 from . import pseudo_tools
 from .prompt import build_task_prompt, injection, stable_prompt
-from .tools import fetch as fetch_tools
+from .tools import fetch as fetch_tools, for_profile
 
 log = logging.getLogger("pos_worker")
 
@@ -325,8 +325,10 @@ class Worker:
 
     def _run_task(self, ref: str, task: dict, run_id: int, engine: str, model: str | None,
                   check: dict | None = None) -> str:
-        # The agent's tools (personal and shared); none if PersonalOS cannot say.
-        me = {**self.me, "tools": fetch_tools(self.client, self.tools_dir), "task_ref": ref,
+        # The agent's tools (personal and shared); none if PersonalOS cannot say. A Claude agent without
+        # file or shell tools gets no shared (coding) library (pos_worker.tools.for_profile).
+        tools = fetch_tools(self.client, self.tools_dir)
+        me = {**self.me, "tools": for_profile(tools, self.me) if engine == "claude" else tools, "task_ref": ref,
               "feedback": self.client.feedback(), "memory": self.client.memory(), "max_budget_usd": getattr(self, "run_cap_usd", None),
               "run_id": run_id}
         if check and check.get("size"):

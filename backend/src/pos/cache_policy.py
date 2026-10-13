@@ -62,7 +62,7 @@ def profile(rows: list) -> dict:
     """Gap buckets and the cache written per bucket for one agent's runs (in start order)."""
     prev = None
     gaps = {"lt5": 0, "mid": 0, "gt60": 0}
-    hit, miss = [], []
+    hit, miss, mid = [], [], []
     for r in rows:
         start = _ts(r["started_at"])
         if prev is not None:
@@ -70,17 +70,25 @@ def profile(rows: list) -> dict:
             b = "lt5" if g < 5 else "mid" if g < 60 else "gt60"
             gaps[b] += 1
             if r["cw"]:
-                (hit if b == "lt5" else miss if b == "gt60" else []).append(r["cw"])
+                (hit if b == "lt5" else miss if b == "gt60" else mid).append(r["cw"])
         prev = _ts(r["ended_at"] or r["started_at"])
-    return {"gaps": gaps, "hit": hit, "miss": miss}
+    return {"gaps": gaps, "hit": hit, "miss": miss, "mid": mid}
 
 
 def choose(p: dict) -> dict:
     """The TTL for an agent's profile (pos.cache_policy.profile), with the per-run cost of each."""
     n = sum(p["gaps"].values())
-    if n < MIN_RUNS or not (p["hit"] or p["miss"]):
+    if n < MIN_RUNS or not (p["hit"] or p["miss"] or p.get("mid")):
         return {"ttl": None, "runs": n, "why": "too few runs"}
-    vi = statistics.median(p["hit"]) if p["hit"] else max(0.0, statistics.median(p["miss"]) - S_DEFAULT)
+    if p["hit"]:
+        vi = statistics.median(p["hit"])
+    elif p["miss"]:
+        vi = max(0.0, statistics.median(p["miss"]) - S_DEFAULT)
+    else:
+        # Every run 5-60 min after the last (the agents 1h is for): no clean sample, so what a run wrote
+        # stands for VI (VI under a 1h TTL, VI + S under 5m: it errs towards 5m). Before 2026-10 these got
+        # no choice, i.e. the CLI's default, which is 5m on an API key or in overage.
+        vi = statistics.median(p["mid"])
     s = max(0.0, statistics.median(p["miss"]) - vi) if p["miss"] else S_DEFAULT
     lt5, mid, gt60 = (p["gaps"][k] / n for k in ("lt5", "mid", "gt60"))
     c1h = WRITE_1H * vi + (lt5 + mid) * READ * s + gt60 * WRITE_1H * s

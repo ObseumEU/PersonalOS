@@ -108,3 +108,11 @@ def test_mcp_tools_as_an_agent(tmp_path):
     actions = [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE via = 'mcp'")]
     assert "mcp:claim_task" in actions and "mcp:get_task:refused" in actions
     conn.close()
+
+
+def test_the_server_instructions_stay_short_and_no_tool_asks_for_inbox_polling(tmp_path):
+    """Claude Code puts the server's instructions into every agent's system prompt (paid on every turn,
+    ~5k characters before 2026-10); the worker delivers new messages into the run by itself."""
+    assert len(mcp_server.INSTRUCTIONS) <= 1000
+    tools = {t.name: t.description for t in mcp_server.build(tmp_path / "x.db")._tool_manager.list_tools()}
+    assert "after every step" not in tools["check_inbox"] and "automatically" in tools["check_inbox"]
