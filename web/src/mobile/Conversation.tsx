@@ -4,6 +4,8 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { type Channel, type ChatMember, type ChatMessage, type Priority, chatApi } from "../chatApi";
 import Messenger, { type FileAtt, useSender, visibleBody } from "../chat/Messenger";
+import { answerFor, threadReplies } from "../chat/answers";
+import { loadDraft, saveDraft, storage } from "../chat/outbox";
 import { completeMention, mentionCandidates, mentionQuery } from "../chat/mentions";
 import { applyReply, upsert } from "../chat/timeline";
 import { toast } from "../components/overlay";
@@ -41,7 +43,16 @@ function Composer({
   onEdit: (m: ChatMessage, body: string) => void;
   onCancelEdit: () => void;
 }) {
-  const [body, setBody] = useState("");
+  // An unsent draft stays with its conversation (and thread) across switches and reloads (chat/outbox);
+  // an edit in progress is not a draft.
+  const kv = useMemo(storage, []);
+  const [body, setBodyState] = useState(() => loadDraft(kv, channel.id, replyTo));
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  const setBody = (v: string) => {
+    setBodyState(v);
+    if (!editingRef.current) saveDraft(kv, channel.id, replyTo, v);
+  };
   const att = useAttachments();
   const { files, uploading } = att;
   const [picker, setPicker] = useState(false);
@@ -64,13 +75,13 @@ function Composer({
   };
   // Editing: the message's text in the box (back to empty when done or cancelled).
   useEffect(() => {
-    setBody(editing ? editing.body : "");
+    setBodyState(editing ? editing.body : loadDraft(kv, channel.id, replyTo));
     setQuery(null);
     requestAnimationFrame(() => {
       grow();
       if (editing) area.current?.focus();
     });
-  }, [editing]);
+  }, [editing, kv, channel.id, replyTo]);
   const change = (v: string) => {
     setBody(v);
     grow();
@@ -258,15 +269,27 @@ export default function Conversation() {
     setMessages((ms) => ms.map((x) => (x.id === root && x.thread ? { ...x, thread: { ...x.thread, unread: 0 } } : x)));
   }, []);
 
+  // Answers for another conversation (opened since) are dropped: a late page never replaces this one.
+  const idRef = useRef(id);
+  idRef.current = id;
   const load = useCallback(() => {
     setError(null);
-    chatApi.channel(id).then(setChannel, (e) => setError(e.message));
+    chatApi.channel(id).then((c) => idRef.current === id && setChannel(c), (e) => idRef.current === id && setError(e.message));
     chatApi.messages(id).then((p) => {
+      if (idRef.current !== id) return;
       setMessages(p.messages);
       setHasMore(p.has_more);
       markRead();
-    }, (e) => setError(e.message));
+    }, (e) => idRef.current === id && setError(e.message));
   }, [id, markRead]);
+  // Another conversation in the same screen: nothing of the previous one stays (its messages, its channel).
+  const shown = useRef(id);
+  if (shown.current !== id) {
+    shown.current = id;
+    setChannel(null);
+    setMessages([]);
+    setHasMore(false);
+  }
   useEffect(load, [load]);
   useEffect(() => {
     window.addEventListener("pos:resume", load);
@@ -277,10 +300,22 @@ export default function Conversation() {
   useEffect(() => {
     setThreadMsgs([]);
     if (!thread) return;
-    chatApi.thread(id, thread).then((p) => {
-      setThreadMsgs(p.messages);
-      markThread(thread);
-    }, (e) => setError(e.message));
+    let stale = false;
+    // One quiet retry: a busy database answered 500 once and the thread showed no replies (prod 2026-10-13).
+    const load = (tries: number): Promise<void> =>
+      chatApi.thread(id, thread).then((p) => {
+        if (stale) return;
+        setThreadMsgs((ms) => p.messages.reduce(upsert, ms));
+        markThread(thread);
+      }, (e) => {
+        if (stale) return;
+        if (tries > 0) return new Promise<void>((r) => setTimeout(r, 800)).then(() => load(tries - 1));
+        setError(e.message);
+      });
+    void load(1);
+    return () => {
+      stale = true;
+    };
   }, [id, thread, markThread]);
 
   const received = useCallback(
@@ -312,7 +347,8 @@ export default function Conversation() {
     [id, received, markRead, markThread],
   );
 
-  const { pending, send, retry, discard } = useSender(channel?.id ?? null, received);
+  // Sent to the conversation on screen: `id`, never a channel object still left from the previous one.
+  const { pending, send, retry, discard } = useSender(channel && channel.id === id ? id : null, received, messages, me);
 
   const older = useCallback(() => {
     if (!messages.length) return Promise.resolve();
@@ -388,13 +424,14 @@ export default function Conversation() {
         <Messenger
           mode={isDm ? "dm" : thread ? "thread" : "channel"}
           viewKey={`${id}:${thread ?? ""}`}
-          messages={thread ? threadMsgs : messages}
+          messages={thread ? threadReplies(threadMsgs, messages, thread) : messages}
           root={root}
           rootChannel={channel.name ?? undefined}
           me={me}
           names={names}
           pending={pending.filter((p) => (thread ? p.reply_to === thread : isDm || p.reply_to === null))}
           typing={typing}
+          answer={answerFor(presence.answers, id, thread)}
           hasMore={!thread && hasMore}
           onOlder={older}
           onTap={setActing}
@@ -407,6 +444,7 @@ export default function Conversation() {
       {!channel && <div className="flex-1" />}
       {channel && canWrite && (
         <Composer
+          key={`${channel.id}:${thread ?? ""}`}
           channel={channel}
           replyTo={thread}
           placeholder={thread ? t("m.chat.reply_placeholder") : t("m.chat.placeholder", { name: title })}

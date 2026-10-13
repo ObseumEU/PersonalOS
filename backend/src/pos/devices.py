@@ -14,12 +14,15 @@ The table is created on first use (no numbered migration).
 """
 
 import hashlib
+import logging
 import secrets
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 
 from .core import now_iso
+
+log = logging.getLogger(__name__)
 
 WEB_TTL_DAYS = 30
 APP_TTL_DAYS = 365
@@ -207,9 +210,14 @@ class DeviceSessions:
                 session.clear()
                 return
             if now - _touched.get(sid, 0) >= TOUCH_EVERY_S:
-                touch(conn, sid)
-                conn.commit()
-                _touched[sid] = now
+                # Best effort: "last seen" never fails the request it rides on (prod 2026-10-13: the thread the
+                # owner opened answered 500 "database is locked" from this UPDATE, and showed no replies).
+                try:
+                    touch(conn, sid)
+                    conn.commit()
+                    _touched[sid] = now
+                except sqlite3.OperationalError:
+                    log.warning("device %s: last seen not updated (database busy)", sid[:8])
         finally:
             conn.close()
 

@@ -1,4 +1,4 @@
-import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Eye, Hash, MessageSquare, MessagesSquare, Paperclip, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
+import { Archive, ArrowLeft, AtSign, Bell, ChevronDown, Clock, Eye, Hash, MessageSquare, MessagesSquare, Paperclip, Pencil, Pin, Plus, Send, SmilePlus, X } from "lucide-react";
 import { TaskLink } from "../taskSheet";
 import { ToolChip, stripToolMarkup } from "../toolMarkup";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
@@ -6,7 +6,9 @@ import { Link, useSearchParams } from "react-router-dom";
 import { type OrgMember, agentsApi } from "../agentsApi";
 import { type Channel, type ChatMember, type ChatMessage, type Presence, type Priority, type StreamEvent, type TypingEntry, chatApi } from "../chatApi";
 import { completeMention, mentionCandidates, mentionQuery } from "../chat/mentions";
-import Messenger, { type FileAtt, ThreadChip, replyCount, useSender, visibleBody } from "../chat/Messenger";
+import Messenger, { AnswerLine, type FileAtt, InlineReplies, ThreadChip, replyCount, useSender, visibleBody } from "../chat/Messenger";
+import { animated, answerFor, inlineReplies, threadReplies as mergeReplies, typingKey } from "../chat/answers";
+import { loadDraft, saveDraft, storage } from "../chat/outbox";
 import { FileCard } from "../files/FileCard";
 import ThreadList, { useThreads } from "../chat/ThreadList";
 import MeetingsBar, { MeetingDetail } from "../chat/Meetings";
@@ -124,18 +126,21 @@ function who(list: TypingEntry[], verb: "typing" | "working") {
 function typingLabel(entries: TypingEntry[]) {
   const typing = entries.filter((e) => e.state === "typing");
   const working = entries.filter((e) => e.state === "working");
-  return [typing.length ? `${who(typing, "typing")}…` : "", working.length ? `${who(working, "working")}…` : ""].filter(Boolean).join(" · ");
+  // An answer to the owner that waits: "CEO ve frontě", "CEO čeká na rozpočet" (chat/answers).
+  const waiting = entries.filter((e) => e.state === "queued" || e.state === "held").map((e) => `${e.name} ${t(typingKey(e))}`);
+  return [typing.length ? `${who(typing, "typing")}…` : "", working.length ? `${who(working, "working")}…` : "", ...waiting].filter(Boolean).join(" · ");
 }
 
 /** Under a message list: who is typing (or working on a reply). Always takes its line, so the list does not jump. */
 function TypingLine({ entries }: { entries: TypingEntry[] }) {
   const label = typingLabel(entries);
-  const soft = entries.length > 0 && entries.every((e) => e.state === "working");
+  const soft = entries.length > 0 && entries.every((e) => e.state !== "typing");
+  const moving = entries.some(animated);
   return (
     <div className="flex h-5 items-center gap-2 px-4 text-[12px] text-ink-2" aria-live="polite" role="status">
       {label && (
         <>
-          <span className="text-accent"><TypingDots soft={soft} /></span>
+          <span className="text-accent">{moving ? <TypingDots soft={soft} /> : <Clock size={12} aria-hidden="true" />}</span>
           <span className="truncate">{label}</span>
         </>
       )}
@@ -306,7 +311,14 @@ function Composer({
   /** Optimistic sending (the messenger view shows the bubble at once); else the composer posts and waits. */
   send?: (text: string, priority: Priority | null, files: Attached[]) => void;
 }) {
-  const [body, setBody] = useState("");
+  // An unsent draft stays with its conversation (and thread) across switches and reloads (chat/outbox).
+  const kv = useMemo(storage, []);
+  const thread = replyTo?.id ?? null;
+  const [body, setBodyState] = useState(() => loadDraft(kv, channel.id, thread));
+  const setBody = (v: string) => {
+    setBodyState(v);
+    saveDraft(kv, channel.id, thread, v);
+  };
   const att = useAttachments();
   const filePick = useRef<HTMLInputElement>(null);
   const [priority, setPriority] = useState<Priority | "">("");
@@ -525,6 +537,8 @@ export default function Chat() {
   const [hasMore, setHasMore] = useState(false);
   const [presence, setPresence] = useState<Presence>({ working: [], typing: {} });
   const thread = Number(params.get("t")) || null;
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
   const threadsView = params.get("v") === "threads";
   const [threadMsgs, setThreadMsgs] = useState<ChatMessage[]>([]);
   const [showAll, setShowAll] = useState(false);
@@ -587,39 +601,64 @@ export default function Chat() {
     }, () => undefined);
   }, []);
 
+  // Opening the thread that is open already loads it again (prod 2026-10-13: a failed load left "0 odpovědí"
+  // and clicking the card again did nothing).
+  const [threadNonce, setThreadNonce] = useState(0);
+  const [threadFailed, setThreadFailed] = useState<string | null>(null);
   const setThread = useCallback(
-    (root: number | null) => setParams(current ? (root ? { c: String(current), t: String(root) } : { c: String(current) }) : {}),
+    (root: number | null) => {
+      if (root && root === threadRef.current) setThreadNonce((n) => n + 1);
+      setParams(current ? (root ? { c: String(current), t: String(root) } : { c: String(current) }) : {});
+    },
     [current, setParams],
   );
-  const threadRef = useRef(thread);
-  threadRef.current = thread;
   const markThread = useCallback((root: number, upTo?: number) => {
     chatApi.threadRead(root, upTo).then(() => window.dispatchEvent(new Event("pos:threads")), () => undefined);
     setMessages((ms) => ms.map((x) => (x.id === root && x.thread ? { ...x, thread: { ...x.thread, unread: 0 } } : x)));
   }, []);
   useEffect(() => {
     setThreadMsgs([]);
+    setThreadFailed(null);
     if (!current || !thread) return;
-    chatApi.thread(current, thread).then((p) => {
-      setThreadMsgs(p.messages);
-      markThread(thread);
-    }, (e) => setError(e.message));
-  }, [current, thread, markThread]);
+    let stale = false;
+    // One quiet retry: a busy database answered 500 once and the thread showed no replies.
+    const load = (tries: number): Promise<void> =>
+      chatApi.thread(current, thread).then((p) => {
+        if (stale) return;
+        setThreadMsgs((ms) => p.messages.reduce(upsertMsg, ms));
+        markThread(thread);
+      }, (e) => {
+        if (stale) return;
+        if (tries > 0) return new Promise<void>((r) => setTimeout(r, 800)).then(() => load(tries - 1));
+        setThreadFailed(e instanceof Error ? e.message : String(e));
+      });
+    void load(1);
+    return () => {
+      stale = true;
+    };
+  }, [current, thread, markThread, threadNonce]);
   const received = useCallback((m: ChatMessage) => {
     setMessages((ms) => (m.reply_to ? applyReply(upsertMsg(ms, m), m, meRef.current, threadRef.current) : upsertMsg(ms, m)));
     const open = threadRef.current;
     if (open && (m.reply_to === open || m.id === open)) setThreadMsgs((ms) => upsertMsg(ms, m));
   }, []);
-  const sender = useSender(current, received);
+  const sender = useSender(current, received, messages, me);
 
   useEffect(() => {
     if (!current) return;
+    // A conversation opened after this one answers first: this late page must not replace it.
+    let stale = false;
+    setMessages([]);
     chatApi.messages(current).then((p) => {
+      if (stale) return;
       setMessages(p.messages);
       setHasMore(p.has_more);
       scrollDown();
       markRead(current);
-    }, (e) => setError(e.message));
+    }, (e) => !stale && setError(e.message));
+    return () => {
+      stale = true;
+    };
   }, [current, markRead]);
 
   const loadOlder = () => {
@@ -716,7 +755,9 @@ export default function Chat() {
   const typingIds = new Set(typingHere.map((e) => e.id));
   const workingHere = channel?.members.filter((m) => m.kind !== "human" && working.has(m.id) && !typingIds.has(m.id)) ?? [];
   const rootMsg = thread ? threadMsgs.find((m) => m.id === thread) ?? byId.get(thread) : undefined;
-  const threadReplies = thread ? threadMsgs.filter((m) => m.reply_to === thread) : [];
+  // The thread's replies: loaded for it, and those the channel page has (live events reach both), once each.
+  const threadReplies = thread ? mergeReplies(threadMsgs, messages, thread) : [];
+  const answers = presence.answers;
   const isDm = channel?.kind === "dm";
   const dmWith = members.filter((m) => m.id !== me && !allDms.some((c) => c.members.some((x) => x.id === m.id)));
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
@@ -872,6 +913,7 @@ export default function Chat() {
                     names={names}
                     pending={sender.pending}
                     typing={typingHere}
+                    answer={answerFor(answers, channel.id)}
                     hasMore={hasMore}
                     onOlder={olderDm}
                     onRetry={sender.retry}
@@ -891,7 +933,19 @@ export default function Chat() {
                     <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto py-2">
                       {hasMore && <button onClick={loadOlder} className="mx-auto block py-2 text-xs text-ink-2 hover:text-ink">{t("act.load_more")}</button>}
                       {messages.length === 0 && <p className="px-4 py-6 text-sm text-ink-2">{isSystem(channel) ? t("chat.system_empty") : t("chat.empty")}</p>}
-                      {isSystem(channel) ? <NoticeGroups messages={messages} names={names} /> : messages.filter((m) => !m.reply_to).map((m) => item(m))}
+                      {isSystem(channel) ? <NoticeGroups messages={messages} names={names} /> : messages.filter((m) => !m.reply_to).map((m) => {
+                        const st = answerFor(answers, channel.id);
+                        const inline = inlineReplies(messages, m, me);
+                        return (
+                          <Fragment key={m.id}>
+                            {item(m)}
+                            {inline.length > 0 && (
+                              <div className="px-4 pb-1"><InlineReplies replies={inline} names={names} onOpen={() => setThread(m.id)} /></div>
+                            )}
+                            {st && st.message_id === m.id && <AnswerLine st={st} className="justify-start! px-4!" onOpenThread={() => setThread(m.id)} />}
+                          </Fragment>
+                        );
+                      })}
                     </div>
                     <TypingLine entries={typingHere.filter((e) => e.thread === null)} />
                   </>
@@ -908,6 +962,7 @@ export default function Chat() {
                   </p>
                 ) : (channel.member || channel.kind === "group") && !isSystem(channel) ? (
                   <Composer
+                    key={channel.id}
                     channel={channel}
                     members={members}
                     onSent={isDm ? undefined : scrollDown}
@@ -930,10 +985,17 @@ export default function Chat() {
             >
               {!rootMsg.meeting ? (
                 <>
+                  {threadFailed && threadReplies.length < (rootMsg.replies ?? 0) && (
+                    <p role="alert" className="flex items-center gap-2 border-b border-line px-4 py-2 text-xs text-red-400">
+                      {t("chat.thread_failed")}
+                      <button type="button" className="text-accent" onClick={() => setThreadNonce((n) => n + 1)}>{t("m.error.retry")}</button>
+                    </p>
+                  )}
                   <Messenger
                     mode="thread"
                     viewKey={`t${rootMsg.id}`}
-                    messages={threadMsgs}
+                    messages={threadReplies}
+                    answer={answerFor(answers, channel.id, rootMsg.id)}
                     root={rootMsg}
                     rootChannel={channel.name ?? undefined}
                     me={me}
@@ -944,6 +1006,7 @@ export default function Chat() {
                     onDiscard={sender.discard}
                   />
                   <Composer
+                    key={`${channel.id}:${rootMsg.id}`}
                     channel={channel}
                     members={members}
                     replyTo={rootMsg}
@@ -965,7 +1028,7 @@ export default function Chat() {
                 ))}
               </div>
               <TypingLine entries={typingHere.filter((e) => e.thread === rootMsg.id)} />
-              <Composer channel={channel} members={members} replyTo={rootMsg} placeholder={t("chat.reply_placeholder")} />
+              <Composer key={`${channel.id}:${rootMsg.id}`} channel={channel} members={members} replyTo={rootMsg} placeholder={t("chat.reply_placeholder")} />
               </>
               )}
             </Panel>

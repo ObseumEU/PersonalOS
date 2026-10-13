@@ -165,7 +165,8 @@ TOOL_PERMISSIONS = {
     "tools_list": "tasks:read", "tools_get": "tasks:read",
     "tools_publish": "tasks:claim", "tools_record_use": "tasks:claim",
     # Chat (pos.chat): writing needs messages:send, reading tasks:read.
-    "chat_send": "messages:send", "chat_react": "messages:send", "chat_create_channel": "messages:send",
+    "chat_send": "messages:send", "chat_react": "messages:send", "chat_edit": "messages:send",
+    "chat_create_channel": "messages:send",
     "chat_invite": "messages:send", "chat_read": "tasks:read", "chat_list_channels": "tasks:read",
     "meeting_start": "messages:send", "meeting_info": "tasks:read",
     "chat_mark_read": "tasks:read",
@@ -232,7 +233,7 @@ def may_use(conn: sqlite3.Connection, actor_id: int, tool: str) -> bool:
         return True
     if perm == "access:read" and agents.has_permission(conn, actor_id, "access:manage"):
         return True  # the Access manager reads what it decides on
-    if tool in ("chat_send", "chat_react", "file_share", "sandbox_share"):  # every agent answers the person waiting for it (chat.may_answer)
+    if tool in ("chat_send", "chat_react", "chat_edit", "file_share", "sandbox_share"):  # every agent answers the person waiting for it (chat.may_answer)
         from . import chat
 
         return chat.may_answer(conn, actor_id)
@@ -956,6 +957,13 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
     def chat_react(ctx: Context, message_id: int, emoji: str) -> dict:
         with session(ctx, "chat_react", message_id=message_id, emoji=emoji) as (conn, c):
             return chat_call(lambda chat: chat.react(conn, c, message_id, emoji))
+
+    @mcp.tool(description="Fix your own chat message (within 24 h): the new full text replaces it, readers see "
+                          "\"upraveno\" and the earlier version stays in its history. Use it instead of sending a "
+                          "second, corrected message.")
+    def chat_edit(ctx: Context, message_id: int, body: str) -> dict:
+        with session(ctx, "chat_edit", message_id=message_id) as (conn, c):
+            return chat_call(lambda chat: chat.edit(conn, c, message_id, body))
 
     @mcp.tool(description="Create a named group channel and invite members (names). visibility: team (every "
                           "member may read and join, the default), public, or private (invite only).")

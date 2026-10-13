@@ -1,3 +1,4 @@
+import type { AnswerStatus } from "./chat/answers";
 import { api } from "./api";
 
 export type Priority = "fyi" | "change_plan" | "stop";
@@ -46,8 +47,10 @@ export type TypingEntry = {
   id: number;
   name: string;
   kind: "human" | "ai" | "agent";
-  state: "typing" | "working";
+  /** typing / working: at it now; queued / held: its answer to the owner waits for a run, or for budget. */
+  state: "typing" | "working" | "queued" | "held";
   thread: number | null;
+  until?: string | null;
 };
 
 export type ChatMessage = {
@@ -102,7 +105,7 @@ export type StreamEvent =
   | { type: "message" | "edit" | "archive" | "reaction"; channel_id: number; message: ChatMessage }
   | { type: "channel"; channel_id: number };
 
-export type Presence = { working: number[]; typing: Record<string, TypingEntry[]> };
+export type Presence = { working: number[]; typing: Record<string, TypingEntry[]>; answers?: Record<string, AnswerStatus> };
 
 const post = <T,>(path: string, body: unknown = {}) => api<T>(path, { method: "POST", body: JSON.stringify(body) });
 
@@ -125,6 +128,8 @@ export const chatApi = {
   react: (mid: number, emoji: string) => post<ChatMessage>(`/api/chat/messages/${mid}/react`, { emoji }),
   invite: (id: number, member: number) => post<Channel>(`/api/chat/channels/${id}/members`, { member }),
   read: (id: number, message_id?: number) => post(`/api/chat/channels/${id}/read`, { message_id }),
+  answers: () => api<Record<string, AnswerStatus>>("/api/chat/answers"),
+  remind: (message_id: number) => post<AnswerStatus>(`/api/chat/messages/${message_id}/remind`),
   typing: (id: number, thread?: number | null) => post(`/api/chat/channels/${id}/typing`, { thread: thread ?? null }),
   typingNow: () => api<Record<string, TypingEntry[]>>("/api/chat/typing"),
 };

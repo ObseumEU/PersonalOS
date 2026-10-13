@@ -14,7 +14,7 @@ from .checks import Transcript
 from .runner import AGENTS, REPO, WORKER, rm_tree
 
 SRC = REPO / "backend" / "src"
-ALWAYS_ANSWER = ("chat_send", "chat_react", "file_share", "sandbox_share")  # mcp_server.may_use
+ALWAYS_ANSWER = ("chat_send", "chat_react", "chat_edit", "file_share", "sandbox_share")  # mcp_server.may_use
 
 
 def _worker_imports():

@@ -157,8 +157,25 @@ def typing(channel_id: int, body: TypingIn | None = None, conn=Depends(get_db), 
 
 @router.get("/typing")
 def typing_state(conn=Depends(get_db), ctx=Depends(get_ctx)):
-    """Who is typing (or working on a reply) now, per channel you may read."""
+    """Who is typing (or working on a reply) now, per channel you may read. The stream's presence also has the
+    agents whose answer to the owner is queued or held (chat.presence_view)."""
     return chat.typing_view(conn, ctx.actor_id)
+
+
+@router.get("/answers")
+def answers(conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """Where the answer to the owner's latest message stands, per conversation (pos.answer_status)."""
+    from . import answer_status
+
+    return answer_status.view(conn, ctx.actor_id, cached=False)
+
+
+@router.post("/messages/{message_id}/remind")
+def remind(message_id: int, conn=Depends(get_db), ctx=Depends(get_ctx)):
+    """"Připomenout": nobody took the message; its task goes to the front, or it is routed again."""
+    from . import answer_status
+
+    return _wrap(lambda: answer_status.remind(conn, ctx, message_id))
 
 
 @router.patch("/messages/{message_id}")

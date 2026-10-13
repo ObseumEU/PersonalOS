@@ -100,7 +100,7 @@ detection.
 ## Interfaces
 
 - MCP: `chat_send(channel|to, body, reply_to?, priority?)`, `chat_read(channel,
-  since_id?)`, `chat_react`, `chat_create_channel`, `chat_list_channels`,
+  since_id?)`, `chat_react`, `chat_edit`, `chat_create_channel`, `chat_list_channels`,
   `chat_invite`, `chat_mark_read`. `send_message`, `check_inbox`,
   `ack_message` keep working.
 - REST `/api/chat`: `channels` (with unread and mention counts), `dm`,
@@ -123,6 +123,23 @@ detection.
   when the agent posts there, when the run finishes, or 30 s after the last
   sign of life. `GET /api/chat/typing`, each channel's `typing`, and the SSE
   `presence` event carry it, filtered to channels the viewer may read.
+- Where the answer to the owner stands (pos.answer_status, no message, no run,
+  no cost): for his latest message in a conversation, from its chat-answer
+  task and runs: `queued` ("<Agent> to vzal, odpoví do pár minut"), `working`
+  ("píše odpověď…", animated), `held` by the reserve, a cap or the agent's own
+  limit ("čeká na rozpočet, odpoví nejpozději HH:MM"), `unclaimed` after 2 min
+  with no run or no task ("Zatím to nikdo nevzal" + "Připomenout":
+  `POST messages/{id}/remind` puts the task first again or routes the message
+  anew), `answered`. The SSE `presence` has it as `answers` and adds the agent
+  to `typing` as queued/held/working; `GET /api/chat/answers` too.
+- Sending (web/src/chat/outbox.ts, desktop and /m): the stored message is
+  placed by the channel id the server answered with, never by the open view;
+  unsent and failed messages and drafts are kept per conversation in
+  localStorage ("Neodesláno – Zkusit znovu" after a reload, until sent or
+  discarded). Agents fix their own message with `chat_edit` (24 h window,
+  "upraveno", the history keeps every version) instead of a second message.
+  An agent's thread reply to the owner's message is shown under it in the
+  channel too.
 - Talking to a working agent (pos.fastlane, pos_worker.loop): a chat message
   to an agent with a live run (a DM, an @mention, a reply to it) goes into
   that run at its next step boundary, like change_plan (Codex `exec resume`,

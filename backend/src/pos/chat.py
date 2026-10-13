@@ -874,6 +874,9 @@ def send(conn: sqlite3.Connection, ctx: Ctx, channel_id: int, body: str, *, repl
               **({"meeting": meeting["id"]} if meeting is not None else {}),
               **({"rerouted_from": rerouted["channel"]} if rerouted else {}),
               **({"merged_from": merged_from} if merged_from else {}))
+    from . import answer_status
+
+    answer_status.invalidate()  # the line under the owner's message follows at once (no 3 s cache)
 
     platform_note = None
     if not system and author["kind"] != "human":
@@ -1165,13 +1168,23 @@ def _message_row(conn: sqlite3.Connection, message_id: int) -> sqlite3.Row:
     return row
 
 
+AGENT_EDIT_HOURS = 24  # an agent fixes its own message within this window (chat_edit), not with a second one
+
+
 def edit(conn: sqlite3.Connection, ctx: Ctx, message_id: int, body: str) -> dict:
-    """Authors edit their own messages; every version stays in the history."""
+    """Authors edit their own messages (an agent within AGENT_EDIT_HOURS); every version stays in the history,
+    the audit log has the edit and readers see "upraveno" (edited_at)."""
     row = _message_row(conn, message_id)
     if row["author_id"] != ctx.actor_id:
         raise Forbidden("only the author edits a message")
     if row["archived_at"]:
         raise ChatError("this message is archived")
+    author = actors.get(conn, ctx.actor_id)
+    if author["kind"] != "human":
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(row["created_at"])
+        if age > timedelta(hours=AGENT_EDIT_HOURS):
+            raise ChatError(f"messages older than {AGENT_EDIT_HOURS} h are not edited; post a short correction "
+                            f"that quotes it instead")
     body = (body or "").strip()
     if not body or len(body) > MAX_BODY:
         raise ChatError("empty or too long")
@@ -1853,6 +1866,22 @@ def typing_view(conn: sqlite3.Connection, viewer: int, channel_id: int | None = 
     return out
 
 
+def presence_view(conn: sqlite3.Connection, viewer: int, cached: bool = True) -> dict:
+    """What the chat shows besides messages: agents with a live run, who is typing (an agent whose answer to the
+    owner is queued, held or being worked on counts: pos.answer_status), and where each answer stands."""
+    from . import answer_status
+
+    try:
+        answers = answer_status.view(conn, viewer, cached)
+    except Exception:  # noqa: BLE001 - the indicator never takes the stream down
+        import logging
+
+        logging.getLogger(__name__).exception("answer status failed")
+        answers = {}
+    typing_ = answer_status.merge_typing(typing_view(conn, viewer), answer_status.typing_entries(conn, answers, viewer))
+    return {"working": working_ids(conn), "typing": typing_, "answers": answers}
+
+
 def chat_origin(conn: sqlite3.Connection, task_id: int) -> tuple[int, int] | None:
     """(channel id, message id) when the task is a chat answer (`_ask_to_answer`)."""
     row = conn.execute("SELECT notes FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1933,7 +1962,7 @@ async def stream(db_path: Path, viewer: int, cursor: int | None = None, *, poll:
             if cursor is None:
                 cursor = cursor_now(conn)
             events, cursor = changes(conn, viewer, cursor)
-            presence = {"working": working_ids(conn), "typing": typing_view(conn, viewer)}
+            presence = presence_view(conn, viewer)
         finally:
             conn.close()
         for ev in events:

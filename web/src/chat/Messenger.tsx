@@ -1,13 +1,15 @@
 import { AlertCircle, Check, ChevronDown, ChevronRight, Clock, CornerUpLeft, Loader2 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api";
-import type { ChatMessage, Priority, ThreadSummary, TypingEntry } from "../chatApi";
+import { type ChatMessage, type Priority, type ThreadSummary, type TypingEntry, chatApi } from "../chatApi";
 import { FileCard } from "../files/FileCard";
 import { LOCALE, t } from "../i18n/core";
 import { Avatar } from "../mobile/ui";
 import { ThreadChip, replyCount } from "./ThreadChip";
 import { Rich } from "./Rich";
 import { type Item, type Row, ago, channelTimeline, dmTimeline, rows as toRows, threadTimeline } from "./timeline";
+import { type OutboxFile, type Pending, belongsTo, loadPending, reconcile, savePending, storage } from "./outbox";
+import { type AnswerStatus, animated, answerLabel, inlineReplies, typingKey } from "./answers";
 
 /*
  * The messenger view (docs/MOBILE.md): the owner's messages on the right in the accent colour,
@@ -17,27 +19,41 @@ import { type Item, type Row, ago, channelTimeline, dmTimeline, rows as toRows, 
  * and threads.
  */
 
-export type FileAtt = { type: "file"; id: number; name: string; mime?: string | null; preview?: string; size?: number | null;
-  version?: number | null; description?: string | null };
+export type FileAtt = OutboxFile;
+export type { Pending };
 
-/** A message on its way: shown at once, replaced by the real one when the server answers. */
-export type Pending = {
-  key: string;
-  channel_id: number;
-  body: string;
-  files: FileAtt[];
-  reply_to: number | null;
-  priority: Priority | null;
-  state: "sending" | "error";
-  error?: string;
-  created_at: string;
-};
-
-/** Optimistic sending: the bubble appears immediately (sending → sent); a failure offers a retry. */
-export function useSender(channelId: number | null, onSent: (m: ChatMessage) => void) {
-  const [pending, setPending] = useState<Pending[]>([]);
+/** Optimistic sending: the bubble appears immediately (sending → sent); a failure offers a retry.
+ * The server's stored message is handed on only when it belongs to the conversation open now (by its
+ * channel_id, never by the view: prod 2026-10-13 the owner's DM message landed in #obseum-ai), and what is
+ * still on its way or failed is kept per conversation across reloads (chat/outbox). `messages` (with `me`)
+ * lets a message restored after a reload drop out once it is found in the conversation. */
+export function useSender(channelId: number | null, onSent: (m: ChatMessage) => void, messages?: ChatMessage[], me?: number) {
+  const kv = useMemo(storage, []);
+  const [pending, setPending] = useState<Pending[]>(() => (channelId ? loadPending(kv, channelId) : []));
   const sentRef = useRef(onSent);
   sentRef.current = onSent;
+  const channelRef = useRef(channelId);
+  channelRef.current = channelId;
+  const touched = useRef(new Set<number>());
+  // Another conversation: its outbox from earlier page loads joins (once).
+  const loaded = useRef(new Set<number>());
+  useEffect(() => {
+    if (!channelId || loaded.current.has(channelId)) return;
+    loaded.current.add(channelId);
+    const back = loadPending(kv, channelId);
+    if (back.length) setPending((ps) => [...ps.filter((p) => p.channel_id !== channelId), ...back]);
+  }, [channelId, kv]);
+  useEffect(() => {
+    for (const p of pending) touched.current.add(p.channel_id);
+    savePending(kv, pending, touched.current);
+  }, [pending, kv]);
+  useEffect(() => {
+    if (!messages || !me) return;
+    setPending((ps) => {
+      const next = reconcile(ps, messages, me);
+      return next.length === ps.length ? ps : next;
+    });
+  }, [messages, me]);
   const post = useCallback((p: Pending) => {
     api<ChatMessage>(`/api/chat/channels/${p.channel_id}/messages`, {
       method: "POST",
@@ -45,9 +61,9 @@ export function useSender(channelId: number | null, onSent: (m: ChatMessage) => 
     }).then(
       (m) => {
         setPending((ps) => ps.filter((x) => x.key !== p.key));
-        sentRef.current(m);
+        if (belongsTo(m, channelRef.current)) sentRef.current(m);
       },
-      (e) => setPending((ps) => ps.map((x) => (x.key === p.key ? { ...x, state: "error", error: e instanceof Error ? e.message : String(e) } : x))),
+      (e) => setPending((ps) => ps.map((x) => (x.key === p.key ? { ...x, state: "error", restored: false, error: e instanceof Error ? e.message : String(e) } : x))),
     );
   }, []);
   const send = useCallback(
@@ -68,7 +84,7 @@ export function useSender(channelId: number | null, onSent: (m: ChatMessage) => 
     // Not inside the state updater: React may run an updater twice (StrictMode), which sent twice.
     const p = pendingRef.current.find((x) => x.key === key);
     if (!p || p.state !== "error") return;
-    setPending((ps) => ps.map((x) => (x.key === key ? { ...x, state: "sending", error: undefined } : x)));
+    setPending((ps) => ps.map((x) => (x.key === key ? { ...x, state: "sending", error: undefined, restored: false } : x)));
     post({ ...p, state: "sending" });
   }, [post]);
   const discard = useCallback((key: string) => setPending((ps) => ps.filter((x) => x.key !== key)), []);
@@ -102,6 +118,8 @@ type BubbleProps = {
   onQuote?: (id: number) => void;
   actions?: (m: ChatMessage) => ReactNode;
   flash: boolean;
+  /** Agents' replies to this (the owner's) message, shown under it in a channel. */
+  inline?: ChatMessage[];
 };
 
 function corners(mine: boolean, first: boolean, last: boolean) {
@@ -109,7 +127,7 @@ function corners(mine: boolean, first: boolean, last: boolean) {
   return ["rounded-[18px]", first ? "" : side[0], last ? "" : side[1]].join(" ");
 }
 
-function Bubble({ row, names, mode, onTap, onOpenThread, onQuote, actions, flash }: BubbleProps) {
+function Bubble({ row, names, mode, onTap, onOpenThread, onQuote, actions, flash, inline }: BubbleProps) {
   const { item, mine, first, last } = row;
   const m = item.m;
   const text = visibleBody(m);
@@ -183,6 +201,7 @@ function Bubble({ row, names, mode, onTap, onOpenThread, onQuote, actions, flash
             ))}
           </span>
         )}
+        {mode === "channel" && inline && inline.length > 0 && <InlineReplies replies={inline} names={names} onOpen={onOpenThread ? () => onOpenThread(m.id) : undefined} />}
         {mode === "channel" && m.replies > 0 && onOpenThread && <ThreadChip count={m.replies} thread={m.thread} onOpen={() => onOpenThread(m.id)} />}
       </div>
     </div>
@@ -214,21 +233,91 @@ function PendingBubble({ p, names, onRetry, onDiscard }: { p: Pending; names: st
 
 function TypingBubble({ entries }: { entries: TypingEntry[] }) {
   const first = entries[0];
-  const soft = entries.every((e) => e.state === "working");
-  const label = entries.map((e) => e.name).join(", ") + " " + (soft ? t("m.chat.working") : t("m.chat.typing"));
+  const soft = entries.every((e) => e.state !== "typing");
+  const moving = entries.some(animated);
+  const label = entries.map((e) => `${e.name} ${t(typingKey(e))}`).join(" · ");
   return (
     <div className="mt-2.5 flex items-end gap-2 px-3" role="status" aria-live="polite" aria-label={label}>
       <Avatar name={first.name} size={28} human={first.kind === "human"} />
       <div className="flex flex-col items-start">
-        {entries.length > 1 && <span className="mb-0.5 px-3 text-[12px] text-ink-2">{entries.map((e) => e.name).join(", ")}</span>}
+        <span className="mb-0.5 px-3 text-[12px] text-ink-2">{label}</span>
         <div className="flex h-9 items-center rounded-[18px] rounded-bl-[6px] border border-line bg-raised px-4 text-ink-2">
-          <span className={`typing-dots big ${soft ? "soft" : ""}`} aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </span>
+          {moving ? (
+            <span className={`typing-dots big ${soft ? "soft" : ""}`} aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          ) : (
+            <Clock size={15} aria-hidden="true" />
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Under the owner's message: who took it and where the answer stands; "Připomenout" when nobody did. */
+export function AnswerLine({ st, onOpenThread, className = "" }: { st: AnswerStatus; onOpenThread?: () => void; className?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const l = answerLabel(st, LOCALE);
+  const remind = () => {
+    setBusy(true);
+    setFailed(null);
+    chatApi.remind(st.message_id).then(
+      () => setBusy(false),
+      (e) => {
+        setBusy(false);
+        setFailed(e instanceof Error ? e.message : String(e));
+      },
+    );
+  };
+  const tone = st.state === "unclaimed" || st.state === "held" ? "text-amber-300" : "text-ink-2";
+  return (
+    <div className={`flex flex-wrap items-center justify-end gap-x-2 gap-y-1 px-3 pt-1 text-[12px] ${tone} ${className}`} role="status" aria-live="polite" data-answer-state={st.state}>
+      {st.state === "working" && (
+        <span className="typing-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      )}
+      {(st.state === "queued" || st.state === "held") && <Clock size={12} aria-hidden="true" />}
+      {st.state === "answered" && <Check size={12} aria-hidden="true" />}
+      {st.state === "unclaimed" && <AlertCircle size={12} aria-hidden="true" />}
+      <span>{t(l.key, l.params)}</span>
+      {st.state === "unclaimed" && (
+        <button type="button" onClick={remind} disabled={busy} className="h-7 rounded-full border border-accent/60 px-3 font-medium text-accent disabled:opacity-60">
+          {busy ? <Loader2 size={12} className="animate-spin" /> : t("chat.answer.remind")}
+        </button>
+      )}
+      {st.state === "answered" && onOpenThread && st.thread == null && (
+        <button type="button" onClick={onOpenThread} className="h-7 font-medium text-accent">{t("chat.answer.show")}</button>
+      )}
+      {failed && <span className="text-red-400" title={failed}>{t("chat.answer.remind_failed")}</span>}
+    </div>
+  );
+}
+
+/** Agents' replies to the owner's message, under it in the channel (the thread stays one tap away). */
+export function InlineReplies({ replies, names, onOpen }: { replies: ChatMessage[]; names: string[]; onOpen?: () => void }) {
+  if (!replies.length) return null;
+  return (
+    <div className="mt-1 flex w-full max-w-[520px] flex-col gap-1">
+      {replies.map((r) => (
+        <div key={r.id} className="rounded-xl border border-accent/30 bg-accent/5 px-3 py-1.5 text-left" data-inline-reply={r.id}>
+          <span className="flex items-center gap-1.5 text-[12px]">
+            <CornerUpLeft size={12} className="rotate-180 text-accent" aria-hidden="true" />
+            <span className="font-medium text-accent">{r.author_name}</span>
+            <span className="text-ink-2">{hhmm(r.created_at)}</span>
+            {onOpen && (
+              <button type="button" onClick={onOpen} className="ml-auto text-ink-2 hover:text-accent">{t("chat.answer.in_thread")}</button>
+            )}
+          </span>
+          <Rich text={visibleBody(r)} names={names} tone="theirs" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -266,6 +355,8 @@ export type MessengerProps = {
   names: string[];
   pending?: Pending[];
   typing?: TypingEntry[];
+  /** Where the answer to the owner's latest message here stands (chat/answers). */
+  answer?: AnswerStatus | null;
   hasMore?: boolean;
   onOlder?: () => Promise<unknown>;
   onTap?: (m: ChatMessage) => void;
@@ -322,7 +413,7 @@ export default function Messenger(props: MessengerProps) {
 
   const firstId = items[0]?.m.id ?? 0;
   const lastMsg = items[items.length - 1]?.m;
-  const tailKey = `${lastMsg?.id ?? 0}:${pending.length}:${typing.length}`;
+  const tailKey = `${lastMsg?.id ?? 0}:${pending.length}:${typing.length}:${props.answer?.state ?? ""}:${messages.length}`;
   const prevFirst = useRef(firstId);
   const prevTail = useRef(tailKey);
   const prevCount = useRef(items.length);
@@ -423,17 +514,22 @@ export default function Messenger(props: MessengerProps) {
                 <span className="rounded-full border border-line bg-surface px-3 py-0.5 text-[12px] text-ink-2">{r.label}</span>
               </div>
             ) : (
-              <Bubble
-                key={r.key}
-                row={r}
-                names={names}
-                mode={mode}
-                onTap={props.onTap}
-                onOpenThread={props.onOpenThread}
-                onQuote={jump}
-                actions={props.actions}
-                flash={flash === r.item.m.id}
-              />
+              <Fragment key={r.key}>
+                <Bubble
+                  row={r}
+                  names={names}
+                  mode={mode}
+                  onTap={props.onTap}
+                  onOpenThread={props.onOpenThread}
+                  onQuote={jump}
+                  actions={props.actions}
+                  flash={flash === r.item.m.id}
+                  inline={mode === "channel" ? inlineReplies(messages, r.item.m, me) : undefined}
+                />
+                {props.answer && props.answer.message_id === r.item.m.id && (
+                  <AnswerLine st={props.answer} onOpenThread={mode === "channel" && props.onOpenThread ? () => props.onOpenThread!(r.item.m.id) : undefined} />
+                )}
+              </Fragment>
             ),
           )}
           {pending.map((p) => (
