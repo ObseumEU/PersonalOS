@@ -201,6 +201,12 @@ def test_a_frequent_agent_with_a_big_prefix_gets_1h_a_rare_one_5m(conn, co):
     assert cache_policy.ttl_for(conn, co["writer"].actor_id, now) is None
     r = cache_policy.ratio(conn, "2026-10-01", "2026-10-03")
     assert r["runs"] == 22 and r["read_per_write"] > 0
+    # Every run 10-40 min after the last (none under 5, none over 60): a choice all the same, not the
+    # CLI's default (5m on an API key): small runs get 1h, big ones still 5m.
+    _runs(conn, co["cto"].actor_id, [15, 30, 10, 40, 20, 25, 15, 35, 20, 30], cw_hit=0, cw_miss=8000)
+    assert cache_policy.ttl_for(conn, co["cto"].actor_id, now) == "1h"
+    _runs(conn, co["qa"].actor_id, [15, 30, 10, 40, 20, 25, 15, 35, 20, 30], cw_hit=0, cw_miss=60000)
+    assert cache_policy.ttl_for(conn, co["qa"].actor_id, now) == "5m"
 
 
 def test_the_worker_sets_the_cache_ttl_and_runs_a_sized_review_small(monkeypatch):
