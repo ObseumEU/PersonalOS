@@ -36,8 +36,13 @@ def worker_ctx(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> 
     # Every worker call (the alive tick every 10 s, heartbeats, polls) would be a write; the
     # "seen" time moves at most every SEEN_WRITE_S (pos.workers reads it at a 5-min scale).
     if (row["last_seen_at"] or "") < _seen_cutoff():
-        conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
-        conn.commit()
+        # Best effort: "seen" never fails the call it rides on (prod 2026-10-13: /api/worker/next, /alive and the
+        # handoff poll answered 500 "database is locked" from this UPDATE).
+        try:
+            conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
+            conn.commit()
+        except sqlite3.OperationalError:
+            conn.rollback()
     return Ctx(actor_id, via="worker")
 
 

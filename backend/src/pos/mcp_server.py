@@ -291,8 +291,16 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
             else:
                 raise ToolError("unauthorized")
             c = Ctx(actor_id, via="mcp", run_id=run_of(conn, actor_id, headers))
-            conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
-            audit.log(conn, c, f"mcp:{tool}", args={k: v for k, v in args.items() if v is not None})
+            # Bookkeeping, committed before the tool runs: left open, these two writes held the database's write
+            # lock through the whole tool (a knowlage search, a Gmail or HA call), and "last seen" failing on a
+            # busy database failed the tool itself (prod 2026-10-11/13: complete_task, sandbox_run_python
+            # "database is locked"). Best effort: a locked database skips it, the tool still runs.
+            try:
+                conn.execute("UPDATE actors SET last_seen_at = ? WHERE id = ?", (now_iso(), actor_id))
+                audit.log(conn, c, f"mcp:{tool}", args={k: v for k, v in args.items() if v is not None})
+                conn.commit()
+            except sqlite3.OperationalError:
+                conn.rollback()
             try:
                 _gate(conn, c, tool)
                 yield conn, c
