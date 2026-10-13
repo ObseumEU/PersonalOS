@@ -358,6 +358,25 @@ def test_an_owner_correction_and_a_failed_run_write_lessons(env):
     out = learning.on_failed_run(conn, conn.execute("SELECT * FROM runs WHERE id = ?", (rid,)).fetchone())
     assert out and "skutečně" in agent_memory.text(conn, w)
     assert learning.lesson_for_failure("connection reset by peer") is None
+    # A refused tool: ask for it when it happens, not a my_access call at the start of every run.
+    lesson = learning.lesson_for_failure("forbidden: not granted")
+    assert "request_access" in lesson and "my_access" not in lesson
+
+
+def test_the_old_my_access_lesson_is_rewritten_in_memories(env):
+    conn, ids = env["conn"], env["ids"]
+    w, other = ids["Writer"], ids["QA Reviewer"]
+    old = next(iter(learning.REWRITTEN_LESSONS))
+    agent_memory.set_body(conn, Ctx(w), f"# Fakta\n- x\n\n{learning.SECTION}\n{learning.PREFIX}{old} (2026-10-03)\n")
+    agent_memory.set_body(conn, Ctx(other), "# Fakta\n- nic\n")
+    dry = learning.rewrite_lessons(conn)
+    assert dry["would_rewrite"] == ["Writer"] and old in agent_memory.text(conn, w)  # a dry run by default
+    assert learning.rewrite_lessons(conn, apply=True)["rewritten"] == ["Writer"]
+    body = agent_memory.text(conn, w)
+    assert old not in body and "my_access" not in body
+    assert f"{learning.PREFIX}{learning.REWRITTEN_LESSONS[old]} (2026-10-03)" in body
+    assert agent_memory.text(conn, other) == "# Fakta\n- nic"
+    assert learning.rewrite_lessons(conn, apply=True)["rewritten"] == []  # idempotent
 
 
 def test_every_agent_gets_a_memory_note_and_the_coach_a_weekly_task(env):
