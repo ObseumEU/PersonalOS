@@ -636,3 +636,31 @@ def test_the_pool_starts_an_owner_waiting_handoff_first():
 
     work = {"state": {}, "unread_messages": 0, "task": {"topic": "ops", "priority": 4, "owner_waiting": True}}
     assert wpool.work_rank(work) == wpool.RANK_OWNER
+
+
+def test_the_guards_poll_never_holds_the_write_lock_while_it_waits(world):
+    """prod 2026-10-13: the heartbeat UPDATE that matched nothing left a write transaction open through the poll's
+    wait; two live handoffs at 4 Hz locked the database for everyone."""
+    import threading
+
+    w = world
+    h = ask(w)
+    agent = Ctx(w.agent_id, via="worker", run_id=w.run_id)
+    handoff.worker_poll(w.conn, agent, h["id"], 0)  # the first beat writes and commits
+    assert not w.conn.in_transaction
+    other = connect(w.settings.db_path)
+    other.execute("PRAGMA busy_timeout = 200")
+    wrote = []
+
+    def write():
+        time.sleep(0.2)
+        other.execute("UPDATE tasks SET progress_note = 'x' WHERE id = ?", (w.task_id,))
+        other.commit()
+        wrote.append(True)
+
+    t = threading.Thread(target=write)
+    t.start()
+    out = handoff.worker_poll(w.conn, agent, h["id"], 1.0)  # within BEAT_WRITE_S: no write due, waits 1 s
+    t.join()
+    other.close()
+    assert out["status"] == "waiting" and wrote == [True] and not w.conn.in_transaction

@@ -825,9 +825,15 @@ BEAT_WRITE_S = 60  # the guard polls every second or so; the run's heartbeat col
 def _beat(conn: sqlite3.Connection, run_id: int) -> None:
     """The guard's poll is the waiting run's heartbeat too: a run waiting for the owner is never taken for a silent
     one (pos.scheduler.reap_runs), even if the worker's own alive tick lags. Commits when it writes."""
+    # Read first, write only when due, and never leave the write open: an UPDATE that matched nothing still opened
+    # a write transaction, which the poll then held through its wait (prod 2026-10-13 11:20-11:31: two live
+    # handoffs polled at 4 Hz kept the writer lock, 31 "database is locked" in 15 min, /api/auth/me 500).
     stale = _iso(_now() - timedelta(seconds=BEAT_WRITE_S))
-    if conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running' AND (heartbeat_at IS NULL "
-                    "OR heartbeat_at < ?)", (now_iso(), run_id, stale)).rowcount:
+    row = conn.execute("SELECT 1 FROM runs WHERE id = ? AND status = 'running' AND (heartbeat_at IS NULL "
+                       "OR heartbeat_at < ?)", (run_id, stale)).fetchone()
+    if row is not None:
+        conn.execute("UPDATE runs SET heartbeat_at = ? WHERE id = ? AND status = 'running'", (now_iso(), run_id))
+    if conn.in_transaction:
         conn.commit()
 
 
@@ -841,6 +847,8 @@ def worker_poll(conn: sqlite3.Connection, ctx: Ctx, hid: int, wait: float) -> di
     h = check_expiry(conn, h)
     if h["status"] in OPEN and h["run_id"]:
         _beat(conn, h["run_id"])
+    if conn.in_transaction:  # never wait holding a lock (the poll is ~4 Hz per live handoff)
+        conn.commit()
     events = take_events(h["id"], wait) if h["status"] in OPEN else []
     if events:  # the status may have changed while it waited
         h = get(conn, hid)

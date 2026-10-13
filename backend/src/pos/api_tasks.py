@@ -22,7 +22,12 @@ def get_db(settings: Settings = Depends(get_settings)) -> Iterator[sqlite3.Conne
     try:
         yield conn
     finally:
-        conn.close()
+        # A request that failed half-way (or forgot to commit) must not keep a write open: roll back first.
+        try:
+            if conn.in_transaction:
+                conn.rollback()
+        finally:
+            conn.close()
 
 
 def get_ctx(request: Request, conn: sqlite3.Connection = Depends(get_db)) -> Ctx:
