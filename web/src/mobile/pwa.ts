@@ -250,6 +250,24 @@ function sameKey(sub: PushSubscription, publicKey: string): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
+/** The push service's subscribe, bounded: on a phone without a connection to it (FCM blocked, no Google Play
+ * services) it can stay pending for ever and the button would say "Zapínám…" with nothing reported. */
+function subscribeTimed(reg: ServiceWorkerRegistration, key: string, ms = 30000): Promise<PushSubscription> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`push service did not answer in ${ms / 1000} s`)), ms);
+    reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }).then(
+      (s) => {
+        window.clearTimeout(timer);
+        resolve(s);
+      },
+      (e) => {
+        window.clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 const postSubscription = (sub: PushSubscription) => api("/api/push/subscribe", { method: "POST", body: JSON.stringify(sub.toJSON()) });
 
 const NO_PROMPT_MS = 1500;
@@ -333,9 +351,7 @@ export async function enablePush(publicKey?: string | null): Promise<PushStep[]>
     renewed = "old subscription had another key, renewed; ";
   }
   if (!sub) {
-    sub = await run("subscribe", "Služba oznámení prohlížeče odmítla přihlášení", () =>
-      reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(vapid) }),
-    );
+    sub = await run("subscribe", "Služba oznámení prohlížeče odmítla přihlášení", () => subscribeTimed(reg, vapid));
     done("subscribe", `${renewed}new subscription at ${new URL(sub.endpoint).host}`);
   } else done("subscribe", `existing subscription at ${new URL(sub.endpoint).host}`);
 
@@ -367,7 +383,7 @@ export async function syncPush(cfg?: PushConfig): Promise<boolean> {
       sub = null;
     }
     if (sub && c.this_device) return false;
-    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(c.public_key) });
+    if (!sub) sub = await subscribeTimed(reg, c.public_key);
     await postSubscription(sub);
     logPushStep("sync", true, `subscription at ${new URL(sub.endpoint).host} registered on app start`);
     return true;

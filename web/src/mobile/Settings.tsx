@@ -223,16 +223,19 @@ export function PushSection() {
       async (c) => {
         setCfg(c);
         setFailed(null);
-        // The browser has a subscription the server does not know (or may make one): register it again.
-        const synced = await syncPush(c);
-        const fresh = synced ? await pushApi.config() : c;
-        if (synced) setCfg(fresh);
-        const d = await pushDiagnostics(fresh.public_key);
+        // The device's state first (shown even while the push service below takes its time).
+        const d = await pushDiagnostics(c.public_key);
         setDiag(d);
         if (!reported.current) {
           // What this device looks like when Settings opens: on the server even when nobody presses anything.
           reported.current = true;
-          logPushStep("state", true, `permission=${d.permission} sw=${d.sw} sub=${d.subscription ?? "none"} server_knows=${!!fresh.this_device} standalone=${d.standalone}`);
+          logPushStep("state", true, `permission=${d.permission} sw=${d.sw} sub=${d.subscription ?? "none"} server_knows=${!!c.this_device} standalone=${d.standalone}`);
+        }
+        // The browser has a subscription the server does not know (or may make one): register it again.
+        if (await syncPush(c)) {
+          const fresh = await pushApi.config();
+          setCfg(fresh);
+          setDiag(await pushDiagnostics(fresh.public_key));
         }
       },
       (e) => setFailed(errText(e)),
