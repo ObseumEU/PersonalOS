@@ -261,6 +261,21 @@ def save_screenshot(data_dir: Path, actor_id: int, tool: str, b64: str | None) -
     return rel.as_posix()
 
 
+def _task_id(conn: sqlite3.Connection, value) -> int | None:
+    """The guard sends the run's task as its ref ("T-1234", POS_TASK_ID): the row id, or None when there is no such
+    task. As text it broke the approvals foreign key (POST /api/worker/browser/check 500, so an agent could not ask
+    for a browser approval) and filed browser steps under an entity id the task's trace never finds."""
+    from . import tasks
+
+    if value in (None, ""):
+        return None
+    try:
+        tid = tasks.parse_id(value if isinstance(value, int) else str(value))
+    except Exception:  # noqa: BLE001 - not a task id: the step is still recorded, unlinked
+        return None
+    return tid if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (tid,)).fetchone() else None
+
+
 def check(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, body: dict) -> dict:
     """The guard's question before a tool call. With `dry_run` it only answers;
     otherwise an approval is requested, with the screenshot the guard took."""
@@ -276,7 +291,7 @@ def check(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, body: dict) -> dic
         a = approvals.request(conn, ctx, f"browser: {tool.removeprefix('browser_')}", {
             "why": reason, "url": body.get("url"), "tool": tool, "args": redact(tool, args), "screenshot": shot,
             **({"element": str(body["element"])[:200]} if body.get("element") else {}),
-        }, task_id=body.get("task_id"))
+        }, task_id=_task_id(conn, body.get("task_id")))
         out["approval_id"] = a["id"]
     conn.commit()
     return out
@@ -298,9 +313,10 @@ def record(conn: sqlite3.Connection, ctx: Ctx, data_dir: Path, body: dict) -> di
     kind = "computer" if tool.startswith("computer_") else "browser"
     extra = {k: str(body[k])[:300] for k in ("download", "note") if body.get(k)}
     rctx = _run_ctx(conn, ctx, body.get("run_id"))
+    tid = _task_id(conn, body.get("task_id"))
     audit.log(conn, rctx, f"{kind}:{tool.removeprefix(kind + '_')}",
-              "task" if body.get("task_id") else None,
-              body.get("task_id"), url=body.get("url"), args=redact(tool, body.get("args") or {}),
+              "task" if tid else None,
+              tid, url=body.get("url"), args=redact(tool, body.get("args") or {}),
               ok=bool(body.get("ok", True)), screenshot=shot, approval_id=body.get("approval_id"), **extra)
     conn.commit()
     if shot and rctx.run_id:  # the last step is also the live view's frame

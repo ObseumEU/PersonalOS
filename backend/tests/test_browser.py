@@ -78,6 +78,30 @@ def test_check_and_log_endpoints(app):
                        headers=h).json()["decision"] == "refuse"
 
 
+def test_the_guard_sends_its_task_as_a_ref_and_the_approval_and_steps_land_on_the_task(app):
+    """The guard sends POS_TASK_ID, the run's task ref ("T-12"): stored as text it broke the approvals foreign key
+    (prod: POST /api/worker/browser/check 500, the agent could not ask) and filed steps the task trace never found."""
+    from pos import tasks
+
+    client, conn, owner, agent_id, key, settings = app
+    h = {"Authorization": f"Bearer {key}"}
+    t = tasks.create(conn, owner, {"title": "Koupit doménu", "assignee": {"type": "agent", "id": agent_id}})
+    conn.commit()
+    ref = t["ref"]
+    r = client.post("/api/worker/browser/check", headers=h, json={
+        "tool": "browser_click", "args": {"element": "Buy now"}, "url": "https://shop.example", "task_id": ref})
+    assert r.status_code == 200, r.text
+    assert approvals.get(conn, r.json()["approval_id"])["task_id"] == t["id"]
+    client.post("/api/worker/browser/log", headers=h, json={"tool": "browser_click", "args": {"element": "x"},
+                                                             "url": "https://shop.example", "task_id": ref})
+    row = conn.execute("SELECT entity, entity_id FROM audit_log WHERE action = 'browser:click'").fetchone()
+    assert (row["entity"], row["entity_id"]) == ("task", t["id"])
+    # An unknown task is no 500: the step is just not linked.
+    r = client.post("/api/worker/browser/check", headers=h, json={
+        "tool": "browser_click", "args": {"element": "Buy now"}, "url": "https://shop.example", "task_id": "T-99999"})
+    assert r.status_code == 200 and approvals.get(conn, r.json()["approval_id"])["task_id"] is None
+
+
 def test_guard_proxies_playwright_and_waits_for_approval():
     """End to end in its own process (stdio MCP children misbehave under pytest on
     Windows): a fake Playwright MCP behind the guard, the real API, an approval."""
