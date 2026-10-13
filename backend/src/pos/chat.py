@@ -575,11 +575,13 @@ def channel_lead(conn: sqlite3.Connection, ch: sqlite3.Row) -> int | None:
         p = None
     if p and p["lead_id"]:
         lead = actors.get(conn, p["lead_id"])
-        if lead["kind"] != "human" and not lead["archived_at"]:
+        if lead["kind"] != "human" and not lead["archived_at"] and not lead["paused_at"]:
             return lead["id"]
+    # A paused lead answers nobody: the CEO takes it (prod 2026-10-13, #kniha led by the paused Kniha Developer).
     team = conn.execute(_agents_sql() + " AND lower(COALESCE(team, '')) = ? ORDER BY id", (name,)).fetchall()
     ids = {r["id"] for r in team}
-    top = [r["id"] for r in team if r["reports_to"] not in ids]
+    paused = {r[0] for r in conn.execute("SELECT id FROM actors WHERE paused_at IS NOT NULL")}
+    top = [r["id"] for r in team if r["reports_to"] not in ids and r["id"] not in paused]
     if top:
         return top[0]
     return role_member(conn, "ceo")
@@ -593,11 +595,13 @@ def _route_unaddressed(conn: sqlite3.Connection, ch: sqlite3.Row,
     if parent is not None:
         root = parent["reply_to"] or parent["id"]
         author = actors.get(conn, parent["author_id"])
-        if author["kind"] != "human" and not author["archived_at"] and author["runtime"] != "service":
+        if (author["kind"] != "human" and not author["archived_at"] and not author["paused_at"]
+                and author["runtime"] != "service"):
             return author["id"], "reply"
         row = conn.execute("""SELECT m.author_id FROM chat_messages m JOIN actors a ON a.id = m.author_id
                               WHERE m.channel_id = ? AND (m.id = ? OR m.reply_to = ?) AND a.kind != 'human'
-                              AND a.runtime != 'service' AND a.archived_at IS NULL AND m.archived_at IS NULL
+                              AND a.runtime != 'service' AND a.archived_at IS NULL AND a.paused_at IS NULL
+                              AND m.archived_at IS NULL
                               ORDER BY m.id DESC LIMIT 1""", (ch["id"], root, root)).fetchone()
         if row:
             return row["author_id"], "reply"
@@ -1005,6 +1009,9 @@ def _ask_to_answer(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, aid: int
     author_row = actors.get(conn, ctx.actor_id)
     to_owner = bool(author_row["is_owner"]) and priority is None
     if not (agents_code.answers_chat(target["name"]) or to_owner):
+        return
+    if target["paused_at"] and to_owner:  # its task would never run: the CEO answers instead, now
+        availability.forward_unserved(conn, ctx, ch, target, message_id, body, why="je pozastavený")
         return
     path = workers.reply_path(conn, target)
     if path is None:  # a service, or an agent without a worker: never silent (pos.availability)
@@ -1766,7 +1773,8 @@ AGENT_TYPING_S = 30
 TYPING_S = HUMAN_TYPING_S  # kept for older callers
 _typing: dict[int, dict[int, dict]] = {}  # channel -> actor -> entry
 _typing_lock = threading.Lock()
-_CHAT_ORIGIN = re.compile(r"Source: chat channel (\d+) \(.*?\), message (\d+)\.")
+# "(DM with Owner)" is there for an agent's own answer, not for one forwarded to the CEO (availability.forward_unserved)
+_CHAT_ORIGIN = re.compile(r"Source: chat channel (\d+)(?: \(.*?\))?, message (\d+)\.")
 
 
 def _thread_of(conn: sqlite3.Connection, message_id: int | None) -> int | None:
