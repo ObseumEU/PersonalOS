@@ -103,10 +103,30 @@ def resolve_assignee(conn: sqlite3.Connection, ctx: Ctx, value) -> dict:
     elif v.lower() in ("ai", "assistant"):
         row = actors.get(conn, actors.assistant_id(conn))
     else:
-        row = actors.find_by_name(conn, v)
+        row = actors.find_by_name(conn, v) or _successor_row(conn, v)
     if row is None:
         return {"assignee_type": "external", "assignee_id": None, "assignee_name": v}
     return {"assignee_type": row["kind"], "assignee_id": row["id"], "assignee_name": row["name"]}
+
+
+def _successor_row(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    """An archived member named by name (a routing rule, an agent's create_task to "CTO") is not an
+    outside name: its work goes to its successor (pos.roles.SUCCESSORS, else the CEO). Before, it
+    became an outside assignee with no id and sat in nobody's queue."""
+    gone = conn.execute("SELECT * FROM actors WHERE name = ? AND archived_at IS NOT NULL AND is_owner = 0",
+                        (name,)).fetchone()
+    if gone is None:
+        from .roles import successor_names
+
+        for new in successor_names(name):  # a member of the chart that was never created here
+            row = actors.find_by_name(conn, new)
+            if row is not None:
+                return row
+        return None
+    from .notices import successor
+
+    new = successor(conn, gone["id"])
+    return actors.get(conn, new) if new else None
 
 
 OWNER_ASSIGN_SOURCES = ("ask_owner",)  # an agent's question for the owner goes through pos.asks
@@ -550,8 +570,9 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
     triaged = None
     policy = None
     if handed_in and "reviewer_id" not in extra:
-        # The risk-class review policy (pos.review_policy): low risk is accepted at once, code goes to
-        # the QA Reviewer. An explicit request_review and a reviewer the owner set are respected.
+        # The review policy (pos.review_policy): lean (the default) accepts all but what a person must
+        # see; classic accepts low risk and sends code to the QA Reviewer. An explicit request_review
+        # and a reviewer the owner set are respected.
         from . import review_policy
 
         if row["reviewer_id"] != actors.owner_id(conn):
@@ -560,7 +581,7 @@ def update(conn: sqlite3.Connection, ctx: Ctx, task_id: int, changes: dict) -> d
                 extra["reviewer_id"] = policy.reviewer_id
     if handed_in and not row["reviewer_id"] and "reviewer_id" not in extra:
         extra["reviewer_id"] = reviewer_of(conn, row)
-        if extra["reviewer_id"] == actors.owner_id(conn):
+        if extra["reviewer_id"] == actors.owner_id(conn) and not (policy and policy.action == "accept"):
             # The owner's reviews go to a stand-in first (the team lead, the CEO for what needs
             # judgment); it leaves him only what truly needs him (pos.review_policy.owner_stand_in).
             from . import business

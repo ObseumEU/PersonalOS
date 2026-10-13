@@ -944,6 +944,7 @@ def test_an_idle_agents_dm_reaches_a_run_and_is_never_lost(setup, fake_codex, tm
 
     lead = agents.create_agent(conn, owner, name="Lead", purpose="lead", lifetime="long_lived",
                                permissions=["tasks:read", "messages:send"], data_dir=tmp_path)["agent"]["id"]
+    conn.execute("UPDATE actors SET reports_to = ? WHERE id = ?", (lead, agent_id))  # its lead's DM wakes it
     sent = chat.send_dm(conn, Ctx(lead), agent_id, "M1 je hotová, odkaz je v T-767.")
     worker = worker_for(client, key, fake_codex, tmp_path)
     seen = []

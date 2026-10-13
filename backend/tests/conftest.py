@@ -34,6 +34,9 @@ def isolated_codex_home(tmp_path, monkeypatch):
     monkeypatch.setenv("POS_SUPPORT_INTAKE", "0")
     # Hand-in evidence (pos.evidence) never runs git or HTTP here; test_evidence.py turns it on.
     monkeypatch.setenv("POS_EVIDENCE_CHECKS", "0")
+    # The review flows are tested with the classic risk classes; the lean policy (the production default
+    # since the 2026-10 cut) is turned on where it is tested (test_review_policy.py, test_lean_org.py).
+    monkeypatch.setenv("POS_REVIEW_MODE", "classic")
     # Nor DNS or HTTP from the reality probe and the claim gate (pos.reality, pos.grounding); test_reality.py
     # brings a stand-in internet.
     monkeypatch.setenv("POS_GROUNDING_NETWORK", "0")

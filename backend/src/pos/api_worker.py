@@ -200,7 +200,12 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             continue
         row = cand
         break
-    if row is None and unread and not capped:
+    held = False
+    if row is None and unread and not capped and not inbox_wakes(conn, ctx.actor_id):
+        # Only agents' chatter (peers in a group, a peer's DM, platform notices): no run of its own; it stays
+        # unread and reaches the agent's next real run (prod 2026-10: 111 inbox runs a week, $23).
+        held = True
+    elif row is None and unread and not capped:
         # Unread messages and nothing that would deliver them: a task whose run does (pos.chat.ensure_inbox_task).
         # Without it they waited for a run that never came, or an idle worker read them and lost them. Also when
         # the queue holds only tasks the reserve holds back (prod 10-07: the CEO's and the Software Engineer's
@@ -212,7 +217,9 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
                                 (tid, cutoff, None)).fetchone()
             if cand is not None and not (reserve and not _reserve_admits(conn, cand, st)):
                 row = cand
-    out: dict = {"state": st, "unread_messages": unread}
+    # Held messages are not "work": the long poll keeps waiting (a DM still wakes it) instead of returning at once.
+    out: dict = {"state": st, "unread_messages": 0, "held_messages": unread} if held else \
+        {"state": st, "unread_messages": unread}
     if row:
         # Over its own limit (runs_day, usd_day...): no task until the limit resets, so neither this
         # worker nor the pool's probe starts a run that would only be refused (pos.access).
@@ -242,6 +249,24 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
             if brief:  # first thing in the run's prompt (the progress note never reaches it)
                 out["task"]["notes"] = f"{brief}\n\n{out['task'].get('notes') or ''}".strip()
     return out
+
+
+WAKE_REASONS = ("dm", "mention", "reply", "priority")
+
+
+def inbox_wakes(conn: sqlite3.Connection, actor_id: int) -> bool:
+    """Do this agent's unread messages deserve a run of their own (an inbox task)? Yes when one is from a
+    person (the owner's always: nothing here delays or drops them), or addressed to it (a DM, an @mention,
+    a reply, a priority message) by its own lead or the CEO. Agents' chatter (a group thread, a peer's DM,
+    a platform notice) does not wake it: it stays unread and is in the agent's next real run's prompt."""
+    from . import notices
+
+    bosses = {b for b in (notices.lead_of(conn, actor_id), notices.ceo(conn)) if b and b != actor_id}
+    rows = conn.execute("""SELECT i.reason, m.author_id, a.kind FROM chat_inbox i
+                           JOIN chat_messages m ON m.id = i.message_id JOIN actors a ON a.id = m.author_id
+                           WHERE i.actor_id = ? AND i.read_at IS NULL AND m.archived_at IS NULL
+                           AND COALESCE(i.info, 0) = 0""", (actor_id,)).fetchall()
+    return any(r["kind"] == "human" or (r["author_id"] in bosses and r["reason"] in WAKE_REASONS) for r in rows)
 
 
 def _decided_approval(conn: sqlite3.Connection, cand) -> bool:

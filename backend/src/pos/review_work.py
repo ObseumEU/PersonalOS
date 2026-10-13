@@ -179,6 +179,11 @@ def stale(conn: sqlite3.Connection, item) -> bool:
     if tid is None:
         return False
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
+    from . import review_policy
+
+    if row is not None and review_policy.lean_accepts(conn, row):
+        _close(conn, item["id"], "the lean review policy accepts the result without a review run")
+        return True
     if row is not None and row["status"] == "review" and not row["archived_at"] \
             and tasks.reviewer_of(conn, row) == item["assignee_id"]:
         return False
@@ -213,12 +218,13 @@ def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = Tr
     completed without a review comes back after RECREATE_HOURS. New items are created within the
     daily review budget (room_for_new; `daily_new`: a plain count per 24 h instead), in priority
     order: the highest priority first, business before platform, then the oldest; the rest wait for
-    the next hourly run ("deferred"). `apply=False`: only report."""
-    from . import business, tasks
+    the next hourly run ("deferred"). A result the lean review policy accepts gets no item (its open
+    one is closed): it waits for the backlog accept (pos.review_policy). `apply=False`: only report."""
+    from . import business, review_policy, tasks
 
     now = now or datetime.now(timezone.utc)
     since = (now - timedelta(hours=RECREATE_HOURS)).isoformat(timespec="seconds")
-    created, moved, closed, deferred_ = [], [], [], []
+    created, moved, closed, deferred_, lean = [], [], [], [], []
     room = (max(0, daily_new - _created_since(conn, since)) if daily_new is not None
             else room_for_new(conn, now, budget_usd))
     for it in conn.execute("SELECT * FROM tasks WHERE source LIKE 'review:%' AND archived_at IS NULL "
@@ -229,11 +235,18 @@ def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = Tr
             closed.append(tasks.display_id(it["id"]))
             if apply:
                 _close(conn, it["id"], "the result left review")
+        elif review_policy.lean_accepts(conn, row):  # no review run for what the lean policy accepts
+            closed.append(tasks.display_id(it["id"]))
+            if apply:
+                _close(conn, it["id"], "the lean review policy accepts the result without a review run")
     todo = []
     for row in conn.execute("SELECT * FROM tasks WHERE status = 'review' AND archived_at IS NULL "
                             "AND COALESCE(source, '') NOT LIKE 'review:%' ORDER BY updated_at, id").fetchall():
         rid = tasks.reviewer_of(conn, row)
         if not _agent_reviewer(conn, rid) or rid == row["assignee_id"]:
+            continue
+        if review_policy.lean_accepts(conn, row):
+            lean.append(tasks.display_id(row["id"]))  # waits for `python -m pos.review_policy --apply`
             continue
         items = _open_items(conn, row["id"])
         if items and items[0]["assignee_id"] == rid:
@@ -257,4 +270,4 @@ def sync(conn: sqlite3.Connection, now: datetime | None = None, apply: bool = Tr
     if apply:
         conn.commit()
     return {k: v for k, v in (("created", created), ("moved", moved), ("closed", closed),
-                              ("deferred", deferred_)) if v}
+                              ("deferred", deferred_), ("lean_backlog", lean)) if v}

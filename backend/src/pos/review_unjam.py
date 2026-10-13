@@ -19,7 +19,8 @@ For every result waiting for review longer than --days (default 3):
 3. brings the review work items in step (pos.review_work.sync, within the daily review budget):
    items of closed results close, moved results' items move to the new reviewer.
 
-Nothing is auto-accepted. A dry run by default (prints what would happen, as JSON):
+Nothing is auto-accepted (in lean review mode a result the lean policy accepts is left for
+`python -m pos.review_policy --apply`). A dry run by default (prints what would happen, as JSON):
 
     python -m pos.review_unjam              # dry run
     python -m pos.review_unjam --apply      # change the data
@@ -93,6 +94,8 @@ def right_reviewer(conn: sqlite3.Connection, row) -> tuple[int | None, str]:
 
     current = tasks.reviewer_of(conn, row)
     owner = actors.owner_id(conn)
+    if review_policy.lean_accepts(conn, row):
+        return None, ""  # no reviewer at all: the lean policy accepts it (pos.review_policy --apply)
     if current == owner:
         return None, ""  # the owner's own reviews stay; the SLA hands them to his stand-in
     if review_policy.is_kniha(conn, row):

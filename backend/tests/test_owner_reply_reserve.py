@@ -66,6 +66,7 @@ def _inbox_task(conn, actor: Ctx):
 
 def test_agent_messages_get_an_inbox_task_even_when_the_reserve_holds_the_queue(conn, owner, team):
     se, cto = team["se"], team["cto"]
+    conn.execute("UPDATE actors SET reports_to = ? WHERE id = ?", (cto.actor_id, se.actor_id))  # its lead's DM wakes it
     _platform_task(conn, cto, se, "Úklid logů")
     _reserve(conn, owner, team["ceo"])
     chat.send_dm(conn, Ctx(cto.actor_id, via="mcp"), se.actor_id, "Approval #3 approved: run it again now.")

@@ -1,5 +1,20 @@
 """Review burn-down: who reviews a handed-in result, by its risk class.
 
+**Lean mode** (POS_REVIEW_MODE=lean, the default since the 2026-10 cut: agents spent ~37 % of the spend
+on reviews, chat wake-ups, routines and meetings). A result needs a review only where a person must
+really look (`lean_high`): money, legal or security (HIGH_TOPICS), money or commitment text (HIGH_RE,
+not a document), a customer reply (HIGH_SOURCES), a done-claim without evidence (pos.evidence.flagged),
+something sent outside that still waits for an approval, and a result a person (the owner) returned
+before. Everything else is accepted at hand-in (`review_auto_accept`, reason "lean review policy: …"):
+code too (the deployer's constitution, tests and health gates are its check) and the owner's own
+requests (he gets a notice that it is done and can reopen it). No CEO stand-in review for ordinary
+results. The hourly review jobs (pos.review_work.sync, pos.business.review_sla) leave a waiting result
+the lean rules would accept alone (no "Review: T-x" item, no escalation, no digest);
+`python -m pos.review_policy --apply` accepts that backlog (a dry run without --apply). A reviewer the
+owner chose (himself) and an explicit request_review are respected in both modes.
+
+**Classic mode** (POS_REVIEW_MODE=classic), as below.
+
 Measured on 2026-10-01: 42 of 225 tasks sat in `review`, some over 12 h, the oldest 38 h, nearly all
 waiting for the CEO. Most of them did not need a person at all. Every hand-in now gets a risk class:
 
@@ -45,6 +60,7 @@ for QA, once: `python -m pos.review_policy --kniha --apply`.
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 import sqlite3
@@ -92,6 +108,16 @@ class Decision:
     action: str          # accept | route | keep
     reviewer_id: int | None = None
     reason: str = ""
+
+
+MODES = ("lean", "classic")
+LEAN = "lean review policy"
+
+
+def mode() -> str:
+    """POS_REVIEW_MODE: "lean" (the default) or "classic" (the risk classes before the 2026-10 cut)."""
+    m = (os.environ.get("POS_REVIEW_MODE") or "lean").strip().lower()
+    return m if m in MODES else "lean"
 
 
 def _text(row, note: str | None) -> str:
@@ -262,8 +288,132 @@ def code_reviewer(conn: sqlite3.Connection, row) -> tuple[int | None, str]:
     return None, ""
 
 
+# ------------------------------------------------------------------ lean mode
+
+def returned_by_person(conn: sqlite3.Connection, task_id: int) -> int | None:
+    """The person (the owner) who last sent this result back: returned it in review, or reopened it
+    once it was done. None when only agents (or nobody) did."""
+    who, prev = None, None
+    for h in conn.execute("""SELECT h.action, h.actor_id, h.data, a.kind FROM history h
+                             LEFT JOIN actors a ON a.id = h.actor_id
+                             WHERE h.entity = 'task' AND h.entity_id = ? ORDER BY h.id""", (task_id,)):
+        try:
+            status = json.loads(h["data"] or "{}").get("status")
+        except ValueError:
+            status = None
+        if h["kind"] == "human" and (h["action"] == "return"
+                                     or (prev in ("done", "review") and status in ("inbox", "next", "working"))):
+            who = h["actor_id"]
+        prev = status or prev
+    return who
+
+
+def awaits_approval(conn: sqlite3.Connection, task_id: int) -> bool:
+    """Something the task sent or asks to send outside still waits for an approval."""
+    return conn.execute("SELECT 1 FROM approvals WHERE task_id = ? AND status = 'pending' LIMIT 1",
+                        (task_id,)).fetchone() is not None
+
+
+def owners_own(conn: sqlite3.Connection, row) -> bool:
+    """The owner asked for it himself (he created or assigned it; not a routine from a schedule)."""
+    from .business import _owner_asked
+
+    return not (row["source"] or "").lower().startswith("schedule:") and _owner_asked(conn, row, actors.owner_id(conn))
+
+
+def lean_high(conn: sqlite3.Connection, row, note: str | None) -> str:
+    """Why a person must really look at this result under the lean policy ('' when nobody must)."""
+    from . import evidence
+
+    source = (row["source"] or "").lower()
+    if source.startswith(HIGH_SOURCES):
+        return "a customer reply"
+    if (row["topic"] or "").lower() in HIGH_TOPICS:
+        return f"topic {row['topic']}"
+    if returned_by_person(conn, row["id"]):
+        return "returned before by the owner"
+    if awaits_approval(conn, row["id"]):
+        return "sent outside and still waiting for an approval"
+    if HIGH_RE.search(_text(row, note)) and not is_doc(row, note):
+        return "money or a commitment"
+    if evidence.flagged(conn, row["id"]):
+        return "a done-claim without evidence"
+    return ""
+
+
+def decide_lean(conn: sqlite3.Connection, row, note: str | None) -> Decision:
+    """The lean policy: a review only where a person must look; everything else is accepted at once."""
+    why = lean_high(conn, row, note)
+    if why:
+        back = returned_by_person(conn, row["id"])
+        if back and why.startswith("returned"):  # the one who sent it back looks again, not a stand-in
+            return Decision("high", "route", back, f"{LEAN}: {why}")
+        return Decision("high", "keep", reason=f"{LEAN}: {why}")
+    if owners_own(conn, row):
+        return Decision("low", "accept", reason=f"{LEAN}: the owner's own request (he is told; he can reopen it)")
+    if is_code(conn, row, note):
+        return Decision("low", "accept", reason=f"{LEAN}: code (the deployer's constitution, tests and health "
+                                                "gates check it)")
+    return Decision("low", "accept", reason=f"{LEAN}: nothing a person must look at")
+
+
+def owner_chose_review(conn: sqlite3.Connection, row) -> bool:
+    """The owner set himself as this result's reviewer (not the fallback a hand-in gave him)."""
+    owner = actors.owner_id(conn)
+    if row["reviewer_id"] != owner:
+        return False
+    for h in conn.execute("SELECT data FROM history WHERE entity = 'task' AND entity_id = ? AND actor_id = ? "
+                          "ORDER BY id", (row["id"], owner)):
+        try:
+            data = json.loads(h["data"] or "{}")
+        except ValueError:
+            continue
+        if data.get("reviewer_id") == owner and data.get("status") != "review":
+            return True
+    return False
+
+
+def owner_keeps(conn: sqlite3.Connection, row) -> bool:
+    """Lean mode: a result waiting for the owner that no stand-in takes from him: he chose to review
+    it, or he sent it back before."""
+    owner = actors.owner_id(conn)
+    return (mode() == "lean" and row["reviewer_id"] == owner
+            and (owner_chose_review(conn, row) or returned_by_person(conn, row["id"]) == owner))
+
+
+def lean_accepts(conn: sqlite3.Connection, row) -> bool:
+    """Lean mode: a result waiting for review that the lean rules accept (the backlog from before the
+    cut, until `--apply`). The hourly jobs leave it alone: no review item, no escalation, no digest."""
+    if mode() != "lean" or row["status"] != "review" or row["archived_at"] or owner_chose_review(conn, row):
+        return False
+    try:
+        return decide_lean(conn, row, row["progress_note"]).action == "accept"
+    except Exception:  # noqa: BLE001 - unsure: it waits for its review as before
+        return False
+
+
+def tell_owner(conn: sqlite3.Connection, task_id: int) -> None:
+    """The owner's own request was accepted without him: he hears it is done (a PersonalOS DM, like
+    every platform notice) and can reopen it. The caller commits."""
+    from . import notices, tasks
+
+    row = conn.execute("SELECT title, assignee_name FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        return
+    ref = tasks.display_id(task_id)
+    try:
+        notices.dm(conn, actors.owner_id(conn),
+                   f"Hotovo: {ref} „{row['title'][:120]}“ ({row['assignee_name'] or 'agent'}). Výsledek: "
+                   f"/report/{ref}. Přijato bez kontroly (úsporný režim kontrol); když nesedí, otevři úkol znovu "
+                   "s komentářem, co změnit.", attachments=[{"type": "task", "id": task_id}], wake_it=False)
+    except Exception:  # noqa: BLE001 - the accept stands; the board shows it done
+        pass
+
+
 def decide(conn: sqlite3.Connection, row, note: str | None) -> Decision:
     """The risk class of a result handed in with `note` (its result / progress note)."""
+    if mode() == "lean":
+        return decide_lean(conn, row, note)
     from . import schedules, verification
 
     high = is_high(conn, row, note)
@@ -427,6 +577,8 @@ def auto_accept(conn: sqlite3.Connection, task_id: int, reason: str, follow_ups:
     comments.log(conn, ctx, task_id, f"Auto-accepted (low risk: {reason}). Review policy: pos.review_policy; "
                                      "anyone who may review it can reopen it.", "review")
     audit.log(conn, ctx, "review_auto_accept", "task", task_id, reason=reason)
+    if before is not None and owners_own(conn, before):
+        tell_owner(conn, task_id)  # his own request, accepted without him: he hears it is done
     if not follow_ups:
         return
     try:
@@ -443,7 +595,8 @@ def auto_accept(conn: sqlite3.Connection, task_id: int, reason: str, follow_ups:
 
 def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = None, sla: bool = True) -> dict:
     """Run the policy over every result waiting for review: low risk accepted, code to the QA
-    Reviewer, then the SLA (over 12 h to the reviewer's lead, the owner's to the CEO)."""
+    Reviewer, then the SLA (over 12 h to the reviewer's lead, the owner's to the CEO). In lean mode
+    this accepts the backlog under the lean rules (only a reviewer the owner chose himself stays)."""
     from . import business, tasks
 
     accepted, routed, to_lead = [], [], []
@@ -451,9 +604,12 @@ def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = 
     ceo = business.ceo_id(conn)
     rows = conn.execute("SELECT * FROM tasks WHERE status = 'review' AND archived_at IS NULL ORDER BY updated_at"
                         ).fetchall()
+    lean = mode() == "lean"
     for row in rows:
         ref = tasks.display_id(row["id"])
-        if row["reviewer_id"] == owner and row["created_by"] == owner:
+        if lean and owner_chose_review(conn, row):
+            continue  # he chose to review it himself
+        if not lean and row["reviewer_id"] == owner and row["created_by"] == owner:
             continue  # the owner asked for it and reviews it himself (the SLA still sends it to the CEO)
         d = decide(conn, row, row["progress_note"])
         if d.action == "accept":
@@ -464,7 +620,7 @@ def sweep(conn: sqlite3.Connection, apply: bool = False, now: datetime | None = 
             routed.append(f"{ref}→{actors.get(conn, d.reviewer_id)['name']}: {row['title'][:60]}")
             if apply:
                 tasks.hand_review(conn, business.system_ctx(conn), row["id"], d.reviewer_id, d.reason)
-        elif d.action == "keep" and ceo and row["reviewer_id"] == ceo and _from_owner(conn, row["id"]):
+        elif d.action == "keep" and not lean and ceo and row["reviewer_id"] == ceo and _from_owner(conn, row["id"]):
             # The CEO got it only as the owner's stand-in: its team lead reviews it now (T-472).
             target = owner_stand_in(conn, row, row["progress_note"])
             if target and target != ceo:
@@ -571,19 +727,23 @@ def main(argv: list[str] | None = None) -> None:
     from .config import get_settings
     from .db import connect
 
-    p = argparse.ArgumentParser(description="Apply the review policy to the results waiting for review.")
+    p = argparse.ArgumentParser(description="Apply the review policy (POS_REVIEW_MODE, default lean) to the "
+                                            "results waiting for review.")
     p.add_argument("--apply", action="store_true", help="change the data (default: a dry run)")
+    p.add_argument("--mode", choices=MODES, default=None, help="the policy to apply (default: POS_REVIEW_MODE)")
     p.add_argument("--db", default=None)
     p.add_argument("--measure", nargs=2, metavar=("SINCE", "UNTIL"),
                    help="no change: how many results reached the CEO between two dates, and after the policy")
     p.add_argument("--kniha", action="store_true",
                    help="only move the Kniha results waiting for the QA Reviewer to the Kniha Lead")
     a = p.parse_args(argv)
+    if a.mode:
+        os.environ["POS_REVIEW_MODE"] = a.mode
     conn = connect(Path(a.db) if a.db else get_settings().db_path)
     try:
         result = measure(conn, *a.measure) if a.measure else \
             redirect_kniha(conn, apply=a.apply) if a.kniha else sweep(conn, apply=a.apply)
-        print(json.dumps(result, ensure_ascii=False, indent=1))
+        print(json.dumps({"mode": mode(), **result}, ensure_ascii=False, indent=1))
     finally:
         conn.close()
 
