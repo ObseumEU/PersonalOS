@@ -4,7 +4,7 @@ import { Link, useLocation, useParams, useSearchParams } from "react-router-dom"
 import { getMe } from "../api";
 import { Avatar, StatusChip, fmtMinutes, toneOf } from "../components/tasks/bits";
 import { oneLine, shortAge } from "../components/tasks/text";
-import { MockDot, PageHeader } from "../components/ui";
+import { LoadError, MockDot, PageHeader } from "../components/ui";
 import { plural, t } from "../i18n";
 import { useNeedsMe } from "../needsMeApi";
 import { setSheetOrder, taskHref } from "../taskSheet";
@@ -372,7 +372,7 @@ function Tasks() {
         {visible.map((g) => (
           <GroupList key={`${g}${view}`} g={g} items={grouped[g]} meId={meId} selected={selected} hrefOf={hrefOf} collapsed={g === "done" || g === "later"} needKinds={needKinds} />
         ))}
-        {error && <p className="p-4 text-xs break-words text-red-400">{error}</p>}
+        {error && (tasks ? <p className="p-4 text-xs break-words text-red-400">{error}</p> : <LoadError error={error} onRetry={refresh} />)}
         <div className="flex justify-end gap-4 px-4 py-3">
           <Link to="/tasks?view=archived" className="text-xs text-ink-2 hover:text-accent">
             {t("tk.archive.link")}

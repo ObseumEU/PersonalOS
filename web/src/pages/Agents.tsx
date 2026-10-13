@@ -6,7 +6,7 @@ import { ActorChip, EngineBadge, Pill, StatusDot } from "../components/agents/bi
 import FreezeCard from "../components/agents/FreezeCard";
 import { WorkingOnText, workingOn } from "../components/agents/WorkingOn";
 import HiringPanel, { InvitePanel } from "../components/Hiring";
-import { Panel } from "../components/ui";
+import { LoadError, Panel } from "../components/ui";
 import { ago as agoCs, label, t } from "../i18n";
 import { StructureList } from "./Org";
 import { useLiveReload } from "../liveStream";
@@ -221,8 +221,9 @@ function Card({ a, rating, maxTokens }: { a: Agent; rating?: Rating; maxTokens: 
 export default function Agents() {
   const [data, setData] = useState<Overview | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
-    agentsApi.list().then((d) => setData(d as Overview));
+    agentsApi.list().then((d) => (setData(d as Overview), setError(null)), (e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
   useEffect(() => {
     load();
@@ -237,6 +238,7 @@ export default function Agents() {
 
   return (
     <div className="flex flex-col gap-5">
+      {!data && error && <LoadError error={error} onRetry={load} className="p-0" />}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
         <StructureList className="max-h-[420px] min-w-0 overflow-y-auto lg:col-span-8" />
 

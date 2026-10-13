@@ -25,6 +25,7 @@ import { Avatar, StatusChip, statusText, toneOf } from "./bits";
 import NeedsYou, { ApprovalCard, needsYou } from "./NeedsYou";
 import ReportCard from "./Report";
 import { Discussion, HistoryTab, isTalk, Overview, Technical } from "./TaskTabs";
+import { LoadError } from "../ui";
 
 /* ------------------------------------------------------------------ shared lookups (loaded once) */
 
@@ -32,13 +33,14 @@ let meCache: Promise<{ id: number | null; owner: boolean }> | null = null;
 const loadMe = () =>
   (meCache ??= getMe().then(
     (m) => ({ id: m.actor_id ?? null, owner: !!m.is_owner }),
-    () => ({ id: null, owner: false }),
+    () => ((meCache = null), { id: null, owner: false }),
   ));
 let actorsCache: Promise<Actor[]> | null = null;
-const loadActors = () => (actorsCache ??= tasksApi.actors().catch(() => []));
+// A failed load is not kept: the next panel asks again (a cached [] would hide the people for good).
+const loadActors = () => (actorsCache ??= tasksApi.actors().catch(() => ((actorsCache = null), [])));
 type ProjectLite = { id: number; slug: string; name: string };
 let projectsCache: Promise<ProjectLite[]> | null = null;
-const loadProjects = () => (projectsCache ??= api<ProjectLite[]>("/api/projects").catch(() => []));
+const loadProjects = () => (projectsCache ??= api<ProjectLite[]>("/api/projects").catch(() => ((projectsCache = null), [])));
 
 function useLoaded<T>(load: () => Promise<T>, init: T): T {
   const [v, setV] = useState<T>(init);
@@ -514,6 +516,8 @@ function TaskPanel({
   const [related, setRelated] = useState<Related | null>(null);
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [history, setHistory] = useState<Version[] | null>(null);
+  // The discussion or the history could not load: those tabs say so with "Zkusit znovu", not an empty list.
+  const [partsError, setPartsError] = useState<string | null>(null);
   const [live, setLive] = useState<TaskLive | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -531,8 +535,10 @@ function TaskPanel({
       (e) => setError(e.message),
     );
     tasksApi.related(taskRef).then(setRelated, () => setRelated({ asks_open: [], ask_for: null, approvals: [], mentioned: [] }));
-    tasksApi.comments(taskRef).then(setComments, () => setComments([]));
-    tasksApi.history(taskRef).then(setHistory, () => setHistory([]));
+    setPartsError(null);
+    const failed = (e: unknown) => setPartsError(e instanceof Error ? e.message : String(e));
+    tasksApi.comments(taskRef).then(setComments, (e) => (failed(e), setComments((c) => c ?? [])));
+    tasksApi.history(taskRef).then(setHistory, (e) => (failed(e), setHistory((h) => h ?? [])));
     tasksApi.live(taskRef).then(setLive, () => setLive(null));
   }, [taskRef]);
 
@@ -622,7 +628,7 @@ function TaskPanel({
         {top}
         <div className="flex flex-col gap-4 p-8" aria-busy="true">
           {error ? (
-            <p className="text-sm text-red-300">{error}</p>
+            <LoadError error={error} onRetry={load} className="p-0" />
           ) : (
             <>
               <span className="h-7 w-2/3 rounded bg-line" />
@@ -823,6 +829,7 @@ function TaskPanel({
                   ))}
                 </div>
                 <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="pt-5">
+                  {partsError && (tab === "talk" || tab === "history") && <LoadError error={partsError} onRetry={load} className="mb-3 p-0" />}
                   {tab === "overview" && <Overview task={task} onSave={save} onChange={load} hideResult={resultReady} />}
                   {tab === "talk" && (
                     <Discussion
@@ -853,7 +860,15 @@ function TaskPanel({
 
 function ApprovalPanel({ id, onClose }: { id: number; onClose: () => void }) {
   const [a, setA] = useState<Approval | null | undefined>(undefined);
-  const load = useCallback(() => agentsApi.approvals("all").then((xs) => setA(xs.find((x) => x.id === id) ?? null), () => setA(null)), [id]);
+  const [failed, setFailed] = useState<string | null>(null);
+  const load = useCallback(
+    () =>
+      agentsApi.approvals("all").then(
+        (xs) => (setA(xs.find((x) => x.id === id) ?? null), setFailed(null)),
+        (e) => setFailed(e instanceof Error ? e.message : String(e)),
+      ),
+    [id],
+  );
   useEffect(() => {
     load();
   }, [load]);
@@ -867,7 +882,8 @@ function ApprovalPanel({ id, onClose }: { id: number; onClose: () => void }) {
       <TopBar refText={t("tk.approval_ref", { id })} pos={-1} total={0} onStep={() => undefined} onClose={onClose} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-[860px] flex-col gap-6 px-4 py-6 sm:px-8">
-          {a === undefined && <p className="text-sm text-ink-2">{t("act.loading")}</p>}
+          {a === undefined && !failed && <p className="text-sm text-ink-2">{t("act.loading")}</p>}
+          {a === undefined && failed && <LoadError error={failed} onRetry={() => void load()} className="p-0" />}
           {a === null && <p className="text-sm text-ink-2">{t("tk.approval_gone")}</p>}
           {a && (
             <>

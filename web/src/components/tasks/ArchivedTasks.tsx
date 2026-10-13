@@ -5,7 +5,7 @@ import { ago, t } from "../../i18n";
 import { taskChanged } from "../../taskSheet";
 import { type Task, tasksApi } from "../../tasksApi";
 import { toast } from "../overlay";
-import { PageHeader } from "../ui";
+import { LoadError, PageHeader } from "../ui";
 import { Avatar } from "./bits";
 
 /** Úkoly → Archiv (/tasks?view=archived): archived tasks, each with "Obnovit" (POST unarchive). */
@@ -73,7 +73,7 @@ export default function ArchivedTasks() {
             </li>
           ))}
         </ul>
-        {error && <p className="p-4 text-xs break-words text-red-400">{error}</p>}
+        {error && (items ? <p className="p-4 text-xs break-words text-red-400">{error}</p> : <LoadError error={error} onRetry={load} />)}
       </section>
     </div>
   );

@@ -1,4 +1,4 @@
-import { ArrowRight, Orbit } from "lucide-react";
+import { ArrowRight, Orbit, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { LOCALE, t } from "../i18n";
@@ -26,7 +26,7 @@ export function Panel({
     <section className={`panel fade-in flex min-h-0 flex-col ${className}`}>
       {title && (
         <div className="flex items-baseline gap-2.5 border-b border-line px-4 py-3">
-          <h2 className="text-sm font-medium">{title}</h2>
+          <h2 className="max-w-full shrink-0 truncate text-sm font-medium">{title}</h2>
           {mock && <MockDot why={typeof mock === "string" ? mock : undefined} />}
           {right && <span className="ml-auto min-w-0 truncate pl-3 text-xs text-ink-2">{right}</span>}
         </div>
@@ -191,3 +191,29 @@ export function Legend({ items }: { items: [string, string][] }) {
     </div>
   );
 }
+
+/** A screen (or a panel) that could not load: what went wrong and "Zkusit znovu", never an endless "načítám…". */
+export function LoadError({
+  error,
+  onRetry,
+  message,
+  className = "",
+}: {
+  error: string;
+  onRetry: () => void;
+  /** The screen's own words for the failure (default: "Nepovedlo se načíst: {error}"). */
+  message?: string;
+  className?: string;
+}) {
+  return (
+    <div role="alert" className={`flex flex-wrap items-center gap-3 p-4 text-sm ${className}`}>
+      <span className="min-w-0 break-words text-red-400">{message ?? t("act.load_failed", { error })}</span>
+      <button type="button" onClick={onRetry} className="btn flex items-center gap-1.5">
+        <RefreshCw size={14} /> {t("act.retry")}
+      </button>
+    </div>
+  );
+}
+
+/** The message of a failed request, for the owner. */
+export const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));

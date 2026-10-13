@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { api, getMe } from "../api";
 import { confirmDialog, toast } from "../components/overlay";
-import { PageHeader } from "../components/ui";
+import { LoadError, PageHeader } from "../components/ui";
 import { type GoalForm, formOf, goalBody } from "../goalsForm";
 import goals from "../i18n/cs/goals";
 import { label, register, t } from "../i18n/core";
@@ -269,7 +269,7 @@ export default function Goals() {
         </div>
         {editing === "new" && <Editor all={all} onDone={done} onCancel={() => setEditing(null)} />}
         {!items && !error && <p className="p-6 text-sm text-ink-2">{t("gl.loading")}</p>}
-        {error && <p className="p-4 text-sm break-words text-red-400">{t("gl.error", { error })}</p>}
+        {error && <LoadError error={error} message={t("gl.error", { error })} onRetry={load} />}
         {items && items.length === 0 && <p className="p-8 text-center text-sm text-ink-2">{t(`gl.none.${filter}`)}</p>}
         <ul>
           {(items ?? []).map((g) =>

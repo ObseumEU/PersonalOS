@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { type Agent, type Approval, agentsApi } from "../agentsApi";
 import { confirmDialog, toast } from "../components/overlay";
-import { PageHeader, Panel } from "../components/ui";
+import { LoadError, PageHeader, Panel } from "../components/ui";
 import { ago, label, t } from "../i18n";
 import { TaskLink } from "../taskSheet";
 
@@ -354,7 +354,8 @@ export default function HR() {
           </button>
         </span>
       </div>
-      {error && <p className="text-sm text-red-400">{t("hr.error", { error })}</p>}
+      {error && review && <p className="text-sm text-red-400">{t("hr.error", { error })}</p>}
+      {error && !review && <LoadError error={error} message={t("hr.error", { error })} onRetry={load} className="p-0" />}
       {!review && !error && <p className="text-sm text-ink-2">{t("hr.loading")}</p>}
 
       {review && (

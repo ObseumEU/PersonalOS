@@ -173,9 +173,11 @@ export default function Company() {
   const [card, setCard] = useState<Scorecard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
+  const load = () => {
+    setError(null);
     scorecardApi.get().then(setCard, (e) => setError(String(e.message ?? e)));
-  }, []);
+  };
+  useEffect(load, []);
   const refresh = () => {
     setBusy(true);
     scorecardApi
@@ -189,7 +191,14 @@ export default function Company() {
   if (!card)
     return (
       <div className="flex flex-col gap-4 p-4">
-        {error ? <p className="text-sm text-red-400">{t("co.error", { error })}</p> : <p className="text-sm text-ink-2" aria-busy="true">{t("co.loading")}</p>}
+        {error ? (
+          <div role="alert" className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="text-red-400">{t("co.error", { error })}</span>
+            <button type="button" className="btn flex items-center gap-1.5" onClick={load}>
+              <RefreshCw size={14} /> {t("act.retry")}
+            </button>
+          </div>
+        ) : <p className="text-sm text-ink-2" aria-busy="true">{t("co.loading")}</p>}
       </div>
     );
   const k = card.kpis;

@@ -30,7 +30,7 @@ import { confirmDialog, toast } from "../components/overlay";
 import Markdown from "../components/Markdown";
 import { Avatar, StatusChip, toneOf } from "../components/tasks/bits";
 import { oneLine, shortAge } from "../components/tasks/text";
-import { PageHeader } from "../components/ui";
+import { LoadError, PageHeader } from "../components/ui";
 import { filesApi } from "../filesApi";
 import { LOCALE, t } from "../i18n";
 import {
@@ -117,9 +117,11 @@ function ProjectList() {
   const [goal, setGoal] = useState("");
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
-  useEffect(() => {
+  const loadList = useCallback(() => {
+    setError(null);
     projectsApi.list(filter === "done" ? "done" : undefined).then(setList, (e) => setError(e.message));
   }, [filter]);
+  useEffect(loadList, [loadList]);
   const shown = (list ?? []).filter((p) => filter !== "active" || p.status === "active" || p.status === "paused");
   const create = (e: FormEvent) => {
     e.preventDefault();
@@ -151,7 +153,7 @@ function ProjectList() {
           </button>
         </form>
       </div>
-      {error && <p className="text-xs break-words text-red-400">{error}</p>}
+      {error && (list === null ? <LoadError error={error} onRetry={loadList} className="p-0" /> : <p className="text-xs break-words text-red-400">{error}</p>)}
       {list === null && !error && <p className="text-sm text-ink-2">{t("act.loading")}</p>}
       {list !== null && shown.length === 0 && <p className="text-sm text-ink-2">{t("pj.empty")}</p>}
       <ul className="grid grid-cols-1 gap-3.5 md:grid-cols-2 2xl:grid-cols-3">
@@ -776,11 +778,15 @@ function DocGroup({ title, docs, empty, icon, right }: { title: string; docs: Kb
 
 function Files({ p, save }: { p: Project; save: (c: Record<string, unknown>) => Promise<unknown> }) {
   const [data, setData] = useState<ProjectFiles | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [folder, setFolder] = useState("");
   const [connecting, setConnecting] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const load = useCallback(() => projectsApi.files(p.slug).then(setData, () => setData(null)), [p.slug]);
+  const load = useCallback(
+    () => projectsApi.files(p.slug).then((x) => (setData(x), setFailed(null)), (e) => setFailed(e instanceof Error ? e.message : String(e))),
+    [p.slug],
+  );
   useEffect(() => {
     load();
   }, [load, p.info.links.drive_folder]);
@@ -891,7 +897,7 @@ function Files({ p, save }: { p: Project; save: (c: Record<string, unknown>) => 
           <DocGroup title={t("pj.files.mail")} docs={data.mail} empty={t("pj.files.mail_empty")} icon={<Mail size={15} />} />
         </>
       )}
-      {!data && <p className="text-sm text-ink-2">{t("act.loading")}</p>}
+      {!data && (failed ? <LoadError error={failed} onRetry={() => void load()} className="p-0" /> : <p className="text-sm text-ink-2">{t("act.loading")}</p>)}
     </div>
   );
 }
@@ -1081,10 +1087,13 @@ function dayLabel(iso: string) {
 function Activity({ p }: { p: Project }) {
   const [days, setDays] = useState(30);
   const [items, setItems] = useState<ActivityItem[] | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     setItems(null);
-    projectsApi.activity(p.slug, days).then((r) => setItems(r.items), () => setItems([]));
-  }, [p.slug, days, p.updated_at]);
+    setFailed(null);
+    projectsApi.activity(p.slug, days).then((r) => setItems(r.items), (e) => setFailed(e instanceof Error ? e.message : String(e)));
+  }, [p.slug, days, p.updated_at, attempt]);
   const byDay = useMemo(() => {
     const out: [string, ActivityItem[]][] = [];
     for (const i of items ?? []) {
@@ -1094,7 +1103,8 @@ function Activity({ p }: { p: Project }) {
     }
     return out;
   }, [items]);
-  if (items === null) return <p className="text-sm text-ink-2">{t("act.loading")}</p>;
+  if (items === null)
+    return failed ? <LoadError error={failed} onRetry={() => setAttempt((n) => n + 1)} className="p-0" /> : <p className="text-sm text-ink-2">{t("act.loading")}</p>;
   return (
     <div className="flex flex-col gap-5">
       {items.length === 0 && <p className="text-[13px] text-ink-2">{t("pj.activity.empty", { n: days })}</p>}
@@ -1249,14 +1259,13 @@ function ProjectDetail({ slug }: { slug: string }) {
     return () => window.removeEventListener("pos:tasks", on);
   }, [load]);
   useEffect(() => {
-    if (editing && !actors.length) (actorsCache ??= tasksApi.actors().catch(() => [])).then(setActors);
+    if (editing && !actors.length) (actorsCache ??= tasksApi.actors().catch(() => ((actorsCache = null), []))).then(setActors);
   }, [editing, actors.length]);
   const refreshSummary = useCallback(
     (force = false) => {
       setSummaryLoading(true);
-      fetch(`/api/projects/${slug}/summary?generate=true${force ? "&force=true" : ""}`, { credentials: "same-origin" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((s) => s && setSummary(s))
+      api<Summary>(`/api/projects/${slug}/summary?generate=true${force ? "&force=true" : ""}`)
+        .then(setSummary, () => undefined)
         .finally(() => setSummaryLoading(false));
     },
     [slug],
@@ -1288,7 +1297,7 @@ function ProjectDetail({ slug }: { slug: string }) {
 
   if (!p)
     return error ? (
-      <p className="text-xs break-words text-red-400">{error}</p>
+      <LoadError error={error} onRetry={() => void load()} className="p-0" />
     ) : (
       <div className="flex flex-col gap-4" aria-busy="true">
         <span className="h-7 w-2/3 rounded bg-line" />

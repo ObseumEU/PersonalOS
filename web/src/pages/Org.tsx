@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { agentsApi, type Org as OrgData, type OrgMember } from "../agentsApi";
 import { ActorChip, Pill, StatusDot, roleSaysMore } from "../components/agents/bits";
 import { toast } from "../components/overlay";
-import { Panel } from "../components/ui";
+import { LoadError, Panel } from "../components/ui";
 import { t } from "../i18n";
 
 const roleLabel = (s: string | null) => (s ? s.replace(/_/g, " ") : "—");
@@ -99,7 +99,7 @@ export function StructureList({ editable = false, className = "" }: { editable?:
     load();
   }, [load]);
 
-  if (!data) return <p className="p-6 text-sm text-ink-2">{error ?? t("act.loading")}</p>;
+  if (!data) return error ? <LoadError error={error} onRetry={() => void load()} /> : <p className="p-6 text-sm text-ink-2">{t("act.loading")}</p>;
   const tree = treeOf(data.members, moves);
   const roots = (tree.get(null) ?? []).sort((a, b) => Number(b.is_owner) - Number(a.is_owner));
   const changed = Object.keys(moves).length;

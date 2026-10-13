@@ -8,7 +8,7 @@ let cache: Promise<Topic[]> | null = null;
 export function useTopics() {
   const [topics, setTopics] = useState<Topic[]>([]);
   useEffect(() => {
-    cache ??= topicsApi.list().catch(() => []);
+    cache ??= topicsApi.list().catch(() => ((cache = null), []));
     cache.then(setTopics);
   }, []);
   return topics;

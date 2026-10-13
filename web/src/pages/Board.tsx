@@ -4,7 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import { approvalHref, taskHref } from "../taskSheet";
 import { type BoardCard, type BoardRow, agentsApi } from "../agentsApi";
 import { ActorChip, StatusDot } from "../components/agents/bits";
-import { PageHeader, Panel } from "../components/ui";
+import { LoadError, PageHeader, Panel } from "../components/ui";
 import { t } from "../i18n";
 import { useLiveReload } from "../liveStream";
 
@@ -36,8 +36,9 @@ function Card({ c, col }: { c: BoardCard; col: string }) {
 
 export default function Board() {
   const [rows, setRows] = useState<BoardRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const load = useCallback(() => {
-    agentsApi.board().then(setRows);
+    agentsApi.board().then((x) => (setRows(x), setError(null)), (e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
   useEffect(() => {
     load();
@@ -55,6 +56,7 @@ export default function Board() {
           {t("work.board.approvals")}
         </Link>
       </div>
+      {!rows && error && <LoadError error={error} onRetry={load} className="p-0" />}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <Panel title={t("work.board.panel")} right={t("work.board.live")} className="min-w-0 xl:col-span-9" bodyClassName="md:overflow-x-auto">
           {/* On a phone: member by member, only the columns that have something (no sideways scrolling). */}
