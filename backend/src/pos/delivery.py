@@ -204,6 +204,68 @@ def _stored(conn: sqlite3.Connection, task_id: int) -> dict[int, str]:
         "SELECT idx, evidence FROM task_criteria_evidence WHERE task_id = ? AND at = ?", (task_id, last))}
 
 
+REPEAT_HOURS = 24
+_HINTS = (  # (words in the normalised criterion, the evidence it asks for)
+    (re.compile(r"pytest|test|passed"), "výstup testů (řádek 'N passed')"),
+    (re.compile(r"commit|sha|merge|kod|oprav"), "sha commitu"),
+    (re.compile(r"mail|zprav|odesl|odpoved|draft|koncept|discord|komentar"), "id odeslané zprávy"),
+    (re.compile(r"poznamk|note|soubor|dokument|report|plan"), "id poznámky nebo souboru"),
+)
+EXAMPLE_LINE = "K1: commit 3f2a9c1 nasazený (deploy_health ok), https://personalos.obseum.cz/m"
+
+
+def _hint(criterion: str) -> str:
+    text = reality.norm(criterion)
+    kinds = [k for rx, k in _HINTS if rx.search(text)]
+    if LIVE_RE.search(text):
+        kinds.insert(0, "URL, kterou otevře běžný uživatel")
+    return " / ".join(dict.fromkeys(kinds)) or "sha / URL / id zprávy / id poznámky / výstup testů"
+
+
+def template(results: list[dict]) -> str:
+    """Ready-to-fill K-lines for a refused hand-in: what is missing and the kind of evidence each needs."""
+    lines = ["Šablona (zkopíruj do výsledku a doplň, jeden řádek na kritérium):"]
+    for r in results:
+        if r["status"] == "ok":
+            lines.append(f"K{r['idx']}: {(r['evidence'] or '').strip()[:120]}  (doloženo)")
+        else:
+            lines.append(f"K{r['idx']}: <{r['criterion'][:80]}: {r['why'][:80]} – typ důkazu: "
+                         f"{_hint(r['criterion'])}>")
+    lines.append(f"Příklad platného řádku: {EXAMPLE_LINE}")
+    return "\n".join(lines)
+
+
+def _repeated(conn: sqlite3.Connection, task_id: int, missing: list[int], children: list[str]) -> bool:
+    """The same hand-in refusal (same missing criteria, same open steps) already happened in the last 24 h."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=REPEAT_HOURS)).isoformat(timespec="seconds")
+    for r in conn.execute("""SELECT detail FROM audit_log WHERE action = 'delivery_incomplete' AND entity = 'task'
+                             AND entity_id = ? AND at >= ? ORDER BY id DESC LIMIT 20""", (task_id, since)):
+        try:
+            d = json.loads(r["detail"] or "{}")
+        except ValueError:
+            continue
+        if not d.get("accepting") and d.get("missing") == missing and d.get("children", []) == children:
+            return True
+    return False
+
+
+def _park(conn: sqlite3.Connection, ctx: Ctx, row, missing: list[int], problems: list[str]) -> str:
+    """A second identical refusal: the task waits (until tomorrow) instead of another paid retry."""
+    from . import comments, tasks, versioning
+
+    what = ", ".join(f"K{i}" for i in missing) or "dílčí úkoly: " + ", ".join(problems[:5])
+    note = f"chybí důkaz {what} (stejné zamítnutí podruhé za {REPEAT_HOURS} h)"
+    if row["status"] != "waiting":
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+        versioning.update(conn, ctx, tasks.ENTITY, row["id"],
+                          {"status": "waiting", "follow_up": row["follow_up"] or tomorrow, "progress_note": note},
+                          action="delivery_parked")
+        comments.log(conn, ctx, row["id"], f"PersonalOS: {note}. Odevzdej, až důkaz existuje.", "system")
+    audit.log(conn, ctx, "delivery_parked", "task", row["id"], missing=missing)
+    return (f"Úkol přešel do waiting ({note}). Neodevzdávej znovu, dokud důkaz neexistuje "
+            "(např. commit není nasazený); pak doplň řádky K<n> a odevzdej.")
+
+
 def check(conn: sqlite3.Connection, ctx: Ctx, row, note: str | None, *, accepting: bool = False,
           extra_text: str = "") -> dict | None:
     """Before a task becomes review or done (or is accepted): raise tasks.Invalid when a criterion has no
@@ -260,12 +322,18 @@ def check(conn: sqlite3.Connection, ctx: Ctx, row, note: str | None, *, acceptin
         if problems:
             parts.append("dílčí úkoly nejsou uzavřené: " + ", ".join(problems)
                          + " (dokonči je, nebo k archivovanému napiš důvod přes task_comment)")
+        missing = [r["idx"] for r in bad]
+        repeat = not accepting and _repeated(conn, row["id"], missing, problems[:10])
         audit.log(conn, ctx, "delivery_incomplete", "task", row["id"], accepting=accepting,
-                  missing=[r["idx"] for r in bad], children=problems[:10])
-        conn.commit()  # the signal stays although the caller rolls its call back
+                  missing=missing, children=problems[:10])
         how = ("Vrať výsledek (review_task verdict=changes) s tím, co chybí." if accepting else
                "Doplň důkaz ke každému kritériu (řádky 'K1: <důkaz>' ve výsledku, nebo criteria_evidence v "
                "complete_task) a odevzdej znovu. Hotovo znamená, že to funguje skutečnému uživateli.")
+        if bad and not accepting:
+            how += "\n" + template(results)
+        if repeat:
+            how += "\n" + _park(conn, ctx, row, missing, problems)
+        conn.commit()  # the signal (and the parking) stays although the caller rolls its call back
         raise Invalid(f"{ref} nelze {'přijmout' if accepting else 'odevzdat jako hotové'}: " + " ".join(parts)
                       + ". " + how)
     if results:
