@@ -39,6 +39,9 @@ class Sentinel:
         self.pos_fail_streak = 0
         self.pos_down_since: float | None = None
         self.errors: list[str] = []
+        from .platform import PlatformWatch
+
+        self.platform = PlatformWatch(self)
 
     # ------------------------------------------------------------- helpers
     def learning(self, now: float) -> bool:
@@ -75,6 +78,18 @@ class Sentinel:
         self.last_tick = now
         self.tick_ms = int((time.monotonic() - t0) * 1000)
         self._heartbeat(now)
+        return out
+
+    def platform_tick(self, now: float | None = None) -> dict:
+        """PersonalOS's deep health (sentinel.platform), every cfg.platform.every_s between the ticks."""
+        now = now or self.clock()
+        with self.lock:
+            try:
+                out = self.platform.tick(now)
+            except Exception as e:  # noqa: BLE001 - the watch never stops the sentinel
+                log.exception("platform watch failed")
+                return {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+            self.pos.flush()
         return out
 
     def _guard(self, what: str, fn) -> list[Obs]:
@@ -229,7 +244,7 @@ class Sentinel:
                 "checks": [{"name": c["name"], "service": c["service"], "ok": bool(c["ok"]), "fails": c["fails"]}
                            for c in checks_],
                 "open_incidents": open_, "counters": counters, "host": self.host, "apps": self.apps,
-                "backups": self.backups, "errors": self.errors[:5]}
+                "backups": self.backups, "platform": self.platform.status(), "errors": self.errors[:5]}
 
     def _heartbeat(self, now: float) -> None:
         ok = self.pos.heartbeat(self.status(now))

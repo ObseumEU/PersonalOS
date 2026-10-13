@@ -248,8 +248,14 @@ def dm_channel(conn: sqlite3.Connection, a: int, b: int, ctx: Ctx | None = None)
     if row:
         return row
     ctx = ctx or Ctx(a)
-    ch = versioning.insert(conn, ctx, "channel", {"kind": "dm", "visibility": "private", "dm_key": key,
-                                                  "created_by": ctx.actor_id, "created_at": now_iso()})
+    try:
+        ch = versioning.insert(conn, ctx, "channel", {"kind": "dm", "visibility": "private", "dm_key": key,
+                                                      "created_by": ctx.actor_id, "created_at": now_iso()})
+    except sqlite3.IntegrityError:  # created by a parallel first message between the read and the insert
+        row = find_dm(conn, a, b)
+        if row is None:
+            raise
+        return row
     _add_member(conn, ch["id"], a)
     _add_member(conn, ch["id"], b)
     return _channel(conn, ch["id"])
@@ -1212,16 +1218,15 @@ def react(conn: sqlite3.Connection, ctx: Ctx, message_id: int, emoji: str) -> di
     row = _message_row(conn, message_id)
     _check_read(conn, _channel(conn, row["channel_id"]), ctx.actor_id)
     _require_send(conn, ctx)
-    cur = conn.execute("SELECT archived_at FROM chat_reactions WHERE message_id = ? AND actor_id = ? AND emoji = ?",
-                       (message_id, ctx.actor_id, emoji)).fetchone()
-    if cur is None:
-        conn.execute("INSERT INTO chat_reactions (message_id, actor_id, emoji, created_at) VALUES (?, ?, ?, ?)",
-                     (message_id, ctx.actor_id, emoji, now_iso()))
-        on = True
-    else:
-        on = cur["archived_at"] is not None
-        conn.execute("UPDATE chat_reactions SET archived_at = ? WHERE message_id = ? AND actor_id = ? AND emoji = ?",
-                     (None if on else now_iso(), message_id, ctx.actor_id, emoji))
+    # One statement (a read-then-insert raced into "UNIQUE constraint failed" on a double tap): a new reaction is
+    # inserted, an existing one toggles. The read after it is inside the write transaction it opened.
+    now = now_iso()
+    conn.execute("""INSERT INTO chat_reactions (message_id, actor_id, emoji, created_at) VALUES (?, ?, ?, ?)
+                    ON CONFLICT (message_id, actor_id, emoji) DO UPDATE
+                    SET archived_at = CASE WHEN archived_at IS NULL THEN ? ELSE NULL END""",
+                 (message_id, ctx.actor_id, emoji, now, now))
+    on = conn.execute("SELECT archived_at IS NULL AS on_ FROM chat_reactions WHERE message_id = ? AND actor_id = ? "
+                      "AND emoji = ?", (message_id, ctx.actor_id, emoji)).fetchone()["on_"] == 1
     audit.log(conn, ctx, "chat_react", "chat_message", message_id, emoji=emoji, on=on)
     conn.commit()
     return message_view(conn, message_id, ctx.actor_id)
@@ -1956,15 +1961,22 @@ async def stream(db_path: Path, viewer: int, cursor: int | None = None, *, poll:
     start = time.monotonic()
     last_presence, last_ping = None, start
     yield "retry: 3000\n\n"
-    while True:
+
+    def read(cur):
         conn = connect(db_path)
         try:
-            if cursor is None:
-                cursor = cursor_now(conn)
-            events, cursor = changes(conn, viewer, cursor)
-            presence = presence_view(conn, viewer)
+            if cur is None:
+                cur = cursor_now(conn)
+            evs, cur = changes(conn, viewer, cur)
+            return evs, cur, presence_view(conn, viewer)
         finally:
             conn.close()
+
+    import asyncio
+
+    while True:
+        # on a worker thread: a slow or locked database never stalls the event loop (every open tab polls)
+        events, cursor, presence = await asyncio.to_thread(read, cursor)
         for ev in events:
             yield _sse(ev["type"], ev, ev["id"])
         if presence != last_presence:

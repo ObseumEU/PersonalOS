@@ -5,6 +5,7 @@ Waiting for work is a long poll: the worker sleeps on the server side, so an
 idle agent never spends tokens (AGENTS-SPEC 4.2).
 """
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -282,6 +283,14 @@ def _reserve_admits(conn: sqlite3.Connection, cand, st: dict) -> bool:
 POLL_FALLBACK_S = 2.0  # re-check the database this often even without a wake (other processes)
 
 
+def _poll_once(db_path, ctx: Ctx) -> dict:
+    conn = connect(db_path)
+    try:
+        return _next_work(conn, ctx)
+    finally:
+        conn.close()
+
+
 @router.get("/next")
 async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Settings = Depends(get_settings)):
     """Long poll: returns as soon as there is a task or a message, else after `wait` s.
@@ -293,11 +302,9 @@ async def next_work(wait: int = 30, ctx: Ctx = Depends(worker_ctx), settings: Se
     deadline = time.monotonic() + max(0, min(wait, 120))
     async with wake.listener(ctx.actor_id) as woken:
         while True:
-            conn = connect(settings.db_path)
-            try:
-                out = _next_work(conn, ctx)
-            finally:
-                conn.close()
+            # on a worker thread: _next_work writes (seen, delivered), and a write waiting for the lock on the
+            # event loop stalls every request (prod 2026-10-13: /api/worker/next 500 "database is locked")
+            out = await asyncio.to_thread(_poll_once, settings.db_path, ctx)
             remaining = deadline - time.monotonic()
             if out.get("task") or out.get("unread_messages") or remaining <= 0:
                 return out

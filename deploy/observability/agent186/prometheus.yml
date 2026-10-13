@@ -20,7 +20,9 @@ scrape_configs:
     scrape_interval: 60s
     scrape_timeout: 15s
     static_configs:
-      - targets: ["https://personalos.obseum.cz/api/health"]
+      # deep: a real DB round-trip with the write lock, 503 when degraded (/api/health only says the process runs;
+      # prod 2026-10-13 it said 200 for 20 minutes while the app could not load)
+      - targets: ["https://personalos.obseum.cz/api/health/deep"]
         labels: {app: personalos, host: svr03}
       - targets: ["https://knowlage.obseum.cz/api/health"]
         labels: {app: knowlage, host: svr03}

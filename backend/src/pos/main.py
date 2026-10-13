@@ -34,16 +34,20 @@ class MCPAuth:
         if scope["type"] == "http" and scope["path"].rstrip("/") == "/mcp":
             headers = {k.decode().lower(): v.decode() for k, v in scope["headers"]}
             key = mcp_server._bearer(headers)
-            conn = connect(self.settings.db_path)
-            try:
-                actor = actors.actor_for_key(conn, key) if key else None
-            finally:
-                conn.close()
+            # off the event loop: a database call there stalls every request when the database is slow
+            actor = await asyncio.to_thread(self._actor, key) if key else None
             if actor is None:
                 await JSONResponse({"detail": "unauthorized"}, status_code=401,
                                    headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
                 return
         await self.app(scope, receive, send)
+
+    def _actor(self, key: str):
+        conn = connect(self.settings.db_path)
+        try:
+            return actors.actor_for_key(conn, key)
+        finally:
+            conn.close()
 
 
 def _claude_selfcheck(db_path) -> None:
@@ -250,7 +254,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health", tags=["system"])
     def health() -> dict[str, str]:
+        """Liveness only (the container's healthcheck). Whether the app works: /api/health/deep."""
         return {"status": "ok"}
+
+    @app.get("/api/health/deep", tags=["system"])
+    def health_deep(request: Request):
+        """A real database round-trip (a read, the write lock taken and released) and the last minute of the
+        API (5xx share, p95, "database is locked"): 503 when degraded (pos.health). The sentinel and the
+        blackbox exporter probe this one."""
+        from . import health as health_mod, metrics
+
+        internal = metrics.allowed(request.headers, request.client.host if request.client else None)
+        body, code = health_mod.deep(settings.db_path, internal=internal)
+        return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/system", tags=["system"], dependencies=[Depends(require_user)])
     def system() -> dict[str, str]:

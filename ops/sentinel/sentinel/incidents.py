@@ -23,6 +23,9 @@ from dataclasses import dataclass, field
 from .store import Store, sev_rank
 
 HEALTH_KINDS = ("health", "unhealthy", "container_down")
+# Incidents whose notices and resolution their own watch handles (sentinel.platform: the owner and the SRE through
+# /api/sentinel/alert, resolved after a healthy period), never the generic /api/events path.
+SELF_MANAGED = ("platform",)
 RESET_GRACE_S = 300  # after a quota's reset, this long without a new error resolves it
 # A rate incident (detail.window_count: the events in the rule's window) escalates when the
 # rate rises this many times over the rate PersonalOS was told about, never on a steady rate.
@@ -118,6 +121,8 @@ class Incidents:
         now = now or self.clock()
         out = []
         for r in self.s.q("SELECT * FROM incidents WHERE status = 'open'"):
+            if r["kind"] in SELF_MANAGED:
+                continue
             if r["notified_level"] < 0:
                 if now < (r["escalate_after"] or 0):
                     continue
@@ -161,6 +166,8 @@ class Incidents:
         now = now or self.clock()
         done = []
         for r in self.s.q("SELECT * FROM incidents WHERE status = 'open'"):
+            if r["kind"] in SELF_MANAGED:
+                continue
             until = quota_until(r)
             if until is not None:
                 if now < until + RESET_GRACE_S:

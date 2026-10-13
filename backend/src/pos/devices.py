@@ -151,6 +151,7 @@ def revoke(conn: sqlite3.Connection, actor_id: int, sid: str) -> bool:
 
 _cache: dict[str, tuple[float, bool]] = {}  # sid -> (checked at, valid)
 _touched: dict[str, float] = {}
+TOUCH_BUSY_MS = 1500  # the device check waits at most this for the write lock (it rides on every request)
 
 
 class DeviceSessions:
@@ -165,9 +166,26 @@ class DeviceSessions:
         if (scope["type"] == "http" and self.settings.password and scope["path"].startswith("/api/")
                 and "session" in scope):
             session = scope["session"]
-            if session.get("user") or session.get("actor_id"):
-                self._check(scope, session)
+            if (session.get("user") or session.get("actor_id")) and not self._cached(session):
+                import asyncio
+
+                # A database read and maybe a write ("last seen"): never on the event loop. prod 2026-10-13: this
+                # UPDATE waited out the busy timeout on the loop itself while a write lock was held, so every
+                # request of the app stalled behind it.
+                await asyncio.to_thread(self._check, scope, session)
         await self.app(scope, receive, send)
+
+    @staticmethod
+    def _cached(session: dict) -> bool:
+        """The device was checked (and touched) recently: decided without the database."""
+        sid = session.get("sid")
+        now = time.monotonic()
+        hit = _cache.get(sid) if sid else None
+        if hit and now - hit[0] < _CACHE_S and (not hit[1] or now - _touched.get(sid, 0) < TOUCH_EVERY_S):
+            if not hit[1]:
+                session.clear()
+            return True
+        return False
 
     def _check(self, scope, session: dict) -> None:
         from .db import connect
@@ -179,7 +197,7 @@ class DeviceSessions:
             if not hit[1]:
                 session.clear()
             return
-        conn = connect(self.settings.db_path)
+        conn = connect(self.settings.db_path, busy_timeout_ms=TOUCH_BUSY_MS)
         try:
             if not sid:  # a session from before devices existed: it becomes one, once per cookie
                 ua = next((v.decode(errors="replace") for k, v in scope["headers"] if k == b"user-agent"), "")

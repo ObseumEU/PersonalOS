@@ -103,11 +103,18 @@ def _error(rid, code: int, message: str) -> JSONResponse:
 async def a2a_rpc(request: Request, conn: sqlite3.Connection = Depends(get_db)):
     auth = request.headers.get("authorization", "")
     key = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    actor_id = actors.actor_for_key(conn, key) if key else None
     try:
         req = await request.json()
     except ValueError:
         return _error(None, -32700, "parse error")
+    from starlette.concurrency import run_in_threadpool
+
+    # The database work (and its commits) on a worker thread, never on the event loop.
+    return await run_in_threadpool(_rpc, conn, key, req)
+
+
+def _rpc(conn: sqlite3.Connection, key: str, req: dict):
+    actor_id = actors.actor_for_key(conn, key) if key else None
     rid = req.get("id")
     if actor_id is None:
         return JSONResponse({"jsonrpc": "2.0", "id": rid, "error": {"code": -32001, "message": "unauthorized"}},

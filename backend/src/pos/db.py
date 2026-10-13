@@ -1,7 +1,16 @@
 """SQLite storage with ordered, append-only migrations."""
 
+import logging
+import os
 import sqlite3
+import sys
+import threading
+import time
+import traceback
+import weakref
+from collections import deque
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -812,23 +821,248 @@ MIGRATIONS: list[str] = [
 ]
 
 
-BUSY_TIMEOUT_MS = 10_000  # a writer waits this long for the lock before "database is locked"
+def _env_num(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name) or default)
+    except ValueError:
+        return default
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+# A writer waits this long for the lock before "database is locked". 5 s (10 s until 2026-10-13): a write here
+# takes milliseconds, so a longer wait only parks a request thread behind a stuck transaction (prod 2026-10-13:
+# /api/auth/me answered 500 after 10 s while one held write lock kept the whole pool waiting).
+BUSY_TIMEOUT_MS = int(_env_num("POS_DB_BUSY_TIMEOUT_MS", 5000))
+# A write transaction open longer than this is logged with the stack that opened it (pos.db.Conn).
+LONG_TX_S = _env_num("POS_DB_LONG_TX_S", 2.0)
+
+log = logging.getLogger("pos.db")
+
+_live: "weakref.WeakSet[Conn]" = weakref.WeakSet()  # every open connection of this process (the watchdog's view)
+_stats_lock = threading.Lock()
+_locked_at: deque = deque(maxlen=10_000)   # monotonic times of "database is locked" errors
+_long_tx_at: deque = deque(maxlen=10_000)  # monotonic times of transactions found held > LONG_TX_S
+_totals = {"locked": 0, "long_tx": 0}       # since the process started (pos_sqlite_*_total)
+_watchdog: threading.Thread | None = None
+
+
+def _where(stack) -> str:
+    """The innermost frame of ours (pos.*, not this module): the code that opened the transaction."""
+    for f in reversed(stack or []):
+        name = f.filename.replace("\\", "/")
+        if "/pos/" in name and not name.endswith("/pos/db.py"):
+            return f"{name.rsplit('/pos/', 1)[-1]}:{f.lineno} {f.name}"
+    return "?"
+
+
+def _note_locked() -> None:
+    with _stats_lock:
+        _locked_at.append(time.monotonic())
+        _totals["locked"] += 1
+
+
+def _note_long_tx() -> None:
+    with _stats_lock:
+        _long_tx_at.append(time.monotonic())
+        _totals["long_tx"] += 1
+
+
+class Conn(sqlite3.Connection):
+    """sqlite3.Connection that (1) never leaves a transaction open when it is closed: close() rolls back
+    first, so every `try: … finally: conn.close()` (each request's connection, pos.api_tasks.get_db, the
+    scheduler's, the loops') releases the write lock on any exception; (2) remembers where and in which thread
+    its write transaction began, so one held longer than LONG_TX_S is logged with that stack (by the watchdog
+    while it is still held, by commit/rollback/close when it ends); (3) counts "database is locked"."""
+
+    _tx_start: float | None = None
+    _tx_stack = None
+    _tx_thread: int | None = None
+    _tx_warned = False
+
+    # ---- tracking
+    def _track(self) -> None:
+        try:
+            open_ = self.in_transaction
+        except sqlite3.ProgrammingError:  # closed
+            open_ = False
+        if open_ and self._tx_start is None:
+            self._tx_start = time.monotonic()
+            self._tx_thread = threading.get_ident()
+            self._tx_stack = traceback.extract_stack(limit=25)[:-3]
+            self._tx_warned = False
+        elif not open_ and self._tx_start is not None:
+            self._tx_end()
+
+    def _tx_end(self) -> None:
+        start, stack, warned = self._tx_start, self._tx_stack, self._tx_warned
+        self._tx_start = self._tx_stack = self._tx_thread = None
+        self._tx_warned = False
+        if start is None:
+            return
+        held = time.monotonic() - start
+        if held < LONG_TX_S:
+            return
+        if warned:
+            log.warning("long transaction released after %.1f s (opened at %s)", held, _where(stack))
+            return
+        _note_long_tx()
+        log.warning("long transaction: a write was held %.1f s (> %.1f s), opened at %s\n%s", held, LONG_TX_S,
+                    _where(stack), "".join(traceback.format_list(stack or [])[-12:]))
+
+    def _call(self, fn, *args):
+        try:
+            return fn(*args)
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e):
+                _note_locked()
+            raise
+        finally:
+            self._track()
+
+    # ---- statements
+    def execute(self, *args):
+        return self._call(super().execute, *args)
+
+    def executemany(self, *args):
+        return self._call(super().executemany, *args)
+
+    def executescript(self, *args):
+        return self._call(super().executescript, *args)
+
+    def commit(self):
+        return self._call(super().commit)
+
+    def rollback(self):
+        return self._call(super().rollback)
+
+    def __exit__(self, *exc):
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self._track()
+
+    def close(self):
+        """Roll back whatever is still open, then close (idempotent; a failed rollback never hides the close)."""
+        try:
+            if self.in_transaction:
+                super().rollback()
+        except sqlite3.Error:
+            pass
+        finally:
+            if self._tx_start is not None:
+                self._tx_end()
+            _live.discard(self)
+            super().close()
+
+    # ---- the watchdog's view
+    def tx_age(self) -> float | None:
+        """Seconds the current write transaction has been open (None: none). A transaction opened through a
+        cursor is noticed too (its start is when the watchdog first saw it)."""
+        try:
+            open_ = self.in_transaction
+        except sqlite3.Error:
+            return None
+        if not open_:
+            return None
+        if self._tx_start is None:
+            self._tx_start = time.monotonic()
+        return time.monotonic() - self._tx_start
+
+
+def watch_once() -> list[dict]:
+    """Warn once about every write transaction held longer than LONG_TX_S, with the stack that opened it and
+    where its thread is now. Returns the transactions held at the moment."""
+    held = []
+    frames = None
+    for c in list(_live):
+        age = c.tx_age()
+        if age is None or age < LONG_TX_S:
+            continue
+        item = {"age_s": round(age, 1), "opened_at": _where(c._tx_stack)}
+        held.append(item)
+        if c._tx_warned:
+            continue
+        c._tx_warned = True
+        _note_long_tx()
+        if frames is None:
+            frames = sys._current_frames()
+        now_frame = frames.get(c._tx_thread) if c._tx_thread else None
+        log.warning("long transaction: a write has been open %.1f s (> %.1f s), opened at %s\n%s%s", age, LONG_TX_S,
+                    item["opened_at"], "".join(traceback.format_list(c._tx_stack or [])[-12:]),
+                    ("its thread is now at:\n" + "".join(traceback.format_stack(now_frame)[-8:])) if now_frame else "")
+    return held
+
+
+def held_transactions() -> list[dict]:
+    """Write transactions open longer than LONG_TX_S right now (no logging)."""
+    out = []
+    for c in list(_live):
+        age = c.tx_age()
+        if age is not None and age >= LONG_TX_S:
+            out.append({"age_s": round(age, 1), "opened_at": _where(c._tx_stack)})
+    return out
+
+
+def _watch_loop(interval_s: float) -> None:
+    while True:
+        time.sleep(interval_s)
+        try:
+            watch_once()
+        except Exception:  # noqa: BLE001 - the watchdog never dies
+            log.exception("transaction watchdog failed")
+
+
+def _ensure_watchdog() -> None:
+    global _watchdog
+    if _watchdog is not None and _watchdog.is_alive():
+        return
+    with _stats_lock:
+        if _watchdog is None or not _watchdog.is_alive():
+            _watchdog = threading.Thread(target=_watch_loop, args=(max(0.2, min(1.0, LONG_TX_S / 2)),),
+                                         name="pos-db-watchdog", daemon=True)
+            _watchdog.start()
+
+
+def counts(window_s: float = 60.0) -> dict:
+    """'database is locked' errors and long transactions in this process in the last `window_s` seconds."""
+    cut = time.monotonic() - window_s
+    with _stats_lock:
+        return {"locked": sum(1 for t in _locked_at if t >= cut), "long_tx": sum(1 for t in _long_tx_at if t >= cut)}
+
+
+def totals() -> dict:
+    with _stats_lock:
+        return dict(_totals)
+
+
+def connect(db_path: Path, busy_timeout_ms: int | None = None) -> Conn:
     """One connection with the platform's settings: foreign keys enforced (the schema's
     REFERENCES), WAL (readers never block the writer), synchronous=NORMAL (safe with WAL:
     a power cut can lose the last commits, never corrupt the file; no fsync per commit), and
-    a 10 s busy timeout so a write that meets another one waits instead of failing (the
-    worker heartbeat 500 of run 143)."""
+    a busy timeout (BUSY_TIMEOUT_MS) so a write that meets another one waits instead of failing (the
+    worker heartbeat 500 of run 143). It is a Conn: closing it always rolls back, and a write transaction
+    held long is logged with the code that opened it."""
+    busy = BUSY_TIMEOUT_MS if busy_timeout_ms is None else int(busy_timeout_ms)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=BUSY_TIMEOUT_MS / 1000)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=busy / 1000, factory=Conn)
     conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+    conn.execute(f"PRAGMA busy_timeout = {busy}")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    _live.add(conn)
+    _ensure_watchdog()
     return conn
+
+
+@contextmanager
+def session(db_path: Path, busy_timeout_ms: int | None = None) -> Iterator[Conn]:
+    """A connection for one unit of work: whatever is not committed when the block ends (normally or by an
+    exception) is rolled back, and the connection is closed."""
+    conn = connect(db_path, busy_timeout_ms)
+    try:
+        yield conn
+    finally:
+        conn.close()  # Conn.close rolls back first
 
 
 def migrate(conn: sqlite3.Connection) -> int:
@@ -850,8 +1084,5 @@ def init_db(db_path: Path) -> None:
 
 
 def get_conn(db_path: Path) -> Iterator[sqlite3.Connection]:
-    conn = connect(db_path)
-    try:
+    with session(db_path) as conn:
         yield conn
-    finally:
-        conn.close()

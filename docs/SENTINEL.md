@@ -88,6 +88,36 @@ deduplicated and redacted), `POST /api/incidents/<id>/ack`,
 `POST /api/test/inject` feeds synthetic lines through the real pipeline
 (service `sentinel-test`) only with `SENTINEL_TEST_HOOK=1`.
 
+## PersonalOS itself (`sentinel/platform.py`, since the 2026-10-13 outage)
+
+`/api/health` only says the process answers; on 2026-10-13 it said 200 for 20 minutes while the app could not
+load ("database is locked"). Every 15 s the sentinel probes **`GET /api/health/deep`** (`pos.health`: a read,
+the write lock taken and released with a 2 s timeout, 503 when that fails, plus the last minute's requests,
+5xx share, p95, "database is locked" and long transactions). The blackbox exporter probes it too.
+
+| Signal | Incident (kind `platform`) when |
+|---|---|
+| deep health | 2 failed probes in a row |
+| 5xx | ≥ 5 and ≥ 5 % of the API's requests in the last minute |
+| "database is locked" | ≥ 3 in a minute (the deep health's count or the API's log lines) |
+
+One incident, never through `/api/events`: **`POST /api/sentinel/alert`** (`pos.platform_alert`) tells the owner
+at once (push, else the handoff e-mail fallback) and gives the SRE one task; levels `alert`, `healed`,
+`escalated`, `recovered` (healthy 2 min). **Auto-heal:** deep health failing for 90 s restarts
+`personalos-api-1`, at most once per 15 min (any restart of it counts, table `remediations`); still failing 2 min
+later, or the restart refused, or a restart due within the 15 min: `escalated`. The logs around the restart
+(redacted) go to `<state>/incident-log/`, the incident's notes, `alerts.log` and the SRE's task; PersonalOS writes
+the audit row `sentinel_alert:<level>`. Thresholds: `platform` in `sentinel/config.py`.
+
+The Docker API goes through `docker-proxy` with **our own haproxy rules**
+(`ops/sentinel/docker-proxy.haproxy.cfg.template`): the stock ones deny every POST with `POST=0`, so the
+runbook's restarts never worked (2026-09-30: 403). Now: GET state and logs, POST restart of the restart
+allowlist, POST start of the deployer, nothing else.
+
+In the API (`pos.db`): every connection is a `Conn` (WAL, `busy_timeout` 5 s, `synchronous=NORMAL`) whose
+`close()` rolls back first, and a watchdog logs any write transaction open longer than 2 s with the stack that
+opened it (`long transaction: …` in the API's log; `pos_sqlite_long_tx_total`).
+
 ## PersonalOS (`pos.monitor`)
 
 - **Events**: `POST /api/events` with the sentinel's token, `source:

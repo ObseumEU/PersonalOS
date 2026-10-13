@@ -87,6 +87,25 @@ DEFAULTS: dict = {
         "quiet_min": 30,               # auto-resolve after this long without a new observation
         "quiet_min_health": 10,
     },
+    # PersonalOS's deep health (GET /api/health/deep: a real DB round-trip with the write lock, the last minute's
+    # 5xx and "database is locked"), probed every every_s by sentinel.platform: the owner and the SRE hear at once
+    # (POST /api/sentinel/alert), the API container is restarted after heal_after_s of failing deep health, at
+    # most once per heal_cooldown_min, then it escalates. prod 2026-10-13: /api/health said ok for 20 minutes
+    # while the app could not load.
+    "platform": {
+        "url": "{pos_url}/api/health/deep",
+        "container": "personalos-api-1",
+        "every_s": 15,
+        "timeout_s": 8,
+        "alert_after_fails": 2,        # consecutive failed deep probes before the owner hears (one blip is not)
+        "fivexx_min": 5, "fivexx_ratio": 0.05,   # 5xx in the API's last minute (count and share)
+        "locked_per_min": 3,           # "database is locked" in a minute (the deep health's count or the logs)
+        "heal_after_s": 90,            # deep health failing continuously this long: restart the container
+        "heal_cooldown_min": 15,       # at most one restart per this (any restart of it: the runbook's too)
+        "heal_grace_s": 120,           # still failing this long after the restart: escalate
+        "recover_ok_s": 120,           # healthy this long: the incident resolves, recovery notice
+        "log_lines": 200,              # log lines around the restart kept in the incident log
+    },
     "apps_every_min": 5,
     "tls_every_min": 60,
     # backup name → directory in the container (read-only mounts, see docs/SENTINEL.md)

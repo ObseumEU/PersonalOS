@@ -12,10 +12,12 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 
-def http_check(url: str, connect: str | None = None, timeout: float = 8.0, json_level: str | None = None) -> dict:
+def http_check(url: str, connect: str | None = None, timeout: float = 8.0, json_level: str | None = None,
+               want_json: bool = False) -> dict:
     """GET url; `connect` host:port routes it through the front proxy with the
     URL's host as SNI and Host header. ok = status < 500 for public URLs
-    (a 401 or 403 still means the app answers), 2xx/3xx for internal ones."""
+    (a 401 or 403 still means the app answers), 2xx/3xx for internal ones.
+    `want_json`: the parsed body under "json" (also of a 503: a degraded answer says why)."""
     u = urlparse(url)
     host = u.hostname or ""
     c_host, _, c_port = (connect or "").partition(":")
@@ -38,7 +40,7 @@ def http_check(url: str, connect: str | None = None, timeout: float = 8.0, json_
             conn = http.client.HTTPConnection(target, port, timeout=timeout)
         conn.request("GET", u.path or "/", headers={"Host": host, "User-Agent": "pos-sentinel"})
         r = conn.getresponse()
-        body = r.read(4096)
+        body = r.read(16384 if want_json else 4096)
         conn.close()
         out["status"] = r.status
         out["ms"] = int((time.monotonic() - t0) * 1000)
@@ -49,6 +51,11 @@ def http_check(url: str, connect: str | None = None, timeout: float = 8.0, json_
                 out["level"] = json.loads(body).get(json_level)
             except (ValueError, AttributeError):
                 pass
+        if want_json:
+            try:
+                out["json"] = json.loads(body)
+            except ValueError:
+                out["json"] = None
         if not out["ok"]:
             out["detail"] = f"HTTP {r.status}"
     except (OSError, http.client.HTTPException, ssl.SSLError) as e:

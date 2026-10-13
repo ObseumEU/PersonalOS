@@ -284,15 +284,19 @@ def _flag(conn: sqlite3.Connection, ctx: Ctx, ch: sqlite3.Row, message_id: int, 
         return None
     ensure_schema(conn)
     now = now_iso()
-    have = conn.execute("SELECT markers FROM owner_frustration WHERE message_id = ?", (message_id,)).fetchone()
-    if have is not None:
-        merged = list(dict.fromkeys([*json.loads(have["markers"] or "[]"), *found["markers"]]))
-        conn.execute("UPDATE owner_frustration SET markers = ? WHERE message_id = ?",
-                     (json.dumps(merged, ensure_ascii=False), message_id))
-    else:
+    # Insert first (atomic: the row is ours, or a parallel call made it and we merge into it inside the write
+    # transaction our insert attempt opened). A read-then-insert raced into "UNIQUE constraint failed".
+    try:
         conn.execute("INSERT INTO owner_frustration (message_id, channel_id, markers, repeat_of, created_at) "
                      "VALUES (?, ?, ?, ?, ?)", (message_id, ch["id"], json.dumps(found["markers"], ensure_ascii=False),
                                                 found["repeat_of"], now))
+    except sqlite3.IntegrityError:
+        have = conn.execute("SELECT markers FROM owner_frustration WHERE message_id = ?", (message_id,)).fetchone()
+        if have is None:  # another constraint, not the row being there
+            raise
+        merged = list(dict.fromkeys([*json.loads(have["markers"] or "[]"), *found["markers"]]))
+        conn.execute("UPDATE owner_frustration SET markers = ? WHERE message_id = ?",
+                     (json.dumps(merged, ensure_ascii=False), message_id))
     ceo = notices.ceo(conn)
     if not ceo:
         return found

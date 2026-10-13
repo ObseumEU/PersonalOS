@@ -29,6 +29,7 @@ class FakeDocker:
         self.items: dict[str, dict] = {}
         self.lines: dict[str, list[tuple[float, str]]] = {}
         self.restarted: list[str] = []
+        self.restart_error: Exception | None = None
 
     def add(self, name, status="running", health=None, restarts=0, started="2026-09-26T08:00:00Z", oom=False,
             exit_code=0):
@@ -49,6 +50,8 @@ class FakeDocker:
         return [(t, line) for t, line in self.lines.get(name, []) if t >= since and (until is None or t <= until)]
 
     def restart(self, name, timeout_s=10):
+        if self.restart_error is not None:
+            raise self.restart_error
         self.restarted.append(name)
 
 
@@ -59,6 +62,7 @@ class FakePos:
         self.up = True
         self.last_error = ""
         self.outbox: list[dict] = []
+        self.alerts: list[dict] = []
 
     def send(self, path, payload):
         if not self.up:
@@ -75,6 +79,10 @@ class FakePos:
 
     def pending(self):
         return len(self.outbox)
+
+    def alert(self, payload):
+        self.alerts.append(payload)
+        return {"owner": "email", "recorded": True}
 
     def heartbeat(self, payload):
         if self.up:

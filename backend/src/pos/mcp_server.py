@@ -1483,15 +1483,21 @@ def build(db_path: Path, default_actor: Callable[[sqlite3.Connection], int] | No
         who = _who(ctx, "sandbox_share", path=path, to=to, ref=thread_or_task_ref)
         data, full = await _sbx(sandbox.read(who, path, max_bytes=settings.agent_file_max_mb * 1024 * 1024))
         origin = f"sandbox:{who['agent']}:{full}"
-        with session(ctx, "sandbox_share:file", path=full, size=len(data)) as (conn, c):
-            row = conn.execute("SELECT id FROM files WHERE origin = ? AND created_by = ? ORDER BY id DESC LIMIT 1",
-                               (origin, c.actor_id)).fetchone()
-            if row is not None:
-                f = agent_files.update(conn, c, settings, row["id"], data, name=name, description=description)
-            else:
-                f = agent_files.create(conn, c, settings, name=name or full.rsplit("/", 1)[-1], data=data,
-                                       description=description, tags=["sandbox"], origin=origin)
-            shared = agent_files.share(conn, c, [f["id"]], to=to, ref=thread_or_task_ref, message=message)
+
+        def store():  # on a worker thread: never write the database on the event loop
+            with session(ctx, "sandbox_share:file", path=full, size=len(data)) as (conn, c):
+                row = conn.execute("SELECT id FROM files WHERE origin = ? AND created_by = ? ORDER BY id DESC "
+                                   "LIMIT 1", (origin, c.actor_id)).fetchone()
+                if row is not None:
+                    f = agent_files.update(conn, c, settings, row["id"], data, name=name, description=description)
+                else:
+                    f = agent_files.create(conn, c, settings, name=name or full.rsplit("/", 1)[-1], data=data,
+                                           description=description, tags=["sandbox"], origin=origin)
+                return f, agent_files.share(conn, c, [f["id"]], to=to, ref=thread_or_task_ref, message=message)
+
+        import anyio
+
+        f, shared = await anyio.to_thread.run_sync(store)
         _push_kb(f["id"])
         return {"file": f, **shared}
 
