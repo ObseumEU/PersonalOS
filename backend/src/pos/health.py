@@ -58,7 +58,7 @@ def _db_check(db_path: Path) -> dict:
     with _lock:
         if _cache["db"] is not None and time.monotonic() - _cache["at"] < CACHE_S:
             return {**_cache["db"], "cached": True}
-        result = probe(db_path)
+        result = probe(db_path, PROBE_BUSY_MS)  # read now: a default argument would freeze it at import
         _cache.update(at=time.monotonic(), db=result)
         return result
 

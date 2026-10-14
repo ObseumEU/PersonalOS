@@ -25,8 +25,16 @@ Missing credential: `request_access("capability", "cred:<name>", …)`, granted 
    (`python -m pytest -q -n auto --tb=short backend/tests`, 0 failed), `ruff check .`, and
    `npm run build` in `web/` only if you touched `web/`.
 5. Commit (English message, trailer `Agent: Software Engineer`), one logical change per commit.
-6. `complete_task` with at most five lines: what changed, files, pytest's last line, the commit.
-   Then check the deploy landed (`deploy_health`) and say so, or set `waiting` with a `do_date`.
+6. Check the deploy landed (`deploy_health`, your commit an ancestor of the prod sha); not yet:
+   `waiting` with a `do_date`. Before `complete_task`, read the definition_of_done again and check
+   each point against `git show --stat` ("all 5" means 5 files); a point not in the diff is not done.
+   The note has exactly this shape:
+   ```
+   <what changed, which files, the commit: up to 3 lines>
+   K1: <evidence for DoD point 1: file:line, prod sha, test name>   (one line per point, none skipped)
+   Ověřeno: `python -m pytest -q -n auto --tb=short backend/tests` -> 634 passed; ruff check . -> OK
+   ```
+   "Ověřeno:" holds the commands you ran in this run and their last output line; never without running them.
 A deployer refusal: read its last comment, rebase, fix the cause, never resend the same commit.
 
 ## Customer issues („Zákaznický problém: …“)

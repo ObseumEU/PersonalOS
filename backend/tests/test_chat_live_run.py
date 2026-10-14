@@ -3,7 +3,6 @@ the fast lane answers while a long step runs, and the queued chat task is not
 answered twice (pos.fastlane, pos_worker.loop, docs/CHAT.md)."""
 
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -15,7 +14,7 @@ from pos.config import Settings
 
 pytest.importorskip("pos_worker")
 from pos_worker import prompt as wprompt  # noqa: E402
-from test_worker import fake_claude, fake_codex, setup, worker_for  # noqa: E402,F401 - fixtures
+from test_worker import fake_claude, fake_codex, setup, wait_for_session, worker_for  # noqa: E402,F401 - fixtures
 
 
 @pytest.fixture(autouse=True)
@@ -45,12 +44,8 @@ def test_injection_tells_where_to_answer_and_how_to_behave():
 # ------------------------------------------------------------------ into the live run, both engines
 
 def _message_when_running(tmp_path, owner, agent_id, text):
+    wait_for_session(tmp_path)
     c = connect(Settings(data_dir=tmp_path).db_path)
-    for _ in range(100):
-        if c.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (agent_id,)).fetchone():
-            break
-        time.sleep(0.1)
-    time.sleep(0.3)
     chat.send_dm(c, owner, agent_id, text)  # a plain chat message: no priority
     c.close()
 
@@ -59,6 +54,9 @@ def _message_when_running(tmp_path, owner, agent_id, text):
 def test_a_plain_chat_message_goes_into_the_running_session(setup, fake_codex, fake_claude, tmp_path,
                                                             monkeypatch, engine):
     monkeypatch.setenv("POS_AGENT_RUNTIME", engine)
+    # A long first turn, so the message comes mid-turn on a loaded deployer too; the injection stops it.
+    monkeypatch.setenv("FAKE_CODEX_STEPS", "30")
+    monkeypatch.setenv("FAKE_CLAUDE_STEPS", "30")
     client, conn, owner, agent_id, key = setup
     t = tasks.create(conn, owner, {"title": "Long build", "assignee": {"type": "agent", "id": agent_id}})
     conn.commit()
