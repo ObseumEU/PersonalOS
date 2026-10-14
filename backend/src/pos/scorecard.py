@@ -250,6 +250,9 @@ def agents_health(conn: sqlite3.Connection, now: datetime | None = None, days: i
                        "AND at >= ? AND at < ?", *LOOP_ACTIONS, s, u)
     incidents = _one(conn, "SELECT COUNT(*) FROM sentinel_incidents WHERE opened_at >= ? AND opened_at < ?", s, u) \
         if _has(conn, "sentinel_incidents") else 0
+    from . import quota_guard
+
+    quota = quota_guard.current(conn, now)
     return {
         "runs_ok": int(runs.get("ok", 0)), "runs_failed": int(runs.get("error", 0)),
         "runs_blocked": int(runs.get("blocked", 0)), "runs_cancelled": int(runs.get("cancelled", 0)),
@@ -260,6 +263,8 @@ def agents_health(conn: sqlite3.Connection, now: datetime | None = None, days: i
         "approvals_pending": rq["approvals"],
         "loops": loops, "incidents": incidents,
         **frustration.stats(conn, now, days),
+        # The agent pool's Claude quota now, 0-100 (pos.quota_guard; None until a run reports it).
+        "agent_pool_quota_pct": quota["pct"], "agent_pool_quota_resets_at": quota["resets_at"],
     }
 
 
@@ -407,6 +412,7 @@ KPIS = (
     ("frustrations", ("agents", "frustrations"), False),
     ("double_answers", ("agents", "double_answers"), False),
     ("unanswered", ("agents", "unanswered"), False),
+    ("agent_pool_quota_pct", ("agents", "agent_pool_quota_pct"), False),
 )
 
 
@@ -527,6 +533,14 @@ def render(card: dict) -> str:
     return "\n".join(lines)
 
 
+def _quota_txt(a: dict) -> str:
+    pct = a.get("agent_pool_quota_pct")
+    if pct is None:
+        return "— (zatím bez údaje)"
+    at = a.get("agent_pool_quota_resets_at")
+    return f"{round(pct)} %" + (f", obnova {at[:16].replace('T', ' ')} UTC" if at else "")
+
+
 def render_platform(card: dict) -> str:
     """The platform section (the weekly improvement meeting's input)."""
     a, sp = card["agents"], card["spend"]
@@ -538,6 +552,7 @@ def render_platform(card: dict) -> str:
         f"nejstarší {a.get('review_oldest_hours') or '—'} h",
         f"- smyčky {a['loops']}, incidenty {a['incidents']}, odmítnuté deploye {card['world']['deploys_failed']}",
         f"- majitel: frustrace {a['frustrations']}, dvojí odpovědi {a['double_answers']}, bez odpovědi {a['unanswered']}",
+        f"- kvóta agent-pool: {_quota_txt(a)}",
         f"- náklady: platforma {_pct(sp.get('platform_share'))} (strop 30 %), ${sp.get('platform_usd')} z ${sp.get('total_usd')}",
     ])
 

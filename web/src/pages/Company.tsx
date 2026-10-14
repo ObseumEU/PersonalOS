@@ -339,6 +339,7 @@ export default function Company() {
               <Stat label={t("co.agents.loops")} value={a.loops} tone={a.loops ? "warn" : undefined} />
               <Stat label={t("co.agents.incidents")} value={a.incidents} />
               <Stat label={t("co.agents.unanswered")} value={a.unanswered} tone={a.unanswered ? "bad" : undefined} sub={`${t("co.agents.frustrations")} ${a.frustrations} · ${t("co.agents.double")} ${a.double_answers}`} />
+              <Stat label={t("co.agents.quota")} value={a.agent_pool_quota_pct == null ? "—" : `${Math.round(a.agent_pool_quota_pct)} %`} tone={(a.agent_pool_quota_pct ?? 0) >= 95 ? "bad" : (a.agent_pool_quota_pct ?? 0) >= 80 ? "warn" : undefined} sub={a.agent_pool_quota_resets_at ? t("co.agents.quota_reset", { at: new Date(a.agent_pool_quota_resets_at).toLocaleString("cs-CZ", { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" }) }) : undefined} />
             </div>
           </Panel>
         </section>

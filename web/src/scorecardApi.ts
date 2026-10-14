@@ -78,6 +78,9 @@ export type Scorecard = {
     frustrations: number;
     double_answers: number;
     unanswered: number;
+    /** The agent pool's Claude quota now, 0-100 (pos.quota_guard); null until a run reports it. */
+    agent_pool_quota_pct?: number | null;
+    agent_pool_quota_resets_at?: string | null;
   };
   kpis: Record<string, ScoreKpi>;
   problems: Problem[];

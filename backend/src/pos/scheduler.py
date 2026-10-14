@@ -444,6 +444,12 @@ def grafana_watch(conn: sqlite3.Connection) -> dict:
     return observability.watch(conn)
 
 
+def agent_pool_quota(conn: sqlite3.Connection) -> dict:
+    from . import quota_guard
+
+    return quota_guard.check(conn)
+
+
 def review_sla(conn: sqlite3.Connection) -> dict:
     from . import business
 
@@ -622,6 +628,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "support_intake": support_intake,
     "agents_watch": agents_watch,
     "grafana_watch": grafana_watch,
+    "agent_pool_quota": agent_pool_quota,
     "sentinel_watch": sentinel_watch,
     "sentinel_digest": sentinel_digest,
     "access_expire": access_expire,
@@ -681,6 +688,8 @@ DEFAULT_JOBS = [
     ("Sentinel: daily health digest in #team", "daily 08:00", "sentinel_digest"),
     # Grafana on .186 (pos.observability): when it stops answering, no alert can reach anyone.
     ("Grafana: alert when it stops answering", "every 5m", "grafana_watch"),
+    # The agent pool's Claude quota (pos.quota_guard): 80 / 95 % → the Monitor and the CEO, spent → the CEO.
+    ("Agent pool quota: warn at 80 / 95 %, tell the CEO when spent", "every 5m", "agent_pool_quota"),
     # Every agent has a worker and the owner is never left without an answer (pos.workers): the pool's
     # keys, a worker silent for 10 min, an owner message unanswered for 10 min: an incident each.
     ("Agents: workers running, the owner's messages answered", "every 2m", "agents_watch"),

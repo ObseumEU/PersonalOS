@@ -67,6 +67,8 @@ export default {
   "co.agents.frustrations": "frustrace majitele",
   "co.agents.double": "dvojí odpovědi",
   "co.agents.unanswered": "bez odpovědi do 2 h",
+  "co.agents.quota": "kvóta agent-pool",
+  "co.agents.quota_reset": "obnova {at}",
   "co.hours": "{n} h",
   "co.days": "{n} d",
 } as Record<string, string>;
