@@ -5,7 +5,10 @@ the host executor's own re-validation."""
 
 import importlib.util
 import json
+import os
+import pwd
 import sys
+import time
 from pathlib import Path
 
 import anyio
@@ -499,6 +502,73 @@ def test_swap_top_lists_the_processes_with_most_swap_and_their_containers(execut
                          "500 sshd -"]
     assert "5000 personalos-api-1" in lines and lines[-1] == "total 14500 kB swap in 4 processes"
     assert not executor.handle({"v": 1, "action": "swap_top", "params": {"top": "99"}, "reason": "r"})["ok"]
+
+
+def _secret_tree(tmp_path):
+    files = {
+        "opt/app/.env": "API_TOKEN=leakedvalue111\n",
+        "opt/app/.env.production": "DB_PASSWORD=leakedvalue222\n",
+        "opt/app/config.yml": "token: leakedvalue333\n",
+        "opt/app/db.sql.bak": "INSERT leakedvalue444\n",
+        "opt/overlay2/l/.env": "IN_OVERLAY=leakedvalue555\n",
+        "home/u/.docker/config.json": '{"auths": {"ghcr.io": {"auth": "leakedvalue666"}}}\n',
+        "home/u/config.json": "{}\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+        os.utime(tmp_path / rel, (1760000000, 1760000000))
+    caddyfile = tmp_path / "Caddyfile"
+    caddyfile.write_text(CADDYFILE.replace("\troot * /srv/liberty", "\tbasic_auth { u leakedvalue777 }"))
+    return caddyfile
+
+
+def test_secret_files_scan_shows_path_owner_mtime_and_never_a_files_content(executor, tmp_path, monkeypatch):
+    caddyfile = _secret_tree(tmp_path)
+    roots = (str(tmp_path / "home"), str(tmp_path / "opt"), str(tmp_path / "missing"))
+    monkeypatch.setattr(ops_runbook, "SCAN_ROOTS", roots)
+    monkeypatch.setattr(ops_runbook, "CADDY_SCAN", {"caddy-proxy": str(caddyfile), "kb-caddy-1": str(tmp_path / "no")})
+    opened = []
+    real_open = open
+
+    def spy(path, *a, **kw):
+        opened.append(str(path))
+        return real_open(path, *a, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr("builtins.open", spy)
+        out = executor.handle({"v": 1, "action": "secret_files_scan", "params": {}, "reason": "T-1295 scan"},
+                              runner=lambda argv, t: pytest.fail("no program runs"))
+    assert out["ok"], out
+    assert opened == [str(caddyfile), str(tmp_path / "no")]  # only the Caddyfiles, never a file that was found
+    text = out["output"]
+    assert "leakedvalue" not in text and "basic_auth" not in text and "reverse_proxy" not in text
+    me, day = pwd.getpwuid(os.getuid()).pw_name, time.strftime("%Y-%m-%d", time.localtime(1760000000))
+    found = [f"{tmp_path}/{rel} {me} {day}" for rel in
+             ("home/u/.docker/config.json", "opt/app/.env", "opt/app/.env.production", "opt/app/db.sql.bak")]
+    assert [line for line in text.splitlines() if line.startswith(f"{tmp_path}/")] == found
+    assert "# 4 found; 0 directories not readable" in text
+    lines = text.splitlines()
+    i = lines.index(f"# caddy-proxy ({caddyfile}): 4 site blocks")
+    assert lines[i + 1:i + 5] == ["personalos.obseum.cz  import internal: yes",
+                                  "libertyloft.cz, www.libertyloft.cz  import internal: no",
+                                  "www.libertyloft.cz  import internal: no",
+                                  "kb.obseum.cz, kb2.obseum.cz  import internal: no"]
+    assert f"# kb-caddy-1 ({tmp_path / 'no'}): not read (FileNotFoundError)" in lines
+    # nothing from the caller: no roots, no find expression
+    bad = executor.handle({"v": 1, "action": "secret_files_scan", "params": {"roots": "/"}, "reason": "r"})
+    assert not bad["ok"] and bad["error"].startswith("refused")
+    short = ops_runbook.secret_files(roots, limit=2)
+    assert short["total"] == 4 and short["lines"] == found[:2] and not short["cut"]
+
+
+def test_secret_files_scan_output_is_not_cut_at_8k_by_the_api(app, monkeypatch, tmp_path):
+    conn, sre = app["conn"], app["sre"]
+    _socket(monkeypatch, tmp_path)
+    listing = "".join(f"/opt/server/app{i}/.env drosko 2026-10-01\n" for i in range(1000))
+    out = ops_runbook.run(conn, Ctx(sre, via="mcp"), "secret_files_scan", {}, "T-1295",
+                          sender=lambda *a: {"ok": True, "exit_code": 0, "output": listing})
+    assert out["ok"] and not out["truncated"] and out["output"].count("\n") == 1000
 
 
 def test_the_executor_cuts_long_output_and_survives_a_crashing_runner(executor):

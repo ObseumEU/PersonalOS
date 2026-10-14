@@ -150,6 +150,8 @@ def handle(request, runner=subprocess_runner, known_hosts_writer=write_known_hos
                 raise Refused("not a listed Caddyfile")
             with _write_lock:
                 code, out = caddy_remove_site(job, runner, plan["timeout"])
+        elif "secret_files_scan" in plan:  # the catalogue's fixed roots and Caddyfiles; lstat only, no file opened
+            code, out = 0, catalogue.secret_files_scan()
         else:
             argv = plan.get("argv")  # none for an action run inside the API
             if not argv or argv[0] not in PROGRAMS or any(not isinstance(a, str) or "\x00" in a for a in argv):
@@ -166,8 +168,9 @@ def handle(request, runner=subprocess_runner, known_hosts_writer=write_known_hos
         return {"ok": False, "exit_code": None, "error": f"refused: {e}", "output": ""}
     except Exception as e:  # noqa: BLE001 - one bad request never stops the executor
         return {"ok": False, "exit_code": None, "error": f"{type(e).__name__}: {str(e)[:300]}", "output": ""}
-    if len(out) > MAX_OUTPUT:
-        out = out[-MAX_OUTPUT:] if action in catalogue.LOG_ACTIONS else out[:MAX_OUTPUT]
+    most = max(MAX_OUTPUT, catalogue.ACTIONS[action].get("max_output", 0))
+    if len(out) > most:
+        out = out[-most:] if action in catalogue.LOG_ACTIONS else out[:most]
     return {"ok": code == 0, "exit_code": code, "output": out,
             "duration_ms": int((time.monotonic() - started) * 1000)}
 

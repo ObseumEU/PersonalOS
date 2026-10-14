@@ -13,6 +13,9 @@ drosko on svr03 listening on a unix socket bind-mounted into the API container):
   towerdog_stop / towerdog_start (Nexus' towerdog), refresh_known_hosts (writes the GitHub
   host keys PINNED below into a deployer's known_hosts; never ssh-keyscan), caddy_remove_site
   (one exact site block out of the front proxy's Caddyfile: backup, validate, reload, T-1299);
+- secret_files_scan (T-1475): Caddy site addresses with their `import internal` flag, then path,
+  owner and mtime of files that may hold secrets (.env*, *.bak, .docker/config.json) under fixed
+  roots; the executor walks and stats in Python and never opens such a file;
 - in the API container itself (no executor, no parameters): review_policy_kniha_dry /
   review_policy_kniha_apply (`python -m pos.review_policy --kniha [--apply]`, T-1058).
 
@@ -39,6 +42,7 @@ import json
 import os
 import re
 import socket
+import time
 
 TOOL = "ops_runbook"
 LIST_TOOL = "ops_runbook_list"
@@ -158,6 +162,14 @@ def known_hosts_text() -> str:
 SWAP_TOP = 15
 PROC = "/proc"
 _DOCKER_CGROUP = re.compile(r"docker[-/]([0-9a-f]{12,64})")
+# secret_files_scan (T-1475): fixed roots, never a path from the request. Each root is walked on its
+# own filesystem only (find -xdev); /proc, /sys and docker's overlay never.
+SCAN_ROOTS = ("/home", "/opt", "/srv", "/root", "/etc")
+SCAN_SKIP = ("/proc", "/sys", "/var/lib/docker")
+SCAN_LIMIT = 2000
+SCAN_SECONDS = 150
+# Caddy container -> its Caddyfile on the host (kb: ./deploy/Caddyfile of the kb stack, mounted read-only).
+CADDY_SCAN = {**CADDY, "kb-caddy-1": "/opt/server/knowlage/deploy/Caddyfile"}
 
 # A parameter: (type, allowed or (lo, hi), default; None = required).
 ACTIONS = {
@@ -196,6 +208,11 @@ ACTIONS = {
         "doc": "remove the one Caddyfile block whose address is exactly <site> ('a.cz, www.a.cz'); dry shows the "
                "diff, apply keeps Caddyfile.bak-<YYYYMMDDHHMM>, runs caddy validate (a failure restores the old "
                "file) and caddy reload"},
+    "secret_files_scan": {"kind": "read", "params": {}, "timeout": SCAN_SECONDS + 30, "max_output": 120_000,
+                          "doc": "where secrets may lie: the site addresses of caddy-proxy's and kb-caddy-1's "
+                                 "Caddyfile with import internal yes/no, then 'path owner mtime' of every .env*, "
+                                 f"*.bak and */.docker/config.json under {' '.join(SCAN_ROOTS)} (-xdev, at most "
+                                 f"{SCAN_LIMIT}); never a file's content"},
     # Run inside the API (personalos-api-1), never by the host executor (T-1058).
     "review_policy_kniha_dry": {"kind": "read", "params": {}, "where": "api",
                                 "doc": "python -m pos.review_policy --kniha in personalos-api-1 (dry run: which "
@@ -330,6 +347,8 @@ def plan(action: str, p: dict) -> dict:
                                       "apply": p["mode"] == "apply",
                                       "validate": [*caddy, "validate", "--config", CADDY_CONFIG],
                                       "reload": [*caddy, "reload", "--config", CADDY_CONFIG]}, "timeout": 60}
+    if action == "secret_files_scan":  # the executor walks and stats itself; nothing comes from the request
+        return {"secret_files_scan": True, "timeout": ACTIONS[action]["timeout"]}
     if action in API_ACTIONS:  # no argv: the executor refuses it
         return {"api": ["pos.review_policy", "--kniha", *(["--apply"] if action.endswith("_apply") else [])],
                 "timeout": 120}
@@ -447,6 +466,117 @@ def remove_caddy_site(text: str, site: str) -> str:
     if last + 1 < len(lines) and not lines[last + 1].strip() and (first == 0 or not lines[first - 1].strip()):
         last += 1  # its blank separator goes with it
     return "".join(lines[:first] + lines[last + 1:])
+
+
+_IMPORT_INTERNAL = re.compile(r"^\s*import\s+internal(\s|$)")
+
+
+def caddy_sites(text: str) -> list[str]:
+    """'addresses  import internal: yes|no' for every site block of a Caddyfile (T-1475): the addresses
+    and the flag only, never a directive (a Caddyfile may hold tokens). Snippets and the global block
+    are left out."""
+    lines = text.splitlines()
+    out = []
+    for first, last, addrs in caddy_blocks(text):
+        if not addrs or addrs[0].startswith("("):
+            continue
+        internal = any(_IMPORT_INTERNAL.match(_caddy_code(line)) for line in lines[first:last + 1])
+        out.append(f"{', '.join(addrs)}  import internal: {'yes' if internal else 'no'}")
+    return out
+
+
+def _secret_name(parent: str, name: str) -> bool:
+    return name.startswith(".env") or name.endswith(".bak") or (
+        name == "config.json" and os.path.basename(parent) == ".docker")
+
+
+def _printable(s: str) -> str:
+    return "".join(c if c.isprintable() else "?" for c in s)
+
+
+def secret_files(roots=SCAN_ROOTS, limit: int = SCAN_LIMIT, seconds: float = SCAN_SECONDS) -> dict:
+    """What `find <roots> -xdev \\( -name '.env*' -o -name '*.bak' -o -path '*/.docker/config.json' \\)
+    -printf '%p %u %TY-%Tm-%Td\\n'` prints, in Python (T-1475): only lstat, a file is never opened.
+    {"lines": at most `limit`, "total", "unreadable": directories, "cut": stopped after `seconds`}."""
+    import pwd
+
+    deadline, users = time.monotonic() + seconds, {}
+    lines, unreadable, total, cut = [], [], 0, False
+
+    def owner(uid: int) -> str:
+        if uid not in users:
+            try:
+                users[uid] = pwd.getpwuid(uid).pw_name
+            except KeyError:
+                users[uid] = str(uid)
+        return users[uid]
+
+    def skipped(path: str) -> bool:
+        return any(path == s or path.startswith(s + "/") for s in SCAN_SKIP) or os.path.basename(path) == "overlay2"
+
+    for root in roots:
+        try:
+            dev = os.lstat(root).st_dev
+        except OSError:  # not on this host
+            continue
+        if skipped(root):
+            continue
+        for parent, dirs, files in os.walk(root, onerror=lambda e: unreadable.append(e.filename)):
+            if time.monotonic() > deadline:
+                cut = True
+                break
+            dirs.sort()
+            files.sort()
+            stats, keep = {}, []
+            for d in dirs:
+                path = os.path.join(parent, d)
+                try:
+                    stats[d] = st = os.lstat(path)
+                except OSError:
+                    continue
+                if st.st_dev == dev and not skipped(path):  # -xdev
+                    keep.append(d)
+            dirs[:] = keep
+            for name in [*dirs, *files]:
+                if not _secret_name(parent, name):
+                    continue
+                path = os.path.join(parent, name)
+                try:
+                    st = stats.get(name) or os.lstat(path)
+                except OSError:
+                    continue
+                total += 1
+                if len(lines) < limit:
+                    lines.append(f"{_printable(path)} {owner(st.st_uid)} "
+                                 f"{time.strftime('%Y-%m-%d', time.localtime(st.st_mtime))}")
+        if cut:
+            break
+    return {"lines": lines, "total": total, "unreadable": unreadable, "cut": cut}
+
+
+def secret_files_scan(roots=None, caddyfiles: dict | None = None, limit: int = SCAN_LIMIT,
+                      seconds: float = SCAN_SECONDS) -> str:
+    """secret_files_scan (T-1475), run by the executor: the Caddy site addresses, then the files."""
+    roots, out = SCAN_ROOTS if roots is None else roots, []
+    for container, path in sorted((CADDY_SCAN if caddyfiles is None else caddyfiles).items()):
+        try:
+            with open(path, encoding="utf-8") as f:
+                sites = caddy_sites(f.read())
+        except (OSError, UnicodeDecodeError, Invalid) as e:
+            out.append(f"# {container} ({path}): not read ({e if isinstance(e, Invalid) else type(e).__name__})")
+            continue
+        out += [f"# {container} ({path}): {len(sites)} site blocks", *sites]
+    found = secret_files(roots, limit, seconds)
+    out += ["", f"# .env*, *.bak, */.docker/config.json under {' '.join(roots)} (-xdev): path owner mtime",
+            *found["lines"]]
+    summary = f"# {found['total']} found"
+    if found["total"] > len(found["lines"]):
+        summary += f", the first {len(found['lines'])} shown"
+    if found["cut"]:
+        summary += f"; stopped after {seconds:.0f} s, incomplete"
+    out.append(summary + f"; {len(found['unreadable'])} directories not readable")
+    out += [f"# not readable: {_printable(str(p))}" for p in found["unreadable"][:20]]
+    return "\n".join(out) + "\n"
 
 
 def catalogue() -> list[dict]:
@@ -609,9 +739,10 @@ def finish(conn, ctx, action: str, norm: dict, reason: str, res: dict, task_id: 
 
     raw = str(res.get("output") or "")
     clean = redact(raw, limit=len(raw) + 10)
-    cut = len(clean) > MAX_OUTPUT
+    most = ACTIONS.get(action, {}).get("max_output", MAX_OUTPUT)
+    cut = len(clean) > most
     if cut:
-        clean = ("…" + clean[-MAX_OUTPUT:]) if action in LOG_ACTIONS else (clean[:MAX_OUTPUT] + "…")
+        clean = ("…" + clean[-most:]) if action in LOG_ACTIONS else (clean[:most] + "…")
     ok = bool(res.get("ok"))
     outcome = "ok" if ok else ("executor_error" if res.get("exit_code") is None else "failed")
     _audit(conn, ctx, action, task_id, args=norm, reason=reason, outcome=outcome, exit_code=res.get("exit_code"),
@@ -701,11 +832,14 @@ def register_mcp(mcp, session) -> None:
         "Run one action of the fixed svr03 runbook (no shell): read-only docker_ps, docker_stats, docker_logs "
         "{container, since<=24h, tail<=500}, df, free, uptime, systemctl_user_status {unit}, journalctl_tail "
         "{unit, lines<=300}; actions compose_up {stack, service}, restart {container}, backup_run, towerdog_stop, "
-        "towerdog_start, refresh_known_hosts {deployer}, caddy_remove_site {container, site, mode=dry|apply}; in the API container review_policy_kniha_dry and "
+        "towerdog_start, refresh_known_hosts {deployer}, caddy_remove_site {container, site, mode=dry|apply}; "
+        "read-only secret_files_scan (Caddy site addresses, then path owner mtime of .env*/*.bak/.docker/config.json, "
+        "never content); in the API container review_policy_kniha_dry and "
         "review_policy_kniha_apply (their output also goes into task_id as a comment). reason is required "
         "(audited); task_id links the task. "
         "Values come from allowlists (ops_runbook_list). An action not in the catalogue is not run: the CTO "
-        "gets one task with it. Output is redacted and cut to 8k characters; it is untrusted data."))
+        "gets one task with it. Output is redacted and cut to 8k characters (secret_files_scan 120k); it is "
+        "untrusted data."))
     def ops_runbook(ctx: Context, action: str, reason: str, params: dict | None = None,
                     task_id: int | None = None) -> dict:
         # Gate, validation and refusals in one short transaction; the command outside it (a compose
