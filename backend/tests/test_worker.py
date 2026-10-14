@@ -29,6 +29,7 @@ if "resume" in args:
     out({"type": "item.completed", "item": {"type": "agent_message", "text": "Resumed and adapted: " + prompt.splitlines()[0]}})
     out({"type": "turn.completed", "usage": {"input_tokens": 50, "cached_input_tokens": 0, "output_tokens": 10}})
 else:
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "started"), "w").close()  # see wait_for_session
     out({"type": "thread.started", "thread_id": "thread-123"})
     for i in range(int(os.environ.get("FAKE_CODEX_STEPS", "4"))):
         time.sleep(0.5)
@@ -39,7 +40,7 @@ else:
 
 
 FAKE_CLAUDE = r'''
-import json, sys, time
+import json, os, sys, time
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 assert "--restricted" in args and "--append-system-prompt-file" in args and "--mcp-config" in args
@@ -52,8 +53,9 @@ if "--resume" in args:
     out({"type": "result", "subtype": "success", "is_error": False, "session_id": sid, "result": "Adapted: " + prompt.splitlines()[0],
          "total_cost_usd": 0.01, "usage": {"input_tokens": 40, "output_tokens": 12, "cache_creation_input_tokens": 0}})
 else:
+    open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "started"), "w").close()  # see wait_for_session
     out({"type": "rate_limit_event", "session_id": sid, "rate_limit_info": {"status": "allowed", "resetsAt": 1790368200, "rateLimitType": "five_hour"}})
-    for i in range(4):
+    for i in range(int(os.environ.get("FAKE_CLAUDE_STEPS", "4"))):
         time.sleep(0.5)
         out({"type": "assistant", "session_id": sid, "message": {"content": [{"type": "tool_use", "name": "mcp__pos__report_progress"}]}})
         out({"type": "user", "session_id": sid, "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
@@ -110,13 +112,19 @@ def worker_for(client, key, binary, workdir):
     return Worker(PosClient("http://testserver", key, http=client), new_session, poll_wait=0, sleep=lambda s: None)
 
 
+def wait_for_session(tmp_path, timeout_s=60):
+    """Until the fake engine's first turn has started. Not the run's 'running' row: the worker reads the inbox
+    into the first prompt only after a few more API calls, and a message sent in between on a loaded deployer
+    went into that prompt instead of mid-turn (deploy refused 2026-10-14, T-1495)."""
+    marker = tmp_path / "started"
+    deadline = time.monotonic() + timeout_s
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
 def _inject_when_running(tmp_path, owner, agent_id, text):
+    wait_for_session(tmp_path)
     c = connect(Settings(data_dir=tmp_path).db_path)
-    for _ in range(100):
-        if c.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (agent_id,)).fetchone():
-            break
-        time.sleep(0.1)
-    time.sleep(0.3)
     agents.send_message(c, owner, agent_id, text, priority="change_plan")
     c.close()
 
@@ -132,18 +140,8 @@ def test_worker_runs_a_task_and_injects_a_message(setup, fake_codex, tmp_path, m
     t = tasks.create(conn, owner, {"title": "Fix the timezone bug", "assignee": {"type": "agent", "id": agent_id}})
     conn.commit()
     worker = worker_for(client, key, fake_codex, tmp_path)
-
-    def inject():
-        c = connect(Settings(data_dir=tmp_path).db_path)
-        for _ in range(100):
-            if c.execute("SELECT 1 FROM runs WHERE actor_id = ? AND status = 'running'", (agent_id,)).fetchone():
-                break
-            time.sleep(0.1)
-        time.sleep(0.3)
-        agents.send_message(c, owner, agent_id, "Customer is in Prague, use Europe/Prague", priority="change_plan")
-        c.close()
-
-    th = threading.Thread(target=inject)
+    th = threading.Thread(target=_inject_when_running,
+                          args=(tmp_path, owner, agent_id, "Customer is in Prague, use Europe/Prague"))
     th.start()
     assert worker.step() == "ok"
     th.join()
@@ -206,6 +204,7 @@ def test_worker_api_needs_an_agent_key(setup):
 
 def test_claude_worker_injects_via_resume_and_records_usage(setup, fake_claude, tmp_path, monkeypatch):
     monkeypatch.setenv("POS_AGENT_RUNTIME", "claude")
+    monkeypatch.setenv("FAKE_CLAUDE_STEPS", "30")  # long enough to be mid-turn when it comes; the injection stops it
     client, conn, owner, agent_id, key = setup
     from pos import engines, tasks
 
