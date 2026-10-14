@@ -9,8 +9,8 @@ T-1101). Every Claude run's `rate_limit_event` (pos.engines.record_claude) is re
 - `check` (scheduler, every 5 min): at 80 % and 95 % one incident for the Monitor (topic provoz) and one
   DM to the CEO; spent: one DM to the CEO with the reset. Once per window and threshold; a jump past
   several thresholds tells only the highest;
-- from POS_QUOTA_RESERVE_PCT (default 90) only the owner's chat answers and P1 incidents start, for an
-  agent whose run would use Claude (pos.api_worker._next_work); the rest stays in `next`;
+- from POS_QUOTA_RESERVE_PCT (default 90) only the owner's chat answers, P1 incidents and meeting turns
+  start, for an agent whose run would use Claude (pos.api_worker._next_work); the rest stays in `next`;
 - for RECOVERY_H after a window that reached the reserve resets: the owner's work first, then P1
   incidents, then the rest; routines start one at a time, at most one per ROUTINE_GAP_MIN company-wide.
 
@@ -171,11 +171,13 @@ def check(conn: sqlite3.Connection, now: datetime | None = None) -> dict:
     reset = _local(cur["resets_at"])
     if top >= SPENT:
         body = (f"**Kvóta agent-pool je vyčerpaná** (okno {cur['window']}): běhy na Claude stojí do **{reset}** "
-                "(konec okna). Po obnovení jdou první zprávy majitele, pak P1 incidenty, pak ostatní; rutiny "
+                "(konec okna). Po obnovení jdou první zprávy majitele, pak P1 incidenty a tahy porad, pak ostatní; "
+                "rutiny "
                 f"postupně, nejvýš jedna za {ROUTINE_GAP_MIN} min.")
     else:
         body = (f"**Kvóta agent-pool {round(pct)} %** (práh {top} %, okno {cur['window']}, obnova {reset}). "
-                f"Od {round(reserve)} % startují jen odpovědi majiteli a P1 incidenty, ostatní počká v next.")
+                f"Od {round(reserve)} % startují jen odpovědi majiteli, P1 incidenty a tahy porad, ostatní počká "
+                "v next.")
         mid = monitor.monitor_id(conn)
         if mid:
             t = tasks.create(conn, Ctx(actors.owner_id(conn), via="scheduler"), {
@@ -203,18 +205,23 @@ def is_p1_incident(row) -> bool:
     return row["priority"] == 1 and ((row["source"] or "") == "event:sentinel" or (row["topic"] or "") == "provoz")
 
 
+def is_meeting_turn(row) -> bool:
+    """A meeting turn (pos.meetings): the meetings of 8.-9. 10. lapsed while the quota was out (T-1138)."""
+    return (row["source"] or "").startswith("meeting:")
+
+
 def is_routine(row) -> bool:
     src = row["source"] or ""
     return src.startswith("schedule:") or src == "scheduler"
 
 
 def rank(conn: sqlite3.Connection, row) -> int:
-    """0 the owner's answer, 1 a P1 incident, 2 the rest."""
+    """0 the owner's answer, 1 a P1 incident or a meeting turn, 2 the rest."""
     from . import business
 
     if business.owner_reply_task(conn, row):
         return 0
-    return 1 if is_p1_incident(row) else 2
+    return 1 if is_p1_incident(row) or is_meeting_turn(row) else 2
 
 
 def _recovering(conn: sqlite3.Connection, now: datetime) -> bool:
@@ -248,8 +255,8 @@ def routine_gap_ok(conn: sqlite3.Connection, now: datetime | None = None) -> boo
 
 
 def admits(conn: sqlite3.Connection, row, how: str, now: datetime | None = None) -> bool:
-    """May this task start in this mode? Over the reserve: the owner's answer, a P1 incident, the owner's open
-    browser handoff. Recovering: all, a routine only when none started in the last ROUTINE_GAP_MIN."""
+    """May this task start in this mode? Over the reserve: the owner's answer, a P1 incident, a meeting turn,
+    the owner's open browser handoff. Recovering: all, a routine only when none started in the last ROUTINE_GAP_MIN."""
     from . import handoff
 
     if how == "reserve":
@@ -260,5 +267,5 @@ def admits(conn: sqlite3.Connection, row, how: str, now: datetime | None = None)
 
 
 def ordered(conn: sqlite3.Connection, rows: list) -> list:
-    """Recovering: the owner's work, then P1 incidents, then the rest (stable within each)."""
+    """Recovering: the owner's work, then P1 incidents and meeting turns, then the rest (stable within each)."""
     return sorted(rows, key=lambda r: rank(conn, r))

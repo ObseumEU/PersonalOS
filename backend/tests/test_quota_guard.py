@@ -163,7 +163,7 @@ def _work(conn, owner, se, title, **kw) -> int:
     return tasks.create(conn, owner, {"title": title, "assignee": {"type": "agent", "id": se}, **kw})["id"]
 
 
-def test_over_the_reserve_only_the_owners_answer_and_p1_incidents_start(conn, owner, team, monkeypatch):
+def test_over_the_reserve_only_the_owners_answer_p1_incidents_and_meeting_turns_start(conn, owner, team, monkeypatch):
     se = team["se"]
     routine = _work(conn, owner, se, "Denní přehled", source="schedule:4", priority=1)
     _quota(conn, 91)
@@ -178,6 +178,11 @@ def test_over_the_reserve_only_the_owners_answer_and_p1_incidents_start(conn, ow
     chat = _work(conn, owner, se, "Chat: answer David", topic="chat", priority=2)
     assert api_worker._next_work(conn, Ctx(se, via="worker"))["task"]["id"] == chat
     conn.execute("UPDATE tasks SET status = 'done' WHERE id = ?", (chat,))
+
+    # a meeting turn starts too: the meetings of 8.-9. 10. lapsed with the quota (T-1138)
+    turn = _work(conn, owner, se, "Porada Kniha: tvůj tah", topic="meeting", source="meeting:3", priority=2)
+    assert api_worker._next_work(conn, Ctx(se, via="worker"))["task"]["id"] == turn
+    conn.execute("UPDATE tasks SET status = 'done' WHERE id = ?", (turn,))
 
     # the reserve threshold is configurable
     monkeypatch.setenv("POS_QUOTA_RESERVE_PCT", "95")

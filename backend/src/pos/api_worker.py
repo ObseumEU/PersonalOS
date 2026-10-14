@@ -187,8 +187,8 @@ def _next_work(conn: sqlite3.Connection, ctx: Ctx) -> dict:
                                 AND status IN ('next', 'working') AND NOT {live}""",
                              (*urgent, ctx.actor_id, cutoff, None)).fetchall()
         candidates = list(first) + [c for c in candidates if c["id"] not in urgent]
-    # The agent pool's Claude quota (pos.quota_guard): over the reserve only the owner's answers and P1 incidents
-    # start, the rest stays in next; after the reset the owner's work goes first and routines start one by one.
+    # The agent pool's Claude quota (pos.quota_guard): over the reserve only the owner's answers, P1 incidents
+    # and meeting turns start, the rest stays in next; after the reset the owner's work goes first and routines start one by one.
     from . import quota_guard
 
     quota = quota_guard.mode(conn, ctx.actor_id)
