@@ -311,6 +311,10 @@ def record_claude(conn: sqlite3.Connection, run_row: sqlite3.Row, jsonl: str, up
                  updated_at = excluded.updated_at""",
             (until, reason, rl.get("rateLimitType"), resets, rl.get("status"), now_iso()),
         )
+    if rl:  # the agent pool's quota per window, for its warnings and reserve (pos.quota_guard)
+        from . import quota_guard
+
+        quota_guard.record(conn, rl, resets)
     conn.commit()
     return u
 
