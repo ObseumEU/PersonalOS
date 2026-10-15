@@ -496,6 +496,12 @@ def invoices_poll(conn: sqlite3.Connection) -> dict:
     return service.poll(conn)
 
 
+def isds_poll(conn: sqlite3.Connection) -> dict:
+    from . import isds
+
+    return isds.poll(conn)
+
+
 def support_intake(conn: sqlite3.Connection) -> dict:
     from .support import service
 
@@ -625,6 +631,7 @@ ACTIONS: dict[str, Callable[[sqlite3.Connection], dict]] = {
     "outbound_drafts": outbound_drafts,
     "outbound_replies": outbound_replies,
     "invoices_poll": invoices_poll,
+    "isds_poll": isds_poll,
     "support_intake": support_intake,
     "agents_watch": agents_watch,
     "grafana_watch": grafana_watch,
@@ -709,6 +716,8 @@ DEFAULT_JOBS = [
     ("Weekly report: publish a draft nobody published", "every 60m", "weekly_publish_overdue"),
     # Invoice mail -> the owner's Google Drive (pos.invoices): sure ones filed at once, unsure ones to the CFO.
     ("Invoices: file new invoice mail to Google Drive (CFO)", "every 5m", "invoices_poll"),
+    # The data box (pos.isds, read only): a new data message → a task with its files and a DM for the owner.
+    ("Datová schránka: nové zprávy → úkol pro majitele", "every 30m", "isds_poll"),
     # Projects (pos.project_info): fresh status summaries, the week's milestones, stale projects → the COO.
     ("Projects: weekly status, milestones and stale projects (COO)", "weekly mon 07:00", "projects_weekly"),
     # Customer mail (pos.support): a problem or bug → one task for the project's developer; the reply draft

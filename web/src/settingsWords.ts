@@ -36,6 +36,7 @@ export const JOB_CS: Record<string, string> = {
   weekly_publish_overdue: "Týdenní report: zveřejnit koncept, který nikdo nezveřejnil",
   outbound_digest: "Odchozí: denní kontrola všeho odeslaného (CEO)",
   invoices_poll: "Faktury: nové faktury z pošty na Google Drive (CFO)",
+  isds_poll: "Datová schránka: nové zprávy → úkol pro majitele",
   meetings_tick: "Porady: časové limity a rozpočet",
   projects_weekly: "Projekty: týdenní stav, milníky a zaseklé projekty (COO)",
   support_intake: "Zákazníci: nová pošta → požadavky, koncepty odpovědí, připomínky",
