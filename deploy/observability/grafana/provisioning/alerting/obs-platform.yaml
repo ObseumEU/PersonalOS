@@ -154,7 +154,9 @@ groups:
             datasourceUid: __expr__
             model: {refId: C, type: threshold, expression: A, conditions: [{evaluator: {type: gt, params: [35]}}]}
         for: 1h
-        noDataState: Alerting
+        # No data means Prometheus lost its input (svr03 frozen, .186 disk full), not a late drill:
+        # obs-host-silent reports that (T-1551).
+        noDataState: OK
         execErrState: Error
         labels: {team: platform, kind: backup, severity: warning, host: svr03}
         annotations:

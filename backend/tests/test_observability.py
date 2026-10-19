@@ -369,3 +369,20 @@ def test_tls_expiry_alert_warns_14_days_ahead_per_probe():
     cond = next(d["model"] for d in rule["data"] if d["refId"] == rule["condition"])
     assert cond["conditions"][0]["evaluator"] == {"type": "lt", "params": [14]}
     assert rule["for"] == "1h" and rule["labels"]["severity"] == "warning" and rule["labels"]["class"] == "config"
+
+
+def test_restore_drill_alert_stays_quiet_when_prometheus_has_no_data():
+    """A metrics outage is obs-host-silent's alert, not a late restore drill (T-1551)."""
+    from pathlib import Path
+
+    import yaml
+
+    path = (Path(__file__).resolve().parents[2] / "deploy" / "observability" / "grafana" / "provisioning"
+            / "alerting" / "obs-platform.yaml")
+    alerting = yaml.safe_load(path.read_text(encoding="utf-8"))
+    rules = {r["uid"]: r for g in alerting["groups"] for r in g["rules"]}
+    drill = rules["obs-backup-drill-stale"]
+    assert drill["noDataState"] == "OK" and drill["execErrState"] != "Alerting"
+    cond = next(d["model"] for d in drill["data"] if d["refId"] == drill["condition"])
+    assert cond["conditions"][0]["evaluator"] == {"type": "gt", "params": [35]}
+    assert rules["obs-host-silent"]["labels"]["severity"] == "critical"
