@@ -624,8 +624,6 @@ def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) ->
     if not anon.verified:
         return {**out, **anon.as_dict()}
     exposed = anon.ok
-    if exposed and not _recent(conn, "reality_exposed", row["project_id"], row["key"], hours=24):
-        audit.log(conn, ctx, "reality_exposed", "project", row["project_id"], key=row["key"], url=url)
     cred = row["probe_credential"]
     ok, why, auth, method = False, "", None, TEST_METHOD
     if not cred:
@@ -633,10 +631,13 @@ def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) ->
     else:
         try:
             name, value = creds.platform_header(conn, ctx, cred, host, f"reality probe {row['key']}")
+        except creds.CredentialError as e:
+            name, value = None, None
+            why = f"heslo {cred} pro ověření nejde použít ({str(e)[:200]})"
+        conn.commit()  # the credential use is logged: no write stays open over the requests below (T-1573)
+        if value is not None:
             auth = probe(url, row["probe_expect"], headers={name: value})
             del value
-        except creds.CredentialError as e:
-            why = f"heslo {cred} pro ověření nejde použít ({str(e)[:200]})"
     if auth is not None:
         if not auth.verified:
             return {**out, **auth.as_dict()}
@@ -653,6 +654,8 @@ def _probe_test(conn: sqlite3.Connection, row, url: str, ctx: Ctx, out: dict) ->
         why = f"{why}; {dwhy}"
     if exposed:
         why = f"{why}; POZOR: {url} je dostupné i bez hesla"
+        if not _recent(conn, "reality_exposed", row["project_id"], row["key"], hours=24):
+            audit.log(conn, ctx, "reality_exposed", "project", row["project_id"], key=row["key"], url=url)
     now = now_iso()
     if ok:
         conn.execute("""UPDATE reality_capabilities SET status = CASE WHEN status = 'live' THEN status ELSE 'test_only'
@@ -737,16 +740,26 @@ def _system(conn: sqlite3.Connection) -> Ctx:
     return business.system_ctx(conn)
 
 
+def _probe_each(conn: sqlite3.Connection, caps: list) -> list[dict]:
+    """What is written so far is committed before each probe goes out: a write never stays open over the
+    network (T-1573: one transaction over all probes held the database ~6 s, other writes got 'locked')."""
+    out = []
+    for r in caps:
+        conn.commit()
+        out.append(run_probe(conn, r))
+    return out
+
+
 def probe_project(conn: sqlite3.Connection, project_id: int) -> list[dict]:
-    return [run_probe(conn, r) for r in rows(conn, [project_id])]
+    return _probe_each(conn, rows(conn, [project_id]))
 
 
 def tick(conn: sqlite3.Connection) -> dict:
     """The scheduler's job: every probe, the expiry, then the holds whose capabilities went live."""
     ensure_schema(conn)
     seed_kniha(conn)
-    results = [run_probe(conn, r) for r in conn.execute(
-        "SELECT * FROM reality_capabilities WHERE archived_at IS NULL AND probe_mode IS NOT NULL").fetchall()]
+    results = _probe_each(conn, conn.execute(
+        "SELECT * FROM reality_capabilities WHERE archived_at IS NULL AND probe_mode IS NOT NULL").fetchall())
     expired = expire(conn)
     released = release_holds(conn)
     conn.commit()

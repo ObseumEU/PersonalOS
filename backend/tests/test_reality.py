@@ -283,6 +283,33 @@ def test_without_the_1password_item_the_deployment_is_the_evidence(env, web, tes
     assert not cap(env, "order")["verified"]
 
 
+def test_no_write_stays_open_while_a_probe_is_on_the_network(env, web, test_instance, monkeypatch):
+    """prod 2026-10-20 (T-1573): the probe job held one write from the first _record_check over every later
+    probe (~6 s), so other writes failed with 'database is locked'."""
+    c = env["conn"]
+    web.dns["rodinne-pribehy.obseum.cz"] = ["93.184.216.34"]
+    web.pages["https://rodinne-pribehy.obseum.cz"] = page()
+    open_during = []
+    fetch, contains = web.fetch, reality.DEPLOYED_CONTAINS
+
+    def watched_fetch(url, timeout, headers=None):
+        open_during.append((url, c.in_transaction))
+        return fetch(url, timeout, headers)
+
+    def watched_contains(host, ref):
+        open_during.append((f"git {ref}", c.in_transaction))
+        return contains(host, ref)
+
+    monkeypatch.setattr(reality, "FETCH", watched_fetch)
+    monkeypatch.setattr(reality, "DEPLOYED_CONTAINS", watched_contains)
+    for _ in range(2):  # the first tick makes things live and verified, the second only records the checks
+        out = reality.tick(c)
+        assert out["live"] == 2 and cap(env, "order")["verified"]
+    assert len(open_during) > 10 and any(u.startswith("git") for u, _ in open_during)
+    assert [u for u, held in open_during if held] == []
+    assert not c.in_transaction
+
+
 def test_the_seed_corrects_its_first_cut_while_nothing_is_verified(env):
     c = env["conn"]
     c.execute("UPDATE reality_capabilities SET probe_expect = 'Objednat knihu' WHERE key IN ('order', 'photos')")
