@@ -93,6 +93,7 @@ RESTART_CONTAINERS = frozenset({
     "nexus-process-pilot-api-1", "nexus-process-pilot-web-1", "nexus-process-pilot-runtime-1",
     "nexus-process-pilot-codex-shim-1", TOWERDOG, "nexus-process-pilot-clamav-1",
     "obs-alloy", "litellm", "langfuse-web",
+    "dataui-worker-1",  # grew to 5.9 GB, swap past 90 % (T-1582); dataui-postgres-1 stays off
 })
 # Reading logs is harmless: the databases too (output is redacted).
 LOG_CONTAINERS = RESTART_CONTAINERS | {

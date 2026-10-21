@@ -101,6 +101,7 @@ def _socket(monkeypatch, tmp_path):
     ("compose_up", {"stack": "personalos", "service": "towerdog"}),
     ("restart", {"container": "nexus-process-pilot-postgres-1"}),
     ("restart", {"container": "personalos-api-1 > /etc/passwd"}),
+    ("restart", {"container": "dataui-postgres-1"}),
     ("refresh_known_hosts", {"deployer": "../../etc"}),
     ("df", {"path": "/"}),
     ("df", "-h; id"),
@@ -143,6 +144,14 @@ def test_validated_actions_build_argv_lists_without_a_shell():
         pl = ops_runbook.plan(name, ops_runbook.validate(name, sample))
         argvs = [pl[name][k] for k in ("validate", "reload")] if name == "caddy_remove_site" else [pl.get("argv") or []]
         assert "known_hosts" in pl or "api" in pl or all(isinstance(a, str) for v in argvs for a in v)
+
+
+def test_the_sre_can_read_and_restart_the_dataui_worker():
+    # T-1582: dataui-worker-1 grew to 5.9 GB and nobody but the owner could look at it.
+    p = ops_runbook.validate("docker_logs", {"container": "dataui-worker-1", "since": "24h"})
+    assert ops_runbook.plan("docker_logs", p)["argv"][-1] == "dataui-worker-1"
+    p = ops_runbook.validate("restart", {"container": "dataui-worker-1"})
+    assert ops_runbook.plan("restart", p)["argv"] == ["docker", "restart", "dataui-worker-1"]
 
 
 def test_the_pinned_github_keys_match_their_published_fingerprints():
