@@ -68,6 +68,9 @@ def pos_tools(me: dict, narrow: str | None = None) -> tuple[list[str], list[str]
     wanted = {t.removeprefix("mcp__pos__") for t in expand(tool_list(raw))}
     if wanted and wanted & set(HAND_IN):
         wanted |= set(REPORT_TOOLS)
+    if wanted:  # a tool granted on its own (tool:<name>, request_access) is never narrowed away: granted means
+        # loadable (2026-10: security_confirm granted, yet hidden by the profile list, holds stuck, T-1642)
+        wanted |= {p.removeprefix("tool:") for p in me.get("permissions") or [] if p.startswith("tool:")}
     if wanted and "Bash" in str((me.get("profile") or {}).get("claude_builtin") or ""):
         wanted.add("request_command_approval")  # a refused command goes to the CTO (pos_worker.command_hook)
     shown = [t for t in permitted if not wanted or t in wanted or t in COMMS]

@@ -34,7 +34,7 @@
     "tool:knowledge"
   ],
   "profile": {
-    "pos_tools": "@worker list_tasks incident_logs incident_close metrics_snapshot loki_query ops_runbook ops_runbook_list ask_owner deploy_health credentials_list credential_http secret_create secret_share secret_list secret_rotate secret_revoke",
+    "pos_tools": "@worker list_tasks incident_logs incident_close metrics_snapshot loki_query ops_runbook ops_runbook_list security_confirm ask_owner deploy_health credentials_list credential_http secret_create secret_share secret_list secret_rotate secret_revoke",
     "claude_builtin": "WebSearch,WebFetch",
     "max_usd_run": 1.5,
     "max_steps": 40

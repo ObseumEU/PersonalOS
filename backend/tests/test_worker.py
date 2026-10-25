@@ -936,6 +936,31 @@ def test_narrow_profiles_use_the_worker_preset_and_keep_memory_and_the_report_to
     assert "note_get" not in pos_tools(me)[0]
 
 
+def test_a_tool_granted_on_its_own_is_shown_past_the_profile_list():
+    """T-1642: request_access said granted, yet the narrow profile list hid security_confirm (not even in
+    ToolSearch), so no hold could be decided."""
+    from pos_worker.tools import pos_tools
+
+    permitted = ["get_task", "security_confirm", "create_agent", "ha_ssh"]
+    me = {"pos_tools": permitted, "all_pos_tools": permitted, "profile": {"pos_tools": "get_task"},
+          "permissions": ["tasks:read", "tool:security_confirm", "tool:not_permitted"]}
+    shown, hidden = pos_tools(me)
+    assert "security_confirm" in shown and "security_confirm" not in hidden
+    assert "create_agent" in hidden and "ha_ssh" in hidden  # no grant: still narrowed away
+    assert "not_permitted" not in shown  # a grant never shows what the agent may not call
+
+
+def test_the_security_reviewer_sees_security_confirm():
+    """The SRE confirms tainted runs' holds (taint.security_reviewer: Security Engineer and CTO archived)."""
+    import json
+    from pathlib import Path
+
+    from pos_worker.tools import expand, tool_list
+
+    profile = json.loads((Path(__file__).resolve().parents[2] / "agents/sre/agent.json").read_text())["profile"]
+    assert "security_confirm" in expand(tool_list(profile["pos_tools"]))
+
+
 def test_session_sends_the_run_and_the_agents_own_git_identity():
     from pos_worker.__main__ import git_identity, tool_count
 
