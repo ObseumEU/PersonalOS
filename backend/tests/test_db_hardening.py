@@ -175,11 +175,18 @@ def test_deep_health_is_degraded_while_the_write_lock_is_held(app, monkeypatch):
     /api/health/deep says degraded (503) within its short timeout, and ok again once the lock is released."""
     monkeypatch.setattr(health, "PROBE_BUSY_MS", 300)
     monkeypatch.setattr(health, "CACHE_S", 0)
+    real_connect, timeouts = db.connect, []
+
+    def spy(path, *a, **k):
+        timeouts.append(k.get("busy_timeout_ms"))
+        return real_connect(path, *a, **k)
+
     holder = _hold_write_lock(app["db"])
+    monkeypatch.setattr(health.db, "connect", spy)
     try:
-        t0 = time.monotonic()
         r = app["client"].get("/api/health/deep")
-        assert time.monotonic() - t0 < 3
+        # its own short timeout, not the 5 s default (a wall-clock bound flaked on the 1-CPU deployer, T-1650)
+        assert 300 in timeouts
         assert r.status_code == 503
         assert r.json()["status"] == "degraded" and "locked" in r.json()["reason"]
         assert app["client"].get("/api/health").status_code == 200  # liveness alone would have said ok
