@@ -1,6 +1,6 @@
 // Grafana Alloy on svr03: the only observability process on this host.
-//   logs    : every container (labels host, stack, service, container, level, http) and the host journal
-//             -> Loki on 192.168.1.186, tenant "Obseum" (the Grafana org "Obseum" reads it as Loki-Obseum)
+//   logs    : every container (labels host, stack, service, container, level, http), the host journal
+//             and backup job log files (source="file") -> Loki on 192.168.1.186, tenant "Obseum" (the Grafana org "Obseum" reads it as Loki-Obseum)
 //   metrics : host (embedded node exporter), containers (embedded cAdvisor), LiteLLM /metrics,
 //             Nexus run counts (read-only SQL) -> Prometheus on 192.168.1.186 (remote write, disk WAL)
 // Versioned in PersonalOS: deploy/observability/svr03/config.alloy
@@ -152,6 +152,46 @@ loki.process "journal" {
     rate  = 100
     burst = 500
     drop  = true
+  }
+}
+
+// ------------------------------------------------------------------ logs: backup job files
+// Jobs that log only to a file. ChatPulse DB backup (cron chatpulse-db-backup: Tesco + Sconto dump
+// and restore drill, alert obs-chatpulse-backup-failed) writes nowhere else (T-1648).
+// The first read starts at the top of the file; positions persist in alloy-data, so a restart
+// does not send it again.
+
+local.file_match "backup_logs" {
+  path_targets = [
+    {"__path__" = "/host/root/opt/server/backups/chatpulse/backup.log", "stack" = "chatpulse", "service" = "chatpulse-backup"},
+  ]
+}
+
+loki.source.file "backup_logs" {
+  targets    = local.file_match.backup_logs.targets
+  forward_to = [loki.process.backup_logs.receiver]
+}
+
+loki.process "backup_logs" {
+  forward_to = [loki.write.obs.receiver]
+
+  stage.static_labels {
+    values = {host = "svr03", source = "file"}
+  }
+  stage.label_drop {
+    values = ["filename"]
+  }
+  stage.match {
+    selector = "{source=\"file\"} |~ \"(?i)error|fail|traceback|no space left\""
+    stage.static_labels {
+      values = {level = "error"}
+    }
+  }
+  // Slow down (never drop) the first read of a long file.
+  stage.limit {
+    rate  = 50
+    burst = 500
+    drop  = false
   }
 }
 
